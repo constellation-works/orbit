@@ -1,21 +1,24 @@
 // Orbit dashboard task-domain rendering and actions.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { captureWorkspaceVisit, findRegisteredHost, getHost, getRegisteredHosts, getServingHost, getWorkspace, onWorkspaceChange, panelCanRender, el, infoHint, fetchJson, patchJson, postJson, syncNodes, isAggregateView, isHttpUrl, hostWriteRefusal, makeToggleRow, makeDisclosure, makeRowDisclosure, enableRovingRows, makeCopyButton, copyText, copyWithFeedback, runHref, bindTaskLink, clockStamp, formatDateTime, submissionNoticeLines, stateCell, fmtDuration, elapsedDurationInfo } from './common.js';
-import { renderMarkdown, renderMarkdownInline } from './markdown.js';
-import { buildInlineFieldEditor } from './field-editor.js';
+import { captureWorkspaceVisit, findRegisteredHost, getHost, getRegisteredHosts, getServingHost, getWorkspace, onWorkspaceChange, panelCanRender, el, infoHint, fetchJson, patchJson, postJson, syncNodes, isAggregateView, isHttpUrl, hostWriteRefusal, makeToggleRow, makeDisclosure, makeRowDisclosure, enableRovingRows, makeCopyButton, copyText, runHref, submissionNoticeLines, stateCell, fmtDuration, elapsedDurationInfo } from './common.js';
+import { renderMarkdown } from './markdown.js';
 import { DRAIN_POOLS, backlogReadiness, drainReadinessFor, drainReadinessView, drainWaitSignature } from './drain-waits.js';
-import { elapsedLabel, onTaskRuntimeChange, runStartedAt, taskContextContenders, taskLockFiles } from './task-runtime.js';
+import { elapsedLabel, runStartedAt, taskLockFiles } from './task-runtime.js';
 import { buildRiskChip, buildRiskDetail, buildRiskRowPart, riskinessSignature } from './task-riskiness.js';
 import { buildAttentionCallout, buildDeliveryPanel, buildDeliveryProgress, buildExecutionProvenance, formatExecutionLocation, claimAttention, claimedReviewApproval, deliverySteps, handoffApprovalRequest, invalidateDistributedConsole, lastKnownClaims, registeredMachineHost } from './distributed.js';
-import { $, taskState, setRenderer, rerender, taskList, searchQueryValue, activeStatusSet, setSearchQuery, setActiveStatuses, statusOrder, statusTransitions, statusTransition, fmtAbsTimeValue, absTimeNode, refreshTasks, defaultActiveStatuses, tasksMeta, canMutateTask, aggregateRefusalTitle, taskWorkspacePath, taskMutationPath, GITHUB_PR_REF_SYSTEM, pullRequestLink, actionErrorNode, plural } from './task-shared.js';
-import { scheduleFeedbackExpiry, buildMutationFeedback, crewOptionsSignature, feedbackSignature, explicitCrewValue, isConfiguredCrewValue, hasStaleExplicitCrew, resolvedCrewName, defaultCrewOptionText, crewOptionTitle } from './task-crew.js';
+import { $, taskState, setRenderer, rerender, taskList, searchQueryValue, activeStatusSet, setSearchQuery, setActiveStatuses, statusOrder, statusTransitions, statusTransition, fmtAbsTimeValue, absTimeNode, refreshTasks, defaultActiveStatuses, tasksMeta, canMutateTask, aggregateRefusalTitle, taskWorkspacePath, taskMutationPath, GITHUB_PR_REF_SYSTEM, pullRequestLink, actionErrorNode, plural, MUTATION_UNDO_WINDOW_MS, isOsTag } from './task-shared.js';
+import { scheduleFeedbackExpiry, buildMutationFeedback, crewOptionsSignature, feedbackSignature, explicitCrewValue, hasStaleExplicitCrew, resolvedCrewName, defaultCrewOptionText, crewOptionTitle } from './task-crew.js';
 export { normalizeCrewPayload, cacheCrewPayload, hasCrewOptions } from './task-crew.js';
 import * as taskShared from './task-shared.js';
 import * as taskHistory from './task-history.js';
 import * as taskReadiness from './task-readiness.js';
 import * as taskEvidence from './task-evidence.js';
+import * as taskComments from './task-comments.js';
+import * as taskFields from './task-fields.js';
+import * as taskWhyStuck from './task-why-stuck.js';
 export { buildArtifacts } from './task-evidence.js';
+export { scrollToComment } from './task-comments.js';
 import { applyUpdatedTask, clearTaskDataCaches, currentCrewTask, forgetTaskDetailLoad, loadTaskDetail, mergeTaskRecord, taskDetailState, taskDrainSignature, taskDrainState } from './task-data.js';
 
 let settleMergedInFlight = false;
@@ -31,18 +34,7 @@ let taskRunLoads = new Map();
 const TASK_RUNS_LIMIT = 20;
 const TASK_RUNS_FRESH_MS = 15000;
 let searchDebounce = null;
-const MUTATION_UNDO_WINDOW_MS = 8000;
-// A saved text field has no undo (restoring prose would need a second write of
-// its own), so its note only has to stay long enough to be read.
-const FIELD_SAVED_NOTICE_MS = 4000;
 const reviewApprovalsInFlight = new Set();
-// ORB-12645: which comments show their Markdown source instead of the rendered
-// body, keyed `<task id>#<index into task.comments>` like
-// `taskState.expandedComments` so a refresh that rebuilds the detail restores
-// the thread the way it was left. The thread order is a page-wide preference,
-// so it persists like the other dashboard presentation prefs.
-let rawComments = new Set();
-let commentPrefs = loadCommentPrefs();
 
 // Task modules repaint the list through task-shared's `rerender`.
 setRenderer(renderTasks);
@@ -70,7 +62,7 @@ onWorkspaceChange(() => {
   recoveryRefusals.clear();
   taskState.taskDecisionLoads.clear();
   taskState.expandedComments.clear();
-  rawComments.clear();
+  taskComments.rawComments.clear();
   taskState.restoredCommentHash = null;
 });
 
@@ -197,8 +189,8 @@ export function formatTaskCount(filteredCount, fetchedCount, meta) {
 // saved or failed note would never paint.
 function detailFeedbackSignature(taskId) {
   const parts = [feedbackSignature(taskState.statusFeedback, taskId), feedbackSignature(taskState.complexityFeedback, taskId), feedbackSignature(taskState.crewFeedback, taskId)];
-  for (const field of Object.keys(TASK_FIELD_EDITORS)) {
-    parts.push(feedbackSignature(taskState.fieldFeedback, fieldFeedbackKey(taskId, field)));
+  for (const field of Object.keys(taskFields.TASK_FIELD_EDITORS)) {
+    parts.push(feedbackSignature(taskState.fieldFeedback, taskFields.fieldFeedbackKey(taskId, field)));
   }
   return parts.join("|");
 }
@@ -840,22 +832,6 @@ function renderFilterSummary(context) {
   node.textContent = parts.length > 0 ? `Filtering by ${parts.join(" · ")}` : "Showing all statuses";
 }
 
-// `os:` tags route a task to a host of that OS, so they read apart from the
-// labels around them.
-function isOsTag(tag) {
-  return typeof tag === "string" && tag.toLowerCase().startsWith("os:");
-}
-
-function buildTagRow(tags) {
-  const wrap = el("div", { class: "detail-tag-row" });
-  for (const tag of tags) {
-    wrap.appendChild(isOsTag(tag)
-      ? el("span", { class: "chip os-chip", text: tag, title: `Admitted only on a host running ${tag.slice(3)}` })
-      : el("span", { class: "chip", text: tag }));
-  }
-  return wrap;
-}
-
 // The task row's OS chips, from the parsed requirement the server attaches;
 // a tag outside the namespace reads as the wait it causes.
 function buildScheduledChip(task, context) {
@@ -1131,1252 +1107,10 @@ function buildRelationRow(key, label, targets, context) {
   return relationRow;
 }
 
-/* ORB-12235: the task fields the expanded detail can edit in place. Each entry
-   reads the task's current value as editor text, renders the read-only view,
-   and turns the edited text back into a PATCH body carrying that one field —
-   never a whole task, which would clobber whatever an agent wrote concurrently.
-   `complexity` is not here: it is a fixed set of choices, so it gets a select
-   (buildComplexityUpdateControl) rather than a text editor. */
-const TASK_FIELD_EDITORS = {
-  not_before: {
-    label: "scheduled time",
-    multiline: false,
-    toText: (task) => task.not_before || "",
-    renderView: (task) => task.not_before
-      ? clockStamp(el("span", { text: formatDateTime(task.not_before) }), task.not_before)
-      : emptyFieldView("not scheduled"),
-    toPayload: (text) => ({ not_before: text.trim() }),
-    placeholder: "2099-02-01T10:00:00Z",
-    hint: "RFC 3339 with an offset (Z for UTC). Leave empty to clear. Starts on the next admission pass at or after this time.",
-  },
-  description: {
-    label: "description",
-    toText: (task) => task.description || "",
-    renderView: (task) =>
-      task.description && task.description.trim()
-        ? markdownView(task.description)
-        : emptyFieldView("no description"),
-    toPayload: (text) => ({ description: text }),
-    placeholder: "Markdown description",
-  },
-  acceptance_criteria: {
-    label: "acceptance criteria",
-    toText: (task) => linesToText(task.acceptance_criteria),
-    renderView: (task) =>
-      Array.isArray(task.acceptance_criteria) && task.acceptance_criteria.length > 0
-        ? buildCriteriaList(task.acceptance_criteria)
-        : emptyFieldView("no acceptance criteria"),
-    toPayload: (text) => ({ acceptance_criteria: textToLines(text) }),
-    hint: "One criterion per line.",
-  },
-  tags: {
-    label: "tags",
-    multiline: false,
-    toText: (task) => (Array.isArray(task.tags) ? task.tags.join(", ") : ""),
-    renderView: (task) =>
-      Array.isArray(task.tags) && task.tags.length > 0
-        ? buildTagRow(task.tags)
-        : emptyFieldView("no tags"),
-    toPayload: (text) => ({ tags: splitTagText(text) }),
-    placeholder: "comma, separated, tags",
-  },
-  context_files: {
-    label: "context files",
-    toText: (task) => linesToText(task.context_files),
-    // Keep the empty state in the same refreshable list as populated
-    // selectors, so a background refresh can replace it without rebuilding an
-    // open detail that contains another field's draft.
-    renderView: (task) => buildFileList(task),
-    // The server refuses a selector that names nothing unless the caller says
-    // the task is about to create it, so that escape is the editor's own
-    // checkbox rather than a second, silently different code path.
-    toPayload: (text, options) => {
-      const payload = { context_files: textToLines(text) };
-      if (options && options.allow_missing_context) payload.allow_missing_context = true;
-      return payload;
-    },
-    hint: "One selector per line (file:…, dir:…, symbol:…).",
-    toggle: {
-      key: "allow_missing_context",
-      label: "allow missing context",
-      title: "Accept a selector naming a target this task will create",
-    },
-  },
-};
-
-function markdownView(text) {
-  const view = el("div", { class: "markdown-body" });
-  const rendered = renderMarkdown(text);
-  if (rendered !== null) {
-    view.innerHTML = rendered;
-  } else {
-    view.textContent = text;
-  }
-  return view;
-}
-
-function emptyFieldView(text) {
-  return el("div", { class: "field-empty", text });
-}
-
-function taskMarkdownPanel(content) {
-  return el("div", { class: "task-markdown-panel" }, [content]);
-}
-
-// Numbered, because criteria are cited by number ("criterion 3 is met").
-function buildCriteriaList(criteria) {
-  const ul = el("ol", { class: "ac-list" });
-  for (const ac of criteria) {
-    const rendered = renderMarkdownInline(ac);
-    if (rendered !== null) {
-      const li = el("li");
-      li.innerHTML = rendered;
-      ul.appendChild(li);
-    } else {
-      ul.appendChild(el("li", { text: ac }));
-    }
-  }
-  return ul;
-}
-
-function buildFileList(task) {
-  const wrap = el("div", { class: "context-files-view" });
-  const summary = el("span", { class: "cf-summary" });
-  const copyAll = el("button", { class: "cf-copy-all", type: "button", text: "Copy selectors" });
-  copyAll.addEventListener("click", () => {
-    const t = ul.contentionTask;
-    const paths = t && Array.isArray(t.context_files) ? t.context_files : [];
-    if (paths.length) copyWithFeedback(copyAll, paths.join("\n"));
-  });
-  const header = el("div", { class: "cf-header" }, [summary, copyAll]);
-  const banner = el("div", { class: "cf-banner", role: "status" });
-  const ul = el("ul", { class: "file-list mono" });
-  ul.contentionTask = task;
-  ul.cfRefs = { wrap, summary, banner, header };
-  wrap.appendChild(header);
-  wrap.appendChild(banner);
-  wrap.appendChild(ul);
-  refreshFileList(ul);
-  return wrap;
-}
-
-function parseContextSelector(selector) {
-  const match = /^([a-z]+):(.*)$/.exec(selector);
-  if (!match) return { kind: "file", target: selector, cut: 0, base: selector, dir: "" };
-  const [, kind, target] = match;
-  let cut = 0;
-  if (kind === "file") {
-    cut = target.lastIndexOf("/") + 1;
-  } else if (kind === "dir") {
-    const trimmed = target.endsWith("/") ? target.slice(0, -1) : target;
-    cut = trimmed.lastIndexOf("/") + 1;
-  }
-  return {
-    kind,
-    target,
-    cut,
-    base: target.slice(cut),
-    dir: target.slice(0, cut),
-  };
-}
-
-function formatDirectory(dirPath) {
-  const span = el("span", { class: "selector-dim" });
-  if (!dirPath) return span;
-  const parts = dirPath.split("/");
-  for (let i = 0; i < parts.length; i++) {
-    if (i < parts.length - 1) {
-      const seg = `${parts[i]}/`;
-      if (i === 0) {
-        span.appendChild(el("span", { class: "selector-root", text: seg }));
-      } else {
-        span.appendChild(document.createTextNode(seg));
-      }
-      span.appendChild(el("wbr"));
-    } else if (parts[i]) {
-      span.appendChild(document.createTextNode(parts[i]));
-    }
-  }
-  return span;
-}
-
-function cfPathForSelector(p) {
-  let target = p.target || "";
-  if (p.kind === "symbol") {
-    let gt = target.split("#")[0];
-    const ci = gt.indexOf("::");
-    if (ci > 0) gt = gt.slice(0, ci);
-    target = gt;
-  }
-  return target;
-}
-
-// One flat list, ordered by full path so files of one directory sit together.
-function cfSortedEntries(entries) {
-  return [...entries].sort((x, y) => {
-    const a = cfPathForSelector(x.p);
-    const b = cfPathForSelector(y.p);
-    return a < b ? -1 : a > b ? 1 : x.selector < y.selector ? -1 : x.selector > y.selector ? 1 : 0;
-  });
-}
-
-function cfSummaryText(entries) {
-  const total = entries.length;
-  const fileLabel = `${total} file${total === 1 ? "" : "s"}`;
-  const dirs = new Set(entries.map((e) => {
-    const target = cfPathForSelector(e.p);
-    const cut = target.lastIndexOf("/");
-    return cut >= 0 ? target.slice(0, cut) : "";
-  }));
-  if (total === 0) return fileLabel;
-  if (dirs.size === 1) return `${fileLabel} in ${[...dirs][0] || "the project root"}`;
-  return `${fileLabel} in ${dirs.size} folders`;
-}
-
-function cfHolderLabel(holder) { return `${holder.id} · ${String(holder.status || "").replaceAll("-", " ")}`; }
-
-function makeContextRow(entry, task) {
-  const { selector, p, matches } = entry;
-  const state = matches === null ? "Contention unknown: current workspace data unavailable"
-    : matches && matches.length ? task.status === "backlog" ? "Contended context" : "Active context contention" : "";
-  const children = [];
-  if (p.kind && p.kind !== "file") {
-    const kindNode = el("span", { class: "selector-kind", text: `${p.kind}:` });
-    kindNode.dataset.kind = p.kind;
-    children.push(kindNode);
-  }
-  if (p.kind !== "symbol") children.push(formatDirectory(p.dir || (p.target.includes("/") ? p.target.slice(0, p.target.lastIndexOf("/") + 1) : "")));
-  children.push(el("span", { class: "selector-base", text: p.base || p.target }));
-  const link = el("a", { class: "context-selector", title: [selector, state].filter(Boolean).join(" · ") }, children);
-  bindTaskLink(link, task.id, task.workspace_id ? { workspace: task.workspace_id } : {});
-  if (state) link.setAttribute("aria-label", `${selector}: ${state}`);
-  const rowChildren = [link];
-  if (matches && matches.length) {
-    rowChildren.push(el("span", { class: "cf-pill cf-pill-contended", text: `held by ${matches.map(cfHolderLabel).join(", ")}` }));
-  } else if (matches === null && (task.status === "backlog" || task.status === "in-progress")) {
-    rowChildren.push(el("span", { class: "cf-pill cf-pill-unknown", text: "contention unknown" }));
-  }
-  const copyBtn = el("button", { class: "cf-copy", type: "button", title: "Copy selector" }, [el("span", { text: "⧉", "aria-hidden": "true" })]);
-  copyBtn.setAttribute("aria-label", `Copy ${selector}`);
-  copyBtn.addEventListener("click", (event) => { event.stopPropagation(); copyText(selector); });
-  rowChildren.push(copyBtn);
-  const li = el("li", { class: "cf-row" }, rowChildren);
-  if (matches === null) li.classList.add("context-contention-unknown");
-  if (matches && matches.length) li.classList.add(task.status === "backlog" ? "context-contended-backlog" : "context-contended-active");
-  return li;
-}
-
-function refreshFileList(ul) {
-  const task = ul.contentionTask;
-  if (!task) return;
-  const applicable = task.status === "backlog" || task.status === "in-progress";
-  const rawPaths = Array.isArray(task.context_files) ? task.context_files : [];
-  const entries = rawPaths.map((selector) => {
-    const p = parseContextSelector(selector);
-    return { selector, p, matches: applicable ? taskContextContenders(task, selector) : [] };
-  });
-  const refs = ul.cfRefs;
-  if (refs) {
-    refs.header.hidden = entries.length === 0;
-    refs.summary.textContent = cfSummaryText(entries);
-    const contended = entries.filter((e) => e.matches && e.matches.length);
-    if (contended.length) {
-      const holders = [...new Set(contended.flatMap((e) => e.matches.map((h) => h.id)))];
-      refs.banner.hidden = false;
-      refs.banner.textContent = `${contended.length} file${contended.length === 1 ? "" : "s"} overlap${contended.length === 1 ? "s" : ""} an in-progress task: held by ${holders.join(", ")}`;
-    } else { refs.banner.hidden = true; refs.banner.textContent = ""; }
-  }
-  if (entries.length === 0) { ul.replaceChildren(el("li", { class: "field-empty", text: "no context files" })); return; }
-  ul.replaceChildren(...cfSortedEntries(entries).map((e) => makeContextRow(e, task)));
-}
-
-// Update only the displayed selectors, including details preserved for an
-// unsaved editor/comment. Never replace an editor or discard its draft.
-onTaskRuntimeChange(() => {
-  for (const ul of document.querySelectorAll(".file-list")) {
-    if (ul.contentionTask) refreshFileList(ul);
-  }
-});
-
-function linesToText(values) {
-  return Array.isArray(values) ? values.join("\n") : "";
-}
-
-// A blank line is how an operator separates entries while typing, not an empty
-// criterion or selector, so it never reaches the server.
-function textToLines(text) {
-  return String(text)
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-}
-
-function splitTagText(text) {
-  return String(text)
-    .split(/[,\n]/)
-    .map((tag) => tag.trim())
-    .filter(Boolean);
-}
-
-function fieldFeedbackKey(taskId, field) {
-  return `${taskId}:${field}`;
-}
-
-function taskFieldHasValue(task, spec) {
-  return spec.toText(task).trim() !== "";
-}
-
-/* ORB-11655: a detail holding an open editor is reused verbatim by the next
-   background refresh, the same way an open comment form is, so the operator's
-   unsaved text survives the poll. The open editors are tracked on the node
-   itself because that node is the thing being kept, and under their own dataset
-   key so closing one cannot cancel a comment draft's claim on the same node. */
-function setDetailEditing(detail, field, open) {
-  if (!detail) return;
-  const fields = new Set((detail.dataset.editing || "").split(",").filter(Boolean));
-  if (open) fields.add(field);
-  else fields.delete(field);
-  if (fields.size > 0) detail.dataset.editing = [...fields].join(",");
-  else delete detail.dataset.editing;
-}
-
-function buildTaskFieldEditor(task, field, detail, context, editSlot = null) {
-  const visit = captureWorkspaceVisit();
-  const spec = TASK_FIELD_EDITORS[field];
-  const mutationPath = visit.path(taskMutationPath(task));
-  const mutable = canMutateTask(task);
-  const editTitle = `Edit ${spec.label} for ${task.id}`;
-  const wrap = el("div", { class: "field-editor-cell" });
-  wrap.appendChild(
-    buildInlineFieldEditor({
-      label: spec.label,
-      value: spec.toText(task),
-      renderView: () => spec.renderView(task),
-      multiline: spec.multiline !== false,
-      placeholder: spec.placeholder || "",
-      hint: spec.hint || "",
-      toggle: spec.toggle || null,
-      editable: mutable,
-      editTitle,
-      disabledTitle: aggregateRefusalTitle(editTitle, `edit ${spec.label}`),
-      save: (text, options) => patchJson(mutationPath, spec.toPayload(text, options)),
-      onSaved: (updatedTask) => {
-        if (visit.isCurrent()) completeFieldSave(task.id, field, updatedTask, context);
-      },
-      onEditingChange: (open) => setDetailEditing(detail, field, open),
-      editSlot,
-    }),
-  );
-  const feedback = taskState.fieldFeedback.get(fieldFeedbackKey(task.id, field));
-  const feedbackNode = buildMutationFeedback(feedback);
-  if (feedbackNode) wrap.appendChild(feedbackNode);
-  return wrap;
-}
-
-function completeFieldSave(taskId, field, updatedTask, context) {
-  applyUpdatedTask(updatedTask, context);
-  const key = fieldFeedbackKey(taskId, field);
-  taskState.fieldFeedback.set(key, { kind: "success", text: `${TASK_FIELD_EDITORS[field].label} saved` });
-  rerender(context);
-  scheduleFeedbackExpiry(taskState.fieldFeedback, key, context, FIELD_SAVED_NOTICE_MS);
-}
-
-/* ORB-12235: complexity gates dispatch — an unassessed task is withheld from
-   implementation — and until now only the CLI could set it. `unassessed` is
-   deliberately not an option: the update endpoint rejects it, so offering it
-   would only produce a 400. A task that currently carries it (or any value the
-   server later adds) keeps a disabled placeholder so the select still shows
-   what is stored. */
-const TASK_COMPLEXITY_OPTIONS = ["low", "medium", "hard", "xhard"];
-
-function buildComplexityUpdateControl(task, context) {
-  const cell = el("div", { class: "complexity-cell" });
-  const mutable = canMutateTask(task);
-  const feedback = taskState.complexityFeedback.get(task.id);
-  const label = `Update complexity for ${task.id}`;
-  const select = el("select", {
-    class: "task-complexity-select mono",
-    title: mutable ? label : aggregateRefusalTitle(label, "change complexity"),
-  });
-  select.setAttribute("aria-label", label);
-
-  const currentValue = assessedComplexity(task);
-  if (!currentValue) {
-    const placeholder = el("option", { text: task.complexity ? String(task.complexity) : "unassessed" });
-    placeholder.value = "";
-    placeholder.disabled = true;
-    select.appendChild(placeholder);
-  }
-  for (const value of TASK_COMPLEXITY_OPTIONS) {
-    const option = el("option", { text: value });
-    option.value = value;
-    select.appendChild(option);
-  }
-  select.value = currentValue;
-  if (!mutable || (feedback && feedback.kind === "pending")) select.disabled = true;
-
-  select.addEventListener("change", (event) => {
-    event.stopPropagation();
-    applyTaskComplexityChange(task, select.value, context);
-  });
-  cell.appendChild(select);
-  const feedbackNode = buildMutationFeedback(feedback, () => {
-    if (feedback && feedback.undo) {
-      applyTaskComplexityChange(task, feedback.undo.previousValue, context);
-    }
-  });
-  if (feedbackNode) cell.appendChild(feedbackNode);
-  return cell;
-}
-
-function assessedComplexity(task) {
-  const value = task && task.complexity ? String(task.complexity) : "";
-  return TASK_COMPLEXITY_OPTIONS.includes(value) ? value : "";
-}
-
-async function applyTaskComplexityChange(task, nextValue, context) {
-  const visit = captureWorkspaceVisit();
-  const mutationPath = visit.path(taskMutationPath(task));
-  const previousValue = assessedComplexity(task);
-  if (!nextValue || nextValue === previousValue || !canMutateTask(task)) return;
-  taskState.complexityFeedback.set(task.id, { kind: "pending", text: "saving…" });
-  rerender(context);
-  try {
-    const updatedTask = await patchJson(mutationPath, { complexity: nextValue });
-    if (!visit.isCurrent()) return;
-    applyUpdatedTask(updatedTask, context);
-    taskState.complexityFeedback.set(task.id, {
-      kind: "success",
-      text: "complexity saved",
-      // Undo is offered only back to an assessed value; the endpoint refuses
-      // `unassessed`, so a task that arrived unassessed has nothing to restore.
-      undo: previousValue
-        ? { previousValue, expiresAt: Date.now() + MUTATION_UNDO_WINDOW_MS }
-        : undefined,
-    });
-  } catch (error) {
-    if (!visit.isCurrent()) return;
-    taskState.complexityFeedback.set(task.id, {
-      kind: "error",
-      text: `complexity update failed: ${error.message || String(error)}`,
-    });
-    console.error(error);
-  }
-  rerender(context);
-  scheduleFeedbackExpiry(taskState.complexityFeedback, task.id, context, MUTATION_UNDO_WINDOW_MS + 500);
-}
-
-/* ORB-12645: the comment thread.
-
-   Agents write spec-length Markdown here, so a comment is a document rather
-   than a log line: the thread spans the full detail width below the two field
-   columns, every body renders through markdown.js (the same sanitization as
-   any other dashboard-authored body), and anything taller than a screenful is
-   capped until the operator opens it.
-
-   Expansion, the raw/rendered toggle and the thread order are operator state
-   rather than task data, so they live in this module — keyed
-   `<task id>#<index into task.comments>` — and survive the 30 s refresh that
-   rebuilds the detail node. */
-const COMMENT_COLLAPSE_HEIGHT_PX = 300;
-// A rendered body is 13px sans at line-height 1.65 (~22px a line), and the
-// ~72ch measure takes roughly 96 source columns before it wraps.
-const COMMENT_LINE_HEIGHT_PX = 22;
-const COMMENT_WRAP_COLUMNS = 96;
-// Below this an outline would only repeat what the body already shows.
-const COMMENT_OUTLINE_MIN_SECTIONS = 3;
-const COMMENT_PREFS_KEY = "orbit.dashboard.comments";
-// `by` on an agent-written comment names the crew or the agent family that
-// wrote it. A human note carries the operator identity the API sanitizes to
-// (ORB-10444), which is never one of these.
-const AGENT_COMMENT_AUTHORS = new Set(["codex", "claude", "gemini", "grok", "agent", "system", "orbit"]);
-
-function loadCommentPrefs() {
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(COMMENT_PREFS_KEY) || "{}");
-    return {
-      newestFirst: parsed.newestFirst === true,
-      collapsed: parsed.collapsed === true,
-    };
-  } catch (_) {
-    return { newestFirst: false, collapsed: false };
-  }
-}
-
-function saveCommentPrefs() {
-  try {
-    window.localStorage.setItem(COMMENT_PREFS_KEY, JSON.stringify(commentPrefs));
-  } catch (_) {
-    /* localStorage unavailable (private mode, quota) — thread order is a
-       presentation preference, so losing it costs nothing */
-  }
-}
-
-function commentSourceLines(message) {
-  return String(message ?? "").split("\n");
-}
-
-// The `##` sections of a body: the collapsed card lists them instead of the
-// text it is hiding, and three or more of them earn an outline.
-function commentSections(message) {
-  const titles = [];
-  let fenced = false;
-  for (const line of commentSourceLines(message)) {
-    if (/^\s*(```|~~~)/.test(line)) {
-      fenced = !fenced;
-      continue;
-    }
-    if (fenced) continue;
-    const heading = /^##\s+(.*?)\s*#*$/.exec(line);
-    if (heading && heading[1].trim()) titles.push(heading[1].trim());
-  }
-  return titles;
-}
-
-/* Height has to be known while the card is still detached — the detail is
-   built off-document and measuring it would mean painting the thread a frame
-   late, after a reflow — so it is estimated from the source instead: one row
-   a line, plus a row for every wrap. */
-function estimatedCommentHeight(message) {
-  let rows = 0;
-  for (const line of commentSourceLines(message)) {
-    rows += Math.max(1, Math.ceil(line.length / COMMENT_WRAP_COLUMNS));
-  }
-  return rows * COMMENT_LINE_HEIGHT_PX;
-}
-
-function commentIsLong(message) {
-  return estimatedCommentHeight(message) > COMMENT_COLLAPSE_HEIGHT_PX;
-}
-
-function commentWordCount(message) {
-  return String(message ?? "").split(/\s+/).filter(Boolean).length;
-}
-
-function commentMessage(comment) {
-  return comment && typeof comment.message === "string" ? comment.message : "";
-}
-
-// The audit body of a pilot receipt: the whole message when the comment
-// carries its typed operation id.
-function pilotReceiptBody(comment) {
-  const message = commentMessage(comment);
-  if (comment.operation_id == null) return legacyPilotReceiptBody(message);
-  return /^[a-fA-F0-9]{64}$/.test(comment.operation_id) ? message : null;
-}
-
-// Compatibility reader for receipts written before the typed operation id:
-// an `operation_id=<id>` first line ahead of the audit body.
-function legacyPilotReceiptBody(message) {
-  const newline = message.indexOf("\n");
-  if (newline < 0 || !/^operation_id=[a-fA-F0-9]{64}\r?$/.test(message.slice(0, newline))) return null;
-  return message.slice(newline + 1);
-}
-
-// A pilot receipt is persisted data: summarize only a recognized assessment,
-// and keep the original message for raw/copy and for unrecognized comments.
-function pilotAssessment(comment) {
-  if (!comment || comment.by !== "task-pilot") return null;
-  const body = pilotReceiptBody(comment);
-  if (body == null) return null;
-  try {
-    const receipt = JSON.parse(body);
-    const assessment = receipt && receipt.assessment;
-    const fields = ["disposition", "confidence", "recommended_crew", "recommended_complexity", "assessment_rationale"];
-    if (!assessment || !fields.every(field => typeof assessment[field] === "string" && assessment[field].trim())) return null;
-    return { receipt, assessment };
-  } catch {
-    return null;
-  }
-}
-
-function pilotAssessmentView({ receipt, assessment }) {
-  const view = el("div", { class: "pilot-assessment" });
-  const fields = el("dl", { class: "pilot-assessment-fields" });
-  const addField = (label, value) => {
-    fields.appendChild(el("dt", { text: label }));
-    fields.appendChild(el("dd", { text: value }));
-  };
-  const recommendation = (field, before) => {
-    const after = assessment[field];
-    return typeof before === "string" && before && before !== after ? `${before} → ${after}` : after;
-  };
-  addField("Disposition", assessment.disposition);
-  addField("Confidence", assessment.confidence);
-  addField("Recommended crew", recommendation("recommended_crew", receipt.crew_before));
-  addField("Recommended complexity", recommendation("recommended_complexity", receipt.complexity_before));
-  addField("Rationale", assessment.assessment_rationale);
-  view.appendChild(fields);
-  for (const [field, label] of [["evidence_gaps", "Evidence gaps"], ["reassessment_triggers", "Reassessment triggers"], ["blocked_by", "Blocked by"]]) {
-    const items = Array.isArray(assessment[field]) ? assessment[field].filter(item => typeof item === "string" && item.trim()) : [];
-    if (items.length === 0) continue;
-    view.appendChild(el("div", { class: "pilot-assessment-label", text: label }));
-    view.appendChild(el("ul", {}, items.map(text => el("li", { text }))));
-  }
-  for (const [field, label] of [["duplicate_of", "Duplicate of"], ["already_landed", "Already landed"]]) {
-    const finding = assessment[field];
-    if (finding == null) continue;
-    const text = typeof finding === "string" ? finding : finding && typeof finding === "object"
-      ? [finding.task_id, finding.commit, finding.evidence].filter(value => typeof value === "string" && value.trim()).join(" · ")
-      : "";
-    if (text) addField(label, text);
-  }
-  return view;
-}
-
-function commentKey(taskId, index) {
-  return `${taskId}#${index}`;
-}
-
-// Stable across a reorder and across the refresh: the position in
-// `task.comments`, never the position on screen.
-function commentAnchorId(taskId, index) {
-  return `comment-${taskId}-${index + 1}`;
-}
-
-function commentInitial(name) {
-  const match = /[a-z0-9]/i.exec(String(name ?? ""));
-  return match ? match[0].toUpperCase() : "?";
-}
-
-function isAgentComment(name, task) {
-  const value = String(name ?? "").trim();
-  if (!value) return false;
-  if (AGENT_COMMENT_AUTHORS.has(value.toLowerCase())) return true;
-  if (isConfiguredCrewValue(value)) return true;
-  const resolved = task && task.resolved_crew ? String(task.resolved_crew) : "";
-  return value === explicitCrewValue(task) || value === resolved;
-}
-
-// The task context carries absolute time only, and a thread also wants the
-// "how long ago" a reader scans for, on the scale the rest of the dashboard
-// uses.
-function commentAge(value) {
-  const at = value ? new Date(value) : null;
-  if (!at || Number.isNaN(at.getTime())) return "";
-  const seconds = (Date.now() - at.getTime()) / 1000;
-  if (seconds < 60) return "just now";
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-  return `${Math.floor(seconds / 86400)}d ago`;
-}
-
-function commentActionButton(label, title) {
-  const button = el("button", { class: "comment-action", text: label, title });
-  button.type = "button";
-  return button;
-}
-
-function commentPermalink(anchorId) {
-  const href = window.location && window.location.href ? String(window.location.href) : "";
-  return `${href.split("#")[0]}#${anchorId}`;
-}
-
-function renderedCommentHeadings(view) {
-  return typeof view.querySelectorAll === "function" ? Array.from(view.querySelectorAll("h2")) : [];
-}
-
-/* The outline follows the reader: whichever heading last crossed the top of
-   the viewport owns the highlight. Observed rather than polled on scroll, and
-   only where the browser supports it — without an observer the outline is
-   still a working set of links. */
-function trackCommentOutline(headings, links) {
-  if (typeof IntersectionObserver !== "function" || headings.length === 0) return null;
-  const observer = new IntersectionObserver(
-    (entries) => {
-      for (const entry of entries) {
-        if (!entry.isIntersecting) continue;
-        const index = headings.indexOf(entry.target);
-        if (index < 0) continue;
-        highlightCommentOutline(links, index);
-      }
-    },
-    { rootMargin: "0px 0px -70% 0px" },
-  );
-  for (const heading of headings) observer.observe(heading);
-  return observer;
-}
-
-function highlightCommentOutline(links, index) {
-  links.forEach((link, position) => {
-    link.className = position === index ? "comment-outline-link active" : "comment-outline-link";
-  });
-}
-
-function buildCommentOutline(headings, titles) {
-  const outline = el("nav", { class: "comment-outline" });
-  outline.appendChild(el("div", { class: "comment-outline-title", text: "In this comment" }));
-  const links = [];
-  titles.forEach((title, index) => {
-    const target = headings[index] || null;
-    const link = el("button", { class: "comment-outline-link", text: title });
-    link.type = "button";
-    link.addEventListener("click", (event) => {
-      event.stopPropagation();
-      if (target && typeof target.scrollIntoView === "function") {
-        target.scrollIntoView({ behavior: "smooth", block: "start" });
-      }
-      highlightCommentOutline(links, index);
-    });
-    links.push(link);
-    outline.appendChild(link);
-  });
-  outline.links = links;
-  return outline;
-}
-
-function disconnectCommentCards(container) {
-  if (!container) return;
-  for (const child of container.children || []) {
-    if (typeof child.disconnectOutline === "function") {
-      child.disconnectOutline();
-    }
-    disconnectCommentCards(child);
-  }
-}
-
-function buildCommentCard(task, comment, index, context) {
-  const key = commentKey(task.id, index);
-  const message = commentMessage(comment);
-  const writer = comment && comment.by ? String(comment.by) : "?";
-  const pilot = pilotAssessment(comment);
-  const titles = pilot ? [] : commentSections(message);
-  const long = !pilot && commentIsLong(message);
-
-  const card = el("article", { class: "comment-card" });
-  card.id = commentAnchorId(task.id, index);
-  card.dataset.commentKey = key;
-
-  const rawToggle = commentActionButton("raw", "Show this comment's original text");
-  const copy = commentActionButton("copy", "Copy this comment's original text");
-  const permalink = commentActionButton("#", "Scroll to this comment and copy a link to it");
-  permalink.className = "comment-action permalink";
-  const actions = el("span", { class: "comment-actions" }, [rawToggle, copy, permalink]);
-
-  const size = long
-    ? el("span", {
-        class: "comment-size",
-        text: titles.length > 0
-          ? `${commentWordCount(message)} words · ${titles.length} sections`
-          : `${commentWordCount(message)} words`,
-      })
-    : null;
-  const head = el("div", { class: "comment-head" }, [
-    el("span", { class: "comment-initial", text: commentInitial(writer) }),
-    el("span", {
-      class: isAgentComment(writer, task) ? "comment-by agent" : "comment-by",
-      text: writer,
-    }),
-    isAgentComment(writer, task) ? el("span", { class: "comment-agent-pill", text: "agent" }) : null,
-    absTimeNode(context, comment && comment.at, { class: "comment-at" }),
-    clockStamp(
-      el("span", { class: "comment-age", text: commentAge(comment && comment.at), title: fmtAbsTimeValue(context, comment && comment.at) }),
-      comment && comment.at,
-      { title: true },
-    ),
-    size,
-    actions,
-  ]);
-
-  const view = pilot ? pilotAssessmentView(pilot) : markdownView(message);
-  view.className = "markdown-body comment-body";
-  const headings = renderedCommentHeadings(view);
-  const raw = el("pre", { class: "comment-raw", text: message });
-  raw.style.display = "none";
-  const bodies = el("div", { class: "comment-bodies" }, [view, raw]);
-  // The outline is built from the rendered headings so its entries and its
-  // scroll targets are the same nodes; the parsed `##` titles stand in only
-  // where no renderer is available and the body fell back to plain text.
-  const outlineTitles = headings.length > 0 ? headings.map((h) => String(h.textContent || "")) : titles;
-  const outline = outlineTitles.length >= COMMENT_OUTLINE_MIN_SECTIONS
-    ? buildCommentOutline(headings, outlineTitles)
-    : null;
-  const layout = el("div", { class: outline ? "comment-layout outlined" : "comment-layout" }, [outline, bodies]);
-
-  let outlineObserver = null;
-  const startTracking = () => {
-    if (outlineObserver || !outline || headings.length === 0) return;
-    outlineObserver = trackCommentOutline(headings, outline.links);
-  };
-  const stopTracking = () => {
-    if (outlineObserver) {
-      outlineObserver.disconnect();
-      outlineObserver = null;
-    }
-  };
-  card.disconnectOutline = stopTracking;
-  card.teardown = stopTracking;
-
-  const summary = el("div", {
-    class: "comment-summary",
-    text: titles.length > 0 ? `sections: ${titles.join(" · ")}` : `${commentWordCount(message)} words`,
-  });
-  const toggle = el("button", { class: "comment-toggle" });
-  toggle.type = "button";
-  const foot = el("div", { class: "comment-foot" }, [summary, toggle]);
-
-  const apply = () => {
-    const expanded = !long || taskState.expandedComments.has(key);
-    const showsRaw = rawComments.has(key);
-    card.className = [
-      "comment-card",
-      long ? "long" : "",
-      long && !expanded ? "collapsed" : "",
-      long && expanded ? "expanded" : "",
-      showsRaw ? "raw" : "",
-    ].filter(Boolean).join(" ");
-    view.style.display = showsRaw ? "none" : "";
-    raw.style.display = showsRaw ? "" : "none";
-    if (outline) outline.style.display = showsRaw || !expanded ? "none" : "";
-    rawToggle.textContent = showsRaw ? "rendered" : "raw";
-    rawToggle.setAttribute("aria-pressed", String(showsRaw));
-    toggle.textContent = expanded ? "Collapse" : "Show full comment";
-    // A short comment has nothing to disclose, so its card keeps the density
-    // of the line it replaced: no footer, no empty row under the body.
-    foot.style.display = long ? "" : "none";
-    summary.style.display = long && !expanded ? "" : "none";
-    // The disclosure state belongs to the control that changes it, not to the
-    // card, which is an article rather than a widget.
-    toggle.setAttribute("aria-expanded", String(expanded));
-    if (!expanded || showsRaw) {
-      stopTracking();
-    } else {
-      startTracking();
-    }
-  };
-
-  toggle.addEventListener("click", (event) => {
-    event.stopPropagation();
-    if (taskState.expandedComments.has(key)) taskState.expandedComments.delete(key);
-    else taskState.expandedComments.add(key);
-    apply();
-  });
-  rawToggle.addEventListener("click", (event) => {
-    event.stopPropagation();
-    if (rawComments.has(key)) rawComments.delete(key);
-    else rawComments.add(key);
-    apply();
-  });
-  copy.addEventListener("click", (event) => {
-    event.stopPropagation();
-    copyWithFeedback(copy, message);
-  });
-  permalink.addEventListener("click", (event) => {
-    event.stopPropagation();
-    if (typeof card.scrollIntoView === "function") {
-      card.scrollIntoView({ behavior: "smooth", block: "start" });
-    }
-    copyWithFeedback(permalink, commentPermalink(card.id));
-  });
-
-  card.appendChild(head);
-  card.appendChild(layout);
-  card.appendChild(foot);
-  apply();
-  return card;
-}
-
-function getCommentHash() {
-  if (typeof window === "undefined" || !window.location || !window.location.hash) return "";
-  const raw = String(window.location.hash);
-  return raw.startsWith("#") ? raw : `#${raw}`;
-}
-
-function buildCommentsPanel(task, context) {
-  let isCollapsed = commentPrefs.collapsed === true;
-  const currentHash = getCommentHash();
-  if (currentHash.startsWith(`#comment-${task.id}-`) && taskState.restoredCommentHash !== currentHash) {
-    isCollapsed = false;
-  }
-  let classes = "field-block collapsible comments-panel";
-  if (isCollapsed) classes += " collapsed";
-  const panel = el("div", { class: classes });
-  renderCommentsPanel(panel, task, context);
-  return panel;
-}
-
-function findCommentCard(id) {
-  if (typeof document.getElementById === "function") {
-    const node = document.getElementById(id);
-    if (node && (node.id === id || String(node.className).includes("comment-card"))) return node;
-  }
-  const root = (typeof document.getElementById === "function" ? document.getElementById("task-detail-body") : null) || (typeof document !== "undefined" ? document.body : null);
-  if (!root) return null;
-  const queue = [root];
-  while (queue.length > 0) {
-    const curr = queue.shift();
-    if (curr.id === id) return curr;
-    if (curr.children) {
-      for (const child of curr.children) queue.push(child);
-    }
-  }
-  return null;
-}
-
-function findCommentsPanel(node) {
-  let curr = node ? node.parentNode : null;
-  while (curr) {
-    if (curr.classList && typeof curr.classList.contains === "function" && curr.classList.contains("comments-panel")) {
-      return curr;
-    }
-    if (String(curr.className || "").split(/\s+/).includes("comments-panel")) {
-      return curr;
-    }
-    curr = curr.parentNode;
-  }
-  return null;
-}
-
-export function scrollToComment(hash = getCommentHash()) {
-  if (!hash) return false;
-  const rawId = String(hash).replace(/^#/, "");
-  if (!rawId.startsWith("comment-")) return false;
-  const target = findCommentCard(rawId);
-  if (!target) return false;
-  // The thread lives on the detail's Comments tab.
-  for (let node = target.parentNode; node; node = node.parentNode) {
-    if (typeof node.activateTab === "function") {
-      node.activateTab("comments");
-      break;
-    }
-  }
-  const panel = findCommentsPanel(target);
-  if (panel) {
-    const isCollapsed = panel.classList && typeof panel.classList.contains === "function"
-      ? panel.classList.contains("collapsed")
-      : String(panel.className || "").split(/\s+/).includes("collapsed");
-    if (isCollapsed) {
-      if (panel.classList && typeof panel.classList.remove === "function") {
-        panel.classList.remove("collapsed");
-      }
-      panel.className = String(panel.className || "")
-        .split(/\s+/)
-        .filter((c) => c !== "collapsed")
-        .join(" ");
-      const toggle = panel.querySelector ? panel.querySelector("h4 .field-toggle") : null;
-      if (toggle && typeof toggle.setAttribute === "function") {
-        toggle.setAttribute("aria-expanded", "true");
-      }
-      commentPrefs = { ...commentPrefs, collapsed: false };
-      saveCommentPrefs();
-    }
-  }
-  if (typeof target.scrollIntoView === "function") {
-    target.scrollIntoView({ behavior: "smooth", block: "start" });
-  }
-  const currentHash = getCommentHash();
-  if (currentHash && (hash === currentHash || rawId === currentHash.replace(/^#/, ""))) {
-    taskState.restoredCommentHash = currentHash;
-  }
-  return true;
-}
-
-if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
-  window.addEventListener("hashchange", () => {
-    const commentHash = getCommentHash();
-    if (commentHash.startsWith("#comment-")) {
-      if (scrollToComment(commentHash)) {
-        taskState.restoredCommentHash = commentHash;
-      } else {
-        taskState.restoredCommentHash = null;
-      }
-    } else {
-      taskState.restoredCommentHash = null;
-    }
-  });
-}
-
-/* Rendered in place rather than through renderTasks: the thread's order and
-   each card's disclosure are this panel's own state, and the detail node is
-   diffed on the task payload, which none of them are part of. */
-function renderCommentsPanel(panel, task, context) {
-  disconnectCommentCards(panel);
-  const isCollapsed = panel.classList && typeof panel.classList.contains === "function"
-    ? panel.classList.contains("collapsed")
-    : String(panel.className || "").split(/\s+/).includes("collapsed");
-  const comments = Array.isArray(task.comments) ? task.comments : [];
-  const actions = el("span", { class: "field-actions" });
-  const order = el("button", {
-    class: "comment-pref",
-    text: commentPrefs.newestFirst ? "newest first" : "oldest first",
-    title: "Toggle the order this thread is listed in",
-  });
-  order.type = "button";
-  order.addEventListener("click", (event) => {
-    event.stopPropagation();
-    commentPrefs = { ...commentPrefs, newestFirst: !commentPrefs.newestFirst };
-    saveCommentPrefs();
-    renderCommentsPanel(panel, task, context);
-  });
-  actions.appendChild(order);
-  if (comments.some((comment) => commentIsLong(commentMessage(comment)))) {
-    const collapseAll = el("button", {
-      class: "comment-pref",
-      text: "collapse all",
-      title: "Collapse every expanded comment on this task",
-    });
-    collapseAll.type = "button";
-    collapseAll.addEventListener("click", (event) => {
-      event.stopPropagation();
-      for (let index = 0; index < comments.length; index++) {
-        taskState.expandedComments.delete(commentKey(task.id, index));
-      }
-      renderCommentsPanel(panel, task, context);
-    });
-    actions.appendChild(collapseAll);
-  }
-  // The header also holds the order and collapse-all buttons, so the title and
-  // count are the disclosure button rather than the whole header.
-  const toggle = el("button", { class: "field-toggle" }, [
-    el("span", { class: "field-title", text: "Comments" }),
-    el("span", { class: "field-count", text: String(comments.length) }),
-  ]);
-  const head = el("h4", { class: "section-title" }, [toggle, actions]);
-  makeDisclosure(head, toggle, {
-    expanded: !isCollapsed,
-    onToggle: (event) => {
-      if (event && typeof event.stopPropagation === "function") {
-        event.stopPropagation();
-      }
-      const hasToggle = panel.classList && typeof panel.classList.toggle === "function";
-      const nowCollapsed = hasToggle
-        ? panel.classList.toggle("collapsed")
-        : !isCollapsed;
-      if (!hasToggle || nowCollapsed === undefined) {
-        const set = new Set(String(panel.className || "").split(/\s+/).filter(Boolean));
-        const next = !set.has("collapsed");
-        if (next) set.add("collapsed");
-        else set.delete("collapsed");
-        panel.className = Array.from(set).join(" ");
-      }
-      toggle.setAttribute("aria-expanded", String(!nowCollapsed));
-      commentPrefs = { ...commentPrefs, collapsed: nowCollapsed };
-      saveCommentPrefs();
-    },
-  });
-  const thread = el("div", { class: "comment-thread" });
-  const ordered = comments.map((comment, index) => ({ comment, index }));
-  if (commentPrefs.newestFirst) ordered.reverse();
-  for (const entry of ordered) {
-    thread.appendChild(buildCommentCard(task, entry.comment, entry.index, context));
-  }
-  panel.replaceChildren(head, thread);
-}
-
-// Descriptions longer than this open clamped behind "Show full description".
-// Estimated from the source, like a long comment, because the detail is built
-// off-document and cannot be measured before it paints.
-const LONG_DESCRIPTION_CHARS = 700;
-const LONG_DESCRIPTION_LINES = 12;
-
-function isLongDescription(text) {
-  const value = String(text || "");
-  return value.length > LONG_DESCRIPTION_CHARS || value.split("\n").length > LONG_DESCRIPTION_LINES;
-}
-
-function isLongCriteria(criteria) {
-  return isLongDescription(linesToText(criteria));
-}
-
-// The attention callout's Retry landing goes to the claim panel's own control,
-// which asks for the reason and sends the request; nothing is sent from here.
-function goToLandingRetry(detail, claim) {
-  if (typeof detail.activateTab === "function") detail.activateTab("delivery");
-  const panel = Array.from(detail.querySelectorAll(".claim-panel"))
-    .find((node) => node.getAttribute("data-claim-id") === String((claim && claim.claim_id) || ""));
-  const target = panel && (panel.querySelector('[data-reason-for~="retry-handoff"]') || panel.querySelector(".claim-actions"));
-  if (!target) return;
-  if (typeof target.scrollIntoView === "function") target.scrollIntoView({ block: "center", behavior: "smooth" });
-  if (target.tagName === "INPUT") target.focus({ preventScroll: true });
-}
-
-// The five facts an operator needs before deciding what to do with a blocked
-// task or a held delivery. Read-only: the block callout keeps the actions.
-function buildWhyStuckCard(task) {
-  const stuck = task.why_stuck;
-  if (!stuck || typeof stuck !== "object") return null;
-  const headingId = `why-stuck-${task.id}`;
-  return el("section", { class: "why-stuck", "aria-labelledby": headingId }, [
-    el("h3", { class: "why-stuck-title", id: headingId, text: "Why stuck" }),
-    el("dl", { class: "why-stuck-rows" }, [
-      whyStuckRow("Escalation", whyStuckEscalationValue(task, stuck.escalation_note)),
-      whyStuckRow("Landing review", whyStuckLanding(stuck.landing_review)),
-      whyStuckRow("Root cause", whyStuckLongNote(task, "root cause", whyStuckNote(stuck.root_cause))),
-      whyStuckRow("Mergeable", whyStuckMergeable(stuck.pull_request)),
-      whyStuckRow("Required checks", whyStuckChecks(stuck.pull_request)),
-    ]),
-  ]);
-}
-
-function whyStuckEscalationValue(task, fact) {
-  const note = whyStuckNote(fact);
-  const block = task.block || {};
-  const readableNote = fact && fact.availability === "read" && typeof fact.text === "string" && fact.text.trim();
-  if (task.status === "blocked" && block.cause === "escalation" && readableNote &&
-      typeof block.reason === "string" && block.reason.trim() === fact.text.trim()) {
-    const reference = el("a", { text: "See blocked note above" });
-    const headingId = `block-heading-${task.id}`;
-    reference.href = `#${headingId}`;
-    reference.addEventListener("click", (event) => {
-      event.preventDefault();
-      document.getElementById(headingId)?.scrollIntoView?.({ block: "center" });
-    });
-    return reference;
-  }
-  return whyStuckLongNote(task, "escalation", note);
-}
-
-function whyStuckRow(label, value) {
-  const body = typeof value === "string"
-    ? el("dd", { class: "why-stuck-value", text: value })
-    : value;
-  if (body && body.classList && !body.classList.contains("why-stuck-value") && body.tagName !== "UL") {
-    body.classList.add("why-stuck-value");
-  }
-  return el("div", { class: "why-stuck-row" }, [
-    el("dt", { class: "why-stuck-label", text: label }),
-    body,
-  ]);
-}
-
-// Escalation notes and root causes can carry whole CI log excerpts; past this
-// they open clamped behind "Show full …", like a long description.
-const LONG_WHY_STUCK_CHARS = 280;
-const LONG_WHY_STUCK_LINES = 5;
-// `<task id>:<row>` of the notes the operator expanded; a rebuild keeps them open.
-const expandedWhyStuck = new Set();
-
-function whyStuckLongNote(task, name, text) {
-  if (text.length <= LONG_WHY_STUCK_CHARS && text.split("\n").length <= LONG_WHY_STUCK_LINES) return text;
-  const key = `${task.id}:${name}`;
-  const open = expandedWhyStuck.has(key);
-  const value = el("dd", { class: open ? "why-stuck-value" : "why-stuck-value clamped" }, [
-    el("div", { class: "why-stuck-text", text }),
-  ]);
-  const closedLabel = `Show full ${name}`;
-  const toggle = el("button", {
-    class: "why-stuck-toggle",
-    type: "button",
-    text: open ? "Show less" : closedLabel,
-    "aria-expanded": String(open),
-  });
-  toggle.addEventListener("click", (event) => {
-    event.stopPropagation();
-    const nowOpen = value.classList.contains("clamped");
-    value.classList.toggle("clamped", !nowOpen);
-    if (nowOpen) expandedWhyStuck.add(key);
-    else expandedWhyStuck.delete(key);
-    toggle.setAttribute("aria-expanded", String(nowOpen));
-    toggle.textContent = nowOpen ? "Show less" : closedLabel;
-  });
-  value.appendChild(toggle);
-  return value;
-}
-
-function whyStuckNote(fact) {
-  if (!fact || typeof fact !== "object") return "unavailable";
-  if (fact.availability === "none") return "none";
-  if (fact.availability === "read" && typeof fact.text === "string" && fact.text.trim()) return fact.text;
-  return "unavailable";
-}
-
-function whyStuckLanding(fact) {
-  if (!fact || fact.availability !== "read" || typeof fact.verdict !== "string" || !fact.verdict.trim()) {
-    return "unavailable";
-  }
-  return `${fact.verdict} · ${whyStuckFindings(fact.finding_count)}`;
-}
-
-function whyStuckFindings(count) {
-  if (typeof count !== "number" || !Number.isFinite(count)) return "findings unavailable";
-  const n = Math.trunc(count);
-  return n === 1 ? "1 finding" : `${n} findings`;
-}
-
-function whyStuckMergeable(pull) {
-  if (pull && pull.availability === "read" && (pull.mergeable === "mergeable" || pull.mergeable === "conflicting")) {
-    return pull.mergeable;
-  }
-  const detail = pull && typeof pull.detail === "string" ? pull.detail.trim() : "";
-  return detail ? `unavailable — ${detail}` : "unavailable";
-}
-
-function whyStuckChecks(pull) {
-  if (!pull || pull.availability !== "read" || !Array.isArray(pull.checks)) {
-    return el("dd", { class: "why-stuck-value", text: "unavailable" });
-  }
-  const checks = pull.checks.filter((check) => check && typeof check.name === "string" && check.name.trim());
-  if (!checks.length) return el("dd", { class: "why-stuck-value", text: "none" });
-  return el("ul", { class: "why-stuck-checks" }, checks.map((check) => {
-    const state = check.state === "failed" || check.state === "passed" || check.state === "pending"
-      ? check.state
-      : "pending";
-    const item = el("li", { class: "why-stuck-check" }, [
-      el("span", { class: "why-stuck-check-name", text: check.name }),
-      el("span", { class: "why-stuck-state", text: state }),
-    ]);
-    item.setAttribute("data-state", state);
-    return item;
-  }));
-}
-
-// Core selects the latest block or escalation and supplies readable evidence.
-// Render it as text: diagnoses and operator actions are untrusted task content.
-function buildTaskBlockCallout(task, context, detail) {
-  if (task.status !== "blocked") return null;
-  const block = task.block || {};
-  const headingId = `block-heading-${task.id}`;
-  const content = el("div", { class: "task-attention-content" }, [
-    el("h3", { class: "task-attention-title", id: headingId, text: "Blocked · needs your attention" }),
-    el("p", {
-      class: "task-attention-body task-block-reason",
-      text: block.reason || "No block reason was recorded.",
-    }),
-  ]);
-  const time = el("p", { class: "task-block-time" });
-  if (block.at) {
-    time.append("Blocked at ", absTimeNode(context, block.at));
-  } else {
-    time.textContent = "Block time not recorded.";
-  }
-  content.appendChild(time);
-  const next = block.next_action || (task.next_step && task.next_step.resume_command
-    ? "Review the failed run, resolve the cause, then resume the run or move this task back to backlog."
-    : "Review the task and its evidence, resolve the cause, then move this task back to backlog when it is ready to retry.");
-  content.appendChild(el("p", { class: "task-attention-body task-block-next", text: `Next: ${next}` }));
-  const actions = el("div", { class: "task-attention-actions" });
-  if (Number.isInteger(block.comment_index) && Array.isArray(task.comments) && task.comments[block.comment_index]) {
-    const read = el("button", { class: "attention-action primary", type: "button", text: "Read escalation" });
-    read.addEventListener("click", () => {
-      detail.activateTab("comments");
-      const id = commentAnchorId(task.id, block.comment_index);
-      taskState.expandedComments.add(commentKey(task.id, block.comment_index));
-      const panel = detail.querySelector(".comments-panel");
-      if (panel) renderCommentsPanel(panel, task, context);
-      scrollToComment(`#${id}`);
-    });
-    actions.appendChild(read);
-  }
-  if (block.run_id) {
-    const run = el("a", { class: "attention-action", text: "View run" });
-    run.href = runHref(block.run_id, task.workspace_id ? { workspace: task.workspace_id } : {});
-    actions.appendChild(run);
-  }
-  if (!actions.children.length) {
-    const history = el("button", { class: "attention-action", type: "button", text: "View history" });
-    history.addEventListener("click", () => detail.activateTab("history"));
-    actions.appendChild(history);
-  }
-  content.appendChild(actions);
-  return el("section", { class: "task-attention warning task-block-callout", "aria-labelledby": headingId }, [
-    el("span", { class: "task-attention-icon", "aria-hidden": "true" }), content,
-  ]);
-}
-
 function buildTaskDetail(task, context, drain = null) {
   const detail = el("div", { class: "row-detail task-detail" });
   detail.addEventListener("click", (e) => e.stopPropagation());
-  detail.teardown = () => disconnectCommentCards(detail);
+  detail.teardown = () => taskComments.disconnectCommentCards(detail);
 
   const leftCol = el("div", { class: "detail-main" });
   const rightCol = el("div", { class: "detail-side" });
@@ -2431,9 +1165,9 @@ function buildTaskDetail(task, context, drain = null) {
   // description is exactly the edit an operator comes here for — but only where
   // editing is actually allowed, so the read-only aggregate view stays as terse
   // as it was.
-  const editor = (field, editSlot = null) => buildTaskFieldEditor(task, field, detail, context, editSlot);
+  const editor = (field, editSlot = null) => taskFields.buildTaskFieldEditor(task, field, detail, context, editSlot);
   const showsEditor = (field) =>
-    canMutateTask(task) || taskFieldHasValue(task, TASK_FIELD_EDITORS[field]);
+    canMutateTask(task) || taskFields.taskFieldHasValue(task, taskFields.TASK_FIELD_EDITORS[field]);
 
   // What needs the operator, and how far the delivery has come, sit above the
   // tabs. Both come from the claim read the Delivery block makes, which lands
@@ -2453,7 +1187,7 @@ function buildTaskDetail(task, context, drain = null) {
     ]);
     if (signature === deliverySignature) return;
     deliverySignature = signature;
-    const callout = buildAttentionCallout(attention, { pullRequest, onRetry: (claim) => goToLandingRetry(detail, claim) });
+    const callout = buildAttentionCallout(attention, { pullRequest, onRetry: (claim) => taskWhyStuck.goToLandingRetry(detail, claim) });
     attentionSlot.replaceChildren(...(callout ? [callout] : []));
     const progress = buildDeliveryProgress(steps);
     progressSlot.replaceChildren(...(progress ? [progress] : []));
@@ -2469,7 +1203,7 @@ function buildTaskDetail(task, context, drain = null) {
       class: "criteria-block",
       ...(count ? { count } : {}),
     });
-    if (isLongCriteria(task.acceptance_criteria)) {
+    if (taskWhyStuck.isLongCriteria(task.acceptance_criteria)) {
       const open = taskState.expandedCriteria.has(task.id);
       if (!open) block.classList.add("clamped");
       const toggle = el("button", {
@@ -2493,8 +1227,8 @@ function buildTaskDetail(task, context, drain = null) {
 
   if (showsEditor("description")) {
     const actions = actionSlot();
-    const block = addField(leftCol, "Description", taskMarkdownPanel(editor("description", actions)), false, false, { actions, class: "description-block" });
-    if (isLongDescription(task.description)) {
+    const block = addField(leftCol, "Description", taskFields.taskMarkdownPanel(editor("description", actions)), false, false, { actions, class: "description-block" });
+    if (taskWhyStuck.isLongDescription(task.description)) {
       const open = taskState.expandedDescriptions.has(task.id);
       if (!open) block.classList.add("clamped");
       const toggle = el("button", {
@@ -2533,11 +1267,11 @@ function buildTaskDetail(task, context, drain = null) {
   }
 
   if (task.plan && task.plan.trim()) {
-    addField(disclosures, "Plan", taskMarkdownPanel(markdownView(task.plan)), true, true);
+    addField(disclosures, "Plan", taskFields.taskMarkdownPanel(taskFields.markdownView(task.plan)), true, true);
   }
 
   if (task.execution_summary && task.execution_summary.trim()) {
-    addField(disclosures, "Execution summary", taskMarkdownPanel(markdownView(task.execution_summary)), true, true);
+    addField(disclosures, "Execution summary", taskFields.taskMarkdownPanel(taskFields.markdownView(task.execution_summary)), true, true);
   }
 
   if (task.review && typeof task.review === "object") {
@@ -2582,7 +1316,7 @@ function buildTaskDetail(task, context, drain = null) {
     showsEditor("context_files") ? actionFooter("context_files", "Context files actions", contextFilesEditSlot) : null,
   ].filter(Boolean);
   const commentsContent = el("div", { class: "comments-tab-content" }, [
-    comments > 0 ? buildCommentsPanel(task, context) : el("p", { class: "field-empty", text: "No comments yet." }),
+    comments > 0 ? taskComments.buildCommentsPanel(task, context) : el("p", { class: "field-empty", text: "No comments yet." }),
   ]);
   // ORB-12516: distributed claim provenance and the owner's handoff actions.
   // The tab appears only once a read finds a claim this workspace holds for
@@ -2620,9 +1354,9 @@ function buildTaskDetail(task, context, drain = null) {
   const [tabStrip, ...tabPanels] = sections;
   const band = el("div", { class: "detail-band" });
   band.appendChild(metaBlock);
-  const blockCallout = buildTaskBlockCallout(task, context, detail);
+  const blockCallout = taskWhyStuck.buildTaskBlockCallout(task, context, detail);
   if (blockCallout) band.appendChild(blockCallout);
-  const whyStuck = buildWhyStuckCard(task);
+  const whyStuck = taskWhyStuck.buildWhyStuckCard(task);
   if (whyStuck) band.appendChild(whyStuck);
   const pilotCallout = taskReadiness.buildPilotWarnings(task);
   if (pilotCallout) band.appendChild(pilotCallout);
@@ -2663,7 +1397,7 @@ function buildTaskDetail(task, context, drain = null) {
 function buildTaskMeta(task, context, { editor, showsEditor, drain }) {
   const levers = el("div", { class: "task-levers" });
   levers.appendChild(buildStatusUpdateControl(task, context));
-  levers.appendChild(buildComplexityUpdateControl(task, context));
+  levers.appendChild(taskFields.buildComplexityUpdateControl(task, context));
   if (canMutateTask(task) && !isAggregateView()) {
     const control = buildCrewUpdateControl(task, context, { withChip: false });
     control.classList.add("task-chip-crew");
@@ -4394,7 +3128,7 @@ function refreshDraftDetails(wrap, task, context, readinessTask = task) {
     for (const ul of wrap.querySelectorAll(".file-list")) {
       if (!ul.contentionTask) continue;
       ul.contentionTask = readinessTask;
-      refreshFileList(ul);
+      taskFields.refreshFileList(ul);
     }
   }
   const current = wrap.querySelector(".readiness-list");
@@ -4482,7 +3216,7 @@ function buildPinnedTask(ptask, context) {
   if (readiness) readiness.dataset.drainSignature = taskDrainSignature(drain);
 
   const wrap = el("div", { class: "pinned-task-wrap" }, [row, detail]);
-  wrap.teardown = () => disconnectCommentCards(wrap);
+  wrap.teardown = () => taskComments.disconnectCommentCards(wrap);
   wrap.dataset.key = `pinned-${ptask.id}`;
   wrap.dataset.hash = `${row.dataset.hash}-${JSON.stringify(ptask)}-${taskDrainSignature(drain)}-${detailFeedbackSignature(ptask.id)}-${fixPrSignature(ptask)}-${taskEvidence.decisionSignature(ptask)}`;
   return wrap;
@@ -5056,10 +3790,10 @@ export function renderTasks(tasks, context) {
   syncRowSelection(body);
   renderTaskPane(filtered, context);
   finishTaskRender(body);
-  const commentHash = getCommentHash();
+  const commentHash = taskComments.getCommentHash();
   if (commentHash.startsWith("#comment-")) {
     if (taskState.restoredCommentHash !== commentHash) {
-      if (scrollToComment(commentHash)) {
+      if (taskComments.scrollToComment(commentHash)) {
         taskState.restoredCommentHash = commentHash;
       }
     }
