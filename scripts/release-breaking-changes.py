@@ -602,6 +602,9 @@ def detect_mcp_changes(git, parent, commit, changed):
     def report(detail):
         found.append(signal("mcp-schema", MCP_SNAPSHOT, detail))
 
+    def inside_oneof(path):
+        return re.search(r"\{oneOf\d+\}", path) is not None
+
     for name in sorted(old):
         if name not in new:
             report(f"tool `{name}` removed")
@@ -649,6 +652,12 @@ def detect_mcp_changes(git, parent, commit, changed):
             if path in after_enums:
                 for value in sorted(values - after_enums[path]):
                     report(f"`{name}` `{path}` enum value {value} removed")
+                # A widened enum usually only admits more input. Inside oneOf,
+                # that input can start matching another branch as well.
+                if inside_oneof(path):
+                    for value in sorted(after_enums[path] - values):
+                        report(f"`{name}` `{path}` enum value {value} added "
+                               "inside oneOf alternative")
         # allOf branches all apply, so their required sets union at their
         # instance location (branch renumbering is not a new constraint).
         # anyOf/oneOf alternatives retain their positional branch paths:
@@ -662,6 +671,16 @@ def detect_mcp_changes(git, parent, commit, changed):
         def location(raw):
             return re.sub(r"\{allOf\d+\}", "", raw)
 
+        def same_instance_location(left, right):
+            left = location(left)
+            right = location(right)
+            if left == right:
+                return True
+            if not right.startswith(left):
+                return False
+            suffix = right[len(left):]
+            return re.fullmatch(r"(?:\{(?:anyOf|oneOf)\d+\})+", suffix) is not None
+
         def required_by_location(facts):
             grouped = {}
             for raw, req in facts.get("required", {}).items():
@@ -673,11 +692,28 @@ def detect_mcp_changes(git, parent, commit, changed):
         translated_after = dict(after)
         translated_after["required"] = translated_facts(after.get("required", {}), path_map, unmatched)
         after_locations = {location(p) for p in after_nodes}
-        for loc, required in sorted(required_by_location(translated_after).items()):
+        after_required = required_by_location(translated_after)
+        removed_properties = []
+        for path, names in before.get("properties", {}).items():
+            if path in after_properties:
+                removed_properties.append((path, names - after_properties[path]))
+        for loc, required in sorted(after_required.items()):
             if loc not in before_locations or loc not in after_locations:
                 continue
             for prop in sorted(required - before_required.get(loc, set())):
                 report(f"`{name}` property `{loc}.{prop}` newly required")
+        # Dropping a requirement normally only admits more input. In a oneOf
+        # branch it can create a second match and reject a formerly valid one.
+        for loc, required in sorted(before_required.items()):
+            if (not inside_oneof(loc) or loc not in before_locations
+                    or loc not in after_locations):
+                continue
+            for prop in sorted(required - after_required.get(loc, set())):
+                if any(prop in names and same_instance_location(path, loc)
+                       for path, names in removed_properties):
+                    continue
+                report(f"`{name}` property `{loc}.{prop}` no longer required "
+                       "inside oneOf alternative")
     return found
 
 

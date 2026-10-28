@@ -508,6 +508,77 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         self.assertEqual(report["bump"], "minor")
         self.assertEqual(report["next_version"], "0.36.0")
 
+    def test_oneof_branch_relaxations_decide_minor_but_root_relaxations_stay_patch(self):
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"] = {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string"},
+                "view": {"type": "string"},
+                "mode": {"type": "string"},
+                "fields": {"type": "array"},
+            },
+            "required": ["id", "view"],
+        }
+        tools[0]["outputSchema"] = {"type": "string", "enum": ["a"]}
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Add root schema controls [ORB-60] (#1)")
+        self.repo.git("tag", "-f", "v0.35.0")
+
+        tools[0]["inputSchema"]["required"] = ["id"]
+        tools[0]["outputSchema"]["enum"].append("b")
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Relax root schemas [ORB-61] (#2)")
+
+        report = self.report("--range", "v0.35.0..HEAD")
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+        self.assertEqual(report["next_version"], "0.35.1")
+
+        tools[0]["inputSchema"] = {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string"},
+                "view": {"type": "string"},
+                "mode": {"type": "string"},
+                "fields": {"type": "array"},
+            },
+            "required": ["id"],
+            "oneOf": [
+                {"required": ["view", "mode"]},
+                {"required": ["fields"]},
+            ],
+        }
+        tools[0]["outputSchema"] = {
+            "oneOf": [
+                {
+                    "properties": {"kind": {"enum": ["a"]}},
+                    "required": ["kind"],
+                },
+                {"required": ["fields"]},
+            ],
+        }
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Add oneOf schema controls [ORB-62] (#3)")
+        self.repo.git("tag", "-f", "v0.35.0")
+
+        tools[0]["inputSchema"]["oneOf"][0]["required"] = ["view"]
+        tools[0]["outputSchema"]["oneOf"][0]["properties"]["kind"]["enum"].append("b")
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Relax oneOf branch schemas [ORB-63] (#4)")
+
+        report = self.report("--range", "v0.35.0..HEAD")
+        self.assertEqual(self.signals(report), {
+            ("ORB-63", "mcp-schema",
+             "`orbit_task_show` property `inputSchema{oneOf0}.mode` "
+             "no longer required inside oneOf alternative"),
+            ("ORB-63", "mcp-schema",
+             "`orbit_task_show` `outputSchema{oneOf0}.kind` "
+             "enum value \"b\" added inside oneOf alternative"),
+        })
+        self.assertEqual(report["bump"], "minor")
+        self.assertEqual(report["next_version"], "0.36.0")
+
     def test_oneof_overlap_check_respects_json_schema_instance_semantics(self):
         cases = (
             (
