@@ -167,7 +167,7 @@ fn healthy_and_ineligible_tasks_have_no_attention() {
 #[test]
 fn abandoned_landing_review_settle_reports_abandoned_verdict() {
     // Exact step-error text built for `Settled::Abandoned` in
-    // `application/review/gate/settle.rs`: it settles nothing, so the row
+    // `application/review/gate/settle/orchestration.rs`: it settles nothing, so the row
     // must show the gate outcome, not the provisional `(verdict incomplete,`
     // parenthetical it quotes.
     let message = format!(
