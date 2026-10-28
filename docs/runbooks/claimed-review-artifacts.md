@@ -3,10 +3,10 @@ type: runbook
 summary: Verify and recover a distributed-drain follower's before-PR reviewer, whose review-artifact reads and report write reach the owner through the run's coordinator instead of SSH inside the sandbox.
 tags: [operations, review-gate, distributed-drain, sandbox, plugin-broker]
 paths:
-  - "crates/orbit-core/src/adapter/command/dispatch/claimed_owner.rs"
-  - "crates/orbit-core/src/adapter/command/dispatch/claimed_review.rs"
-  - "crates/orbit-core/src/adapter/command/dispatch/claimed_recovery.rs"
-  - "crates/orbit-core/src/adapter/command/dispatch/claimed_findings.rs"
+  - "crates/orbit-core/src/adapter/command/dispatch/claimed/owner.rs"
+  - "crates/orbit-core/src/adapter/command/dispatch/claimed/review.rs"
+  - "crates/orbit-core/src/adapter/command/dispatch/claimed/recovery.rs"
+  - "crates/orbit-core/src/adapter/command/dispatch/claimed/findings.rs"
   - "crates/orbit-core/src/adapter/command/dispatch/brokered.rs"
   - "crates/orbit-core/src/adapter/tool_host/worker_tools.rs"
   - "crates/orbit-cli/src/command/mcp/claimed_owner.rs"

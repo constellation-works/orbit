@@ -198,7 +198,7 @@ impl BrokerDispatch for RunDispatch {
                         {
                             return Err(OrbitError::PolicyDenied(policy.denial_message(&tool)));
                         }
-                        return super::claimed_owner::execute_brokered(
+                        return super::claimed::execute_brokered(
                             &self.runtime,
                             run,
                             &tool,

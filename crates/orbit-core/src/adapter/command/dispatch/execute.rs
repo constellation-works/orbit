@@ -489,7 +489,7 @@ impl OrbitRuntime {
         #[cfg(unix)]
         let mut claimed_owner_refusal = None;
         #[cfg(unix)]
-        match super::claimed_owner::bridge_claimed_owner_call(
+        match super::claimed::bridge_claimed_owner_call(
             &self.global_root(),
             self.worker_invocation(),
             self.automation_machine_identity(),
@@ -499,14 +499,14 @@ impl OrbitRuntime {
             &self.paths().repo_root,
             entry_point,
         ) {
-            Some(super::claimed_owner::ClaimedOwnerRoute::Forwarded(result)) => {
+            Some(super::claimed::ClaimedOwnerRoute::Forwarded(result)) => {
                 mark_tool_audit_recorded();
                 return Ok(ToolDispatchOutcome {
                     value: result?,
                     audit_recorded: false,
                 });
             }
-            Some(super::claimed_owner::ClaimedOwnerRoute::Refused(error)) => {
+            Some(super::claimed::ClaimedOwnerRoute::Refused(error)) => {
                 claimed_owner_refusal = Some(error);
             }
             None => {}

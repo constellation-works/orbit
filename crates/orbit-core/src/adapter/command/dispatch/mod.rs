@@ -7,13 +7,7 @@ mod audit;
 mod brokered;
 mod callback;
 #[cfg(unix)]
-mod claimed_findings;
-#[cfg(unix)]
-mod claimed_owner;
-#[cfg(unix)]
-mod claimed_recovery;
-#[cfg(unix)]
-mod claimed_review;
+mod claimed;
 mod dry_run;
 mod execute;
 
@@ -24,7 +18,7 @@ pub use audit::{
 pub(crate) use brokered::RunDispatch;
 pub use callback::refuse_plugin_child_cli_command;
 #[cfg(unix)]
-pub use claimed_owner::{ClaimedOwnerRoute, bridge_claimed_owner_call, owner_route_unavailable};
+pub use claimed::{ClaimedOwnerRoute, bridge_claimed_owner_call, owner_route_unavailable};
 pub use dry_run::DryRunResult;
 pub(super) use execute::execute_global_plugin_dispatch;
 pub use execute::{

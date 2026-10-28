@@ -35,10 +35,10 @@ use orbit_types::workflow::{
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-use super::super::brokered::RunDispatch;
-use super::super::claimed_owner::{ClaimedOwnerRoute, bridge_through};
-use super::super::execute::ToolEntryPoint;
+use super::super::owner::{ClaimedOwnerRoute, bridge_through};
 use crate::OrbitRuntime;
+use crate::adapter::command::dispatch::brokered::RunDispatch;
+use crate::adapter::command::dispatch::execute::ToolEntryPoint;
 use crate::runtime::plugin::broker::{PeerAnchor, PluginBroker};
 
 pub(super) const FOLLOWER: &str = "hm_follower";
@@ -342,7 +342,7 @@ impl Fixture {
             effective_capabilities: BTreeSet::from([McpCapability::Agent]),
             ..Default::default()
         };
-        super::super::claimed_review::execute_brokered(
+        super::super::review::execute_brokered(
             &self.runtime,
             &self.run("agent_review_repair"),
             &self.binding,
@@ -494,7 +494,7 @@ fn the_broker_refuses_what_its_records_do_not_admit_without_reaching_the_owner()
     }
     // What no nested `orbit` sends: fields that would widen the scope, a
     // certificate, and a tool outside the two.
-    let serving = super::super::brokered::RunDispatch::new(
+    let serving = crate::adapter::command::dispatch::brokered::RunDispatch::new(
         fixture.runtime.clone(),
         fixture.run("agent_review_repair"),
     );

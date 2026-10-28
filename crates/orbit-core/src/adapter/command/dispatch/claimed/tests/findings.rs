@@ -11,7 +11,7 @@
 //! receipt offered, and every other `review-*` artifact stays refused without
 //! reaching the owner.
 //!
-//! [`RunDispatch`]: super::super::brokered::RunDispatch
+//! [`RunDispatch`]: crate::adapter::command::dispatch::brokered::RunDispatch
 
 use base64::Engine as _;
 use orbit_store::contracts::{ClaimCandidateRef, ClaimEvidence, ClaimMutation, LocalPullMutation};
@@ -24,8 +24,8 @@ use orbit_types::workflow::{
 };
 use serde_json::{Value, json};
 
-use super::claimed_recovery::{Leaf, refused_with};
-use super::claimed_review::{GET, PUT, TASK};
+use super::recovery::{Leaf, refused_with};
+use super::review::{GET, PUT, TASK};
 
 const FINDINGS: &str = REVIEW_EVIDENCE_FINDINGS_ARTIFACT;
 const IMPLEMENT: &str = "agent_implement";

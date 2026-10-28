@@ -8,7 +8,8 @@ use std::sync::atomic::Ordering;
 use orbit_engine::PluginBrokerHandle;
 use serde_json::{Value, json};
 
-use super::{Fixture, GET, PUT, SHOW, TaskOwner, raw_call};
+use super::super::review::{Fixture, GET, PUT};
+use super::broker::{SHOW, TaskOwner, raw_call};
 
 #[test]
 fn claimed_task_detail_pages_preserve_broker_scope_and_owner_validation() {
@@ -52,10 +53,12 @@ fn claimed_task_detail_pages_preserve_broker_scope_and_owner_validation() {
         .unwrap();
     let mut run = fixture.run("agent_implement");
     run.task_id = Some(id.into());
-    let dispatch = Arc::new(super::RunDispatch::new(
-        fixture.runtime.clone(),
-        run.clone(),
-    ));
+    let dispatch = Arc::new(
+        crate::adapter::command::dispatch::brokered::RunDispatch::new(
+            fixture.runtime.clone(),
+            run.clone(),
+        ),
+    );
     let broker = crate::runtime::plugin::broker::PluginBroker::start(
         &fixture.global_root,
         &run.run_id,

@@ -3,7 +3,7 @@
 //! A claimed leaf's final recovery diagnoses its run from the review and
 //! delivery evidence its procedure names, and the leaf's sandbox reaches
 //! neither: the before-PR gate's `review-*` artifacts live on the owner's task
-//! behind the reviewer-only scope ([`super::claimed_review`]), and the owner
+//! behind the reviewer-only scope ([`super::review`]), and the owner
 //! holds no record of the follower's leaf run, so its delivery view of the
 //! leaf can only be "job run not found".
 //!
@@ -29,7 +29,7 @@ use orbit_types::workflow::{
 };
 use serde_json::{Map, Value, json};
 
-use super::claimed_owner::{GET, PUT, TASK_SHOW, accept_fields, require_claimed_task};
+use super::owner::{GET, PUT, TASK_SHOW, accept_fields, require_claimed_task};
 use crate::OrbitRuntime;
 use crate::application::job::claimed::ClaimedLeaf;
 use crate::runtime::tool_exec::CapabilityEnforcement;
@@ -87,7 +87,7 @@ fn reason(error: OrbitError) -> String {
 }
 
 /// Execute one `review-*` artifact call of a claimed leaf's final recovery,
-/// for the claim [`super::claimed_owner`] derived. `path` is the request's
+/// for the claim [`super::owner`] derived. `path` is the request's
 /// canonical artifact path; the request must also have spelled it that way,
 /// so a name that only normalises to a gate artifact is refused rather than
 /// read.
@@ -101,17 +101,17 @@ pub(super) fn execute_review_read(
     session: ToolSessionContext,
 ) -> Result<Value, OrbitError> {
     if tool == PUT {
-        return Err(super::claimed_review::denied(&format!(
+        return Err(super::review::denied(&format!(
             "review_write_refused: final recovery reads its run's review evidence; '{PUT}' of a \
              `review-*` artifact stays the before-PR reviewer's"
         )));
     }
-    let leaf = recovering_leaf(runtime, run).map_err(|why| super::claimed_review::denied(&why))?;
+    let leaf = recovering_leaf(runtime, run).map_err(|why| super::review::denied(&why))?;
     accept_fields(object, &["id", "path", "model"])?;
     require_claimed_task(object, binding)?;
     let spelled = object.get("path").and_then(Value::as_str);
     if tool != GET || spelled != Some(path) || !RECOVERY_REVIEW_READS.contains(&path) {
-        return Err(super::claimed_review::denied(&format!(
+        return Err(super::review::denied(&format!(
             "review_read_refused: final recovery reads only `{}`, each named exactly",
             RECOVERY_REVIEW_READS.join("`, `")
         )));
@@ -161,7 +161,7 @@ pub(super) fn require_leaf_delivery_run(
     match object.get("run_id") {
         None => Ok(()),
         Some(Value::String(run_id)) if run_id.trim() == binding.bound_run_id => Ok(()),
-        Some(_) => Err(super::claimed_owner::denied(
+        Some(_) => Err(super::owner::denied(
             "delivery_run_refused: a claimed worker reads the delivery of its own leaf run \
              only; omit `run_id` or name that run",
         )),
@@ -190,7 +190,7 @@ pub(super) fn delivery(
     } else {
         live_leaf(runtime, run)
     }
-    .map_err(|why| super::claimed_owner::denied(&why))?;
+    .map_err(|why| super::owner::denied(&why))?;
     runtime.authorize_tool_operation(TASK_SHOW, &session, CapabilityEnforcement::McpSessionOnly)?;
     let observation = runtime.observe_claimed_leaf_delivery(&leaf)?;
     serde_json::to_value(observation)
