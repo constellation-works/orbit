@@ -73,7 +73,7 @@ fn large_valid_arm_weights_produce_the_expected_sample_ratio() {
         let task_id = task.id.to_string();
         let arm_name = if index < 100 { "control" } else { "treatment" };
         let assignments = store
-            .assign_experiments(&workspace_id, &task_id, true, &|records, _, _| {
+            .assign_experiments(&workspace_id, &task_id, true, true, &|records, _, _| {
                 let record = records
                     .iter()
                     .find(|record| record.experiment.id == experiment_id)
@@ -333,7 +333,7 @@ fn enroll_primary_sample(
     let workspace_id = runtime.workspace_id().unwrap();
     let store = runtime.sqlite_store().unwrap();
     store
-        .assign_experiments(&workspace_id, &task.id, true, &|records, _, _| {
+        .assign_experiments(&workspace_id, &task.id, true, true, &|records, _, _| {
             let record = records
                 .iter()
                 .find(|r| r.experiment.id == experiment_id)

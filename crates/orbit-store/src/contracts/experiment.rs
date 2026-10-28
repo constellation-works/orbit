@@ -126,7 +126,8 @@ pub struct ExperimentAssignment {
 }
 
 /// Pure assignment decision inside the store transaction. Existing rows cannot
-/// be replaced. `admitted` includes prior admissions that matched no population.
+/// be replaced. `admitted` includes prior admissions that matched no population;
+/// callers may reconsider those rows while there is still no assignment.
 pub type ExperimentAssignmentDecision<'a> = dyn Fn(
         &[ExperimentRecord],
         &[ExperimentAssignment],
@@ -136,11 +137,14 @@ pub type ExperimentAssignmentDecision<'a> = dyn Fn(
 
 pub trait ExperimentStoreBackend: Send + Sync {
     /// Serialize assignment decisions with lifecycle changes and other admissions.
+    /// Disabled settings do not consume admission unless a running experiment
+    /// is already stored, which keeps long-lived processes from missing it.
     fn assign_experiments(
         &self,
         workspace_id: &str,
         task_id: &str,
         mark_admitted: bool,
+        experiments_enabled: bool,
         decide: &ExperimentAssignmentDecision<'_>,
     ) -> Result<Vec<ExperimentAssignment>, OrbitError>;
 

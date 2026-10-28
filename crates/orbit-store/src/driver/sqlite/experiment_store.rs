@@ -33,6 +33,7 @@ impl ExperimentStoreBackend for Store {
         workspace_id: &str,
         task_id: &str,
         mark_admitted: bool,
+        experiments_enabled: bool,
         decide: &crate::contracts::ExperimentAssignmentDecision<'_>,
     ) -> Result<Vec<crate::contracts::ExperimentAssignment>, OrbitError> {
         super::experiment_assignments::assign_experiments(
@@ -40,6 +41,7 @@ impl ExperimentStoreBackend for Store {
             workspace_id,
             task_id,
             mark_admitted,
+            experiments_enabled,
             decide,
         )
     }

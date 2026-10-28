@@ -20,8 +20,11 @@ impl OrbitRuntime {
             &self.workspace_id()?,
             &task.id,
             true,
+            enabled,
             &|records, existing, admitted| {
-                if admitted || !enabled || task.status.is_terminal() {
+                // Old admission-only rows were created even when the feature
+                // was disabled. Reconsider them until they have a sticky row.
+                if (admitted && !existing.is_empty()) || task.status.is_terminal() {
                     return Ok(Vec::new());
                 }
                 let mut occupied = occupied_surfaces(records, existing)?;
@@ -119,6 +122,7 @@ impl OrbitRuntime {
             &self.workspace_id()?,
             &task.id,
             false,
+            true,
             &|records, existing, _| {
                 let record = records
                     .iter()
