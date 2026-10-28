@@ -2,7 +2,7 @@
 //!
 //! A claimed leaf's reviewer reads its pinned manifest and prior review
 //! evidence, and attaches its report, on the owner's task through the
-//! claimed-owner bridge ([`super::claimed_owner`]), which carries every
+//! claimed-owner bridge ([`super::owner`]), which carries every
 //! claimed worker's owner calls. The before-PR gate's own artifacts are
 //! narrower than the rest: the broker answers them only for the before-PR
 //! reviewer, and only for the one admitted attempt whose reviewer is running
@@ -26,7 +26,7 @@ use orbit_types::workflow::{
 };
 use serde_json::{Map, Value, json};
 
-use super::claimed_owner::{
+use super::owner::{
     GET, PUT, accept_fields, artifact_put_input, put_content, require_claimed_task,
 };
 use crate::OrbitRuntime;
@@ -118,7 +118,7 @@ pub(super) fn denied(reason: &str) -> OrbitError {
 }
 
 /// Execute one bridged call on a [review artifact](is_review_artifact) in
-/// the broker, for the claim [`super::claimed_owner`] derived. `path` is the
+/// the broker, for the claim [`super::owner`] derived. `path` is the
 /// request's canonical artifact path; every check and the owner's call use
 /// it, never the raw string. A hold-named evidence artifact outside the
 /// `review-*` namespace is any claimed worker's ordinary artifact read, so it
@@ -132,7 +132,7 @@ pub(super) fn execute_brokered(
     path: &str,
     session: ToolSessionContext,
 ) -> Result<Value, OrbitError> {
-    // `claimed_owner` already passes the owner's canonical key, but keep this
+    // `owner` already passes the owner's canonical key, but keep this
     // boundary safe if another caller ever forwards a raw spelling. Artifact
     // storage trims and collapses these spellings before lookup.
     let path = canonical_review_path(path)?;

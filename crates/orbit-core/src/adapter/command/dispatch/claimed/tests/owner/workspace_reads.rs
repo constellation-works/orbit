@@ -19,9 +19,10 @@ use orbit_types::workflow::{
 };
 use serde_json::{Value, json};
 
-use super::super::super::claimed_owner::{ClaimedOwnerRoute, bridge_through};
-use super::super::super::execute::ToolEntryPoint;
-use super::{FOLLOWER, Fixture, GET, PUT, SHOW, TaskOwner, refused};
+use super::super::super::owner::{ClaimedOwnerRoute, bridge_through};
+use super::super::review::{FOLLOWER, Fixture, GET, PUT};
+use super::broker::{SHOW, TaskOwner, refused};
+use crate::adapter::command::dispatch::execute::ToolEntryPoint;
 
 /// The claimed task and a related task in the same workspace, each with a
 /// comment and an artifact, on the owner's store.
@@ -175,10 +176,12 @@ fn a_remote_owners_claimed_worker_reads_any_task_of_its_claimed_workspace() {
     let fixture = &workspace.fixture;
     let mut run = fixture.run("agent_implement");
     run.task_id = Some(fixture.binding.task_id.clone());
-    let dispatch = Arc::new(super::RunDispatch::new(
-        fixture.runtime.clone(),
-        run.clone(),
-    ));
+    let dispatch = Arc::new(
+        crate::adapter::command::dispatch::brokered::RunDispatch::new(
+            fixture.runtime.clone(),
+            run.clone(),
+        ),
+    );
     let broker = crate::runtime::plugin::broker::PluginBroker::start(
         &fixture.global_root,
         &run.run_id,

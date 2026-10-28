@@ -506,20 +506,20 @@ service side regardless.
   skip where Bubblewrap cannot create a namespace. The existing engine sandbox harness
   separately covers provider exit, timeout and broker-start failure.
 - A claimed worker's owner call
-  (`crates/orbit-core/src/adapter/command/dispatch/claimed_owner.rs`) passes the same `cwd`,
+  (`crates/orbit-core/src/adapter/command/dispatch/claimed/owner.rs`) passes the same `cwd`,
   allowlist or deny-policy and agent-facing checks, then derives its scope from the runtime's
   worker binding and the run record, applies the call's scope and field checks, and
   routes through the runtime's owner coordinator, the route the step runner itself uses for the
   claim. Its own refusals carry `claimed_owner_bridge_refused`. A `review-*` artifact call
-  outside the recovery and findings routes below goes on to `dispatch/claimed_review.rs`,
+  outside the recovery and findings routes below goes on to `dispatch/claimed/review.rs`,
   which checks the reviewer activity and the review ledger's attempt before the claimed task.
   Its scope refusals carry `claimed_review_bridge_refused` and, for an attempt that is no longer running or a manifest
   for another attempt, `review_attempt_stale` or `review_manifest_stale`. A final recovery's
-  `review-*` read and every claimed worker's delivery view of its claimed task go to `dispatch/claimed_recovery.rs`
+  `review-*` read and every claimed worker's delivery view of its claimed task go to `dispatch/claimed/recovery.rs`
   instead, which derives the leaf's liveness and its final-recovery window from the follower's
   admission and run state (`live_claimed_leaf` and `claimed_leaf_in_final_recovery` in
   `application/job/claimed.rs`) and projects the leaf's delivery locally. Any other activity's
-  read of `review-evidence-findings.json` goes to `dispatch/claimed_findings.rs`, which binds it
+  read of `review-evidence-findings.json` goes to `dispatch/claimed/findings.rs`, which binds it
   to the live leaf's kept candidate from its admission receipt. The nested `orbit`
   sends an artifact as base64 so a full 1 MiB artifact fits the request frame. The broker writes
   the one audit row (brokered, peer PID, the run's task and activity); the owner's row names the
@@ -533,15 +533,15 @@ service side regardless.
   sandbox, that the manifest and report cross with exact bytes, that a lost answer is retried,
   and that stale, forged, cross-task and out-of-workspace requests, another activity and a
   stopped broker are refused. It skips where the platform sandbox cannot start.
-  `dispatch/tests/claimed_review.rs` and `dispatch/tests/claimed_owner.rs` cover the broker's
+  `dispatch/claimed/tests/review.rs` and `dispatch/claimed/tests/owner/broker.rs` cover the broker's
   scope and refusals, for the review artifacts and every other owner call, over the real socket
   on any Unix host, and that a masked sandbox never falls back to SSH.
-  `dispatch/tests/claimed_recovery.rs` drives a final recovery on a leaf admitted, created, bound
+  `dispatch/claimed/tests/recovery.rs` drives a final recovery on a leaf admitted, created, bound
   and launched through its durable pull admission: its gate-evidence reads and its delivery view
   succeed, and a write, another task or workspace, another run, a decided recovery, an ended
   run, a settling claim, an unnamed or respelled `review-*` path and another run's delivery stay
   refused without reaching the owner.
-  `dispatch/tests/claimed_findings.rs` reads findings longer than the owner comment's budget
+  `dispatch/claimed/tests/findings.rs` reads findings longer than the owner comment's budget
   from the same fixture's implementer, and checks that the gate's other artifacts, a write, a
   respelling, another task, a final recovery, a claim without a kept candidate, another run, a
   settling claim and findings on another run or commit or not written by Orbit stay refused.

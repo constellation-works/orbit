@@ -21,44 +21,41 @@ use orbit_types::workflow::{
 };
 use serde_json::{Value, json};
 
-use super::super::brokered::RunDispatch;
-use super::super::claimed_owner::{ClaimedOwnerRoute, bridge_through};
-use super::super::execute::ToolEntryPoint;
-use super::claimed_review::{FOLLOWER, Fixture, GET, PUT, TASK};
+use super::super::super::owner::{ClaimedOwnerRoute, bridge_through};
+use super::super::review::{FOLLOWER, Fixture, GET, PUT, TASK};
 use crate::OrbitRuntime;
+use crate::adapter::command::dispatch::brokered::RunDispatch;
+use crate::adapter::command::dispatch::execute::ToolEntryPoint;
 use crate::runtime::plugin::broker::{BrokerDispatch, BrokerRequest, EntryPoint};
 
-const SHOW: &str = "orbit.task.show";
+pub(super) const SHOW: &str = "orbit.task.show";
 const ADD: &str = "orbit.task.add";
 const FRICTION: &str = "orbit.friction.add";
-
-mod pagination;
-mod workspace_reads;
 
 /// The owner's side of the claim route over a real task store: the owner's
 /// public task tools on this fixture's disposable store, under the binding's
 /// workspace as the owner's routing pins it.
-struct TaskOwner {
+pub(super) struct TaskOwner {
     runtime: OrbitRuntime,
-    calls: AtomicUsize,
+    pub(super) calls: AtomicUsize,
 }
 
 impl TaskOwner {
-    fn over(runtime: &OrbitRuntime) -> Self {
+    pub(super) fn over(runtime: &OrbitRuntime) -> Self {
         Self {
             runtime: runtime.without_worker_routing(),
             calls: AtomicUsize::new(0),
         }
     }
 
-    fn execute(&self, tool: &str, mut input: Value) -> Result<Value, OrbitError> {
+    pub(super) fn execute(&self, tool: &str, mut input: Value) -> Result<Value, OrbitError> {
         // Stand in for the owner's workspace routing, with the real tool
         // dispatch and stored task on this fixture's disposable owner store.
         input["workspace"] = json!(self.runtime.workspace_id()?);
         self.runtime.execute_tool_command(tool, input, None, None)
     }
 
-    fn calls(&self) -> usize {
+    pub(super) fn calls(&self) -> usize {
         self.calls.load(Ordering::SeqCst)
     }
 }
@@ -95,7 +92,7 @@ fn mask(fixture: &Fixture) {
     std::fs::write(&sentinel, b"masked").unwrap();
 }
 
-fn refused(route: Option<ClaimedOwnerRoute>) -> OrbitError {
+pub(super) fn refused(route: Option<ClaimedOwnerRoute>) -> OrbitError {
     match route {
         Some(ClaimedOwnerRoute::Refused(error)) => error,
         other => panic!("refused before the broker: {other:?}"),
@@ -451,7 +448,7 @@ fn a_source_the_nested_orbit_may_not_read_is_refused_before_the_broker() {
 
 /// A call sent to the broker's socket as the sandboxed agent itself can send
 /// it, bypassing the nested `orbit` and whatever it would prepare.
-fn raw_call(
+pub(super) fn raw_call(
     fixture: &Fixture,
     socket: &std::path::Path,
     name: &str,

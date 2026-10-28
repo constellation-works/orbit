@@ -28,10 +28,10 @@
 //! - `orbit.friction.add` is recorded during the claimed task.
 //!
 //! The before-PR gate's own artifacts keep the reviewer's attempt scope
-//! ([`super::claimed_review`]), except the named ones a claimed leaf's final
+//! ([`super::review`]), except the named ones a claimed leaf's final
 //! recovery reads and the evidence findings on the kept candidate the leaf
-//! resumes ([`super::claimed_findings`]), and the claimed task's own delivery
-//! view is answered from the leaf's own record ([`super::claimed_recovery`]):
+//! resumes ([`super::findings`]), and the claimed task's own delivery
+//! view is answered from the leaf's own record ([`super::recovery`]):
 //! the owner has none of it. Another task's delivery is the owner's record.
 //!
 //! A worker on its owner's machine reaches the owner store in process; the
@@ -64,7 +64,7 @@ use orbit_types::tool::{
 use orbit_types::workflow::{OWNER_ROUTE_UNAVAILABLE_ERROR_CODE, OWNER_ROUTE_UNAVAILABLE_MARKER};
 use serde_json::{Map, Value, json};
 
-use super::execute::ToolEntryPoint;
+use super::super::execute::ToolEntryPoint;
 use crate::OrbitRuntime;
 
 pub(super) const GET: &str = "orbit.task.artifact.get";
@@ -286,17 +286,15 @@ fn local_owner_scope(
     match name {
         TASK_SHOW => {
             check_task_show(object)?;
-            if names_claimed_task(object, binding)
-                && super::claimed_recovery::wants_delivery(object)
-            {
-                super::claimed_recovery::require_leaf_delivery_run(object, binding)?;
+            if names_claimed_task(object, binding) && super::recovery::wants_delivery(object) {
+                super::recovery::require_leaf_delivery_run(object, binding)?;
             }
             Ok(false)
         }
         GET => {
             accept_fields(object, &GET_FIELDS)?;
             let path = canonical_artifact_path(object)?;
-            if super::claimed_review::is_review_artifact(&path) {
+            if super::review::is_review_artifact(&path) {
                 require_claimed_task(object, binding)?;
                 return Ok(true);
             }
@@ -305,7 +303,7 @@ fn local_owner_scope(
         _ => {
             require_claimed_task(object, binding)?;
             let path = canonical_artifact_path(object)?;
-            Ok(super::claimed_review::is_review_artifact(&path))
+            Ok(super::review::is_review_artifact(&path))
         }
     }
 }
@@ -464,7 +462,7 @@ const GET_FIELDS: [&str; 3] = ["id", "path", "model"];
 /// claimed workspace, and say whether it asks for a bounded page.
 fn check_task_show(object: &Map<String, Value>) -> Result<bool, OrbitError> {
     accept_fields(object, &TASK_SHOW_FIELDS)?;
-    if super::claimed_recovery::wants_delivery(object) {
+    if super::recovery::wants_delivery(object) {
         accept_fields(object, &["id", "fields", "field", "run_id", "model"])?;
         return Ok(false);
     }
@@ -561,7 +559,7 @@ pub(super) fn put_content(object: &Map<String, Value>) -> Result<Vec<u8>, OrbitE
 ///
 /// The caller has already checked the request's `cwd` and the run's tool
 /// policy, and records the audit row around this.
-pub(super) fn execute_brokered(
+pub(in crate::adapter::command::dispatch) fn execute_brokered(
     runtime: &OrbitRuntime,
     run: &orbit_engine::PluginBrokerRun,
     tool: &str,
@@ -575,23 +573,23 @@ pub(super) fn execute_brokered(
         GET | PUT => canonical_artifact_path(object)?,
         _ => String::new(),
     };
-    let review = matches!(tool, GET | PUT) && super::claimed_review::is_review_artifact(&path);
+    let review = matches!(tool, GET | PUT) && super::review::is_review_artifact(&path);
     let binding = claim_binding(runtime, run, review)?;
     if review {
         // Another task's review artifacts are outside the claim for every
         // activity, before any review scope decides [ORB-19289].
         require_claimed_task(object, binding)?;
-        if super::claimed_recovery::is_final_recovery(run) {
-            return super::claimed_recovery::execute_review_read(
+        if super::recovery::is_final_recovery(run) {
+            return super::recovery::execute_review_read(
                 runtime, run, binding, tool, object, &path, session,
             );
         }
-        if super::claimed_findings::is_findings_read(tool, &path) {
-            return super::claimed_findings::execute_findings_read(
+        if super::findings::is_findings_read(tool, &path) {
+            return super::findings::execute_findings_read(
                 runtime, run, binding, object, &path, session,
             );
         }
-        return super::claimed_review::execute_brokered(
+        return super::review::execute_brokered(
             runtime, run, binding, tool, object, &path, session,
         );
     }
@@ -611,10 +609,8 @@ pub(super) fn execute_brokered(
         }
         TASK_SHOW => {
             let paged = check_task_show(object)?;
-            if names_claimed_task(object, binding)
-                && super::claimed_recovery::wants_delivery(object)
-            {
-                return super::claimed_recovery::delivery(runtime, run, binding, object, session);
+            if names_claimed_task(object, binding) && super::recovery::wants_delivery(object) {
+                return super::recovery::delivery(runtime, run, binding, object, session);
             }
             let mut input = input.clone();
             if paged {

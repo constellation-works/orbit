@@ -33,11 +33,11 @@ use orbit_types::workflow::{
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-use super::super::brokered::RunDispatch;
-use super::super::claimed_owner::{ClaimedOwnerRoute, bridge_through};
-use super::super::execute::ToolEntryPoint;
-use super::claimed_review::{FOLLOWER, GET, OWNER, Owner, PUT, TASK};
+use super::super::owner::{ClaimedOwnerRoute, bridge_through};
+use super::review::{FOLLOWER, GET, OWNER, Owner, PUT, TASK};
 use crate::OrbitRuntime;
+use crate::adapter::command::dispatch::brokered::RunDispatch;
+use crate::adapter::command::dispatch::execute::ToolEntryPoint;
 use crate::application::test_support::{admission_receipt, admission_request};
 use crate::runtime::plugin::broker::{
     BrokerDispatch, BrokerRequest, EntryPoint, PeerAnchor, PluginBroker,

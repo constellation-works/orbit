@@ -243,7 +243,7 @@ Admitted unit tests:
   `orbit-core`; this focused parser check exercises the CLI grammar without
   needing owner claim state or dispatching the recovery command.
 
-- `orbit-core`'s `dispatch/tests/claimed_owner/pagination.rs::claimed_task_detail_pages_preserve_broker_scope_and_owner_validation`
+- `orbit-core`'s `dispatch/claimed/tests/owner/pagination.rs::claimed_task_detail_pages_preserve_broker_scope_and_owner_validation`
   reproduces F2026-10-599 through the public broker socket and real owner task-tool
   dispatch, in an isolated child. It verifies bounded pages and owner validation
   while keeping internal-field, delivery and artifact-call refusals, and refuses
@@ -251,7 +251,7 @@ Admitted unit tests:
   It lives with the existing claimed-worker broker fixture so it can provide a
   disposable owner transport without SSH or a native confined worker.
 
-- `orbit-core`'s `dispatch/tests/claimed_owner/workspace_reads.rs::a_remote_owners_claimed_worker_reads_any_task_of_its_claimed_workspace`
+- `orbit-core`'s `dispatch/claimed/tests/owner/workspace_reads.rs::a_remote_owners_claimed_worker_reads_any_task_of_its_claimed_workspace`
   and `a_claimed_worker_on_its_owners_machine_gets_the_same_workspace_reads_and_refusals`
   are criterion 3 regressions for ORB-19270 (a claimed worker could list but not
   open related tasks). Over the bridge, the broker socket and the real owner

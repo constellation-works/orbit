@@ -8,7 +8,7 @@
 //! resumes the candidate receives the claim's kept candidate without the
 //! findings, so the results past that cut reach the leaf only from the
 //! artifact. That artifact sits in the review gate's reserved namespace,
-//! behind the reviewer's attempt scope ([`super::claimed_review`]).
+//! behind the reviewer's attempt scope ([`super::review`]).
 //!
 //! The broker carries this one read, and nothing else of the namespace, for
 //! any activity but final recovery of the claimed leaf the worker binding
@@ -24,8 +24,8 @@ use orbit_types::tool::{ToolSessionContext, WorkerInvocation};
 use orbit_types::workflow::{REVIEW_EVIDENCE_FINDINGS_ARTIFACT, ReviewEvidenceFindings};
 use serde_json::{Map, Value, json};
 
-use super::claimed_owner::{GET, accept_fields, require_claimed_task};
-use super::claimed_review::{artifact_bytes, denied};
+use super::owner::{GET, accept_fields, require_claimed_task};
+use super::review::{artifact_bytes, denied};
 use crate::OrbitRuntime;
 use crate::runtime::tool_exec::CapabilityEnforcement;
 
@@ -35,7 +35,7 @@ pub(super) fn is_findings_read(tool: &str, path: &str) -> bool {
 }
 
 /// Execute a claimed leaf's read of [`REVIEW_EVIDENCE_FINDINGS_ARTIFACT`] for
-/// the claim [`super::claimed_owner`] derived. `path` is the request's
+/// the claim [`super::owner`] derived. `path` is the request's
 /// canonical artifact path; the request must also have spelled it that way.
 pub(super) fn execute_findings_read(
     runtime: &OrbitRuntime,
