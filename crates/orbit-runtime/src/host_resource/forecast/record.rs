@@ -81,6 +81,11 @@ impl HostLoadForecast {
 }
 
 impl ForecastPoints {
+    /// The profiles the forecast priced with, for the caller's lookups.
+    pub fn profiles(&self) -> &ProfileSet {
+        &self.profiles
+    }
+
     /// Count one admitted delivery, priced by the profile `lookup` finds. A
     /// delivery with no profile adds nothing, as in the forecast.
     pub fn admit(&mut self, task_id: &str, lookup: &ProfileLookup) {

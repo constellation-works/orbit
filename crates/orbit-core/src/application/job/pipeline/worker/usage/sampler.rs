@@ -104,7 +104,7 @@ pub(crate) struct RunResourceSampler {
     workspace_id: String,
     run_id: String,
     class: DeliveryResourceClass,
-    /// The run's crew model, the regime its minutes are profiled under.
+    /// The run's crew model, whose crew profile its minutes belong to.
     crew_model: Option<String>,
     started_at: DateTime<Utc>,
     /// Minute index of `started_at`: past the last minute an earlier worker
@@ -217,8 +217,8 @@ impl RunResourceSampler {
         }
     }
 
-    /// Record `crew_model` on every minute, as the regime the run's resource
-    /// profile samples ran under.
+    /// Record `crew_model` on every minute, as the crew model whose resource
+    /// profile the run's samples belong to.
     pub(crate) fn with_crew_model(mut self, crew_model: Option<String>) -> Self {
         self.crew_model = crew_model;
         self

@@ -23,7 +23,7 @@ fn resource_profiles_disclose_the_all_selection_limit_with_more_retained_deliver
             let runtime = admitting_runtime(&fixture);
             let ws = runtime.workspace_id().unwrap();
             let admitted = Utc::now() - chrono::Duration::days(1);
-            // All deliveries have one current regime and are inside ordinary
+            // All deliveries share one crew model and are inside ordinary
             // age retention. Seed them in one transaction, without live workers.
             runtime.sqlite_store().unwrap().with_transaction(|tx| {
                 let db = tx.connection();
@@ -63,9 +63,15 @@ fn resource_profiles_disclose_the_all_selection_limit_with_more_retained_deliver
                 1000
             );
             assert_eq!(all["profiles"][0]["series"][0]["cpu_cores"], json!(2.0));
+            assert_eq!(all["profiles"][0]["crew_model"], Value::Null);
             assert_eq!(
-                all["profiles"][0]["regime"]["crew_model"],
-                json!("fixture-model")
+                all["profiles"][0]["crews"],
+                json!([{
+                    "crew_model": "fixture-model",
+                    "deliveries": 1000,
+                    "profile_deliveries": 1000,
+                }]),
+                "a union reports each crew model's share of its window and own profile"
             );
             assert_eq!(all["last"], json!("all"));
             assert_eq!(all["profile_window"], json!(1500));

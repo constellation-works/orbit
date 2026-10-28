@@ -118,10 +118,9 @@ pub struct DeliveryRunResources {
     pub delivery_admitted_at: DateTime<Utc>,
     /// When the run finished; `None` while it is live or its row is gone.
     pub finished_at: Option<DateTime<Utc>>,
-    /// The run's regime: the crew model and Orbit version of its newest
-    /// minute that recorded them. A minute without a crew model reads the
-    /// one its `job_runs` row names, as the worker may resolve its crew
-    /// after sampling began.
+    /// The crew model and Orbit version of its newest minute that recorded
+    /// them. A minute without a crew model reads the one its `job_runs` row
+    /// names, as the worker may resolve its crew after sampling began.
     pub crew_model: Option<String>,
     pub orbit_version: Option<String>,
     /// The run's minutes, oldest first.
@@ -207,8 +206,8 @@ pub struct PullForecastDecision {
 pub struct ResourceHistoryKeep {
     /// The newest deliveries, by admission, of each workspace, work class
     /// and complexity whose run minutes stay, plus the newest eligible
-    /// completed deliveries and the newest in their current regime by finish
-    /// time for each profile key.
+    /// completed deliveries by finish time of each profile key, and of each
+    /// profile key and crew model.
     pub deliveries_per_key: usize,
     /// The newest admission forecasts that stay, with the host minutes from
     /// the oldest of them on.

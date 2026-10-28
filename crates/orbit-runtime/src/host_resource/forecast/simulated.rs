@@ -100,6 +100,7 @@ pub fn simulated_forecast(
             age_minutes: delivery.age_minutes,
             profile_source: delivery.profile.source,
             profile_key: key.cloned(),
+            crew_model: profile.and_then(|profile| profile.crew_model.clone()),
             current_cpu_cores,
             current_memory_bytes,
             held_flat: live.is_none(),

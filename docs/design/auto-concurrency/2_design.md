@@ -183,10 +183,12 @@ class in `worker/delivery_class.rs`, the host reads in
   profiles and the accuracy report as they were. `orbit gc runs --apply`,
   and so the `store-gc` routine, prunes them host-wide and reports the
   count it kept (`kept_newest`).
-- **Regime.** Each run minute records the crew model the run was assembled
-  for and the Orbit version that sampled it (`crew_model`,
-  `orbit_version`, migration v68). Older minutes have neither; a minute
-  without a crew model reads the run's `job_runs.crew_model`.
+- **Crew model and version.** Each run minute records the crew model the
+  run was assembled for and the Orbit version that sampled it
+  (`crew_model`, `orbit_version`, migration v68). Older minutes have
+  neither; a minute without a crew model reads the run's
+  `job_runs.crew_model`. Profiles key on the crew model; the version is
+  for reference only.
 - **macOS process tree.** macOS has no scopes. Every 5 s the worker sums
   its own process tree and the orphans it adopts below (`SessionTree` and
   `TreeCpuAccount` in `ancestry.rs`). A process's total is its own CPU plus the CPU of the
@@ -434,27 +436,66 @@ historical evidence. This changes profile inputs only; admission mode and
 the shadow rollout remain unchanged.
 
 A **resource profile** for one key is built from that key's most recent
-completed deliveries: the last `profile_window` (50), however old. Its
-window follows the newest delivery's **regime**, its crew model and Orbit
-version:
+completed deliveries: the last `profile_window` (50), however old. Crew
+model is a profile dimension, not a filter:
 
-- Deliveries of the newest delivery's regime come first, newest first.
-- Earlier-regime deliveries are added, newest first, only while the window
-  holds fewer than `min_profile_deliveries`. Past that minimum they are
-  left out: a new model or Orbit build changes what one delivery costs, so
-  an older regime's samples would mislead admission once the new one has
-  enough of its own.
-- A class-wide fallback profile (the fallback chain below) unions each key's current-regime
-  deliveries.
-- Each profile reports `delivery_count`, its `regime`,
-  `prior_regime_deliveries` (earlier-regime deliveries that topped it up)
-  and `excluded_prior_regime` (those left out).
+- Each delivery carries the crew model its runs named. A key has one
+  **crew profile** per crew model, over the last `profile_window` of that
+  model's deliveries, and the key's own profile, the **union** over every
+  crew model. Deliveries that recorded no crew model count only toward the
+  union.
+- Crews are drawn per complexity from weighted pools, so one key mixes
+  models. An earlier rule (ORB-19199) kept only the deliveries of the
+  newest delivery's crew model and Orbit version; a profile shrank to
+  whichever crew finished last, and every release dropped it to
+  `min_profile_deliveries`. That rule is retired (ORB-19264).
+- The Orbit version is recorded on each delivery but never narrows a
+  window: a routine release does not change what a delivery costs. Should
+  a version ever need a reset, it is an explicit operator action, not a
+  side effect of a version bump.
+- A class-wide fallback profile (the fallback chain below) unions every
+  delivery of its keys, across crew models.
+- Each profile reports `delivery_count`, `crew_model` (the model a crew
+  profile holds, `null` for a union) and `crews`: per crew model, the
+  window's deliveries it ran (`deliveries`) and the size of its own crew
+  profile of the key (`profile_deliveries`, `null` without one). The
+  union's crew count is the length of `crews`. These replace the retired
+  `regime`, `prior_regime_deliveries` and `excluded_prior_regime` fields of
+  `GET /api/resource-profiles` and `orbit run profiles --json`, which are
+  removed outright rather than kept for a release: their meaning no longer
+  exists, and the Resources view, their only consumer, ships with the
+  change.
+
+**Which crew a lookup uses.** Step 0 of the fallback chain reads the crew
+profile for the lookup's crew model while it has at least
+`min_profile_deliveries`, then the union:
+
+- Admission and the backlog forecast price a task by its assigned crew
+  (`task.crew`, set when the crew is drawn at creation or repair), resolved
+  to its model through the configured `[crews.*]`, which the runtime hands
+  the profile set (`ProfileSet::crew_models`); the pure lookup never loads
+  config. A task without an assigned crew runs `workflow.default_crew` or a
+  later draw, and a crew name that is not configured has no model, so both
+  take the union.
+- A running delivery uses the crew model its run minutes recorded; before
+  its first minute it takes the union.
+- A reservation does not record the crew model, so it is priced by the
+  union until its run exists. Recording it would need a new
+  `admission_reservations` column, which the short reservation life does
+  not justify.
+- A pull drain's work-fit request carries no task, so the owner's offered
+  work is priced by the union.
+
+Retention keeps what these windows read: per key, the newest `max(200,
+profile_window)` deliveries by admission and the newest eligible ones by
+finish, and the same count per key and crew model, so one model's
+deliveries never push another's history out.
 
 The window has no age cap. `PROFILE_HISTORY_DAYS` (30) once kept a profile
 to the last 30 days; it is retired, because a month without deliveries
 then emptied every profile and admission fell back to its least specific
-estimate exactly when the host resumed. Count and regime bound staleness
-instead, and count-aware retention keeps the deliveries the window reads.
+estimate exactly when the host resumed. Count bounds staleness instead, and
+count-aware retention keeps the deliveries the windows read.
 
 For each minute `m` since admission, the profile holds:
 
@@ -516,6 +557,8 @@ Implemented in `runtime/host_resource/profile/` (`build.rs`, `lookup.rs`,
 A key with fewer than 10 deliveries falls back along this chain, stopping at
 the first key that has enough. Each lookup reports which step answered:
 
+0. the key itself: the lookup's crew profile (`crew`) when it names a crew
+   model, then the union (`exact`);
 1. drop complexity: `(host, workspace, class)`;
 2. for a template, its base class: `no-diff` or `change` in the same
    workspace, rolling up both template and non-template deliveries of that
@@ -1187,7 +1230,7 @@ Limitations:
 | `orbit run profiles` | Implemented: the profiles per workspace, work class and complexity: deliveries (sparse below `min_profile_deliveries`), horizon, peak CPU and memory and when they occur, the nearest-rank p50 and p90 of each delivery's single-minute peak CPU and memory (CPU_P50, CPU_P90, MEM_P50, MEM_P90; these stay high when peaks fall in different minutes, unlike the mean-series peak, and a sparse profile still shows them; §3.3), and the CPU and memory spread. Flags no-diff profiles with build-like load and names the deliveries behind each flag (§3.2). `--json` includes `delivery_peak_cpu` and `delivery_peak_memory_bytes` (`p50`, `p90`) with the full series |
 | `orbit run profiles --accuracy` | Implemented (§8.1): composable forecast-time `--since`, exact `--drain` and recorded `--mode` cohorts; mature measured pairs, pending and missing counts per offset, with missing split into unsampled (no delivery live), partial (a delivery overlapped the minute but none saw it whole) and gap (a delivery ran for the whole minute and wrote no host row); shadow decisions and enforce admissions, gap-fit holds and pull holds per drain; each drain's limiter shares from `drain_pass_counters`. `--json` includes the effective selection, raw pairs and `limiters` |
 | Per-drain mode | Implemented for local drains: CLI `--auto-concurrency off|shadow|enforce`, registered MCP `orbit.workflow.auto` start `auto_concurrency`, and dashboard HTTP start `auto_concurrency` all use Core submission. At durable admission, `input.auto_concurrency_source` records explicit or configured mode. Explicit overrides survive resume/restart; configured local and pull drains follow the host mode on the next admission pass. Each pass snapshots `[machine.auto_concurrency]` and effective `workflow.provider_limit_*` policy, with global/workspace config mtimes caching resolution. Changes to mode, thresholds, profile bounds or provider overrides need no restart. Invalid config warns and retains both last-known-good policies until a valid edit. Running leaves continue. Throttle, ceilings and accuracy lineage retain their existing behavior. Stop/resize and explicit pull overrides are refused before effects. |
-| Dashboard | Implemented: an operator launch choice of inherited host mode, off, shadow or enforce. The form reads current inherited host mode from readiness, sends the actual option, and shows the receipt's durable effective mode; the live window shows its current effective mode. The Drain card shows the recorded forecast from readiness: its time, CPU and memory over the first hour as sparklines against the current admit thresholds (peak bars for a record without `series`), headroom, admitted tasks with their profile source, and a candidate enforce held. A pass that built none says `no forecast this pass` and shows `last_admission_forecast` as **Last forecast** when readiness has one. A retained forecast reads as history: past, time-anchored decisions (`Admitted at 03:59 UTC`, `Held at 03:59 UTC`), each task's current status, and `window ended · nothing running` when that drain has ended and shared occupancy (`active_leaf_runs`) is zero; `window ended · other work running` when it is above zero, and `window ended` when it is unknown. A live pass keeps `Admitted`, `Held` and `Starvation guard protects`. A live shadow forecast says `Would admit` and `Would hold`; a retained shadow forecast says `Would have admitted at 03:59 UTC`. Analytics › Resources (`GET /api/resource-profiles`) charts the selected workspace's profiles on the host per work class, complexities overlaid: mean CPU with a ±1 sd band, p90 and mean memory and the alive share against minutes since admission, in cores and GiB or percent of host with the admit thresholds ([user interface](../user-interface/2_design.md#5b-analytics--resources)). Its history selector counts deliveries, never days: admission's own `profile_window` (default), the last 200, or **Last 1,000** retained completed deliveries per kind (`?last=<n>|all`, 1 to 1,000; `all` is a compatibility alias for 1,000, not all retained history), each profile naming its delivery count and regime. The API discloses the effective per-key `delivery_limit` and selectable `max_last` (1,000); admission's default `profile_window` can be larger. Regime filtering can reduce the served count below the limit. Forecast curves against measured load with running tasks stacked remain future work. |
+| Dashboard | Implemented: an operator launch choice of inherited host mode, off, shadow or enforce. The form reads current inherited host mode from readiness, sends the actual option, and shows the receipt's durable effective mode; the live window shows its current effective mode. The Drain card shows the recorded forecast from readiness: its time, CPU and memory over the first hour as sparklines against the current admit thresholds (peak bars for a record without `series`), headroom, admitted tasks with their profile source, and a candidate enforce held. A pass that built none says `no forecast this pass` and shows `last_admission_forecast` as **Last forecast** when readiness has one. A retained forecast reads as history: past, time-anchored decisions (`Admitted at 03:59 UTC`, `Held at 03:59 UTC`), each task's current status, and `window ended · nothing running` when that drain has ended and shared occupancy (`active_leaf_runs`) is zero; `window ended · other work running` when it is above zero, and `window ended` when it is unknown. A live pass keeps `Admitted`, `Held` and `Starvation guard protects`. A live shadow forecast says `Would admit` and `Would hold`; a retained shadow forecast says `Would have admitted at 03:59 UTC`. Analytics › Resources (`GET /api/resource-profiles`) charts the selected workspace's profiles on the host per work class, complexities overlaid: mean CPU with a ±1 sd band, p90 and mean memory and the alive share against minutes since admission, in cores and GiB or percent of host with the admit thresholds ([user interface](../user-interface/2_design.md#5b-analytics--resources)). Its history selector counts deliveries, never days: admission's own `profile_window` (default), the last 200, or **Last 1,000** retained completed deliveries per kind (`?last=<n>|all`, 1 to 1,000; `all` is a compatibility alias for 1,000, not all retained history), each profile naming its delivery count and its crew models (`crews`: each model's share of the window and the size of its own crew profile). The API discloses the effective per-key `delivery_limit` and selectable `max_last` (1,000); admission's default `profile_window` can be larger. Forecast curves against measured load with running tasks stacked remain future work. |
 
 `max_active_leaf_runs` keeps its meaning: the operator's ceiling, enforced
 first.

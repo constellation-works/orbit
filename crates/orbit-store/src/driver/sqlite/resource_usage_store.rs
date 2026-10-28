@@ -192,7 +192,7 @@ impl ResourceUsageStoreBackend for Store {
                 {
                     last.resumed |= run.resumed;
                     // Minutes come oldest first: the newest that recorded a
-                    // regime names the run's.
+                    // crew model or version names the run's.
                     if run.crew_model.is_some() {
                         last.crew_model = run.crew_model;
                     }
@@ -410,9 +410,9 @@ fn prune_bounds(
 /// not among the `?2` that [`ResourceHistoryKeep`] holds.
 ///
 /// - A run minute stays for the newest `?2` deliveries by admission, and
-///   the newest `?2` profile-eligible deliveries and the newest `?2` of
-///   their current regime by finish time, per key. A delivery with recent
-///   minutes keeps its older minutes too.
+///   the newest `?2` profile-eligible deliveries by finish time, per key
+///   and, for each crew model, per key and crew model. A delivery with
+///   recent minutes keeps its older minutes too.
 /// - A forecast stays while it is among the newest `?2`.
 /// - A host minute stays from the minute the oldest of the newest `?2`
 ///   forecasts was made in, so every kept forecast can still pair with the
@@ -474,12 +474,7 @@ fn prunable(table: ResourceMinutesTable) -> String {
                                 ON jj.workspace_id = rr.workspace_id AND jj.run_id = rr.run_id \
                               WHERE rr.workspace_id = r.workspace_id AND rr.task_id = r.task_id \
                                 AND rr.delivery_admitted_at = r.delivery_admitted_at \
-                              GROUP BY rr.run_id HAVING model IS NOT NULL ORDER BY rr.run_id LIMIT 1) AS model, \
-                             (SELECT m.orbit_version FROM run_resource_minutes m \
-                              WHERE m.workspace_id = r.workspace_id AND m.task_id = r.task_id \
-                                AND m.delivery_admitted_at = r.delivery_admitted_at \
-                                AND m.orbit_version IS NOT NULL \
-                              ORDER BY m.run_id, m.minute_index DESC LIMIT 1) AS version \
+                              GROUP BY rr.run_id HAVING model IS NOT NULL ORDER BY rr.run_id LIMIT 1) AS model \
                          FROM run_resource_minutes r LEFT JOIN job_runs j \
                            ON j.workspace_id = r.workspace_id AND j.run_id = r.run_id \
                          WHERE r.delivery_admitted_at IS NOT NULL \
@@ -489,15 +484,11 @@ fn prunable(table: ResourceMinutesTable) -> String {
                              (r.cpu_accounting IS NOT NULL AND r.cpu_accounting NOT IN \
                                  ('{linux}', '{macos}', '{macos_tree}')) THEN 1 ELSE 0 END) = 0), \
                      ranked AS (SELECT *, \
-                         ROW_NUMBER() OVER (PARTITION BY workspace_id, work_class, complexity, model, version \
-                             ORDER BY finished DESC, delivery_admitted_at DESC, task_id DESC) AS newest, \
-                         FIRST_VALUE(model) OVER (PARTITION BY workspace_id, work_class, complexity \
-                             ORDER BY finished DESC, delivery_admitted_at DESC, task_id DESC) AS current_model, \
-                         FIRST_VALUE(version) OVER (PARTITION BY workspace_id, work_class, complexity \
-                             ORDER BY finished DESC, delivery_admitted_at DESC, task_id DESC) AS current_version \
-                         FROM eligible) \
+                         ROW_NUMBER() OVER (PARTITION BY workspace_id, work_class, complexity, model \
+                             ORDER BY finished DESC, delivery_admitted_at DESC, task_id DESC) AS newest \
+                         FROM eligible WHERE model IS NOT NULL) \
                      SELECT workspace_id || char(31) || task_id || char(31) || delivery_admitted_at \
-                     FROM ranked WHERE newest <= ?2 AND model IS current_model AND version IS current_version) \
+                     FROM ranked WHERE newest <= ?2) \
                  AND workspace_id || char(31) || task_id || char(31) || delivery_admitted_at \
                  NOT IN (SELECT workspace_id || char(31) || task_id || char(31) || delivery_admitted_at \
                      FROM run_resource_minutes WHERE delivery_admitted_at IS NOT NULL \

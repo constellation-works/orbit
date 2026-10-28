@@ -16,6 +16,9 @@ pub struct ProfileLookup {
     /// Ignored for a template.
     pub complexity: Option<String>,
     pub base_class: BaseClass,
+    /// The crew model expected to run it, whose own profile of the key is
+    /// read first; `None` when unknown, and the key's union prices it.
+    pub crew_model: Option<String>,
 }
 
 impl ProfileLookup {
@@ -45,7 +48,14 @@ impl ProfileLookup {
             work_class,
             complexity,
             base_class,
+            crew_model: None,
         }
+    }
+
+    /// This lookup for work `crew_model` will run, or for unknown crew.
+    pub fn with_crew_model(mut self, crew_model: Option<String>) -> Self {
+        self.crew_model = crew_model;
+        self
     }
 
     /// A lookup for a template of `base_class` with no profile of its own: it
@@ -58,6 +68,7 @@ impl ProfileLookup {
             work_class: AUTO_TASK_TAG_PREFIX.to_string(),
             complexity: None,
             base_class,
+            crew_model: None,
         }
     }
 
@@ -70,7 +81,10 @@ impl ProfileLookup {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProfileSource {
-    /// The delivery's own key.
+    /// The delivery's own key, over its crew model's deliveries.
+    Crew,
+    /// The delivery's own key over every crew model: the union, when its
+    /// crew model is unknown or its own profile is sparse.
     Exact,
     /// Step 1: the same workspace and class over every complexity.
     WithoutComplexity,
@@ -90,6 +104,7 @@ impl ProfileSource {
     /// The step's name, as it serializes.
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Crew => "crew",
             Self::Exact => "exact",
             Self::WithoutComplexity => "without_complexity",
             Self::BaseClass => "base_class",
@@ -108,10 +123,17 @@ pub struct ProfileMatch {
 }
 
 impl ProfileSet {
+    /// The model `crew` runs, when it names a configured crew.
+    pub fn crew_model(&self, crew: Option<&str>) -> Option<&str> {
+        crew.and_then(|crew| self.crew_models.get(crew))
+            .map(String::as_str)
+    }
+
     /// The profile for `lookup`, stopping at the first step whose profile has
     /// at least `min_profile_deliveries`:
     ///
-    /// 0. the delivery's own key;
+    /// 0. the delivery's own key: its crew model's profile when the lookup
+    ///    names one, then the union over every crew model;
     /// 1. drop complexity (not for a template, whose key has none);
     /// 2. for a template, its base class in the same workspace, including
     ///    template deliveries;
@@ -136,11 +158,22 @@ impl ProfileSet {
         } else {
             lookup.complexity.as_deref()
         };
-        let exact = self.profiles.iter().find(|profile| {
+        let own_key = |profile: &&Arc<ResourceProfile>| {
             profile.key.workspace_id == lookup.workspace_id
                 && profile.key.work_class == lookup.work_class
                 && profile.key.complexity.as_deref() == complexity
-        });
+        };
+        if let Some(model) = lookup.crew_model.as_deref() {
+            let crew = self
+                .crew_profiles
+                .iter()
+                .filter(own_key)
+                .find(|profile| profile.crew_model.as_deref() == Some(model));
+            if let Some(answer) = found(ProfileSource::Crew, crew) {
+                return answer;
+            }
+        }
+        let exact = self.profiles.iter().find(own_key);
         if let Some(answer) = found(ProfileSource::Exact, exact) {
             return answer;
         }

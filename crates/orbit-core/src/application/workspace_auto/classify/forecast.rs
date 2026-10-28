@@ -28,7 +28,8 @@ pub(super) fn record_admission_forecast(
     };
     let result = runtime.workspace_id().and_then(|workspace_id| {
         for task in admitted.iter().filter_map(|task_id| tasks.get(task_id)) {
-            forecast.admit(&task.id, &task_lookup(&workspace_id, task));
+            let lookup = task_lookup(&workspace_id, task, forecast.profiles());
+            forecast.admit(&task.id, &lookup);
         }
         runtime.record_admission_forecast(&AdmissionForecastRecord {
             workspace_id,
