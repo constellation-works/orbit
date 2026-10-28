@@ -314,6 +314,42 @@ def deny_unknown_types(text):
     """{type name: {field}} for each deny_unknown_fields struct or enum in a Rust file."""
     if text is None:
         return {}
+
+    def field_is_skipped(attributes):
+        for match in re.finditer(r"#\s*\[\s*serde\s*\(", attributes):
+            arguments, argument, depth = [], [], 1
+            index = match.end()
+            in_string = escaped = False
+            while index < len(attributes) and depth:
+                char = attributes[index]
+                if in_string:
+                    if escaped:
+                        escaped = False
+                    elif char == "\\":
+                        escaped = True
+                    elif char == '"':
+                        in_string = False
+                elif char == '"':
+                    in_string = True
+                elif char == "(":
+                    depth += 1
+                elif char == ")":
+                    depth -= 1
+                    if depth == 0:
+                        arguments.append("".join(argument))
+                        break
+                    argument.append(char)
+                elif char == "," and depth == 1:
+                    arguments.append("".join(argument))
+                    argument = []
+                else:
+                    argument.append(char)
+                index += 1
+            if any(argument.split("=", 1)[0].strip() in {"skip", "skip_serializing"}
+                   for argument in arguments):
+                return True
+        return False
+
     types = {}
     for match in RUST_ITEM.finditer(text):
         attrs = item_attributes(text, match.start())
@@ -325,27 +361,48 @@ def deny_unknown_types(text):
             index += 1
         body = strip_rust_comments(text[start:index - 1])
         fields, depth, variant = set(), 1, None
+        pending_attributes, attribute_buffer = [], None
         for line in body.splitlines():
             stripped = line.strip()
+            if attribute_buffer is not None:
+                attribute_buffer += "\n" + line
+                if "]" in line:
+                    pending_attributes.append(attribute_buffer)
+                    attribute_buffer = None
+                continue
             if stripped.startswith("#"):
+                if "]" in stripped:
+                    pending_attributes.append(line)
+                else:
+                    attribute_buffer = line
                 continue
             if match.group("kind") == "struct" and depth == 1:
                 field = RUST_FIELD.match(line)
                 if field:
-                    fields.add(field.group(1))
+                    if not field_is_skipped("\n".join(pending_attributes)):
+                        fields.add(field.group(1))
+                    pending_attributes = []
+                elif stripped:
+                    pending_attributes = []
             elif match.group("kind") == "enum":
                 if depth == 1:
                     opened = RUST_VARIANT.match(line)
-                    variant = opened.group(1) if opened else None
-                    if opened and "}" in line:  # `Variant { a: A, b: B },`
+                    variant_skipped = field_is_skipped("\n".join(pending_attributes))
+                    variant = opened.group(1) if opened and not variant_skipped else None
+                    if opened and not variant_skipped and "}" in line:  # `Variant { a: A, b: B },`
                         inline = line[opened.end():line.rindex("}")]
                         fields.update(f"{variant}.{field.group(1)}"
                                       for part in inline.split(",")
                                       if (field := RUST_FIELD.match(part)))
+                    pending_attributes = []
                 elif depth == 2 and variant:
                     field = RUST_FIELD.match(line)
                     if field:
-                        fields.add(f"{variant}.{field.group(1)}")
+                        if not field_is_skipped("\n".join(pending_attributes)):
+                            fields.add(f"{variant}.{field.group(1)}")
+                        pending_attributes = []
+                    elif stripped:
+                        pending_attributes = []
             depth += line.count("{") - line.count("}")
         types[match.group("name")] = fields
     return types
