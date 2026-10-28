@@ -958,7 +958,7 @@ main.tasks-layout.task-pane-open > .tasks-dock { display: none; }
 
 /* The task pane: the list, a resizer, then the selected task's detail at the
    operator's remembered share of the width (`--task-pane-width`, set from
-   tasks.js), kept wide enough to read and narrow enough to leave a list.
+   task-pane.js), kept wide enough to read and narrow enough to leave a list.
    Important because shell.css stacks every `main` grid below 1000px. */
 main.tasks-layout.task-pane-open {
   grid-template-columns:

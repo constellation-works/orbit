@@ -127,6 +127,9 @@ states = ["default", "loading", "error"]
 references = ["run-detail"]
 mask = []                             # selectors painted over before capture
 globs = ["crates/orbit-web/assets/dashboard/js/tasks.js",
+         "crates/orbit-web/assets/dashboard/js/task-detail.js",
+         "crates/orbit-web/assets/dashboard/js/task-pane.js",
+         "crates/orbit-web/assets/dashboard/js/task-lifecycle.js",
          "crates/orbit-web/assets/dashboard/js/task-runtime.js",
          "crates/orbit-web/assets/dashboard/css/task-detail.css",
          "crates/orbit-web/src/api/tasks.rs"]
@@ -188,7 +191,7 @@ First entries, chosen to cover the most edited views and the components they sha
 | id | Route | Fixture | States | Selected by (globs, abbreviated) |
 |---|---|---|---|---|
 | `tasks-list` | `#tasks` | `busy-workspace` | default, empty, loading, error | `js/tasks.js`, `css/tasks.css`, `api/tasks.rs` |
-| `task-detail` | `#tasks/<fixture task>` | `busy-workspace` | default, loading, error | `js/tasks.js`, `js/task-runtime.js`, `css/task-detail.css`, `api/tasks.rs` |
+| `task-detail` | `#tasks/<fixture task>` | `busy-workspace` | default, loading, error | `js/tasks.js`, `js/task-detail.js`, `js/task-pane.js`, `js/task-lifecycle.js`, `js/task-runtime.js`, `css/task-detail.css`, `api/tasks.rs` |
 | `run-detail` | run detail of a fixture run | `busy-workspace` | default, error | `js/run-detail.js`, `css/run-detail.css`, `api/runs/**` |
 | `jobs-live` | `#jobs/live` | `busy-workspace` | default, empty | `js/runs.js`, `css/runs.css`, `api/jobs.rs` |
 | `analytics-metrics` | `#analytics/metrics` | `busy-workspace` | default, loading | `js/metrics*.js`, `js/sparkline.js`, `api/diagnostics/**` |
@@ -302,7 +305,7 @@ reference, which saves tokens on smoke views a shared-path change did not move.
   "manifest": {"path": "crates/orbit-web/visual/views.toml", "revision": "<base sha>", "sha256": "…"},
   "frozen_instant": "2026-01-01T12:00:00Z",
   "views": [{
-    "id": "task-detail", "selected_by": ["crates/orbit-web/assets/dashboard/js/tasks.js"],
+    "id": "task-detail", "selected_by": ["crates/orbit-web/assets/dashboard/js/tasks.js", "crates/orbit-web/assets/dashboard/js/task-detail.js", "crates/orbit-web/assets/dashboard/js/task-pane.js", "crates/orbit-web/assets/dashboard/js/task-lifecycle.js"],
     "images": [{
       "path": "visual/task-detail/default-dark-1440-after.png",
       "side": "after", "commit": "…", "state": "default", "theme": "dark",
