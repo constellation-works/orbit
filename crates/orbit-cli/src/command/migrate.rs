@@ -37,7 +37,7 @@ pub struct MigrateCommand {
         value_name = "N"
     )]
     pub limit: usize,
-    /// Apply pending migrations, then set each task's crew to the crew its latest delivery run selected, where they differ
+    /// Apply pending migrations, then set each task's crew to the crew its latest delivery selected (latest local delivery run or claimed-leaf settlement), where they differ
     #[arg(long, conflicts_with = "backfill_diff_stats")]
     pub backfill_task_crews: bool,
 }
