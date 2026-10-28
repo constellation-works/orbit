@@ -1815,7 +1815,12 @@ existing recovery activities, final validation and push do the repair:
   unrelated or disconnected push records cannot authorize a different head.
 - Final recovery after `complete_pr` re-reads required checks on the current
   head and receives each failed check's name and diagnostic evidence in
-  `required_check_failures`, independently of the earlier step error. Pending,
+  `required_check_failures`, independently of the earlier step error. The
+  exception is an untouched-path failure whose base evidence is still
+  incomplete: no passing same-check base run exists yet, or the base run passes
+  but no same-signature `pull_request` rerun of the unchanged head is recorded.
+  That wait withholds `required_check_failures` for every check, and the
+  attempt requeues the published candidate instead of diagnosing it. Pending,
   unreadable or changing checks refuse a partial diagnosis without renewing
   the completion watch deadline.
 - A failed required check run that no workflow produced (a provider app's
