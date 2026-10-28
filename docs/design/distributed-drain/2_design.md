@@ -340,7 +340,9 @@ claimed leaves pass `claimed: true` to `agent_implement`, and in that mode:
   Search and task listing read the owner's authoritative records only in the claimed
   workspace; search cannot request federated `workspaces` or `all_workspaces`
   (including their aliases). Task show and artifact get read any task in that
-  workspace; a task the owner does not hold there is refused
+  workspace, except another task's `review-*` artifact (refused on the remote
+  route as `claimed_owner_bridge_refused`; the review gate keeps its stricter
+  scope); a task the owner does not hold there is refused
   (`claimed_owner_bridge_refused`). Artifact put stays on the claimed task, and
   follow-up creation retains its claim relation checks. No additional
   mutations are bridged. A task requiring `orbit.task.update` remains held before
@@ -1474,7 +1476,7 @@ Acceptance criteria, not reported as passing.
 | Claimed implementer with no SSH route to the owner (agent sandbox) | Scoped owner calls cross the run broker; task updates stay denied, and the output summary reaches `claim_handoff` as the owner's `execution_summary` |
 | Owner's own drain admission pass times out on a task or database lock | The pass is deferred, not failed: it admits nothing, releases any `enforce` gap-fit reservations it wrote for its wave (any it cannot release expire with their TTL), records `lock_busy` and the lock error (naming the holder) as the drain's last pass, and the next pass retries after the poll interval. Ten consecutive deferred passes fail the drain with that error; a completed pass resets the count; any other admission error fails the drain as before |
 | Owner times out waiting on a task or database lock | The owner answers the retryable `lock_busy`, not `internal_error`; a bound worker retries an owner read twice (1 s, then 3 s) before failing, so an agent envelope's task load (final recovery's included) outlasts a burst; a step it still fails settles as `transient`, never as `candidate` or `base_conflict` ([ORB-15088]) |
-| Claimed agent's owner call from inside the sandbox | Only the closed owner-tool list crosses the run's broker. Search, task listing, task show and artifact get read the claimed workspace ([ORB-19270]); federated search, a task outside that workspace, an artifact put or friction for another task, and unsupported relations are refused. A missing broker is `owner_route_unavailable`, settled as a release ([ORB-14260]) |
+| Claimed agent's owner call from inside the sandbox | Only the closed owner-tool list crosses the run's broker. Search, task listing, task show and artifact get read the claimed workspace ([ORB-19270]); federated search, a task outside that workspace, another task's `review-*` artifact (on the remote route), an artifact put or friction for another task, and unsupported relations are refused. A missing broker is `owner_route_unavailable`, settled as a release ([ORB-14260]) |
 | Claimed run creates files under an admitted `dir:` selector | Committed and handed off with no exact `file:` selector; eligible additions outside the original module footprint request owner-validated widening; ineligible paths are refused before any index change; `.orbit/tmp/` scratch is never delivered ([ORB-13756]) |
 | Claimed retry of a task whose previous attempt failed | The delivery gate judges this attempt's implementer summary, not the stored `Outcome: failed`; a current failure is still refused before any Git mutation ([ORB-13755]) |
 | Generic resume of an interrupted claimed leaf | Refused; recovery creates a fenced new claim/run, preserving branch evidence |

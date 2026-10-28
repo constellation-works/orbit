@@ -944,7 +944,8 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   coordinator (the step runner's broker, outside the sandbox), for a closed
   list of calls: `orbit.search`, `orbit.task.list`, `orbit.task.show` and
   `orbit.task.artifact.get` against the owner workspace the claim is bound to
-  (a federated scope, or a task the owner does not hold in that workspace, is
+  (a federated scope, a task the owner does not hold in that workspace, or
+  another task's `review-*` artifact on the remote route, is
   refused, and none is carried to any other workspace), `orbit.task.add` of a task `spawned_from` the claimed task
   and related to nothing else (a claimed `delivery-code-review`, `code-review`, `qa-sweep`
   or `qa-full-sweep` auto-task's finding may also name its culprit as

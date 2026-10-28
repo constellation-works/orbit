@@ -165,7 +165,10 @@ SSH route can only fail host-key verification. With `ORBIT_PLUGIN_BROKER` set, t
 The broker carries them only for the run bound to the claim, whose task is the claimed task,
 and takes the task, claim and owner from those records, never from the request. Each call is
 scoped to the claim. Search, task listing, task show and artifact get read the claimed
-workspace and may name any task in it ([ORB-19270]): the binding, not the request, supplies the
+workspace and may name any task in it ([ORB-19270]), except that a `review-*`
+artifact of another task is refused on the remote route as
+`claimed_owner_bridge_refused` (the `review-*` scope below): the binding, not
+the request, supplies the
 owner's workspace, so the owner answers only from that workspace, and a task show or artifact
 get naming a task the owner does not hold there is refused as `claimed_owner_bridge_refused`
 after a task-only check on the owner. An artifact put names the claimed task. A new task must name the
@@ -208,7 +211,9 @@ comment.
 workspace, so a claimed worker can check for duplicate findings before filing. The binding
 supplies the destination; search refuses federated `workspaces` and `all_workspaces` scope,
 including their aliases, and both tools refuse internal (`_`-prefixed) fields. Task show and
-artifact get read any task in the claimed workspace ([ORB-19270]), artifact put stays on the
+artifact get read any task in the claimed workspace ([ORB-19270]), except another
+task's `review-*` artifact (refused on the remote route as
+`claimed_owner_bridge_refused`; see the `review-*` scope below); artifact put stays on the
 claimed task, and `orbit.task.update` remains denied.
 A finding the owner still refuses
 is returned in the implementer's `unfiled_findings` output. The claimed handoff attaches it to
@@ -705,7 +710,7 @@ anything:
 | Peer authentication fails | The connection is closed with no reply. The client reports `plugin_broker_unavailable` and the host logs the refusal. |
 | The client disconnects mid-call | The backend's process group is killed. A reported rotation is still applied. |
 | A claimed reviewer's artifact call arrives after its reviewer finished, or outside the reviewer activity | `plugin_broker_refused` with `review_attempt_stale` or `claimed_review_bridge_refused`; nothing reaches the owner. The reviewer reports `incomplete`, and the next run admits a fresh attempt. |
-| A claimed worker's owner call writes to another task, names an unsupported relation or field, or reads a task outside the claimed workspace | `plugin_broker_refused` with `claimed_owner_bridge_refused`; nothing reaches the owner, except the read whose not-found tells the broker the task is outside the claimed workspace. A `regression_from` relation reaches the owner, which refuses it with `PolicyDenied` unless the claimed task is a review task and the target is a task in its workspace. |
+| A claimed worker's owner call writes to another task, names an unsupported relation or field, reads a task outside the claimed workspace, or reads another task's `review-*` artifact | `plugin_broker_refused` with `claimed_owner_bridge_refused`; nothing reaches the owner, except the read whose not-found tells the broker the task is outside the claimed workspace. A `regression_from` relation reaches the owner, which refuses it with `PolicyDenied` unless the claimed task is a review task and the target is a task in its workspace. |
 | A claimed final recovery writes a `review-*` artifact, reads one outside the gate's named evidence, or reads after its recovery decided or its claim began settling; or any claimed worker asks for another run's delivery of its claimed task | `plugin_broker_refused` with `review_write_refused`, `review_read_refused`, `final_recovery_stale`, `claim_not_live` or `delivery_run_refused`; nothing reaches the owner. The final-recovery prompt treats a refused read as a gap in its evidence, not a reason to stop. |
 | A claimed worker's owner call cannot reach the broker | `owner_route_unavailable`, `retryable: false`, naming this run's coordinator as stopped (or `ORBIT_PLUGIN_BROKER` as unset). The agent ends its step on that code and must not route around the sandbox. The run skips step and final recovery, and a pull drain releases the claim and stops offering that crew for its window. |
 | The host is an older Orbit that starts no broker | It applies no mask either, so nested calls keep today's in-process path. Rollout order (§8) keeps this pairing. |

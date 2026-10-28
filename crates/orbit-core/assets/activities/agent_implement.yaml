@@ -480,7 +480,9 @@ spec:
     When `input.claimed` is true, the pipeline delivers your output to the
     owning machine. The injected task is authoritative; `orbit.task.update`
     and owner artifact writes are unavailable, while `orbit.task.show` and
-    `orbit.task.artifact.get` read any task in the claimed workspace. Return
+    `orbit.task.artifact.get` read any task in the claimed workspace, except
+    that a `review-*` artifact of another task is refused on the remote route
+    (the review gate keeps its stricter scope). Return
     writes as output fields instead:
     - `execution_summary` (REQUIRED): the Handoff summary.
     - `context_files_added`: selectors you would have declared in step 4.
