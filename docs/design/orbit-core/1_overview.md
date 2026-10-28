@@ -1,8 +1,8 @@
 ---
 title: Orbit Core — Overview
 owner: codex
-last_updated: 2026-10-24
-last_validated: 2026-10-25
+last_updated: 2026-10-28
+last_validated: 2026-10-28
 status: Accepted
 stage: shipped
 next: "—"
@@ -69,7 +69,7 @@ source scan, enforces the runtime direction.
   `orbit-engine::RuntimeHost` callback translation. Adapters may use both
   application operations and runtime mechanisms.
 - **Bootstrap** — initialization, managed/default assets, policy seeding, and
-  forward-only startup migrations.
+  forward-only startup migrations [ORB-10012].
 - **Composition** — root resolution and the sole join of `orbit-config`,
   bootstrap, runtime construction, and adapters.
 - **Runtime roots** — `OrbitRuntimeRoots` carries `global_root`,
@@ -126,7 +126,7 @@ source scan, enforces the runtime direction.
 
 `OrbitStores` is Core's internal holder for typed `orbit-store` backends; it is
 not an external SDK surface. Code inside Core delegates ordinary persistence
-to the owning backend traits, while outer crates use explicit `OrbitRuntime`
+to the owning backend traits [ORB-10355], while outer crates use explicit `OrbitRuntime`
 methods and application APIs. Runtime exposes mechanisms; coordination across
 stores or side effects belongs to the owning application operation.
 
@@ -253,6 +253,7 @@ lowest of the nine modules above `contracts`.
 - [ORB-10012] — introduced the versioned workspace-layout migration pre-flight the runtime open runs.
 - [ORB-10016] — extracted `orbit-cmd` from orbit-core and trimmed the root re-export surface.
 - [ORB-10355] — removed the hand-maintained store delegation layer in favor of direct typed backend access.
+- [ORB-10885] — extracted `orbit-config` from orbit-core and moved config layering into the owning crate.
 - [ORB-10886] — removed the internal command/runtime cycle and established the directional module graph.
 - [ORB-17906] — extracted the runtime kernel into the `orbit-runtime` crate behind the `OrbitRuntime` wrapper.
 - [ORB-17924] — added `application::contracts`, the task-to-automation port and the job review-admission hook, and guarded those cuts.

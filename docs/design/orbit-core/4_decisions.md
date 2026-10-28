@@ -1,7 +1,7 @@
 ---
 title: Orbit Core — Decisions
 owner: claude
-last_updated: 2026-10-10
+last_updated: 2026-10-28
 status: Accepted
 feature: orbit-core
 doc_role: decisions
@@ -216,11 +216,17 @@ downgraded to review.
 
 ## Task References
 
+- [ORB-00289] — trimmed six admin and maintenance tools from the agent MCP surface.
 - [ORB-10016] — extracted `orbit-cmd` from orbit-core, converted moved command groups to extension traits, and trimmed root re-exports.
 - [ORB-10026] — authored the [North-star architecture bearing: operations as data behind an operation registry](#north-star-architecture-bearing-operations-as-data-behind-an-operation-registry) north-star operation-registry architecture bearing.
+- [ORB-10200] — unified CLI command meaning behind one command-operation module.
+- [ORB-10358] — piloted the operations-as-data registry for the friction noun, with the CLI, MCP and dashboard as derived adapters.
+- [ORB-10458] — backfilled design-doc ADRs that had no record in the ADR store.
 - [ORB-10479] — restored the 18 design-doc ADRs whose allocation survived their body, and made the [ORB-10538] repair surface reachable and abandoned-allocation aware ([Exact-id ADR restore repaired abandoned allocations](#exact-id-adr-restore-repaired-abandoned-allocations)).
+- [ORB-10501] — detected and repaired id-allocation rows pinned to worktrees that no longer exist.
 - [ORB-10545] — made superseded ADR bodies repository-published history and
   added allocation-pinned federated reconciliation ([Published superseded ADR bodies as durable decision history](#published-superseded-adr-bodies-as-durable-decision-history)).
+- [ORB-11332] — implemented operation-mode policy, scoped automation and bounded recovery; the mode was later removed by ORB-12769 to ORB-12772.
 - [ORB-12769] — removed the dashboard panel and `/api/operation/*` routes, and decomposed the removal.
 - [ORB-12770] — removed the `orbit operation` CLI group, `run auto --grant`, and the MCP tools.
 - [ORB-12771] — removed the Core `application/operation` module and the Common governance module.
