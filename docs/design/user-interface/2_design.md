@@ -325,7 +325,15 @@ It stays beside the task list, gives way to an open task, and is hidden below
 1000px so the list keeps its width. Drain contains the Auto-drain status card
 and a simple **Start a window** card. Locks held has By file (default) and
 By task views, remembered for Tasks, and a task-ID filter. Log is the live,
-filterable tail; its tab names the worst level present. The top-bar drain
+filterable tail; its tab names the worst level present. The dock's content
+starts level with the first task block (`alignTasksDock` in `log-tail.js`
+measures the offset and sets `--tasks-dock-lead` on `#tasks-dock`, so the
+Auto-drain card and the first block share a top edge at any width). The room
+that leaves above the tabs holds a **host strip** (`#tasks-host-strip`, up to
+88px tall): the rail Host block's verdict and its `load`, `mem`, `disk` and `io`
+rows with bars, laid out horizontally and painted from the same summary in
+`host-resources.js`, so the two repaint together, aged samples included. A gap
+too small for the strip stays empty, and the strip leaves with the dock. The top-bar drain
 indicator opens `#tasks?dock=drain` in All workspaces mode, where the status
 card shows fleet drains with one tab per host, live workspaces first, their
 phase, leaf slots, eligible work, waits, holds and queued windows. Rows switch

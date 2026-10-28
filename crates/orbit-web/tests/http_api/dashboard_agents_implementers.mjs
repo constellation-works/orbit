@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { agents, common, answer, takeAll, response, settle, part, click, selectButton, byId, notComputed, attribution } from './dashboard_agents.mjs';
-import { implementerCard, implementerDetail, implementerRadarCard, implementerOutlierCard, implementerRadarDetail } from './agents_implementers_fixture.mjs';
+import { implementerCard, implementerRadarCard, implementerOutlierCard } from './agents_implementers_fixture.mjs';
 
 common.setWorkspace('ws-a');
 common.setWindow('30d');
@@ -26,8 +26,7 @@ for (const selector of ['.agents-cost-plot', '.agents-cost-point', '.agents-cost
 }
 assert.ok(!body.textContent.includes('Score against cost') && !body.textContent.includes('First reviews by tier'), 'the removed panel leaves no chart, frontier or tier copy');
 assert.match(part('detail').textContent, /Cost per landed task/, 'cost stays in Shown, not scored');
-for (const request of takeAll()) request.resolve(response(implementerDetail('sol', 'model-b')));
-await settle();
+assert.deepEqual(takeAll(), [], 'the dashboard does not fetch agent detail');
 assert.match(part('detail').textContent, /model-b/);
 const shown = part('detail').querySelectorAll('.agents-term-context');
 assert.equal(shown.length, implementerCard().terms.length, 'every scored term shows its reference count');
@@ -36,9 +35,7 @@ const rejects = part('detail').querySelectorAll('.agents-breakdown li').find(nod
 assert.equal(rejects.querySelector('.agents-term-value').textContent, '−2.7', 'the bar uses excess rejects, rather than total rejects');
 assert.ok(!part('detail').textContent.includes('[object Object]'), 'structured tier data never leaks into the detail column');
 click(selectButton('costly'));
-const requests = takeAll();
-assert.equal(requests[0].url.searchParams.get('model'), 'model-d');
-requests[0].resolve(response(implementerDetail('costly', 'model-d')));
+assert.deepEqual(takeAll(), [], 'selecting another row does not request agent detail');
 await settle();
 assert.equal(part('detail').querySelector('h3').textContent, 'costly');
 
@@ -67,16 +64,11 @@ const loadCard = async (card) => {
   });
   await load;
   await settle();
-  for (const request of takeAll()) {
-    request.resolve(response(implementerRadarDetail(card, request.url.searchParams.get('crew'), request.url.searchParams.get('model'))));
-  }
-  await settle();
+  assert.deepEqual(takeAll(), [], 'loading a scorecard does not request agent detail');
 };
-const selectCrew = async (card, crew) => {
+const selectCrew = async (crew) => {
   click(selectButton(crew));
-  for (const request of takeAll()) {
-    request.resolve(response(implementerRadarDetail(card, request.url.searchParams.get('crew'), request.url.searchParams.get('model'))));
-  }
+  assert.deepEqual(takeAll(), [], 'selecting a crew does not request agent detail');
   await settle();
 };
 
@@ -84,7 +76,7 @@ const selectCrew = async (card, crew) => {
 // regressions, with no reviewed deliveries.
 const radarCard = implementerRadarCard();
 await loadCard(radarCard);
-await selectCrew(radarCard, 'sol');
+await selectCrew('sol');
 assert.equal(part('detail').querySelector('h3').textContent, 'sol');
 for (const radius of fleetRadii()) assert.ok(Math.abs(radius - 52) < 0.01, `the fleet median sits on the middle ring, got ${radius}`);
 assert.ok(radarRadius('weighted_landed') > 52, 'a rank-2 row above the landed median plots outside the median ring');
@@ -101,12 +93,12 @@ assert.match(radarTableRow('escaped_regressions').textContent, /\+10/, 'the acce
 
 // Adding one extreme outlier crew must not move the median ring or squeeze
 // a normal crew toward the rim.
-await selectCrew(radarCard, 'peer-a');
+await selectCrew('peer-a');
 const peerLandedBefore = radarRadius('weighted_landed');
 const peerEscapedBefore = radarRadius('escaped_regressions');
 const outlierCard = implementerOutlierCard();
 await loadCard(outlierCard);
-await selectCrew(outlierCard, 'peer-a');
+await selectCrew('peer-a');
 for (const radius of fleetRadii()) assert.ok(Math.abs(radius - 52) < 0.01, `the outlier does not move the fleet median ring, got ${radius}`);
 assert.ok(radarRadius('weighted_landed') < 78 && Math.abs(radarRadius('weighted_landed') - peerLandedBefore) < 26, 'the outlier does not move a normal crew toward the rim on landed');
 assert.ok(radarRadius('escaped_regressions') < 78 && Math.abs(radarRadius('escaped_regressions') - peerEscapedBefore) < 26, 'the outlier does not squeeze a normal crew on escaped regressions');

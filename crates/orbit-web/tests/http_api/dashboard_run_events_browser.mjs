@@ -169,6 +169,23 @@ try {
     results.widths.push({ width, controls });
     await page.screenshot({ path: path.join(evidence, `events-${width}.png`), animations: 'disabled' });
   }
+  // An opened event's fields are an inset panel, not bare text that runs into the next row.
+  for (const width of [1440, 375]) {
+    await page.setViewportSize({ width, height: 900 });
+    const detail = rows.nth(98).locator('td.run-event-detail details');
+    await detail.locator('summary').click();
+    const fields = await detail.locator('pre').evaluate(node => {
+      const style = getComputedStyle(node);
+      return { border: parseFloat(style.borderTopWidth), background: style.backgroundColor, radius: parseFloat(style.borderTopLeftRadius), padding: parseFloat(style.paddingLeft) };
+    });
+    assert.ok(fields.border >= 1 && fields.radius >= 4 && fields.padding >= 8, `event fields form a bordered panel at ${width}: ${JSON.stringify(fields)}`);
+    assert.notEqual(fields.background, 'rgba(0, 0, 0, 0)', 'event fields panel has its own background');
+    assert.equal(await page.evaluate(() => document.scrollingElement.scrollWidth > innerWidth), false, `open event fields do not overflow at ${width}`);
+    await rows.nth(98).scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(evidence, `event-fields-open-dark-${width}.png`), animations: 'disabled' });
+    await detail.locator('summary').click();
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
   await page.getByRole('button', { name: 'Load earlier', exact: true }).click();
   await page.waitForFunction(() => document.querySelector('#run-events-body tbody tr')?.dataset.key === 'runev-event-50');
   assert.match(await page.locator('.run-events-pagination').textContent(), /51–150 of 250/);

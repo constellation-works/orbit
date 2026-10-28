@@ -74,8 +74,8 @@ fn codebase_view_executes_subtab_swap_sections_empty_state_and_denial_badge() {
 }
 
 /// Analytics › Agents counts each role tab's ranked rows, splits the strip by
-/// owner, moves the detail column with the selected row, keeps "How the score
-/// works" open across polls, re-reads the detail after a newer scan, shows the
+/// owner, moves the detail column with the selected row without fetching agent
+/// detail, keeps "How the score works" open across polls, shows the
 /// empty and not-computed states, the Reviewers provisional banner, `accepts
 /// often` tag and verdict-outcome bars, and routes `#analytics/orchestrators`
 /// to `#analytics/agents/orchestrators`.

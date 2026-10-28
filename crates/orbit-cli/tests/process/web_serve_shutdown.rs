@@ -85,7 +85,9 @@ fn dashboard_exits_promptly_on_sigterm_with_open_connections() {
     assert!(
         status.success(),
         "expected the in-process graceful-shutdown path to exit cleanly \
-         within {SHUTDOWN_DEADLINE:?}, got {status:?} after {shutdown_duration:?}"
+         within {SHUTDOWN_DEADLINE:?}, got {status:?} after {shutdown_duration:?}; \
+         stderr tail: {}",
+        server.stderr_tail()
     );
 
     drop(idle);
@@ -105,10 +107,17 @@ fn dashboard_exits_promptly_on_sigterm_with_open_connections() {
         "expected /healthz to report ok after restart, got: {body}"
     );
 
+    let before_sigterm2 = Instant::now();
     send_sigterm(&restarted);
     let status2 = wait_with_deadline(&mut restarted, SHUTDOWN_DEADLINE)
         .expect("restarted server did not exit within the shutdown deadline");
-    assert!(status2.success());
+    let shutdown_duration2 = before_sigterm2.elapsed();
+    assert!(
+        status2.success(),
+        "expected the restarted dashboard to exit cleanly within {SHUTDOWN_DEADLINE:?}, \
+         got {status2:?} after {shutdown_duration2:?}; stderr tail: {}",
+        restarted.stderr_tail()
+    );
 }
 
 fn open_sse(port: u16, timeout: Duration) -> DeadlineStream {

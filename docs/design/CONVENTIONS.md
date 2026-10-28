@@ -285,6 +285,7 @@ Retired features are removed from this table along with their folder.
 | Review Gate | [docs/design/review-gate/](./review-gate/) | codex |
 | Routines | [docs/design/routines/](./routines/) | claude |
 | State Compatibility | [docs/design/state-compatibility/](./state-compatibility/) | claude |
+| Symbol Risk Index | [docs/design/symbol-risk-index/](./symbol-risk-index/) | claude |
 | Task Artifacts | [docs/design/task-artifacts/](./task-artifacts/) | codex |
 | Task Migration | [docs/design/task-migration/](./task-migration/) | claude |
 | Task Publication | [docs/design/task-publication/](./task-publication/) | codex |

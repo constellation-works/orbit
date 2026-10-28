@@ -2390,6 +2390,17 @@ fn base_check_holds_never_dispatch_candidate_recovery() {
                             jobs["jobs"][0][field] = json!(time);
                             fs::write(path, serde_json::to_vec(&jobs).unwrap()).unwrap();
                         }
+                        let path = fx
+                            .forge
+                            .join("commit-ci")
+                            .join(&fx.base_sha)
+                            .join("runs.json");
+                        let mut runs: Value =
+                            serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+                        runs["workflow_runs"][0]["status"] = json!("completed");
+                        runs["workflow_runs"][0]["conclusion"] = json!("success");
+                        runs["workflow_runs"][0]["run_started_at"] = json!("2026-10-27T05:01:00Z");
+                        fx.write_forge("base-push-runs.json", runs.to_string());
                         let mut next = auto_fix_input(&fx);
                         next["run_id"] = json!("jrun-base-recheck");
                         let error = action(&host, "pr_complete", &next).unwrap_err();

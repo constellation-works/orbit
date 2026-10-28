@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use orbit_common::OrbitError;
 use serde_json::{Value, json};
 
-use crate::context::{HandoffLandingContext, RuntimeHost};
+use crate::context::{HandoffLandingContext, RuntimeHost, TaskAutomationUpdate};
 
 use super::super::super::operations;
 use super::super::super::pr::{CheckState, PullRequestStatus};
@@ -26,6 +26,7 @@ const REQUEUE_OUTCOME: &str = "the automatic repair is already spent, so the own
 pub(super) enum CheckFailureClass {
     Transient,
     Inherited,
+    Flaky,
     Candidate,
     BaseSuspect,
     Inconclusive,
@@ -36,6 +37,7 @@ impl CheckFailureClass {
         match self {
             Self::Transient => "transient",
             Self::Inherited => "inherited",
+            Self::Flaky => "flaky",
             Self::Candidate => "candidate",
             Self::BaseSuspect => "base-suspect",
             Self::Inconclusive => "inconclusive",
@@ -47,6 +49,9 @@ impl CheckFailureClass {
 #[derive(Default)]
 pub(in crate::executor::automation::vcs) struct CheckRecovery {
     rerun: bool,
+    /// Untouched failures whose fresh base pass already authorized a rerun.
+    /// The rerun's later completion must not demand yet another base pass.
+    rerun_candidates: BTreeSet<(u64, String, String)>,
     updated: bool,
     pub(super) deadline_ms: u64,
     /// Failed jobs already acted on, so a rollup that still shows them
@@ -223,7 +228,7 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
                 )));
             }
         };
-        let (class, why, tip_passes, signature) = classify_logged_job(
+        let (mut class, mut why, tip_passes, signature) = classify_logged_job(
             host,
             workspace,
             job,
@@ -235,6 +240,15 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
             &mut base_jobs,
             &mut tip_jobs,
         );
+        if recovery
+            .rerun_candidates
+            .contains(&(run_id, label.clone(), signature.clone()))
+            || (class == CheckFailureClass::Flaky && recovery.rerun)
+        {
+            class = CheckFailureClass::Candidate;
+            why = "the untouched-path failure remains after the shared one-rerun budget was spent"
+                .into();
+        }
         if class == CheckFailureClass::BaseSuspect {
             super::suspect::record_base_suspect(
                 host,
@@ -266,7 +280,7 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
         CheckFailureClass::BaseSuspect => Ok(CheckRecoveryStep::WaitForBase(evidence(
             "waiting for a fresh base check within the landing deadline; no candidate repair",
         ))),
-        CheckFailureClass::Transient if !recovery.rerun => {
+        CheckFailureClass::Transient | CheckFailureClass::Flaky if !recovery.rerun => {
             let runs: BTreeSet<u64> = jobs.iter().filter_map(|job| job.run_id).collect();
             for run_id in runs {
                 host.run_private_vcs_operation(
@@ -276,8 +290,36 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
                         "workspace_path": workspace.to_string_lossy(),
                     }),
                 )?;
+                let rerun_jobs = jobs.iter().filter(|job| job.run_id == Some(run_id)).map(|job| {
+                    json!({"job_id":job.job_id,"check":job.label,"classification":job.class.as_str(),"signature":job.signature})
+                }).collect::<Vec<_>>();
+                host.apply_task_automation_update(
+                    &context.task_id,
+                    TaskAutomationUpdate {
+                        append_history: vec![orbit_types::task::TaskHistoryEntry {
+                            at: chrono::Utc::now(),
+                            by: "system".into(),
+                            event: "ci_check_rerun".into(),
+                            note: Some(
+                                json!({"head":head,"run_id":run_id,"jobs":rerun_jobs}).to_string(),
+                            ),
+                            from_status: None,
+                            to_status: None,
+                            operation_id: None,
+                            decision: None,
+                        }],
+                        ..TaskAutomationUpdate::default()
+                    },
+                )?;
             }
             recovery.rerun = true;
+            recovery.rerun_candidates.extend(
+                jobs.iter()
+                    .filter(|job| job.class == CheckFailureClass::Flaky)
+                    .filter_map(|job| {
+                        Some((job.run_id?, job.label.clone(), job.signature.clone()))
+                    }),
+            );
             recovery.handled.extend(jobs.iter().map(|job| job.job_id));
             recovery.handled_checks.extend(answered_checks);
             recovery
@@ -359,12 +401,14 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
             ));
             Ok(CheckRecoveryStep::Acted)
         }
-        CheckFailureClass::Candidate if context.automatic_repair_spent => {
+        CheckFailureClass::Candidate | CheckFailureClass::Flaky
+            if context.automatic_repair_spent =>
+        {
             Ok(CheckRecoveryStep::Requeue(evidence(REQUEUE_OUTCOME)))
         }
-        CheckFailureClass::Candidate => Ok(CheckRecoveryStep::Repair(evidence(
-            "the candidate is handed to one automatic repair",
-        ))),
+        CheckFailureClass::Candidate | CheckFailureClass::Flaky => Ok(CheckRecoveryStep::Repair(
+            evidence("the candidate is handed to one automatic repair"),
+        )),
         CheckFailureClass::Inconclusive => Ok(CheckRecoveryStep::Stop(evidence(
             "its evidence could not be read in full, so nothing is rerun, updated or repaired \
              and the candidate stays in review",

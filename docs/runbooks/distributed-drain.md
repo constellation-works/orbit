@@ -1671,13 +1671,18 @@ one. From then on:
     outside the repository may have changed since, such as an advisory
     database or a toolchain release. The landing records one
     `ci_base_suspect` history event per task and failure, spends no rerun,
-    update or repair, and keeps polling the latest push run of the same job
-    on the landing tip. Only a base job that started after the candidate's
-    job completed decides, on an unmoved base and on a moved landing tip
-    alike: the same failure there makes it **inherited**, and a pass makes
-    it **candidate** (for example a test in an untouched file that the
-    candidate's change breaks). A **candidate** outcome on a moved tip
-    stops for the one automatic repair directly, with no branch update. An
+    update or repair, and keeps polling for a fresh push run of the same job.
+    A completed successful push on the accepted base or any descendant through
+    the landing tip counts even after the tip moves again. Both the run and
+    its job must have started at or after the candidate's job completed.
+    The lookup examines up to 100 recent base-branch push runs, retaining the
+    latest run per workflow and commit; evidence outside that window keeps
+    the wait. A fresh same-signature failure on the tip makes it **inherited**.
+    A fresh pass makes it **flaky**: the landing reruns the failed jobs once
+    before attributing them to the candidate, with no branch update. A passing
+    rerun clears the failure without a repair. The same signature failing
+    again becomes **candidate** and takes the usual automatic repair; its
+    later completion does not require another fresh base pass. An
     **inherited** outcome on a moved tip takes the inherited recovery
     above: one branch update, and a failure that still fails after it
     while the tip does not pass stops in `review` without a repair. A tip
@@ -1760,6 +1765,9 @@ one. From then on:
   separately failed required aggregate: it is classified on the next poll,
   even when every workflow job now passes.
 
+  Transient and flaky failures share one rerun budget per head. Each rerun
+  records `ci_check_rerun` in task history with the head, workflow run ID,
+  job IDs, check names, classifications and signatures.
   Each of the rerun, the branch update and the repair is spent once. A
   failure past that budget, or one the landing cannot classify (its jobs or
   log are unreadable), stops the landing with the task in `review` and the

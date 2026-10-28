@@ -444,6 +444,40 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         self.assertEqual(report["bump"], "minor")
         self.assertEqual(report["next_version"], "0.36.0")
 
+    def test_existing_mcp_alternative_tightening_decides_minor(self):
+        for keyword in ("anyOf", "oneOf"):
+            with self.subTest(keyword=keyword):
+                tools = self.repo.mcp()
+                schema = tools[0]["inputSchema"]
+                schema["properties"]["mode"] = {"type": "string"}
+                schema.pop("anyOf", None)
+                schema.pop("oneOf", None)
+                schema[keyword] = [{"required": ["view"]}, {"required": ["mode"]}]
+                self.repo.write_mcp(tools)
+                self.repo.commit(f"feat: Add {keyword} alternatives [ORB-55] (#1)")
+                self.repo.git("tag", "-f", "v0.35.0")
+
+                schema[keyword].append({"required": ["fields"]})
+                self.repo.write_mcp(tools)
+                self.repo.commit(f"feat: Append {keyword} alternative [ORB-56] (#2)")
+
+                additive = self.report()
+                self.assertEqual(additive["signals"], [])
+                self.assertEqual(additive["bump"], "patch")
+                self.assertEqual(additive["next_version"], "0.35.1")
+
+                schema[keyword][0]["required"].append("mode")
+                self.repo.write_mcp(tools)
+                self.repo.commit(f"feat: Tighten {keyword} alternative [ORB-57] (#3)")
+
+                report = self.report()
+                self.assertEqual(self.signals(report), {
+                    ("ORB-57", "mcp-schema",
+                     f"`orbit_task_show` property `inputSchema{{{keyword}0}}.mode` newly required"),
+                })
+                self.assertEqual(report["bump"], "minor")
+                self.assertEqual(report["next_version"], "0.36.0")
+
     def test_existing_boolean_schema_property_gaining_required_child_decides_minor(self):
         tools = self.repo.mcp()
         tools[0]["inputSchema"]["properties"]["options"] = True

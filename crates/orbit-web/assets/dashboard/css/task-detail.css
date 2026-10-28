@@ -606,7 +606,7 @@
 }
 .task-lifecycle-step { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
 .task-lifecycle-bar { height: 3px; border-radius: 2px; background: var(--border); }
-.task-lifecycle-step.past .task-lifecycle-bar { background: color-mix(in srgb, var(--fg-mute) 50%, transparent); }
+.task-lifecycle-step.past .task-lifecycle-bar { background: var(--state-success); }
 .task-lifecycle-step.current .task-lifecycle-bar { background: var(--dot); }
 .task-lifecycle-label {
   font-size: 11px;
@@ -629,7 +629,7 @@
 }
 .task-stage-step { flex: 1 1 0; display: flex; flex-direction: column; gap: 7px; min-width: 0; }
 .task-stage-bar { height: 2px; border-radius: 2px; background: var(--border); }
-.task-stage-step.past .task-stage-bar { background: color-mix(in srgb, var(--fg-mute) 50%, transparent); }
+.task-stage-step.past .task-stage-bar { background: var(--state-success); }
 .task-stage-step.current .task-stage-bar { background: var(--state-running); }
 .task-stage-label {
   font-size: 11px;
