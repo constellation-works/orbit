@@ -4,6 +4,7 @@ import { AUTO_DRAIN_APPROVE_RULE } from './drain-start.js';
 import { autoDrainForecast, refreshBacklogForecast } from './operations-forecast.js';
 import { configureOperationsFleetCallbacks, loadFleetSnapshot, paintAggregateFleet, renderFleetIndicator } from './operations-fleet.js';
 import { $, feedback, operationsState, pendingOperations, registerOperationsReset, runLink, selectedWorkspace, workspaceReadOnlyReason } from './operations-shared.js';
+import { taskList, taskState } from './task-shared.js';
 import { configureOperationsDrainControls, autoDrainConcurrencyValid, autoDrainConcurrencyValue, autoDrainStopButton, autoDrainStopNote, refreshDrainAfterAction, renderAutoDrainStart } from './operations-drain-controls.js';
 import { autoDrainBlocked, autoDrainCapacity, autoDrainCounts, autoDrainPhase, autoDrainPlural, autoDrainProviderAuth, autoDrainProviderLimitNote, autoDrainReasons, autoDrainShortRunId, autoDrainThrottleLine, autoDrainTimeLeft, updateDrainIndicators } from './operations-drain-capacity.js';
 
@@ -328,7 +329,15 @@ function fetchAndRenderAutoDrain({ detailTaskId = null } = {}) {
 
 configureOperationsDrainControls({
   render: renderAutoDrain,
-  fetch: fetchAndRenderAutoDrain,
+  fetch: () => {
+    // Action refreshes replace the shared snapshot just like a poll. Keep
+    // the selected task in it even when it is outside the bounded backlog.
+    const selectedTask = !taskState.pinnedExternalTask
+      ? taskList(taskState.paneContext).find(task => task.id === taskState.selectedTaskId)
+      : null;
+    const detailTaskId = ["proposed", "backlog"].includes(selectedTask?.status) ? selectedTask.id : null;
+    return fetchAndRenderAutoDrain({ detailTaskId });
+  },
   holdAnnouncement: held => { holdDrainAnnouncement = held; },
 });
 
