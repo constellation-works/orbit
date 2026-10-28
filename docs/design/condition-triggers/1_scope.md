@@ -107,8 +107,12 @@ The current code shapes the fix in four ways:
   (`crates/orbit-store/src/contracts/task/query.rs`), but has no "changed since"
   filter.
 - **Orbit runs no long-lived watcher.** The clock tick is a stateless one-shot
-  started by launchd or systemd. A pull follower holds no owner checkout, so its
-  clock evaluates no workspace definitions.
+  started by launchd or systemd. Coordination-state automation runs only in owner
+  checkouts, but a pull follower's clock still evaluates its replica-local cron
+  worktree GC (`worktree_gc_pipeline`) and store GC (`store_gc_pipeline`); every
+  other routine, auto-task and recovery stays owner-only (`runs_in_replica`,
+  `crates/orbit-core/src/application/routines/loader.rs`; `collect_host_routines`
+  consumed at `crates/orbit-core/src/application/routines/sweep.rs:245-249`).
 - **Any path to tag or publish must keep release authority with Daniel.** RELEASING.md
   and the constellation rules forbid an agent from tagging or publishing unasked.
   npm publish needs Daniel's OTP.
@@ -408,17 +412,25 @@ for a correct result.
 - **Retained state.** Each condition retains at most 1,000 subject records.
   Saturation stops the lap and reports backpressure, as members do.
 
-**Ownership.** Only the owner evaluates:
+**Ownership.** Coordination-state automation is owner-only; replica-local cron GC
+is the shipped exception:
 
 - Workspace, task and file conditions are evaluated only by the workspace's
-  registered owner host, in its owner checkout. The routine loader already visits
-  only owner checkouts.
-- Every action write passes `ensure_coordination_task_write_permitted`
+  registered owner host, in its owner checkout. This is a design choice for the
+  new condition kind, not the shipped clock rule: the routine loader collects
+  both owner entries and replica checkouts and keeps only the replica-local cron
+  routines targeting worktree GC or store GC (`collect_host_routines` and
+  `runs_in_replica`, `crates/orbit-core/src/application/routines/loader.rs`,
+  consumed at `crates/orbit-core/src/application/routines/sweep.rs:245-249`).
+  Delivery and state triggers stay owner-only even for those jobs.
+- Every coordination-state action write passes `ensure_coordination_task_write_permitted`
   (`crates/orbit-runtime/src/orbit_runtime/identity.rs`), so a replica checkout
-  refuses to fire even if it loads the file.
-- A pull follower never evaluates. Its drain inherits whatever the owner minted.
+  refuses to fire one even if it loads the file.
+- A pull follower evaluates only its replica-local cron worktree GC and store GC.
+  Its drain otherwise inherits whatever the owner minted.
 - In phase 3, `scope: host` reads the owner host. Follower-host conditions need
-  host-level definitions (Open questions).
+  host-level definitions (Open questions); that restriction is for the proposed
+  condition kind, alongside the existing replica-local cron GC scheduling.
 
 **While the owner is down.** Nothing is evaluated and nothing fires. When the owner
 returns, the next pass compares current state with the stored arm states:
@@ -718,7 +730,9 @@ honest; a static proof would not be.
   [30-day, release-gated rule](../state-compatibility/4_decisions.md#compatibility-paths-expire-on-a-30-day-release-gated-window)
   [ORB-15732]. It is removed only when it is 30 days old, the owner runs a release
   that contains it, and no consumer remains.
-- **Followers.** Followers never evaluate, so an older follower binary has no effect.
+- **Followers.** Followers evaluate only their replica-local cron worktree GC and
+  store GC (`runs_in_replica`), so an older follower binary affects only that
+  replica-local GC scheduling.
   The decision-request gate `trigger_action` is new: an older dashboard or plugin
   that meets it must show it as unknown and refuse to answer it.
 
@@ -979,9 +993,13 @@ What is missing:
   and in the clock log.
 - **Other mounts.** Reading a mount other than the three sampled paths needs a declared
   extra path.
-- **Follower hosts.** A follower, which is where dk-server-1's worktrees fill, needs
-  host-level definitions; see Open questions. In phase 3 this use case covers owner
-  hosts only.
+- **Follower hosts.** Follower hosts already schedule their own replica-local cron
+  worktree GC and store GC today (`runs_in_replica`,
+  `crates/orbit-core/src/application/routines/loader.rs`), which is where
+  dk-server-1's worktrees fill. The proposed `scope: host` condition still needs
+  host-level definitions (Open questions), so in phase 3 this use case covers owner
+  hosts only; that is a design choice for conditions, not a limit of the shipped
+  cron GC.
 
 ### D. File added → job
 
