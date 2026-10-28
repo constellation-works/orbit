@@ -688,6 +688,34 @@ try {
   await page.waitForFunction(() => document.querySelectorAll('.audit-row').length === 170);
   assert.equal(auditRequests.at(-1).get('before'), '21', 'Load older continues from the oldest row on screen');
   assert.equal(await page.getByRole('button', { name: 'Load older events' }).count(), 0, 'no button once the window is exhausted after the refresh');
+  // A successful head still renders when the second older-page revalidation
+  // fails. Discard the partial walk and retain the previously loaded tail.
+  pagedEvents.unshift({ ...pagedEvents[0], id: 171, execution_id: 'reval-171' });
+  holdAudit = isOlder;
+  await page.evaluate(() => { globalThis.failedTailRefresh = auditFixture.fetchAndRenderAudit(auditContext).then(() => 'loaded', () => 'failed'); });
+  const firstTailPage = await takeHeld(params => params.get('before') === '122');
+  firstTailPage.answer();
+  const secondTailPage = await takeHeld(params => params.get('before') === '72');
+  secondTailPage.fail();
+  const tailFailure = {
+    outcome: await page.evaluate(() => failedTailRefresh),
+    rows: await rowTitles(),
+    panelErrors: await page.locator('#audit-body [data-panel-status].action-error').count(),
+  };
+  holdAudit = null;
+  for (const width of [1440, 375]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.locator('.audit-row').first().scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(evidence, `events-tail-failure-dark-${width}.png`), animations: 'disabled' });
+  }
+  fs.writeFileSync(path.join(evidence, 'tail-failure.json'), JSON.stringify(tailFailure, null, 2));
+  assert.equal(tailFailure.rows[0], 'event 171', 'the fresh head renders when the second tail revalidation page fails');
+  assert.equal(tailFailure.outcome, 'loaded', 'a tail revalidation failure does not fail a successful head refresh');
+  assert.equal(tailFailure.panelErrors, 0, 'a tail revalidation failure shows no panel failure');
+  assert.deepEqual(tailFailure.rows, Array.from({ length: 171 }, (_, index) => `event ${171 - index}`),
+    'the fallback retains the full prior tail in order without duplicates or a partial walk');
+  assert.equal(await page.getByRole('button', { name: 'Load older events' }).count(), 0, 'the fallback retains the exhausted tail cursor');
+  await page.setViewportSize({ width: 1440, height: 900 });
   auditCutoffMs = null;
   pagedEvents = null;
   await page.evaluate(async () => {
