@@ -1,5 +1,6 @@
-//! A transport outage before `worktree_setup` leaves the task in backlog and
-//! holds the run; a later admission proceeds after origin recovers.
+//! A transport outage before `worktree_setup` holds the run while all tasks
+//! remain in backlog. For an already-in-progress task, the run fails through
+//! ordinary failure handling instead of leaving it in an unresumable hold.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -22,9 +23,9 @@ const JOB: &str = "origin_fetch_fixture";
 const ORIGIN_UNAVAILABLE_CODE: &str = "delivery_origin_unavailable";
 
 #[test]
-fn worktree_setup_origin_outage_holds_concurrent_runs_and_recovers() {
+fn worktree_setup_origin_outage_holds_backlog_and_fails_in_progress() {
     if !isolated(
-        "origin_fetch_hold::worktree_setup_origin_outage_holds_concurrent_runs_and_recovers",
+        "origin_fetch_hold::worktree_setup_origin_outage_holds_backlog_and_fails_in_progress",
     ) {
         return;
     }
@@ -142,6 +143,26 @@ fn worktree_setup_origin_outage_holds_concurrent_runs_and_recovers() {
         TaskStatus::InProgress
     );
 
+    std::fs::write(&mode, "offline").unwrap();
+    let in_progress_run =
+        submit_setup_run(&runtime, &admitted[0].0, "in-progress-outage", "agent-main");
+    let _ = runtime.execute_pipeline_run_worker(&in_progress_run);
+    let in_progress_outage = runtime.show_job_run(&in_progress_run).unwrap();
+    assert_eq!(
+        in_progress_outage.state,
+        JobRunState::Failed,
+        "{:?}",
+        in_progress_outage.steps
+    );
+    assert_ne!(
+        in_progress_outage.steps[0].error_code.as_deref(),
+        Some(ORIGIN_UNAVAILABLE_CODE)
+    );
+    assert_eq!(
+        runtime.get_task(&admitted[0].0).unwrap().status,
+        TaskStatus::Blocked
+    );
+
     std::fs::write(&mode, "auth").unwrap();
     let auth_task = add_backlog_task(&runtime, 3);
     let auth_run = submit_setup_run(&runtime, &auth_task, "auth-refused", "agent-main");
@@ -205,7 +226,7 @@ fn write_upload_pack(script: &Path, mode: &Path, origin: &Path) {
     std::fs::write(
         script,
         format!(
-            "#!/bin/sh\ncase \"$(cat '{}')\" in\nhang) exec sleep 30 ;;\nauth) echo 'Permission denied (publickey). Connection closed' >&2; exit 1 ;;\n*) exec git-upload-pack '{}' ;;\nesac\n",
+            "#!/bin/sh\ncase \"$(cat '{}')\" in\nhang) exec sleep 30 ;;\noffline) echo 'fatal: unable to access origin: Could not resolve host' >&2; exit 1 ;;\nauth) echo 'Permission denied (publickey). Connection closed' >&2; exit 1 ;;\n*) exec git-upload-pack '{}' ;;\nesac\n",
             mode.display(),
             origin.display()
         ),

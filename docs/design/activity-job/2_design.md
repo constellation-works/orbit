@@ -263,9 +263,12 @@ stable diagnostic codes, so delivery steps stop `held` and the gate and auto
 success guards pass them. `delivery_origin_unavailable` is raised only by the
 pre-admission `worktree_setup` boundary: a bounded transport fetch failure, or
 a fetch-lock timeout followed by a bounded origin probe that confirms
-transport unavailability. The task remains in backlog, and authentication,
-permission and missing-ref failures keep their ordinary failure behavior. The
-named outcomes and exclusions are in
+transport unavailability while every task being admitted is still in backlog.
+Those tasks remain there for a later admission. If a task is already in progress,
+ordinary run failure handling applies (or claim settlement for a claimed leaf)
+instead of an unresumable hold.
+Authentication, permission and missing-ref failures keep their ordinary failure
+behavior. The named outcomes and exclusions are in
 [delivery refusals](../../CONFIG.md#delivery-refusals-are-held).
 The existing action records remain authoritative for task and repair state;
 these decisions bypass retry, recovery and the terminal failure handoff.
