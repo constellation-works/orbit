@@ -198,7 +198,7 @@ normal task-lock release audit path with the `doctor_stale_task_lock` reason, an
 This is distinct from `--fix-stale-locks`, which handles dead-holder filesystem `.lock` files.
 
 There is deliberately no blanket `--fix` or resolve-all option. Configuration repair, database
-recovery, job cancellation, graph cleanup, id-allocation retirement, filesystem holder-record cleanup,
+recovery, job cancellation, graph cleanup, id-allocation retirement, cleanup of filesystem holder records,
 task-reservation release, retired activity-backend cleanup, orphan task-store deletion,
 retired config-key removal, and automation attempt-pin release have different evidence and
 safety gates, so each repair remains explicit and safety-scoped.
