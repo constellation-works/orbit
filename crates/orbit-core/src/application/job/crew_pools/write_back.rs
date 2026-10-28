@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use orbit_common::OrbitError;
 use orbit_store::contracts::JobRunQuery;
 use orbit_types::task::TaskHistoryEntry;
-use orbit_types::workflow::JobRun;
+use orbit_types::workflow::{JobRun, JobRunState};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -175,12 +175,18 @@ impl OrbitRuntime {
         }
     }
 
-    /// Set each task's crew from its latest delivery run's crew selection
-    /// where they differ, with `crew_source` `backfill:admission` and a
-    /// history entry [ORB-19416]. Terminal tasks are included, since
-    /// analytics read their crew. Running it again changes nothing.
+    /// Set each task's crew from its latest delivery's crew selection where
+    /// they differ, with `crew_source` `backfill:admission` and a history
+    /// entry [ORB-19416]. The latest delivery is the task's newest local
+    /// delivery run or, for work a claimed leaf executed, its settled claim:
+    /// the owner keeps no local run for those, only the settlement record
+    /// [ORB-19602]. Terminal tasks are included, since analytics read their
+    /// crew. A task is left alone when its latest local run was cancelled
+    /// before implementing, so a crew that never ran cannot replace the
+    /// task's, and when its explicit crew assignment is newer than the
+    /// delivery it would copy from. Running it again changes nothing.
     pub fn backfill_admitted_task_crews(&self) -> Result<TaskCrewBackfill, OrbitError> {
-        let mut latest: BTreeMap<String, JobRun> = BTreeMap::new();
+        let mut latest_run: BTreeMap<String, JobRun> = BTreeMap::new();
         for job in POLICY_PIPELINES {
             let runs = self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
                 job_id: Some(job.to_string()),
@@ -191,11 +197,36 @@ impl OrbitRuntime {
                 let Some(task_id) = run_task_id(&run) else {
                     continue;
                 };
-                match latest.get(&task_id) {
+                match latest_run.get(&task_id) {
                     Some(seen) if seen.created_at >= run.created_at => {}
                     _ => {
-                        latest.insert(task_id, run);
+                        latest_run.insert(task_id, run);
                     }
+                }
+            }
+        }
+        let mut latest_settlement: BTreeMap<String, (String, chrono::DateTime<chrono::Utc>)> =
+            BTreeMap::new();
+        for inspection in self.inspect_execution_claims()? {
+            let task_id = inspection.claim.task_id.clone();
+            let Some(settlement) = inspection.settlement.as_ref() else {
+                continue;
+            };
+            let Some(crew) = settlement
+                .crew
+                .clone()
+                .filter(|crew| !crew.trim().is_empty())
+            else {
+                continue;
+            };
+            let Ok(at) = chrono::DateTime::parse_from_rfc3339(&settlement.settled_at) else {
+                continue;
+            };
+            let at = at.with_timezone(&chrono::Utc);
+            match latest_settlement.get(&task_id) {
+                Some((_, seen)) if *seen >= at => {}
+                _ => {
+                    latest_settlement.insert(task_id, (crew, at));
                 }
             }
         }
@@ -205,13 +236,61 @@ impl OrbitRuntime {
         };
         let written = AdmittedCrewSource {
             source: BACKFILL_CREW_SOURCE.to_string(),
-            cause: "by backfill from its latest delivery run's crew selection".to_string(),
+            cause: "by backfill from its latest delivery's crew selection".to_string(),
         };
-        for (task_id, run) in latest {
-            let Some(crew) = self.run_selected_crew(&task_id, &run)? else {
+        let tasks: std::collections::BTreeSet<String> = latest_run
+            .keys()
+            .chain(latest_settlement.keys())
+            .cloned()
+            .collect();
+        for task_id in tasks {
+            // Whether the latest local run was cancelled before implementing:
+            // its crew never ran [ORB-19602]. Step hydration is read only
+            // for a cancelled latest run; every other run needs no steps.
+            let cancelled = match latest_run.get(&task_id) {
+                Some(run) => self.run_cancelled_before_implementation(run)?,
+                None => false,
+            };
+            // The local run this would copy from, when its selection names a
+            // crew and it was not cancelled before implementing.
+            let run_source: Option<(String, chrono::DateTime<chrono::Utc>)> =
+                match latest_run.get(&task_id) {
+                    Some(run) if !cancelled => self
+                        .run_selected_crew(&task_id, run)?
+                        .map(|crew| (crew, run.created_at)),
+                    _ => None,
+                };
+            let settlement_source = latest_settlement.get(&task_id);
+            // A latest run cancelled before implementing ends the task here
+            // unless a claimed leaf settled after it: an older run's crew is
+            // not the latest delivery [ORB-19602].
+            let settlement_supersedes = match (latest_run.get(&task_id), settlement_source) {
+                (Some(run), Some((_, settled_at))) => *settled_at > run.created_at,
+                (None, Some(_)) => true,
+                _ => false,
+            };
+            if cancelled && !settlement_supersedes {
+                report.examined += 1;
                 continue;
+            }
+            // The newer delivery wins; a run and a settlement stamped alike
+            // keep the run, the long-standing source.
+            let (crew, at) = match (&run_source, settlement_source) {
+                (Some((run_crew, run_at)), Some((settlement_crew, settled_at)))
+                    if *settled_at > *run_at =>
+                {
+                    (settlement_crew.clone(), *settled_at)
+                }
+                (Some((run_crew, run_at)), _) => (run_crew.clone(), *run_at),
+                (None, Some((settlement_crew, settled_at))) => {
+                    (settlement_crew.clone(), *settled_at)
+                }
+                (None, None) => continue,
             };
             report.examined += 1;
+            if self.backfill_explicit_is_newer(&task_id, at)? {
+                continue;
+            }
             match self.write_task_crew(&task_id, &crew, &written, CrewWriteGuard::Any) {
                 Ok(Some(from)) => {
                     report.changed += 1;
@@ -227,6 +306,30 @@ impl OrbitRuntime {
             }
         }
         Ok(report)
+    }
+
+    /// Whether the task's explicit crew assignment is newer than the delivery
+    /// `at` the backfill would copy from, so the operator's choice stands
+    /// [ORB-19602].
+    fn backfill_explicit_is_newer(
+        &self,
+        task_id: &str,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<bool, OrbitError> {
+        let task = match self.get_task(task_id) {
+            Ok(task) => task,
+            Err(OrbitError::NotFound { .. }) => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        if task.crew_source.as_deref() != Some("explicit") {
+            return Ok(false);
+        }
+        let history = self.get_task_history(task_id)?;
+        let latest = history
+            .iter()
+            .filter(|entry| entry.event == "crew_assigned")
+            .max_by_key(|entry| entry.at);
+        Ok(latest.is_some_and(|entry| entry.at > at))
     }
 
     /// The crew `run` selected for `task_id`: its admission selection, else
@@ -311,6 +414,23 @@ impl OrbitRuntime {
                 Ok(())
             })?;
         Ok(changed)
+    }
+
+    /// Whether the task's latest local `run` was cancelled before it
+    /// implemented: no implement step completed, so its crew selection never
+    /// ran [ORB-19602]. Step hydration is read only for a cancelled run;
+    /// any other state needs no steps.
+    fn run_cancelled_before_implementation(&self, run: &JobRun) -> Result<bool, OrbitError> {
+        if run.state != JobRunState::Cancelled {
+            return Ok(false);
+        }
+        let steps = match self.stores().jobs().get_job_run(&run.run_id)? {
+            Some(full) => full.steps,
+            None => Vec::new(),
+        };
+        Ok(!steps
+            .iter()
+            .any(|step| step.state == JobRunState::Success && step.target_id.contains("implement")))
     }
 }
 

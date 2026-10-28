@@ -25,6 +25,30 @@ fn handoff_mutation_id(claim_id: &str) -> String {
     format!("pull-handoff:{claim_id}")
 }
 
+/// The crew the settlement itself reports: its evidence's own crew first,
+/// then the typed failure's or the unusable provider's, mirroring the
+/// settlement record's priority after what the follower reported beside it
+/// [ORB-19602]. A handoff carries no evidence, so this is `None` for one.
+fn settlement_reported_crew(settlement: &ClaimMutation) -> Option<String> {
+    let named = |value: &Option<String>| value.clone().filter(|value| !value.trim().is_empty());
+    match settlement {
+        ClaimMutation::Fail(evidence) | ClaimMutation::Release(evidence) => named(&evidence.crew)
+            .or_else(|| {
+                evidence
+                    .failure
+                    .as_ref()
+                    .and_then(|failure| named(&failure.crew))
+            })
+            .or_else(|| {
+                evidence
+                    .provider_unavailable
+                    .as_ref()
+                    .and_then(|unavailable| named(&unavailable.crew))
+            }),
+        _ => None,
+    }
+}
+
 impl OrbitRuntime {
     /// Settle a claim with the follower's durable settlement: a typed handoff
     /// or a failure. Anything else is a lifecycle operation the executor does
@@ -54,8 +78,14 @@ impl OrbitRuntime {
         // The leaf's crew and model are attribution only: the record keeps
         // them, and nothing that decides the settlement reads them. Once the
         // settlement stands, the leaf's crew is written back to the task,
-        // since the leaf drew it on its executor [ORB-19416].
-        let leaf_crew = attribution.crew.clone();
+        // since the leaf drew it on its executor [ORB-19416]. A failure or
+        // release whose top-level attribution is missing still reports the
+        // crew inside its evidence [ORB-19602]; a handoff carries none.
+        let leaf_crew = attribution
+            .crew
+            .clone()
+            .filter(|crew| !crew.trim().is_empty())
+            .or_else(|| settlement_reported_crew(&settlement));
         #[cfg(feature = "test-support")]
         crate::application::distributed::admission_checkpoint::notify_settle();
         // Fence the post-receipt write-back against replay [ORB-19486,

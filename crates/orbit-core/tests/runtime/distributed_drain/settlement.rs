@@ -1037,6 +1037,93 @@ fn an_overlapping_fail_replay_leaves_the_crew_chosen_after_the_settlement_unchan
     }
 }
 
+/// [ORB-19602] A claimed leaf whose crew the follower reported inside its
+/// failure evidence, with no top-level attribution, still writes that crew
+/// back: the evidence is the executor's report of the crew that ran.
+fn a_fail_settlement_reporting_its_crew_in_evidence_writes_it_back() {
+    let pair = Pair::with_crews(&[Some("sol")]);
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    let task = pair.claimed_task(&leaf);
+    let record = pair.admission(&leaf);
+    let claim = record.receipt.as_ref().unwrap().claim.as_ref().unwrap();
+    let session = ToolSessionContext {
+        caller_machine_id: Some(FOLLOWER.into()),
+        process_machine_id: Some(OWNER.into()),
+        transport: Some(McpTransport::SshMcp),
+        effective_capabilities: BTreeSet::from([McpCapability::Agent]),
+        ..ToolSessionContext::default()
+    };
+    let settled = pair
+        .wire
+        .owner
+        .serve_claim_settle(
+            &session,
+            &claim.claim_id,
+            Some(&leaf),
+            ClaimMutation::Fail(ClaimEvidence {
+                summary: Some("leaf failed".into()),
+                crew: Some("luna".into()),
+                ..Default::default()
+            }),
+            orbit_store::contracts::ClaimAttribution::default(),
+        )
+        .expect("a failure reporting its crew settles");
+    assert_eq!(
+        settled.phase,
+        orbit_store::contracts::ExecutionClaimPhase::Failed
+    );
+    let after = pair.owner_task(&task);
+    assert_eq!(after["crew"], "luna", "{after:#}");
+    assert_eq!(after["crew_source"], "redraw:claimed_leaf", "{after:#}");
+}
+
+/// [ORB-19602] The backfill recovers a settled claimed leaf's crew from the
+/// owner's settlement record: the owner keeps no local delivery run for work
+/// a follower executed, only the settlement's report of the crew that ran.
+fn backfill_recovers_a_settled_claimed_leafs_crew_from_its_settlement() {
+    let pair = Pair::with_crews(&[Some("sol")]);
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    let task = pair.claimed_task(&leaf);
+    let record = pair.admission(&leaf);
+    let claim = record.receipt.as_ref().unwrap().claim.as_ref().unwrap();
+    // Store the settlement without the settle write-back, like a claim that
+    // settled before the owner wrote leaf crews back: the record keeps the
+    // crew, the task keeps its own.
+    let context = ClaimInvocation::trusted_worker(
+        claim.task_id.clone(),
+        claim.claim_id.clone(),
+        claim.executed_on.machine_id.clone(),
+        Some(ClaimRun {
+            machine_id: claim.executed_on.machine_id.clone(),
+            run_id: leaf.clone(),
+        }),
+    );
+    pair.wire
+        .owner
+        .mutate_execution_claim(
+            Some(&context),
+            "backfill-fixture-fail",
+            &ClaimMutation::Fail(ClaimEvidence {
+                summary: Some("leaf failed".into()),
+                crew: Some("luna".into()),
+                ..Default::default()
+            }),
+        )
+        .expect("a direct claim failure stores its settlement");
+    assert_eq!(pair.owner_task(&task)["crew"], "sol");
+    let report = pair
+        .wire
+        .owner
+        .backfill_admitted_task_crews()
+        .expect("backfill runs over settled claims");
+    assert_eq!(report.changed, 1, "{report:?}");
+    let after = pair.owner_task(&task);
+    assert_eq!(after["crew"], "luna", "{after:#}");
+    assert_eq!(after["crew_source"], "backfill:admission", "{after:#}");
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     another_session_machine_cannot_bind_or_settle_a_followers_claim_scenarios,
@@ -1053,7 +1140,9 @@ crate::scenario_table!(
     a_forced_release_the_owner_missed_is_delivered_by_the_clock_sweep,
     a_replayed_fail_settlement_after_a_crew_update_leaves_the_newer_crew_unchanged,
     a_replayed_release_settlement_after_a_crew_update_leaves_the_newer_crew_unchanged,
-    an_overlapping_fail_replay_leaves_the_crew_chosen_after_the_settlement_unchanged
+    an_overlapping_fail_replay_leaves_the_crew_chosen_after_the_settlement_unchanged,
+    a_fail_settlement_reporting_its_crew_in_evidence_writes_it_back,
+    backfill_recovers_a_settled_claimed_leafs_crew_from_its_settlement
 );
 
 #[cfg(unix)]

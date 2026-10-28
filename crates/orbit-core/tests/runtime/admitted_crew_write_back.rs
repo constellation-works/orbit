@@ -676,6 +676,96 @@ fn a_control_crew_without_admission_evidence_is_unavailable_not_a_mismatch() {
     );
 }
 
+/// [ORB-19602] The backfill leaves a task alone when its explicit crew
+/// assignment is newer than the delivery run it would copy from, so an
+/// operator's choice stands over a stale selection.
+#[test]
+fn backfill_leaves_an_explicit_crew_newer_than_its_latest_run() {
+    if !isolated(
+        "admitted_crew_write_back::backfill_leaves_an_explicit_crew_newer_than_its_latest_run",
+    ) {
+        return;
+    }
+    let fx = fixture(HOLD_CREWS);
+    let job = delivery_job(&fx);
+    let task = fx.tagged_task(&[], None).id;
+    let input = submit(&fx, &job, json!({ "task_id": task, "crew": "luna" }));
+    assert_eq!(input["crew_selection"]["crew"], "luna", "{input}");
+    assert_eq!(crew_of(&fx, &task).0.as_deref(), Some("luna"));
+    fx.runtime
+        .update_task_with_identity(
+            &task,
+            TaskUpdateParams {
+                crew: Some(Some("opus".to_string())),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        crew_of(&fx, &task),
+        (Some("opus".to_string()), Some("explicit".to_string()))
+    );
+
+    let report = fx.runtime.backfill_admitted_task_crews().unwrap();
+    assert!(
+        report.tasks.iter().all(|change| change.task_id != task),
+        "{report:?}"
+    );
+    assert_eq!(
+        crew_of(&fx, &task),
+        (Some("opus".to_string()), Some("explicit".to_string()))
+    );
+}
+
+/// [ORB-19602] The backfill skips a latest run cancelled before it
+/// implemented: its crew selection never ran, so it must not replace the
+/// task's crew. The rerate redraw below is a system assignment, not an
+/// explicit one, so only the cancellation can spare the task.
+#[test]
+fn backfill_skips_a_latest_run_cancelled_before_implementation() {
+    if !isolated(
+        "admitted_crew_write_back::backfill_skips_a_latest_run_cancelled_before_implementation",
+    ) {
+        return;
+    }
+    let fx = fixture(RERATE_CREWS);
+    let job = delivery_job(&fx);
+    let task = fx.tagged_task(&[], None).id;
+    assert_eq!(crew_of(&fx, &task).0.as_deref(), Some("sol"));
+    let submitted = fx
+        .runtime
+        .submit_job_run(
+            job.to_str().unwrap(),
+            json!({ "task_id": task }),
+            Some("admitted-crew-test"),
+        )
+        .unwrap();
+    fx.runtime.cancel_job_run(&submitted.run_id).unwrap();
+    // A system redraw after the cancelled run moves the task off the run's
+    // crew without an explicit assignment.
+    fx.runtime
+        .update_task_with_identity(
+            &task,
+            TaskUpdateParams {
+                complexity: Some(TaskComplexity::Hard),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .unwrap();
+    assert_eq!(crew_of(&fx, &task).0.as_deref(), Some("luna"));
+
+    let report = fx.runtime.backfill_admitted_task_crews().unwrap();
+    assert!(
+        report.tasks.iter().all(|change| change.task_id != task),
+        "{report:?}"
+    );
+    assert_eq!(crew_of(&fx, &task).0.as_deref(), Some("luna"));
+}
+
 /// [ORB-19520] A rerate onto a superseded delivery's crew is unavailable,
 /// not a mismatch: the latest relevant delivery ran a different crew.
 #[test]
