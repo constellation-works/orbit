@@ -437,6 +437,11 @@ impl OrbitRuntime {
                 "binding is stale; inspect the exact source, scope and lease again",
             ));
         }
+        // Linked replays return above. A reservation without a run must still
+        // respect a backlog hold before it can readmit the task or start work.
+        if let Some(hold) = self.schedule_hold(&task)? {
+            return Err(hold.refusal(&task.id));
+        }
         if source.state == JobRunState::Success {
             if request.unmet_acceptance.is_none()
                 || request.policy_digest.as_deref()

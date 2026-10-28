@@ -167,16 +167,20 @@ A new admission exclusion, `Scheduled`, beside `ProviderBackoff`:
     (`application/job/pipeline_actions/gate_admission.rs`) and worktree
     admission (`admit_task_for_workflow_as_system`, reached from
     `adapter/engine_host/runtime_host/claims.rs`). So a resumed or
-    replayed gate re-checks it too.
+    replayed gate re-checks it too. Source repair checks the hold before
+    reserving or readmitting a backlog task; a linked replay reconciles its
+    existing run first. An unlinked reservation waits until the hold lifts.
   - **Cannot start a scheduled task.** Job resume
     (`reclaim_task_for_resumed_run` in `application/job/resume/plan.rs`)
     readmits a `backlog` task only for a completion repair of a requeue made
     by its own lineage's final recovery, that is, a task that had already
-    started. Source repair (`application/job/resume/source_repair/`) only
-    moves a `review` task back to `in-progress`. Claim recovery
+    started. Source repair can also readmit `review`, `blocked`, or `backlog`
+    tasks: failed published sources with final-recovery evidence and
+    acknowledged superseded sources can be eligible outside review. The hold
+    applies to backlog, not blocked tasks. Claim recovery
     (`recover_claim_as_operator` in `application/review/handoff.rs`) and
     requeue (`application/task/requeue.rs`) only move a task to `blocked`
-    or `backlog`, where the hold applies.
+    or `backlog`; the hold applies only to backlog.
   - **Outside admission.** A human `orbit task update --status in-progress`
     is a manual transition, not a dispatch, and stays available.
 - **Version skew.** The task envelope refuses unknown fields, so a host
