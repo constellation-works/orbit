@@ -206,8 +206,8 @@ template:
 
     Verify every finding against the code at the pinned SHA before filing — a
     line that looks wrong but is guarded elsewhere is not a finding. Search
-    open Orbit tasks tagged `code-review` before filing; skip duplicates and
-    nitpicks. Give each confirmed finding a severity — `critical`, `high`,
+    open Orbit tasks tagged `code-review` before filing; skip duplicates.
+    Give each confirmed finding a severity — `critical`, `high`,
     `medium`, `low` or `nit`, by the rubric under the classification below —
     used as its `regression.severity` and as the filed task's priority (`low`
     for `nit`), file:line evidence at the pinned SHA, the `code-review` tag,
@@ -215,18 +215,19 @@ template:
     severity.
 
     File each confirmed `critical` or `high` finding as its own `bug` task.
-    Group a module's `medium` and `low` findings into at most one cleanup
-    `bug` per module: it lists each grouped finding with its title, severity,
-    file:line evidence and culprit task or the reason none can be held
+    Group a module's `medium`, `low`, and `nit` findings into at most one
+    cleanup `bug` per module: it lists each grouped finding with its title,
+    severity, file:line evidence and culprit task or the reason none can be held
     responsible; its `context_files` are the deduplicated union of the
     grouped findings' selectors; its priority is the highest grouped severity
     (`medium` when any grouped finding is medium, otherwise `low`); and it
     carries at most one classified `regression_from` relation per distinct
     culprit task among the attributable grouped findings (when findings sharing
     a culprit differ in nature or escape, note both in the description and
-    classify the single link `unclassified`). A module with no medium or low findings files no cleanup
-    task. Never group a high or critical finding into a cleanup task, and
-    never file more than one cleanup task for one module in one run.
+    classify the single link `unclassified`). A module with no `medium`, `low`, or
+    `nit` findings files no cleanup task. Never group a high or critical finding
+    into a cleanup task, and never file more than one cleanup task for one module
+    in one run.
 
     Classify every `regression_from` relation you file by adding
     `"regression":{"nature":"<nature>","escape":"<escape>","severity":"<severity>","sites":["<defect site selector>"]}` to it.
