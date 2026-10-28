@@ -390,7 +390,7 @@ claimed leaves pass `claimed: true` to `agent_implement`, and in that mode:
   ordinary relation write would (a target under a prefix this registry issued must resolve; a
   foreign prefix is accepted), refuses the settlement otherwise, and records the relations in the
   acceptance commit without a `regression` classification, since the output carries IDs only;
-  the implementer states the nature and escape in its summary. The leaf's reviewer reads the
+  the implementer states the nature, escape and severity it would have set in its summary (a recorded classification also carries `severity_source`, defaulting to the filer). The leaf's reviewer reads the
   culprit from the implementer's summary.
 - A claimed implementer may change any path the work requires; the frozen footprint is a
   scheduling hint, not a delivery gate. Every added path the admission selectors do not cover

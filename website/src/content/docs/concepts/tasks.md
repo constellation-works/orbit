@@ -231,7 +231,13 @@ The current kinds, each pointing from this task to its target:
 `broke_existing`, `defect_in_new`, `incomplete`, `merge_reintroduced`, `contract_drift`
 or `unclassified`, and `escape` is one of `no_test`, `test_not_selected`,
 `platform_only`, `review_missed`, `spec_ambiguous`, `nondeterministic` or
-`unclassified`. Read a task's relations back with
+`unclassified`. `severity` rates how much the defect matters on the five-level
+scale review findings use — `critical`, `high`, `medium`, `low` or `nit` — and a
+new classified link without one is refused. Every link reads back with
+`severity_source`: `filer` (set by the writer, the default), `verified`
+(finding verification confirmed or adjusted it), `operator` (an operator
+override), `backfill` (a backfill of older links) or `default` (stored before
+severity existed; reads as `medium`). Read a task's relations back with
 `orbit task show "$TASK_ID" --fields relations`.
 
 A regression in delivered work gets a new task with a `regression_from` relation to the
