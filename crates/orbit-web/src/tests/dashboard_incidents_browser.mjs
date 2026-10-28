@@ -275,7 +275,7 @@ const detail = () => page.locator('#diag-body .incident-detail').evaluate((node)
   sentence: node.querySelector('.incident-sentence').textContent,
   message: node.querySelector('.incident-full-message').textContent,
   messageClipped: node.querySelector('.incident-full-message').scrollWidth > node.querySelector('.incident-full-message').clientWidth + 1,
-  note: node.querySelector('.incident-message-note')?.textContent || null,
+  note: node.querySelector('.incident-message-note:not(.incident-evidence-note)')?.textContent || null,
   related: [...node.querySelectorAll('.incident-related-item')].map((item) => item.textContent),
   sameCause: [...node.querySelectorAll('.incident-same-cause .incident-related-item')].map((item) => item.textContent),
   basis: node.querySelector('.incident-cause-basis')?.textContent || null,
@@ -728,6 +728,73 @@ try {
   assert(!drilldown.has('role') && !drilldown.has('tool'), 'exact evidence does not broaden to actor or surface filters');
   evidenceLog.boundedEvidence = { previewNote, ids: drilldown.get('ids') };
 
+  // The server recovers a cut root from all seven rows before sending only
+  // the newest five. The only complete copy is the second-oldest row.
+  const recoveredMessage = CUT_MESSAGE.slice(0, -1) + ' https://mirror.example.test/orbit.git';
+  const recovered = incident(81, { surface: 'orbit.workspace.sync', message: CUT_MESSAGE, runId: 'run-recovered', firstAgo: HOUR, lastAgo: HOUR - MINUTE, events: 7, now: Date.now() });
+  recovered.events[1].message = recoveredMessage;
+  recovered.message = recoveredMessage;
+  recovered.message_event_id = recovered.events[1].id;
+  recovered.event_ids = recovered.events.map(event => event.id).reverse();
+  recovered.events = recovered.events.slice(-5).reverse();
+  recovered.events_omitted = 2;
+  // Samples must not accidentally supply the omitted full copy to the UI.
+  recovered.sample_events = recovered.events.slice(0, 3);
+  const unrecoverable = { ...recovered, incident_id: 'inc-82', run_ids: ['run-unrecoverable'], message: CUT_MESSAGE, last_ts: new Date().toISOString() };
+  await page.goto(`${origin}/message-scope?workspace=ws_orbit`);
+  await page.evaluate(async (row) => {
+    const { renderIncidents } = await import('/static/js/incidents.js');
+    renderIncidents({ window: '24h', class: 'unexpected', limit: 50, incidents: [row], shown_incident_count: 1, matching_incident_count: 1 });
+  }, unrecoverable);
+  assert((await detail()).message === CUT_MESSAGE && (await detail()).note !== null, 'the cut note remains when all seven stored rows are cut');
+  await page.goto(`${origin}/message-scope?workspace=ws_orbit`);
+  await page.evaluate(async (incidents) => {
+    const { renderIncidents } = await import('/static/js/incidents.js');
+    renderIncidents({ window: '24h', class: 'unexpected', limit: 50, incidents, shown_incident_count: incidents.length, matching_incident_count: incidents.length });
+  }, [unrecoverable, recovered]);
+  const recoveredDetail = await detail();
+  assert(recoveredDetail.message === recoveredMessage && recoveredDetail.note === null,
+    `an omitted audit row recovers the full detail message without a cut note: ${JSON.stringify(recoveredDetail)}`);
+  await page.locator('#diag-body .incident-copy').click();
+  assert(await page.evaluate(() => navigator.clipboard.readText()) === recoveredMessage, 'Copy uses the complete message recovered outside the preview');
+  for (const width of [1440, 375]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.locator('.incident-detail-panel').scrollIntoViewIfNeeded();
+    assert(await noPageOverflow() <= 1, `the recovered message wraps at ${width}px`);
+    await page.screenshot({ path: path.join(evidence, `incidents-recovered-dark-${width}.png`) });
+  }
+  evidenceLog.recoveredDetail = recoveredDetail;
+
+  // Recovery can select an omitted row whose full text exceeds the feed cap.
+  // Its audit-row pointer must survive recovery across a newer cut-only run.
+  const cappedCut = REFUSAL_MESSAGE.slice(0, 180) + '…';
+  const cappedFields = { cls: 'expected', surface: 'orbit.task.transition', message: cappedCut, firstAgo: HOUR, events: 7, now: Date.now() };
+  const cappedRecovered = incident(83, { ...cappedFields, runId: 'run-capped-recovered' });
+  const cappedNewest = incident(84, { ...cappedFields, runId: 'run-capped-cut', lastAgo: 0 });
+  cappedRecovered.events[1].id = REFUSAL_EVENT_ID;
+  for (const row of [cappedRecovered, cappedNewest]) {
+    row.event_ids = row.events.map(event => event.id).reverse();
+    row.events = row.events.slice(-5).reverse();
+    row.sample_events = row.events.slice(0, 3);
+    row.events_omitted = 2;
+  }
+  cappedRecovered.message = REFUSAL_MESSAGE.slice(0, LIST_MESSAGE_MAX_BYTES);
+  cappedRecovered.truncated = true;
+  cappedRecovered.message_event_id = REFUSAL_EVENT_ID;
+  await page.goto(`${origin}/message-scope?workspace=ws_orbit`);
+  await page.evaluate(async (incidents) => {
+    const { renderIncidents } = await import('/static/js/incidents.js');
+    renderIncidents({ window: '24h', class: 'expected', limit: 50, incidents, shown_incident_count: incidents.length, matching_incident_count: incidents.length });
+  }, [cappedNewest, cappedRecovered]);
+  await page.locator('#diag-body .incident-tile[data-class="expected"]').click();
+  assert((await detail()).message === REFUSAL_MESSAGE.slice(0, LIST_MESSAGE_MAX_BYTES), 'an omitted capped copy supplies the excerpt across runs');
+  await page.locator('#diag-body .incident-message-note:not(.incident-evidence-note) button').click();
+  await until('the omitted capped message', async () => (await detail()).message === REFUSAL_MESSAGE);
+  assert((await detail()).note === null, 'a loaded omitted message has no cut note');
+  await page.locator('#diag-body .incident-copy').click();
+  assert(await page.evaluate(() => navigator.clipboard.readText()) === REFUSAL_MESSAGE, 'Copy uses the full text loaded from the omitted audit row');
+  evidenceLog.cappedRecovery = await detail();
+
   assert(pageErrors.length === 0, `no page errors: ${pageErrors.join('; ')}`);
   fs.writeFileSync(path.join(evidence, 'incidents-assertions.json'), `${JSON.stringify({
     passed: true,
@@ -754,6 +821,7 @@ try {
       'browser-incidents-message-host-round-trip',
       'browser-incidents-message-workspace-round-trip',
       'browser-incidents-bounded-preview-keeps-exact-audit-evidence',
+      'browser-incidents-message-recovered-outside-five-row-preview',
     ],
     viewports: ['1440', '768', '375'],
     ...evidenceLog,

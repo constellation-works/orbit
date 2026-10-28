@@ -258,17 +258,33 @@ pub(super) fn failure_category_summaries(report: &FailureIncidentReport) -> Valu
 /// every propagation link [ORB-15527]. An object whose message was cut
 /// carries `truncated: true`, and an incident names in `message_event_id` the
 /// audit row its message came from, for [`incident_event_message`].
+/// A stored ellipsis-cut root is recovered from a complete matching audit
+/// message across all event references before the message and preview caps.
 /// Only the newest [`INCIDENT_EVENT_PREVIEW_LIMIT`] full event references are
 /// repeated; `event_ids` preserves every row for explicit raw-audit access.
 fn incident_to_json(incident: &FailureIncident) -> Value {
-    let message = incident.message.as_deref().map(message_excerpt);
-    let message_event_id = incident.message.as_deref().and_then(|message| {
+    let mut message_text = incident.message.as_deref();
+    let mut message_event_id = message_text.and_then(|message| {
         incident
             .events
             .iter()
             .find(|event| event.message.as_deref() == Some(message))
             .map(|event| event.id)
     });
+    if let Some(stem) = message_text.and_then(ellipsis_cut_message_stem)
+        && let Some(event) = incident.events.iter().find(|event| {
+            event.message.as_deref().is_some_and(|message| {
+                let message = message.trim();
+                message.len() > stem.len()
+                    && message.starts_with(stem)
+                    && ellipsis_cut_message_stem(message).is_none()
+            })
+        })
+    {
+        message_text = event.message.as_deref();
+        message_event_id = Some(event.id);
+    }
+    let message = message_text.map(message_excerpt);
     json!({
         "incident_id": incident.incident_id,
         "signature": redact_all(&incident.signature),
@@ -314,6 +330,13 @@ fn incident_to_json(incident: &FailureIncident) -> Value {
             "basis": incident.cause.basis.as_str(),
         },
     })
+}
+
+fn ellipsis_cut_message_stem(message: &str) -> Option<&str> {
+    let message = message.trim();
+    message
+        .strip_suffix('…')
+        .or_else(|| message.strip_suffix("..."))
 }
 
 fn event_ref_to_json(event: &IncidentEventRef) -> Value {

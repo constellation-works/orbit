@@ -1,10 +1,94 @@
-//! Regression for incident lists expanding every repeated raw event.
+//! Regressions for bounded incident evidence and complete message recovery.
 
 use orbit_core::{AuditEventStatus, FailureIncidentQuery};
 use serde_json::{Value, json};
 
 use super::audit;
 use super::support::{Fixture, isolated, json_ok};
+
+#[test]
+fn incident_message_recovers_a_complete_copy_outside_the_evidence_preview() {
+    isolated(
+        "incident_lists::incident_message_recovers_a_complete_copy_outside_the_evidence_preview",
+        || {
+            let fixture = Fixture::new();
+            let stem = format!("validation failed: {}", "diagnostic context ".repeat(12));
+            let mut cases = Vec::new();
+            for (run, ellipsis, suffix) in [
+                ("unicode", "…", Some("complete diagnostic tail".to_string())),
+                ("ascii", "...", Some("complete diagnostic tail".to_string())),
+                ("capped", "…", Some("complete diagnostic tail ".repeat(120))),
+                ("unrecoverable", "…", None),
+            ] {
+                let cut = format!("{stem}{ellipsis}");
+                let complete = suffix.map(|suffix| format!("{stem}{suffix}"));
+                for index in 0..7 {
+                    let mut event = audit::row(
+                        &format!("{run}-{index}"),
+                        Some("fixture.validate"),
+                        AuditEventStatus::Failure,
+                    );
+                    event.job_run_id = Some(run.into());
+                    event.error_message = Some(if index == 1 {
+                        complete.clone().unwrap_or_else(|| cut.clone())
+                    } else {
+                        cut.clone()
+                    });
+                    fixture.runtime.record_audit_event(&event).unwrap();
+                }
+                cases.push((run, cut, complete));
+            }
+            let report = fixture
+                .runtime
+                .audit_failure_incidents(&FailureIncidentQuery::default())
+                .unwrap();
+            let server = fixture.server(false);
+            let payload =
+                json_ok(server.get("/api/audit/incidents?since=24h&workspace=ws_http_fixture"));
+            assert_eq!(payload["incidents"].as_array().unwrap().len(), cases.len());
+            for (run, cut, complete) in cases {
+                let stored = report
+                    .incidents
+                    .iter()
+                    .find(|incident| incident.run_ids == [run])
+                    .unwrap();
+                assert_eq!(stored.message.as_deref(), Some(cut.as_str()));
+                assert_eq!(stored.events.len(), 7);
+                let omitted_id = stored.events[5].id;
+                let incident = payload["incidents"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|incident| incident["run_ids"] == json!([run]))
+                    .unwrap();
+                let preview = incident["events"].as_array().unwrap();
+                assert_eq!(preview.len(), 5);
+                assert_eq!(incident["events_omitted"], 2);
+                assert_eq!(incident["event_count"], 7);
+                assert!(preview.iter().all(|event| event["message"] == cut));
+                assert!(preview.iter().all(|event| event["id"] != omitted_id));
+                let expected = complete.as_deref().unwrap_or(&cut);
+                let message_id = if complete.is_some() {
+                    omitted_id
+                } else {
+                    stored.events[0].id
+                };
+                // Equal cut messages choose the newest matching row, as before.
+                assert_eq!(incident["message_event_id"], message_id, "{run}");
+                assert_eq!(
+                    incident["message"],
+                    &expected[..expected.len().min(2048)],
+                    "recover from all audit rows before bounding the preview: {run}"
+                );
+                assert_eq!(incident["truncated"], expected.len() > 2048, "{run}");
+                let full = json_ok(server.get(&format!(
+                    "/api/audit/events/{message_id}/message?workspace=ws_http_fixture"
+                )));
+                assert_eq!(full["message"], expected, "{run}");
+            }
+        },
+    );
+}
 
 #[test]
 fn incident_list_bounds_repeated_evidence_and_keeps_exact_raw_drilldown() {
