@@ -3,7 +3,7 @@ summary: "Activity / Job — Decisions"
 type: design
 title: "Activity / Job — Decisions"
 owner: codex
-last_updated: 2026-10-11
+last_updated: 2026-10-27
 last_validated: 2026-10-14
 status: Draft
 feature: activity-job
@@ -901,6 +901,8 @@ Use `orbit run ship` as the only public shipment command. Omitted task IDs run b
 ## The v2 shell activity surface is removed, not sandboxed
 
 **Recorded:** 2026-08-01 19:14:39.899572Z · [ORB-00374], [ORB-00363], [ORB-10479]
+
+**Reopened by:** [Scope: Script steps](../script-steps/1_scope.md) ([ORB-19294]) proposes taking this entry's recorded alternative, retrofitting the sandbox, policy and cwd confinement, for operator-granted, digest-bound `target: script:<name>` job steps. `type: shell` and inline command text stay load errors. This entry stands until that design's execution phase ships and records the superseding decision.
 
 **Context.** The v2 `shell` activity (`ActivityV2Spec::Shell`) dispatched `Command::new(program)` with no OS sandbox, no cwd confinement, and no policy consultation — unlike the `backend: cli` agent path. Its only guard was a `program ∈ allowed_programs` check where both fields came from the same workspace-supplied YAML, so the allowlist was a tautology ([ORB-00363]). The real alternatives were to retrofit the sandbox/policy/cwd pipeline onto `run_shell`, or to remove the surface entirely.
 
