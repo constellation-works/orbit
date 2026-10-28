@@ -317,10 +317,10 @@ impl OrbitRuntime {
                     (settlement_crew.clone(), *settled_at)
                 }
                 (Some((run_crew, run_at)), _) => (run_crew.clone(), *run_at),
-                (None, Some((settlement_crew, settled_at))) => {
+                (None, Some((settlement_crew, settled_at))) if settlement_supersedes => {
                     (settlement_crew.clone(), *settled_at)
                 }
-                (None, None) => continue,
+                (None, _) => continue,
             };
             report.examined += 1;
             notify_backfill_checkpoint();
