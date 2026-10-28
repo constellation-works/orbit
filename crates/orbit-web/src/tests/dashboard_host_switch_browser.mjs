@@ -1004,6 +1004,33 @@ try {
   HOSTS.hosts.pop();
   await page.close();
 
+  // The serving host's Show href, opened in a new tab of a browser that
+  // remembers a remote, selects the serving host there; an ordinary click
+  // on the same link switches in page to the same destination.
+  await openPage('/?workspace=ws_orbit#tasks', { fresh: true });
+  await taskRow('alpha-RUN').waitFor({ state: 'visible' });
+  await switchHost('hostb');
+  await taskRow('hostb-RUN').waitFor({ state: 'visible' });
+  assert(await page.evaluate(() => localStorage.getItem('orbit.dashboard.host')) === 'hostb', 'hostb is the remembered remote');
+  await page.evaluate(() => { window.location.hash = 'config/hosts'; });
+  const servingShow = page.getByRole('link', { name: `Show ${SERVING}` });
+  await servingShow.waitFor({ state: 'visible' });
+  const servingHref = await servingShow.getAttribute('href');
+  assert(new URL(servingHref, origin).searchParams.has('host') && new URL(servingHref, origin).searchParams.get('host') === '',
+    `serving Show href carries an explicit empty host: ${servingHref}`);
+  const tab2 = await context.newPage();
+  tab2.on('pageerror', (error) => pageErrors.push(`serving Show tab: ${error.message}`));
+  await tab2.goto(new URL(servingHref, origin).href);
+  await tab2.locator('#host-select').waitFor({ state: 'attached' });
+  await until('serving Show tab selects the serving host', async () => ['', null].includes(await tab2.evaluate(() => new URL(window.location.href).searchParams.get('host')))
+    && await tab2.locator('#host-select').inputValue() === '');
+  assert(await tab2.evaluate(() => localStorage.getItem('orbit.dashboard.host')) === 'hostb', 'the new tab did not rewrite the remembered remote in the original tab');
+  await tab2.close();
+  await servingShow.click();
+  await until('ordinary Show click selects the serving host', async () => (await selectedHost()) === null && await page.locator('#host-select').inputValue() === '');
+  evidenceLog.servingShowHref = servingHref;
+  await page.close();
+
   if (pageErrors.length) throw new Error(`page errors: ${pageErrors.join(' | ')}`);
   fs.writeFileSync(path.join(evidence, 'host-switch-assertions.json'), `${JSON.stringify({
     assertions: [
@@ -1023,6 +1050,7 @@ try {
       'browser-log-tail-retires-the-old-host-at-the-switch',
       'browser-history-restores-the-host-each-entry-names',
       'browser-history-restores-aggregate-after-a-single-workspace-host',
+      'browser-serving-show-href-selects-serving-in-new-tab',
     ],
     viewports: ['1440', '768'],
     ...evidenceLog,

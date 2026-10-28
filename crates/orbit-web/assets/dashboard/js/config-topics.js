@@ -88,7 +88,12 @@ function shellWord(text) {
 
 export function parseDraft(row, text) {
   const t = row.value_type || '';
-  if (t === 'bool') return text === 'true';
+  if (t === 'bool') {
+    const trimmed = text.trim();
+    if (trimmed === 'true') return true;
+    if (trimmed === 'false') return false;
+    throw new Error(`${row.key} takes true or false`);
+  }
   if (t === 'integer') {
     const trimmed = text.trim();
     if (!/^-?\d+$/.test(trimmed)) throw new Error(`${row.key} takes a whole number`);
