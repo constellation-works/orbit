@@ -132,8 +132,80 @@ fn failed_after_push_gets_fresh_authority_without_replaying_the_attempt() {
     );
 }
 
+fn scheduled_failed_publication_waits_before_source_repair() {
+    use orbit_common::OrbitError;
+    use orbit_core::application::job::JobRunListParams;
+
+    let mut f = Fixture::new();
+    published_owner::publication(&mut f);
+    published_owner::requeue(&mut f);
+    let set_schedule = |time: &str| {
+        f.runtime
+            .run_tool(
+                "orbit.task.update",
+                json!({
+                    "id": f.task, "not_before": time, "model": "codex"
+                }),
+            )
+            .unwrap();
+    };
+    set_schedule("2099-01-01T00:00:00Z");
+    assert_eq!(
+        f.runtime.get_task(&f.task).unwrap().status,
+        TaskStatus::Backlog
+    );
+    let before_history = f.runtime.get_task_history(&f.task).unwrap();
+    let before_runs = f
+        .runtime
+        .list_job_runs(JobRunListParams::default())
+        .unwrap()
+        .len();
+    let binding = f
+        .runtime
+        .run_tool_as_human("orbit.workflow.run.resume", f.request("inspect"))
+        .unwrap()["binding"]
+        .clone();
+    let input = f.submit(binding);
+    let error = f
+        .runtime
+        .run_tool_as_human("orbit.workflow.run.resume", input.clone())
+        .unwrap_err();
+    assert!(matches!(error, OrbitError::TaskScheduled { .. }), "{error}");
+    assert_eq!(
+        f.runtime.get_task(&f.task).unwrap().status,
+        TaskStatus::Backlog
+    );
+    assert_eq!(
+        f.runtime.get_task_history(&f.task).unwrap().len(),
+        before_history.len()
+    );
+    assert_eq!(
+        f.runtime
+            .list_job_runs(JobRunListParams::default())
+            .unwrap()
+            .len(),
+        before_runs
+    );
+
+    set_schedule("2000-01-01T00:00:00Z");
+    let admitted = f
+        .runtime
+        .run_tool_as_human("orbit.workflow.run.resume", input.clone())
+        .unwrap();
+    assert_eq!(admitted["replayed"], false);
+    let id = admitted["run_id"].as_str().unwrap();
+    f.wait(id);
+    let replay = f
+        .runtime
+        .run_tool_as_human("orbit.workflow.run.resume", input)
+        .unwrap();
+    assert_eq!(replay["run_id"], id);
+    assert_eq!(replay["replayed"], true);
+}
+
 crate::scenario_table!(
     failed_publication_scenarios,
+    scheduled_failed_publication_waits_before_source_repair,
     failed_after_push_gets_fresh_authority_without_replaying_the_attempt,
     failed_push_refusals_preserve_task_and_receipts
 );
