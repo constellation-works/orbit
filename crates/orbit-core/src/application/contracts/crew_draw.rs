@@ -28,6 +28,24 @@ pub(crate) fn parse_type_crew_source(source: &str) -> Option<(&str, TaskComplexi
     (!task_type.is_empty() && tier.is_assessed()).then_some((task_type, tier))
 }
 
+/// Prefix of the provenance admission writes back when an experiment arm's
+/// crew overlay chose the crew that runs, as `experiment:<id>/<arm>`.
+pub(crate) const EXPERIMENT_SOURCE_PREFIX: &str = "experiment:";
+
+/// Prefix of the provenance admission writes back when it ran a task on a
+/// crew other than the one recorded, as `redraw:<reason>`: a provider hold
+/// or limit, a pool draw, an explicit run crew, or a claimed leaf's own draw.
+pub(crate) const REDRAW_SOURCE_PREFIX: &str = "redraw:";
+
+/// The provenance the one-time backfill records on a task whose crew it set
+/// from the task's latest delivery run.
+pub(crate) const BACKFILL_CREW_SOURCE: &str = "backfill:admission";
+
+/// The provenance an experiment arm's crew overlay writes back.
+pub(crate) fn experiment_crew_source(experiment: &str, arm: &str) -> String {
+    format!("{EXPERIMENT_SOURCE_PREFIX}{experiment}/{arm}")
+}
+
 /// Prefix of the task comment that records a provider-limit reassignment of
 /// an auto-task's explicit crew [ORB-17638].
 pub(crate) const PROVIDER_LIMIT_REASSIGNMENT_PREFIX: &str = "Provider-limit reassignment:";
@@ -41,13 +59,25 @@ pub(crate) fn auto_task_minted(tags: &[String]) -> bool {
 }
 
 /// Whether `source` is a system assignment — a purpose pool, a type pool, a
-/// complexity pool, or the default — rather than an explicit pin or a legacy
-/// crew with no assignment evidence.
+/// complexity pool, the default, or an admission write-back — rather than an
+/// explicit pin or a legacy crew with no assignment evidence.
 pub(crate) fn automatic_crew_source(source: &str) -> bool {
     source == "default"
         || source.starts_with("pool:")
         || source.starts_with(PURPOSE_SOURCE_PREFIX)
         || source.starts_with(TYPE_SOURCE_PREFIX)
+        || admission_crew_source(source)
+}
+
+/// Whether `source` records a crew admission wrote back for one delivery
+/// ([`EXPERIMENT_SOURCE_PREFIX`], [`REDRAW_SOURCE_PREFIX`],
+/// [`BACKFILL_CREW_SOURCE`]). Such a crew is the latest delivery's, not a
+/// standing assignment: the next admission draws the task's pool again
+/// instead of keeping it.
+pub(crate) fn admission_crew_source(source: &str) -> bool {
+    source.starts_with(EXPERIMENT_SOURCE_PREFIX)
+        || source.starts_with(REDRAW_SOURCE_PREFIX)
+        || source == BACKFILL_CREW_SOURCE
 }
 
 /// Crew chosen for a task at creation, with the provenance its history entry

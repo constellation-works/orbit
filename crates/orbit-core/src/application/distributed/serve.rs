@@ -250,7 +250,10 @@ impl crate::OrbitRuntime {
                 run_id: run_id.to_string(),
             });
         // The leaf's crew and model are attribution only: the record keeps
-        // them, and nothing that decides the settlement reads them.
+        // them, and nothing that decides the settlement reads them. Once the
+        // settlement stands, the leaf's crew is written back to the task,
+        // since the leaf drew it on its executor [ORB-19416].
+        let leaf_crew = attribution.crew.clone();
         let context = ClaimInvocation::trusted_worker(
             claim.task_id.clone(),
             claim.claim_id.clone(),
@@ -258,7 +261,7 @@ impl crate::OrbitRuntime {
             run,
         )
         .with_attribution(attribution);
-        match settlement {
+        let result = match settlement {
             ClaimMutation::Fail(evidence) => {
                 self.validate_claimed_review_carry(&claim, evidence.claimed_review.as_ref())?;
                 let evidence = self.prepare_claimed_review_settlement(&claim, evidence);
@@ -329,7 +332,9 @@ impl crate::OrbitRuntime {
                 "only a typed handoff, a failure or a release settles a claimed leaf; approval, \
                  revocation and recovery are owner-operator actions",
             )),
-        }
+        }?;
+        self.write_back_claimed_leaf_crew(&claim.task_id, leaf_crew.as_deref());
+        Ok(result)
     }
 
     /// [ORB-15566] End a claim whose known-red report the owner's own base run

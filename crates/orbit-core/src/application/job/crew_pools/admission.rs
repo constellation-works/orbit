@@ -15,6 +15,7 @@ use super::draw::{
     weighted_draw,
 };
 use super::types::{COMPLEXITIES, CapturedCrewPools, POLICY_PIPELINES, POOLS_KEY, SELECTION_KEY};
+use super::write_back::AdmittedCrewSource;
 use crate::application::task::TaskRecords;
 
 /// A planned provider-limit reassignment of an auto-task's explicit crew
@@ -182,15 +183,24 @@ impl OrbitRuntime {
         random: &mut impl FnMut() -> Result<u64, OrbitError>,
     ) -> Result<(), OrbitError> {
         let task = self.get_task(task_id)?;
-        self.capture_task_crew_selection(input, &task, random)
+        let written = self.capture_task_crew_selection(input, &task, random)?;
+        // A claimed leaf's task lives in its owner's store: the owner writes
+        // its crew back when the leaf settles.
+        if self.worker_invocation().is_none() {
+            let crew = input["crew"].as_str().unwrap_or_default().to_string();
+            self.write_back_task_crew(&task.id, &crew, &written)?;
+        }
+        Ok(())
     }
 
+    /// Draw the crew `task` runs as into `input`, returning the provenance
+    /// a write-back of that crew to the task records [ORB-19416].
     pub(crate) fn capture_task_crew_selection(
         &self,
         input: &mut Value,
         task: &Task,
         random: &mut impl FnMut() -> Result<u64, OrbitError>,
-    ) -> Result<(), OrbitError> {
+    ) -> Result<AdmittedCrewSource, OrbitError> {
         let pools = pools_from_input(input)?;
         let task_id = &task.id;
         let experiment_pool = self.experiment_crew_pool(task_id)?;
@@ -308,6 +318,10 @@ impl OrbitRuntime {
                 .limit_for(&selected.crew)
                 .map(ProviderLimit::describe)
         });
+        let written = match &experiment_pool {
+            Some(pool) => AdmittedCrewSource::experiment(&pool.experiment, &pool.arm),
+            None => AdmittedCrewSource::redraw(&source, explicit.is_some()),
+        };
         input[SELECTION_KEY] = json!({
             "task_id": task.id,
             "crew": selected.crew.name,
@@ -338,7 +352,7 @@ impl OrbitRuntime {
             }
         }
         input["crew"] = json!(selected.crew.name);
-        Ok(())
+        Ok(written)
     }
 
     /// The reassignment [ORB-17638] calls for on `task`, if any: an

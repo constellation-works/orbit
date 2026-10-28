@@ -440,6 +440,7 @@ backups" section has the full rule.
 orbit migrate               # inspect pending migrations without applying
 orbit migrate --confirm     # apply
 orbit migrate --backfill-diff-stats [--limit N]  # apply, then record diff stats for done tasks landed earlier
+orbit migrate --backfill-task-crews  # apply, then set task.crew from each task's latest delivery run
 ```
 
 Both ledgers — the SQLite schema and the workspace layout — auto-apply when a

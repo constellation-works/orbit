@@ -22,9 +22,10 @@ mod review_layer;
 
 pub use claimed_leaf::{ClaimedLeafStage, DrainClaimedLeaf};
 pub(crate) use crew_draw::{
-    CreationCrewAssignment, CrewCandidate, CrewPoolDraw, InspectionPool,
-    PROVIDER_LIMIT_REASSIGNMENT_PREFIX, PURPOSE_SOURCE_PREFIX, TYPE_SOURCE_PREFIX,
-    auto_task_minted, automatic_crew_source, parse_type_crew_source, type_crew_source,
+    BACKFILL_CREW_SOURCE, CreationCrewAssignment, CrewCandidate, CrewPoolDraw, InspectionPool,
+    PROVIDER_LIMIT_REASSIGNMENT_PREFIX, PURPOSE_SOURCE_PREFIX, REDRAW_SOURCE_PREFIX,
+    TYPE_SOURCE_PREFIX, admission_crew_source, auto_task_minted, automatic_crew_source,
+    experiment_crew_source, parse_type_crew_source, type_crew_source,
 };
 pub use distributed_gate::DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED;
 pub use drain_entry::DrainEntryPoint;

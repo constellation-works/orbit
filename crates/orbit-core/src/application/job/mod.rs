@@ -65,6 +65,7 @@ pub(in crate::application) use automation_port::JobAutomationPort;
 pub use catalog::CatalogReferenceLayer;
 pub(crate) use catalog::{DEFAULT_JOB_FILES, seed_default_jobs};
 pub use catalog::{JobCatalogEntry, JobCatalogFilter, job_catalog_to_json_with_last_run};
+pub use crew_pools::{TaskCrewBackfill, TaskCrewChange};
 pub(in crate::application) use drain_port::{JobDrainPort, JobPullSettlementPort};
 pub use exec::V2JobRunResult;
 pub use explore_analytics::{

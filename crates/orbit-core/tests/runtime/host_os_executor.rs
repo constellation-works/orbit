@@ -527,9 +527,13 @@ fn a_supported_explicit_run_crew_survives_discovery_and_replay() {
             "{listed}"
         );
     }
+    // The task records the crew its run used [ORB-19416], under an automatic
+    // source, so the override does not pin it.
+    let recorded = linux.get_task(&task.id).unwrap();
+    assert_eq!(recorded.crew.as_deref(), Some("sol"));
     assert_eq!(
-        linux.get_task(&task.id).unwrap().crew,
-        None,
+        recorded.crew_source.as_deref(),
+        Some("redraw:run_crew"),
         "run override does not pin the task"
     );
     // Even a matching frozen selection does not release a task's stored pin
