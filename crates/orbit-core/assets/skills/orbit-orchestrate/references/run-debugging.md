@@ -180,6 +180,137 @@ evidence. Treat `checkout_identity.state: incomplete`, `missing`, or
 - **Recovery failure:** the original step failed and `step_failure_recovery` also failed — report both, keep the original step as primary unless recovery caused additional damage.
 - **Parent orchestration failure:** a child run failed and a gate/auto parent is still running or waiting — identify both run ids.
 
+## Hosted-check failures and inherited red bases
+
+Use this procedure when owner landing is waiting on or stopped by a failed
+hosted check. It classifies required checks and checks explicitly owed by
+review on the pinned PR head before spending candidate recovery. A red rollup
+alone does not establish a code defect or an abandoned run.
+
+### Inspect the owner, task and provider evidence
+
+1. On the owning host and workspace, find the landing run as well as the
+   delivery leaf and drain. Inspect each relevant run; the shipped
+   `task_landing_pipeline` uses step `land` for activity `handoff_land`:
+
+   ```bash
+   orbit run show <landing-run-id> --no-reconcile --json
+   orbit run show <landing-run-id> --step land --no-reconcile --json
+   orbit run events <landing-run-id> --no-reconcile --json
+   orbit run logs <landing-run-id> --step land --no-reconcile --json
+   orbit tool run orbit.task.show --input '{"id":"<task-id>","model":"<agent-family>","fields":["status","job_run_id","external_refs","history","comments"]}'
+   ```
+
+   Copy actual step IDs when a job is customized. Run JSON uses `.run.state`;
+   a step read exposes `step_output`. Read the run's error and task history
+   even if a failed deterministic step has no successful output or agent log.
+   These run commands inspect the host where they execute; an agent without
+   owner access reports that gap rather than substituting a follower's store.
+
+2. In task history, inspect `event` and decode its JSON `note` where present:
+   - `landing_waiting_for_base`: `state: "waiting_for_base"`, `head`, `reason`
+     and absolute `deadline_ms`. A recorded wait is evidence of a bounded
+     landing poll, not an instruction to restart it.
+   - `ci_base_suspect`: `base`, `head`, `check`, `signature`, `run_id`, `job_id`,
+     `run_attempt`, `pr_number`, `event`, `started_at`, `completed_at`, `reason`.
+   - `ci_check_rerun`: `head`, `run_id`, `pr_number`, `event`, and `jobs[]`
+     containing `check`, `classification`, `signature`, `job_id`,
+     `run_attempt`, `started_at` and `completed_at` from the earlier attempt.
+   - `pr_base_update_reserved`: `execution`, `repository`, `pr_number`,
+     `head_sha`, `base_sha`, `base_branch`, `deadline_ms` and `evidence`.
+     Inherited handoff recovery names `evidence.cause: "inherited"` and
+     `evidence.handoff_id`; count reservations for that PR, not polls.
+   - `landing_stopped`: the stop reason, including classification, diagnostic
+     signature/log excerpt or the evidence that could not be read. The owner
+     claim's stopped landing attempt retains the full evidence: structured PR
+     refusals have `kind: "owner_landing_refusal"`, `reason`, `repairable`,
+     `accepted`, `observation` and, for a requeue stop, `requeue: true`.
+
+   Completed landing output has `phase: "landed"` and `evidence`; when check
+   recovery acted, `evidence.check_recovery` lists its actions. Recovery
+   activity success alone does not prove a check passed or a PR merged.
+
+3. Independently inspect the PR and the exact failed job and base push runs
+   using the installed GitHub CLI in the owning repository:
+
+   ```bash
+   gh pr view <pr-number> --repo <owner/repo> --json number,url,state,headRefOid,baseRefName,mergeStateStatus,statusCheckRollup
+   gh pr checks <pr-number> --repo <owner/repo> --required
+   gh run view <workflow-run-id> --repo <owner/repo> --attempt <attempt> --verbose
+   gh run view <workflow-run-id> --repo <owner/repo> --attempt <attempt> --job <job-id> --log
+   gh run list --repo <owner/repo> --branch <base-branch> --event push --commit <base-sha>
+   ```
+
+   Repeat the job/log reads for the relevant base runs. Record the workflow
+   and job name, failed step, emitted diagnostic signature, head/base SHAs,
+   event, PR association, run/attempt identities and timestamps. A shared job
+   name or failed-step label alone is insufficient. For latest-base push
+   evidence, landing can look back at most eight first-parent commits for the
+   same job's success/failure: a skipped or absent job says nothing; a pending
+   same job waits. An unreadable listing/log is a gap, never a passing base.
+
+### Interpret the classification before choosing recovery
+
+| Class | Decisive evidence and owner-landing behavior |
+|---|---|
+| **Inherited** | The same emitted signature fails on the accepted base, or a moved base tip passes the same workflow/job. Untouched-file failures need the base-suspect procedure below unless matching base failure evidence establishes inheritance. Landing updates the PR branch onto the current base when admitted, then reads checks again; a still-red or unproven base waits without a repair agent. |
+| **Transient** | Emitted logs show runner or network failure. Landing reruns failed jobs once and waits again. A repeated transient failure stops in review, without a code repair. |
+| **Base-suspect** | The log cites only repository files the candidate did not change and the base does not establish the same failure. Wait for a successful same-check push run on the accepted base ancestry; even a pass predating the PR failure only permits one unchanged-head PR rerun. A passing rerun clears it. Candidate attribution needs the same signature repeated on that rerun. A matching base failure remains inherited. |
+| **Candidate** | A real diagnostic and readable base evidence do not explain the failure, or the unchanged-head PR rerun repeats the base-suspect signature after a same-check base pass. Landing stops for its one automatic repair, or the bounded backlog return when that repair is spent. |
+| **Inconclusive** | Job identity, listing, logs or diagnostic evidence is missing/unreadable; an empty log or signature containing only the step name proves no cause. Stop in review without rerunning, updating or repairing. |
+
+An unchanged-head rerun must be a verified `pull_request` execution for the
+same PR and head, the same workflow run with a later `run_attempt`, starting
+after the earlier attempt completed, with the same check and signature.
+Compare provider evidence with `ci_base_suspect` or `ci_check_rerun`; a
+suspicion note, another push/dispatch run or a green base alone cannot spend
+the repair. The rerunnable untouched-file case can appear as `flaky` in
+`ci_check_rerun.jobs[].classification`. It shares landing's one-rerun budget
+with transient recovery.
+
+Every failed required check needs its own evidence. A required aggregate
+check with no answering workflow job is candidate-owned only when its own
+failure annotations all name files the candidate changed; otherwise it is
+inconclusive. Passing analysis jobs do not clear a failed aggregate.
+
+### Recognize the bounded wait and its outcome
+
+Inherited handoff base updates share a persisted budget of at most three
+cumulative updates, each onto a different base commit, across polls, retries
+and restarts. After the first update, a newer tip where every inherited job
+passes can permit another update. A red, pending or unproven tip keeps waiting
+within the landing deadline, including when the update budget is spent. Only
+a head already containing that passing tip that still fails earns candidate
+repair. These are verified merges of base advances into the PR branch;
+landing does not edit or rebase the candidate to bypass a check.
+
+The `landing_waiting_for_base` note makes that wait visible. At the landing
+deadline, an unresolved base wait stops in review with the reason `the base
+never recovered before the landing deadline`. Base-suspect observations also
+have `max_base_ci_cycles` (default 3) per unchanged head/check/signature;
+exhaustion stops in review naming the check, signature and missing evidence.
+Inspect the effective activity input and recorded deadline instead of
+extending or restarting the wait by assumption.
+
+A conclusive candidate failure stops for one automatic repair leaf with
+fresh validation and a new handoff. Once that repair is spent, the owner
+ends the claim and returns the task to `backlog`, preserving the candidate
+and failure evidence for its next run. Exhausting the task's landing repair
+budget blocks it for an operator. Unreadable evidence and unresolved base
+waits spend no candidate repair. Confirm the actual task and latest landing
+attempt state before recommending any action.
+
+These outcomes describe existing owner landing, not new operator authority.
+For completion-watcher repairs use [auto-fix authorization](orchestration.md#auto-fix-authorization);
+its repair and single base-update limits remain separate. A **missing**
+protected result uses that reference's narrowly proved HTTP-prerequisite
+infrastructure rerun, not this failed-job classification. Local required
+validation failures use [red-base validation holds](../../orbit-setup/references/automation.md#built-in-re-checking-tasks-held-for-a-red-base),
+not hosted landing waits. None of these diagnoses authorizes manual requeue,
+a second drain, weaker checks or a merge. A stopped healthy handoff follows
+the existing operator-only [retry landing](orchestration.md#retry-a-stopped-owner-landing)
+procedure only when its authority and evidence qualify.
+
 ## Operator Agent Invocations
 
 A run of `agent_invoke_pipeline` is not a delivery pipeline. It is one operator

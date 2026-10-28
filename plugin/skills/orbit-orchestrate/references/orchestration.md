@@ -755,10 +755,13 @@ by configuration, and independent of `--complete`. It authorizes repair only:
 It cannot be combined with `--pull` or `--stop`.
 
 - The completion watcher detects the blockers; no second watcher exists. Pending
-  checks wait. Failed required checks are repaired by the job's
-  `step_failure_recovery`, with the failed head's error signature and log
-  excerpt as evidence. Conflicts are repaired by `pr_conflict_recovery` against
-  the current base.
+  checks wait. Failed required checks need conclusive candidate evidence before
+  the job's `step_failure_recovery` repairs them, with the failed head's error
+  signature and log excerpt as evidence. An inherited red base or a
+  base-suspect failure can keep waiting without spending a repair; see
+  [hosted-check diagnosis](run-debugging.md#hosted-check-failures-and-inherited-red-bases)
+  for the evidence and the separate owner-handoff landing limits. Conflicts are
+  repaired by `pr_conflict_recovery` against the current base.
 - A missing protected check may trigger one infrastructure rerun without an
   agent: the forge must read effective classic and ruleset policy with integration
   identity, bind the PR, repository, base, head, workflow, event and latest attempt,
