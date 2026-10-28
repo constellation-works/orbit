@@ -697,6 +697,8 @@ Test design (boundary first, unit tests by exception, binary layout) is in [test
 - **Bubblewrap on Linux.** Inside an agent-executor or job-run worktree, live `bwrap` fails with `No permissions to create new namespace` because the outer sandbox blocks nested user namespaces. That is the environment, not a defect: replay the live spawn checks (`spawn_under_linux_bwrap`, `--run-ignored`) on the owning Linux host, and never disable `linux-bwrap` or try to make it nest ([runbook](runbooks/linux-sandbox.md#verify-the-bubblewrap-boundary-natively)).
 - **Deferred fixtures in an implementer's gate.** A deferred fixture prints `DEFERRED: bubblewrap unavailable: …` on Linux, the Seatbelt guard's `SKIP: sandbox-exec cannot apply a profile: …` on macOS, or `DEFERRED: ps denied: …` where the sandbox refuses `ps`, and passes, so `make ci-test-affected` can exit 0 without having run it. Inside the agent sandbox that is expected, and the implementer hands the gap off instead of failing [ORB-15287] [ORB-15409] [ORB-15587]. It runs the gate with a [validation summary](#validation-summary-and-base-reruns) in its scratch and the base pinned, then names only that summary:
 
+  Before attempting or claiming the handoff, follow the full [Sanctioned sandbox deferral contract](../crates/orbit-core/assets/skills/orbit/references/task-execution.md#sanctioned-sandbox-deferral) for eligibility, output, probes, replay and exclusions. The mechanics below explain how the engine checks that handoff.
+
     ```sh
     ORBIT_VALIDATION_SUMMARY="$PWD/.orbit/tmp/gate-summary.json" make ci-test-affected CI_TEST_BASE=<base_sha>
     ```
