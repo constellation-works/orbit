@@ -1536,6 +1536,28 @@ export function formatDateTime(value, { seconds = false } = {}) {
   return `${dateTimeText(dateParts(date, clockIsUtc()), seconds)} ${activeZoneName(date)}`;
 }
 
+/// "23 min ago", "in 2 h", "just now"; null for a missing or unparseable time.
+export function relativeTime(value, now = Date.now()) {
+  if (!value) return null;
+  const at = new Date(value).getTime();
+  if (Number.isNaN(at)) return null;
+  const diff = at - now;
+  const abs = Math.abs(diff);
+  if (abs < 45_000) return diff > 0 ? "in under a minute" : "just now";
+  let text;
+  if (abs < 86_400_000) {
+    // Round the total once; rounding the remainder can carry into a "60 min".
+    const totalMinutes = Math.round(abs / 60_000);
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    if (hours === 0) text = `${minutes} min`;
+    else text = minutes ? `${hours} h ${minutes} min` : `${hours} h`;
+  } else {
+    text = `${Math.round(abs / 86_400_000)} d`;
+  }
+  return diff > 0 ? `in ${text}` : `${text} ago`;
+}
+
 /// "2026-10-07" on the dashboard clock's calendar.
 export function formatDate(value) {
   const date = toDate(value);

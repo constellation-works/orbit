@@ -1,6 +1,6 @@
 // Routine-definition and host clock operations [ORB-10875].
 
-import { captureWorkspaceVisit, el, fetchJson, getWorkspace, isAggregateView, postJson } from './common.js';
+import { captureWorkspaceVisit, el, fetchJson, getWorkspace, isAggregateView, postJson, relativeTime } from './common.js';
 import { renderAutomation } from './automation.js';
 import { closeEditors, editorObserved, isOpen, openEditor, routineDraft, routineTriggerEditor, scheduleEditButton } from './schedule-editor.js';
 
@@ -31,7 +31,6 @@ import {
   outcomeDot,
   pendingOperations,
   registerOperationsReset,
-  relativeTime,
   routineEventDriven,
   routineScheduleText,
   runLink,

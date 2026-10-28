@@ -1,6 +1,6 @@
 // Job catalogue and live run operations [ORB-10875, ORB-10876].
 
-import { copyText, el, fetchJson, hostWriteRefusal, postJson, requestPanel } from './common.js';
+import { copyText, el, fetchJson, hostWriteRefusal, postJson, requestPanel, relativeTime } from './common.js';
 
 import {
   $,
@@ -18,7 +18,6 @@ import {
   outcomeDot,
   pendingOperations,
   registerOperationsReset,
-  relativeTime,
   runLink,
   runOperation,
   selectedWorkspace,

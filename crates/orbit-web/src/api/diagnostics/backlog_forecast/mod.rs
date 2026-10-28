@@ -5,6 +5,7 @@ use axum::response::{IntoResponse, Json, Response};
 use serde::Deserialize;
 
 use crate::state::Ws;
+use orbit_core::OrbitError;
 use orbit_core::application::task::BacklogForecastHistory;
 
 #[derive(Deserialize, Default)]
@@ -23,6 +24,10 @@ pub(in crate::api) struct BacklogForecastQuery {
     /// `on` adds new tasks at the recent arrival rate.
     #[serde(default)]
     arrivals: Option<String>,
+    /// `1` computes live instead of serving the default query's newest
+    /// stored forecast; it stores a row only when the hourly slot is free.
+    #[serde(default)]
+    refresh: Option<String>,
 }
 
 pub(in crate::api) async fn diagnostics_backlog_forecast(
@@ -30,13 +35,23 @@ pub(in crate::api) async fn diagnostics_backlog_forecast(
     Query(q): Query<BacklogForecastQuery>,
 ) -> Response {
     match super::super::blocking("backlog forecast", move || {
-        runtime.backlog_forecast(
+        let refresh = match q.refresh.as_deref() {
+            None | Some("0") => false,
+            Some("1") => true,
+            Some(other) => {
+                return Err(OrbitError::InvalidInput(format!(
+                    "refresh must be 0 or 1, got {other:?}"
+                )));
+            }
+        };
+        runtime.serve_backlog_forecast(
             BacklogForecastHistory {
                 lookback_days: q.lookback_days,
                 history_tasks: q.history_tasks,
             },
             q.concurrency,
             q.arrivals.as_deref(),
+            refresh,
         )
     })
     .await

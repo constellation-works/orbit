@@ -29,6 +29,30 @@ impl OrbitRuntime {
         super::calculate::calculate_backlog_forecast(self, &options, Utc::now())
     }
 
+    /// [`Self::backlog_forecast`], except that the canonical query serves the
+    /// newest stored snapshot (`served_from: "stored"`) when it is complete,
+    /// from the current model and at most two store intervals old. Its
+    /// calibration is frozen at store time. `refresh`, any other query, or no
+    /// such snapshot computes live; a live canonical read still stores only
+    /// when the hourly slot is free.
+    pub fn serve_backlog_forecast(
+        &self,
+        history: BacklogForecastHistory,
+        concurrency: Option<u32>,
+        arrivals: Option<&str>,
+        refresh: bool,
+    ) -> Result<Value, OrbitError> {
+        let options = options::parse_options(history, concurrency, arrivals)?;
+        let now = Utc::now();
+        if options.canonical()
+            && !refresh
+            && let Some(response) = super::persistence::stored_forecast_response(self, now)?
+        {
+            return Ok(response);
+        }
+        super::calculate::calculate_backlog_forecast(self, &options, now)
+    }
+
     /// Fill the canonical hourly slot on the owner clock, without requiring
     /// an endpoint read. The transaction remains the authority if a read races
     /// this early check. Recent slots skip history reads and simulation.

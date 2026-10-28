@@ -261,6 +261,8 @@ pub(super) fn forecast_result(
     Ok(json!({
         "model_version": model::MODEL_VERSION,
         "generated_at": now.to_rfc3339(),
+        // `stored` when a default read serves the newest stored snapshot.
+        "served_from": "live",
         "timing": {"preparation_ms": preparation_ms, "simulation_ms": simulation_ms},
         "inputs": inputs,
         "assumptions": {

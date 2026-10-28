@@ -1,6 +1,6 @@
 // Auto-task operations [ORB-10876].
 
-import { el, fetchJson, getWorkspace, postJson, requestPanel, statusPill } from './common.js';
+import { el, fetchJson, getWorkspace, postJson, requestPanel, statusPill, relativeTime } from './common.js';
 import { renderAutomation } from './automation.js';
 import { autoTaskDraft, autoTaskScheduleEditor, closeEditors, editingIn, editorObserved, isOpen, openEditor, scheduleEditButton } from './schedule-editor.js';
 
@@ -26,7 +26,6 @@ import {
   operationsState,
   pendingOperations,
   registerOperationsReset,
-  relativeTime,
   runOperation,
   selectedWorkspace,
   selectedWorkspaceName,
