@@ -472,7 +472,13 @@ orbit decision channel rotate-key <channel>
 
 The plugin submits through the governed `orbit.decision.submit` path: only
 the plugin the channel is bound to, through its callback session, or the
-operator testing a channel. The CLI form is:
+operator testing a channel. Core keeps every channel's key in
+`~/.orbit/state/decision-channels/`, which no plugin backend can read, even
+with `orbit_tools`, and which agent sandboxes hide. The digest and submit
+callbacks read that store, so they work only from a backend the host runs
+outside the plugin sandbox (`backend.sandbox: none` with the `unsandboxed`
+grant). From a sandboxed backend they are refused as not visible. The CLI
+form is:
 
 ```bash
 orbit decision submit <request-id> <answer-id> --channel <channel> --token <token>

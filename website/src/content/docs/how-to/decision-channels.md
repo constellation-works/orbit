@@ -59,6 +59,13 @@ registration supplies the value. Keep transport credentials in the plugin's
 other declared secrets. Use a dedicated namespace for this channel: registering
 or rotating another channel for that namespace replaces its `channel_key`.
 
+Orbit keeps every channel's key in its own channel store as well, and no plugin
+backend can read that store, even with `orbit_tools`. The two callbacks read
+it, so they run only from a backend the host runs outside the plugin sandbox
+(`backend.sandbox: none` with the `unsandboxed` grant). A sandboxed backend's
+`orbit.decision.digest` and `orbit.decision.submit` calls are refused as not
+visible. Agent sandboxes hide the store too.
+
 Callbacks need the host-issued plugin callback session, an enabled plugin, the
 manifest's callback list, the recorded host grant and the spawning caller's
 allowance. A name in tool input or an environment variable does not establish

@@ -330,6 +330,7 @@ impl Fixture {
             global.join("state/logs"),
             global.join("state/audit"),
             global.join("state/plugin-secrets"),
+            global.join("state/decision-channels"),
             global.join("state/plugin-callbacks"),
             global.join("state/plugin-broker/masked"),
             global.join("plugins/.grants"),
@@ -558,6 +559,7 @@ impl Fixture {
         vec![
             self.global.join("state/plugins"),
             self.global.join("state/plugin-secrets"),
+            self.global.join("state/decision-channels"),
         ]
     }
 
@@ -571,6 +573,7 @@ impl Fixture {
             "plugins/.grants",
             "state/plugins",
             "state/plugin-secrets",
+            "state/decision-channels",
         ]
         .iter()
         .map(|relative| self.global.join(relative))

@@ -55,17 +55,29 @@ pub(super) const ORBIT_TOOLS_GLOBAL_WRITE_FILES: &[&str] = &[
 /// plugin secret set`. Nothing in it is granted back, not even a plugin's own
 /// file: the host reads a value and hands it to the backend, so a plugin child
 /// never needs the store itself.
+///
+/// [`DECISION_CHANNEL_STORE_DIR`] holds every decision channel's token key,
+/// the same value the bound plugin receives as its `channel_key` secret. It
+/// is denied whole, staged writes included, and nothing in it is granted
+/// back: a channel's key reaches its bound plugin only through
+/// `context.secrets`.
 pub(super) const PLUGIN_GLOBAL_READ_DENY_DIRS: &[&str] = &[
     "state/plugin-callbacks",
     "plugins/.grants",
     "state/plugins",
     PLUGIN_SECRET_STORE_DIR,
+    DECISION_CHANNEL_STORE_DIR,
 ];
 
 /// The host-owned secret store, relative to the global root (`orbit-core`'s
 /// `runtime::plugin::secrets`). Named here because the sandbox decides who may
 /// read it: no plugin child, whatever it was granted.
 pub const PLUGIN_SECRET_STORE_DIR: &str = "state/plugin-secrets";
+
+/// Core's decision-channel store, relative to the global root (`orbit-core`'s
+/// `application::task::decision_channel`). It mirrors every channel's token
+/// key, so no plugin child may read it and an agent sandbox masks it.
+pub const DECISION_CHANNEL_STORE_DIR: &str = "state/decision-channels";
 
 /// Host-owned directory beside the namespace install directories, holding one
 /// grant-authorization witness per plugin (`orbit-core`'s `runtime::plugin::grants`).

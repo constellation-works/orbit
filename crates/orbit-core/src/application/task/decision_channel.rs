@@ -9,7 +9,10 @@
 //! generated at registration, mirrored to the bound plugin's `channel_key`
 //! secret (so the transport can mint tokens into what it sends), and kept
 //! here because core verifies — the plugin presents evidence, core judges
-//! it. Registration, revocation and rotation are operator-surface writes;
+//! it. The store therefore holds key material: no plugin child may read it
+//! and an agent sandbox masks it, so every read and write here runs on the
+//! host and refuses a hidden store rather than seeing no channel.
+//! Registration, revocation and rotation are operator-surface writes;
 //! nothing in this module is reachable from a plugin callback or an agent
 //! envelope except [`OrbitRuntime::submit_decision_via_channel`], whose
 //! caller the tool boundary derives from the callback session or the
@@ -51,12 +54,13 @@ use super::decision_dkim::{
 use super::helpers::SYSTEM_ACTOR_LABEL;
 use crate::OrbitRuntime;
 use crate::application::task::TaskRecords;
+use crate::runtime::plugin::paths::decision_channel_store_dir;
+use crate::runtime::plugin::sandbox_mask::{decision_channel_store_masked, not_visible};
 use crate::runtime::plugin::secrets::{PluginSecretStore, PluginSecretValue};
 
 /// The plugin secret a channel key is mirrored to.
 pub const DECISION_CHANNEL_KEY_SECRET: &str = "channel_key";
 
-const STORE_DIR: &str = "state/decision-channels";
 const STORE_FILE: &str = "channels.json";
 const STORE_SCHEMA_VERSION: u32 = 1;
 const TOKEN_LEN: usize = 26;
@@ -860,10 +864,20 @@ impl OrbitRuntime {
     }
 
     fn decision_channel_dir(&self) -> PathBuf {
-        self.global_root().join(STORE_DIR)
+        decision_channel_store_dir(&self.global_root())
+    }
+
+    /// Inside an agent sandbox the store is masked; reading the sentinel as
+    /// an empty store would turn every channel into "not registered".
+    fn refuse_masked_decision_channel_store(&self) -> Result<(), OrbitError> {
+        if decision_channel_store_masked(&self.global_root()) {
+            return Err(not_visible("the decision channel store"));
+        }
+        Ok(())
     }
 
     fn decision_channel_store(&self) -> Result<ChannelStoreFile, OrbitError> {
+        self.refuse_masked_decision_channel_store()?;
         let path = self.decision_channel_dir().join(STORE_FILE);
         let body = match std::fs::read_to_string(&path) {
             Ok(body) => body,
@@ -872,6 +886,10 @@ impl OrbitRuntime {
                     schema_version: STORE_SCHEMA_VERSION,
                     channels: BTreeMap::new(),
                 });
+            }
+            // A plugin child's sandbox denies the store's contents.
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                return Err(not_visible("the decision channel store"));
             }
             Err(error) => {
                 return Err(OrbitError::Io(format!("read {}: {error}", path.display())));
@@ -886,9 +904,13 @@ impl OrbitRuntime {
     }
 
     fn lock_decision_channel_store(&self) -> Result<FileLockGuard, OrbitError> {
+        self.refuse_masked_decision_channel_store()?;
         let lock_path = self.decision_channel_dir().join("channels.lock");
         acquire_exclusive_file_lock(&lock_path, "decision channels", FileLockOptions::default())
-            .map_err(|error| OrbitError::Io(format!("lock {}: {error}", lock_path.display())))
+            .map_err(|error| match error.kind() {
+                std::io::ErrorKind::PermissionDenied => not_visible("the decision channel store"),
+                _ => OrbitError::Io(format!("lock {}: {error}", lock_path.display())),
+            })
     }
 
     /// Callers hold `lock_decision_channel_store` across their whole

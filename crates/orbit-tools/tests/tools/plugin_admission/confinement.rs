@@ -193,3 +193,171 @@ fn env_pass_cannot_forward_a_privilege_bearing_orbit_name_even_if_requested() {
         "an ordinary requested name is still forwarded"
     );
 }
+
+/// Prints `<path>=<contents or denied>` for each argument, joined by `|`.
+#[cfg(unix)]
+const STORE_PROBE_BACKEND: &str = "#!/bin/sh\ncat >/dev/null\nseen=\nfor path in \"$@\"; do\n  body=$(cat \"$path\" 2>/dev/null) || body=denied\n  seen=\"$seen${seen:+|}$body\"\ndone\nprintf '{\"ok\":true,\"output\":{\"seen\":\"%s\"}}\\n' \"$seen\"\n";
+
+/// The decision-channel store mirrors every channel's token key, in
+/// `channels.json` and in the staged file a registration renames over it. An
+/// unrelated plugin holding `orbit_tools` is granted the whole global root,
+/// so the store must be carved out of that grant as the plugin secret store
+/// is, on the direct and the brokered launch path alike, and on both
+/// platforms' read boundaries [ORB-19338].
+#[cfg(unix)]
+#[test]
+fn an_orbit_tools_plugin_cannot_read_the_decision_channel_key_store() {
+    use std::io::Write;
+    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+
+    use orbit_tools::plugin::{
+        BrokeredCaller, DECISION_CHANNEL_STORE_DIR, PLUGIN_SECRET_STORE_DIR,
+    };
+    use orbit_types::policy::ResolvedFsProfile;
+
+    use super::support::stub_backend;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    // Physical, so a macOS `/var` alias cannot split a rule from its path.
+    let base = temp.path().canonicalize().expect("canonical tempdir");
+    let global_root = base.join("relocated/orbit-global");
+    let store = global_root.join(DECISION_CHANNEL_STORE_DIR);
+    let canaries = [
+        (store.join("channels.json"), "CHANNEL-STORE-CANARY"),
+        (
+            store.join(".channels.json.0123abcd.tmp"),
+            "STAGED-STORE-CANARY",
+        ),
+        (
+            global_root
+                .join(PLUGIN_SECRET_STORE_DIR)
+                .join("decision-mail.json"),
+            "PLUGIN-SECRET-CANARY",
+        ),
+    ];
+    for (path, canary) in &canaries {
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(path.parent().expect("parent"))
+            .expect("private store dir");
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)
+            .and_then(|mut file| file.write_all(canary.as_bytes()))
+            .expect("synthetic key-bearing file");
+    }
+    let plugin_root = global_root.join("plugins/demo/1.0.0");
+    let worktree = base.join("checkout");
+    std::fs::create_dir_all(&plugin_root).expect("plugin root");
+    std::fs::create_dir_all(&worktree).expect("worktree");
+    let mut unrelated = (*spec(
+        stub_backend(&plugin_root, STORE_PROBE_BACKEND),
+        &plugin_root,
+        PluginPermissions::default(),
+        &[PluginGrant::OrbitTools],
+    ))
+    .clone();
+    unrelated.global_root.clone_from(&global_root);
+    unrelated.state_dir = global_root.join("state/plugins/demo");
+    unrelated.args = canaries
+        .iter()
+        .map(|(path, _)| path.to_string_lossy().into_owned())
+        .collect();
+    let caller = BrokeredCaller {
+        worktree: worktree.clone(),
+        fs_profile: ResolvedFsProfile {
+            name: "implementer".to_string(),
+            read: vec!["**".to_string()],
+            modify: Vec::new(),
+        },
+        proc_allowed_programs: Vec::new(),
+        proc_disallowed_programs: None,
+    };
+
+    for (launch, profile) in [
+        ("direct", unrelated.sandbox_profile(None)),
+        ("brokered", unrelated.brokered_sandbox_profile(&caller)),
+    ] {
+        let profile = profile.unwrap_or_else(|error| panic!("{launch} profile: {error}"));
+        assert!(
+            profile.read.contains(&global_root),
+            "{launch}: orbit_tools is granted the global root, the reproduced exposure: {:?}",
+            profile.read
+        );
+        assert!(
+            profile.read_denies.contains(&store),
+            "{launch}: the decision-channel store is a denied tree: {:?}",
+            profile.read_denies
+        );
+        assert!(
+            !profile
+                .readable_denied_files()
+                .iter()
+                .chain(&profile.readable_denied_trees())
+                .any(|path| path.starts_with(&store)),
+            "{launch}: nothing inside the store is granted back"
+        );
+
+        // The macOS read boundary, compiled the way the macOS spawn does: the
+        // store's deny is emitted and no later rule re-allows inside it.
+        let mut sbpl =
+            orbit_exec::compile_macos_sandbox_profile(&profile.macos_fs_rules(), "plugin")
+                .expect("compile SBPL");
+        orbit_exec::append_macos_read_boundary(
+            &mut sbpl,
+            &profile.read_denies,
+            &profile.readable_denied_trees(),
+            &profile.readable_denied_files(),
+        );
+        let store_rule = format!("\"{}", store.display());
+        let deny = format!("(deny file-read* (subpath \"{}\"))", store.display());
+        let deny_at = sbpl
+            .lines()
+            .position(|line| line == deny)
+            .unwrap_or_else(|| panic!("{launch}: SBPL denies the store:\n{sbpl}"));
+        assert!(
+            !sbpl
+                .lines()
+                .skip(deny_at + 1)
+                .any(|line| line.starts_with("(allow") && line.contains(&store_rule)),
+            "{launch}: no later SBPL rule re-allows the store:\n{sbpl}"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        use orbit_tools::Tool;
+
+        use super::support::tool;
+
+        let probe = orbit_exec::probe_landlock();
+        if !probe.available {
+            // Reported as the orbit-exec Landlock suite does, never as a pass
+            // of the native boundary.
+            #[allow(clippy::print_stdout)]
+            {
+                println!("skipping the native Landlock run: {}", probe.detail);
+            }
+            return;
+        }
+        let backend = tool(std::sync::Arc::new(unrelated), None);
+        let direct = context(&worktree);
+        let brokered = orbit_tools::ToolContext {
+            brokered_caller: Some(caller),
+            ..direct.clone()
+        };
+        for (launch, ctx) in [("direct", direct), ("brokered", brokered)] {
+            let output = backend
+                .execute(&ctx, serde_json::json!({}))
+                .unwrap_or_else(|error| panic!("{launch} confined probe: {error}"));
+            assert_eq!(
+                output["seen"], "denied|denied|denied",
+                "{launch}: the confined child reads neither the channel store, its staged \
+                 write, nor the plugin secret control"
+            );
+        }
+    }
+}
