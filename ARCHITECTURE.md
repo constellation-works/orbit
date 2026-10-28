@@ -21,11 +21,14 @@ Foundation    orbit-common · orbit-types
 
 Domain crates own their data and transport. Application layers compose them. Kernel crates expose reusable mechanisms and never depend back on a feature.
 
-The store's run-resource minute history uses a partial index on minute zero
-for profile-cache freshness. Each sampler starts a run at minute zero, and
-retention prunes a run's other samples before removing that marker.
-The migration is read-compatible: older binaries can read the database but
-stay read-only because their retention order may remove the marker too soon.
+The store's run-resource minute history feeds profile-cache freshness with a
+probe over every sampled run: the newest `finished_at` and the count of finished
+runs that have any minute row. A run's minute indexes count from the start of
+sampling, but its first recorded minute need not be minute zero: a failed first
+read or a lost minute-zero insert leaves no such row, and the run still counts
+once it finishes. The probe joins `job_runs` only for sampled runs, so its cost
+follows retained minute rows, not job history. The migration (v69) is
+read-compatible: older binaries can read the database but stay read-only.
 
 ## Crates
 
