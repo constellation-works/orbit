@@ -441,3 +441,5 @@ v68 resource_minute_regime
 v69 run_resource_minutes_freshness_index
 + ["index","idx_run_resource_minutes_first_sample","run_resource_minutes","CREATE UNIQUE INDEX idx_run_resource_minutes_first_sample\n         ON run_resource_minutes(workspace_id, run_id)\n         WHERE minute_index = 0"]
 
+v70 reopen_legacy_experiment_admissions
+

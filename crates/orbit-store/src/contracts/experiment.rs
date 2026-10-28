@@ -127,7 +127,7 @@ pub struct ExperimentAssignment {
 
 /// Pure assignment decision inside the store transaction. Existing rows cannot
 /// be replaced, except that a forced assignment may replace an exclusion. `admitted` includes prior admissions that matched no population;
-/// callers may reconsider those rows while there is still no assignment.
+/// a marked admission never reaches the decision once the task is admitted.
 pub type ExperimentAssignmentDecision<'a> = dyn Fn(
         &[ExperimentRecord],
         &[ExperimentAssignment],
@@ -139,6 +139,8 @@ pub trait ExperimentStoreBackend: Send + Sync {
     /// Serialize assignment decisions with lifecycle changes and other admissions.
     /// `experiments_enabled` is the caller's current effective enablement. While
     /// it is false, a marked admission writes nothing and returns existing rows.
+    /// Once an enabled marked admission has run, later marked admissions return
+    /// the existing rows unchanged, even when that first admission matched none.
     fn assign_experiments(
         &self,
         workspace_id: &str,

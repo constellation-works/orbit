@@ -45,7 +45,9 @@ use backlog_forecasts::apply_backlog_forecasts;
 use baseline::apply_baseline_schema;
 use crew_performance::apply_crew_performance_snapshot;
 use executor_census::apply_executor_census;
-use experiments::{apply_experiment_admissions, apply_experiments};
+use experiments::{
+    apply_experiment_admissions, apply_experiments, apply_reopen_legacy_experiment_admissions,
+};
 use feature::apply_feature_schema_ledger;
 use feature_ledgers::apply_absorb_feature_ledgers;
 use friction::{apply_friction_records_schema, apply_friction_rehome_target};

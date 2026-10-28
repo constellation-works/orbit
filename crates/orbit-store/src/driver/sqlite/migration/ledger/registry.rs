@@ -650,12 +650,22 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::ReadCompatible,
         apply: super::super::apply_run_resource_minutes_freshness_index,
     },
+    // ORB-19423: delete admission-only rows so tasks older binaries admitted
+    // while experiments were disabled are admitted once more; rows written
+    // from here on are final. Data only: an older binary reads a missing row
+    // as a task not yet admitted.
+    Migration {
+        version: 70,
+        name: "reopen_legacy_experiment_admissions",
+        compat: MigrationCompatibility::Additive,
+        apply: super::super::apply_reopen_legacy_experiment_admissions,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 69;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 70;
 
 /// A migration recorded as applied in the `schema_meta` ledger.
 #[derive(Debug, Clone, PartialEq, Eq)]

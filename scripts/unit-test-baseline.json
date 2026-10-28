@@ -536,6 +536,7 @@
         "driver/sqlite/migration/tests/ledger/compatibility.rs::resource_minute_tables_keep_an_older_binary_writing",
         "driver/sqlite/migration/tests/ledger/engine.rs::failed_migration_rolls_back_schema_and_ledger",
         "driver/sqlite/migration/tests/ledger/registry.rs::invocation_workspace_backfill_attributes_only_unambiguous_runs",
+        "driver/sqlite/migration/tests/ledger/registry.rs::legacy_admission_only_rows_reopen_and_sticky_rows_stay",
         "driver/sqlite/migration/tests/ledger/registry.rs::store_schema_prefix_goldens",
         "driver/sqlite/migration/tests/ledger/registry.rs::task_registry_schema_prefix_goldens",
         "driver/sqlite/task_registry/tests/mod.rs::fresh_open_through_symlinked_root_matches_reopen_by_canonical_root",
