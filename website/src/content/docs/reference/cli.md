@@ -70,7 +70,7 @@ mirror, pass `--workspace` explicitly. `--host <host>` names the host for
 |---|---|
 | `orbit task add` | Create a task. `--title` and `--complexity` are required. `--origin` records why it was filed: `operator_request`, `orchestrator_initiative` or `automation`. |
 | `orbit task update <id>` | Update fields. `--approve` takes the next approval step (`proposed → backlog`, `review → done`) and is refused while a non-terminal local run lists the task. `--status` follows the [lifecycle table](../../concepts/tasks/#transition-rules); `--force` overrides it. |
-| `orbit task list` | List tasks of every status by default. Filter with `--status`, `--tag`, `--origin`, `--path`, `--ready`, `--ref`. |
+| `orbit task list` | List tasks of every status by default. Filter with `--status`, `--tag`, `--origin`, `--path`, `--ready`, `--ref`. `--scheduled` lists future schedules soonest first, including proposed tasks labelled by status. `--not-before-from` and `--not-before-until` accept inclusive RFC 3339 bounds. |
 | `orbit task eligible` | List `backlog` and `proposed` tasks whose context-file lock surface overlaps no `in-progress` or `review` task, by the same lock test automatic dispatch uses. Nothing else is checked: not dependencies, complexity, groups, crew, or overlap between candidates. `--status backlog\|proposed`, `--path`, `--limit`; `--explain` also lists held-back candidates with the overlapping file and the task holding it. Read-only. JSON shape: [Response shapes](../../how-to/mcp-integration/#response-shapes). |
 | `orbit task show <id>` | Show one task: on this machine, found by ID across registered workspaces, or on the host its prefix names. A proposed or backlog task gets a `Readiness:` line naming what blocks drain approval or admission, with a fix for each gap. A task a failed run left blocked prints a `Next:` line, and a recorded final-recovery decision prints `Final Recovery:`; a routed show uses the same words. `--json` carries `next_step` and `final_recovery`. `--fields` selects specific fields. |
 | `orbit task archive <id>` | Archive an open task. `done` and `rejected` tasks cannot transition to archived. Archived is terminal; a human can restore it with `task update <id> --status <status> --force`. |
@@ -87,6 +87,21 @@ mirror, pass `--workspace` explicitly. `--host <host>` names the host for
 | `orbit task locks list` \| `contention` \| `reserve` \| `release` | Inspect and manage the file locks that gate parallel dispatch. |
 | `orbit task export` \| `import` \| `reindex` | Export and import portable `tar.zst` task bundles, and rebuild the task index. |
 | `orbit task publication publish` \| `status` \| `inspect` \| `restore` | Publish, check, read, or restore a task snapshot. Nothing publishes automatically. |
+
+### Scheduled tasks
+
+Set a task's earliest start with `orbit task update <id> --not-before <time>`;
+clear it with `--clear-not-before`. The CLI accepts RFC 3339 with an offset or
+a local `YYYY-MM-DDTHH:MM`. `orbit task list --scheduled` shows future times
+in schedule order in text and JSON, including proposed tasks. Approval and
+dispatch remain separate; the schedule is an earliest start, not an exact-time
+promise. `orbit task show <id>` shows Scheduled and Actual start separately;
+`--fields not_before,started_at --json` selects those values.
+
+The dashboard task detail has the same Scheduled value and actual first start.
+Its editor accepts RFC 3339 with an offset and clears on an empty save. A
+backlog card shows a Scheduled chip while its hold applies. The forecast
+waits for the scheduled instant before admitting the task.
 
 ### Decision requests
 

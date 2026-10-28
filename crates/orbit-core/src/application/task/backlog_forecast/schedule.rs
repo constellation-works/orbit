@@ -268,7 +268,13 @@ fn critical_path(
             .iter()
             .try_fold(0.0f64, |most, dep| Some(most.max(longest[*dep]?)));
         longest[index] = before.zip(scripts[index].finish_hours()).map(|(a, b)| {
-            a + b
+            let earliest = if scenario.in_progress[index] {
+                0.0
+            } else {
+                scenario.admission.scheduled_deadline(index).unwrap_or(0.0)
+            };
+            a.max(earliest)
+                + b
                 + if index >= scenario.initial {
                     scenario.generated[index - scenario.initial].lag
                 } else {
@@ -415,7 +421,12 @@ pub(super) fn simulate_drain(
         loop {
             state.ready.clear();
             for &index in &state.pending {
-                if state.indegree[index] == 0 {
+                if admission
+                    .scheduled_deadline(index)
+                    .is_some_and(|due| due > at)
+                {
+                    state.reason[index] = ForecastWait::Scheduled;
+                } else if state.indegree[index] == 0 {
                     state.ready.push(index);
                 } else {
                     state.reason[index] = ForecastWait::Dependency;
@@ -471,11 +482,18 @@ pub(super) fn simulate_drain(
             .then(|| admission.resource_recheck(&state.running, &state.admitted_at, at))
             .flatten()
             .unwrap_or(f64::INFINITY);
+        let scheduled = state
+            .pending
+            .iter()
+            .filter_map(|index| admission.scheduled_deadline(*index))
+            .filter(|due| *due > at)
+            .fold(f64::INFINITY, f64::min);
         let next = state
             .heap
             .peek()
             .map_or(f64::INFINITY, |end| end.0)
             .min(deadline)
+            .min(scheduled)
             .min(recheck)
             .min(state.returns.peek().map_or(f64::INFINITY, |end| end.0))
             .min(state.filings.peek().map_or(f64::INFINITY, |end| end.0));

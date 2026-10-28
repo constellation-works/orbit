@@ -99,6 +99,8 @@ impl ForecastTaskSet {
 pub(crate) enum ForecastWait {
     /// An in-forecast dependency has not finished.
     Dependency,
+    /// Its earliest scheduled start is still ahead of simulated time.
+    Scheduled,
     /// Its surface overlaps a running task's lock, its root group's does, or
     /// a task selected earlier in the same wave.
     Lock,
@@ -113,8 +115,9 @@ pub(crate) enum ForecastWait {
 }
 
 impl ForecastWait {
-    pub(crate) const ALL: [Self; 6] = [
+    pub(crate) const ALL: [Self; 7] = [
         Self::Dependency,
+        Self::Scheduled,
         Self::Lock,
         Self::Reservation,
         Self::Footprint,
@@ -125,6 +128,7 @@ impl ForecastWait {
     pub(crate) fn key(self) -> &'static str {
         match self {
             Self::Dependency => "dependency",
+            Self::Scheduled => "scheduled",
             Self::Lock => "lock",
             Self::Reservation => "reservation",
             Self::Footprint => "footprint",
@@ -210,6 +214,16 @@ impl ForecastAdmission {
     /// task `index`'s footprint.
     pub(crate) fn footprint_deadline(&self, index: usize) -> Option<f64> {
         self.footprint_deadline[index]
+    }
+
+    /// Earliest simulated hour for this task's schedule. Operator overrides
+    /// are resolved when the admission snapshot is frozen.
+    pub(crate) fn scheduled_deadline(&self, index: usize) -> Option<f64> {
+        self.tasks[index].not_before.map(|at| {
+            (at - self.forecast_at)
+                .to_std()
+                .map_or(0.0, |span| span.as_secs_f64() / 3600.0)
+        })
     }
 
     /// A stable digest of task `index`'s canonical lock surface.
@@ -456,10 +470,21 @@ impl OrbitRuntime {
     /// root groups and the `review` locks the forecast does not model yet.
     pub(crate) fn forecast_admission(
         &self,
-        tasks: Vec<Task>,
+        mut tasks: Vec<Task>,
         workspace: &BTreeMap<String, Task>,
         now: DateTime<Utc>,
     ) -> ForecastAdmission {
+        // Freeze overrides with the schedule. An unreadable history keeps
+        // the conservative earliest start rather than forecasting early work.
+        for task in &mut tasks {
+            if let Some(at) = task.scheduled_after(now)
+                && self
+                    .get_task_history(&task.id)
+                    .is_ok_and(|history| orbit_types::task::schedule_overridden(&history, at))
+            {
+                task.not_before = None;
+            }
+        }
         let workspace_root = self.paths().repo_root.as_path();
         let unlocked = self.unlocked_context_paths();
         let lock_modes = self.footprint_lock_modes();

@@ -42,7 +42,8 @@ pub(super) fn render(input: &Map<String, Value>, value: Value, view: ListView) -
     // A column the caller filtered on stays on screen even when the filter
     // made it uniform.
     let filtered = TaskTableFilters {
-        status: status_filtered,
+        status: status_filtered || input.get("scheduled").and_then(Value::as_bool) == Some(true),
+        scheduled: input.get("scheduled").and_then(Value::as_bool) == Some(true),
         priority: input.contains_key("priority"),
         task_type: input.contains_key("type"),
         runs_on: input.contains_key("runs_on"),
@@ -54,7 +55,9 @@ pub(super) fn render(input: &Map<String, Value>, value: Value, view: ListView) -
         // terminal), so "newest first" only holds within each bucket, not
         // across the whole result; an explicit `--status` filter runs one
         // query and is newest first throughout (ORB-12200).
-        let ordering = if status_filtered {
+        let ordering = if filtered.scheduled {
+            "soonest scheduled first"
+        } else if status_filtered {
             "newest first"
         } else {
             "non-terminal tasks first, then terminal, each newest first"

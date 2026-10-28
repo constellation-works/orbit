@@ -205,6 +205,20 @@ impl TaskListProjection {
         let task = &row.task;
         let mut object = task_to_json(task, status_by_id, &self.pull_request_links);
         object.insert(
+            "not_before".into(),
+            json!(task.not_before.map(orbit_types::task::format_not_before)),
+        );
+        if let Some(at) = task.not_before {
+            object.insert(
+                "scheduled_hold".into(),
+                json!(
+                    task.status == TaskStatus::Backlog
+                        && at > chrono::Utc::now()
+                        && !orbit_types::task::schedule_overridden(&row.history, at)
+                ),
+            );
+        }
+        object.insert(
             "pilot_warnings".into(),
             json!(task_pilot_warnings(
                 task.status,

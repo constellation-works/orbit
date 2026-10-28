@@ -4,8 +4,8 @@ owner: claude
 last_updated: 2026-10-27
 last_validated: 2026-10-27
 status: Draft
-stage: building
-next: "Build the list filter, --scheduled, the dashboard field and the forecast placement (ORB-19215)"
+stage: shipped
+next: "Consumer calendar and Schedule picker in orbit-office"
 feature: scheduled-tasks
 doc_role: scope
 type: design
@@ -15,10 +15,10 @@ tags: [tasks, admission, scheduling, calendar, distributed-drain]
 
 # Scope: Scheduled tasks (`not_before`)
 
-Status: building. Phase 1, the core, is built [ORB-19214]: the field, the
-`Scheduled` hold on every dispatcher, the ship refusal with its operator
-override, and readiness and run-show reporting. [ORB-19215] builds the
-surfaces. The first consumer is orbit-office's
+Status: shipped in Orbit. Phase 1 [ORB-19214] supplies the field, the
+`Scheduled` hold, the ship refusal and operator override, and readiness and
+run-show reporting. Phase 2 [ORB-19215] supplies range listing, scheduled
+CLI output, dashboard editing and forecast placement. The first consumer is orbit-office's
 calendar, where "do this on Friday at 9" should be a task that already exists,
 shows on the calendar, and starts at that time.
 
@@ -31,7 +31,7 @@ Bearing: Orbit has two kinds of time-driven work today.
   that lifts by itself ([workflow task admission](../activity-job/2_design.md#810-workflow-task-admission)).
   `ProviderBackoff` already holds a task until a `not_before` instant [ORB-14266].
 
-Nothing lets one existing task wait for a date.
+The scheduled-task field lets one existing task wait for a date.
 
 ## Problem
 
@@ -63,7 +63,7 @@ usual, and it is visible and listable by its date.
 - **Absent** means today's behaviour. The field is additive and serialised
   only when set, so existing records and readers are unchanged.
 - **Set** through `orbit.task.add`, `orbit.task.update` and
-  `orbit task add|update --not-before <time>`; the dashboard field is phase 2.
+  `orbit task add|update --not-before <time>`, and the dashboard Scheduled editor.
   On the tool, an empty string clears it; on the CLI, `--clear-not-before`
   does. An explicit `null` leaves it unchanged: the operation wire reads
   `null` as an omitted field for every parameter, and MCP clients send
@@ -115,12 +115,20 @@ A new admission exclusion, `Scheduled`, beside `ProviderBackoff`:
 
 - `orbit.task.list` takes `not_before_from` and `not_before_until` (RFC 3339,
   either or both). It returns tasks whose `not_before` falls in the range,
-  and every row carries `not_before`. That is what a calendar needs for a
-  week view.
+  with both boundary instants included. Unscheduled tasks do not match a
+  bounded range. Every default list row carries `not_before` (null when
+  unset); an explicit `fields` projection selects only its requested keys.
+  Malformed bounds are refused naming the input. That is what a calendar
+  needs for a week view.
 - `orbit task list --scheduled` lists tasks with a future `not_before`,
-  soonest first.
+  soonest first, including `proposed` tasks labelled by status. Other filters
+  still apply, and limiting happens after schedule ordering.
 - `orbit.task.show` and the dashboard task detail show the time, and once
-  the task has started, when it actually started.
+  the task has started, `started_at`: its first recorded entry into
+  `in-progress`, rather than the requested time. The dashboard Scheduled
+  editor accepts RFC 3339 with an offset; save an empty value to clear it.
+  A backlog card carries a Scheduled chip only while its hold applies,
+  respecting an operator override.
 
 ### What stays the same
 
@@ -187,7 +195,7 @@ A new admission exclusion, `Scheduled`, beside `ProviderBackoff`:
 1. **Core:** the field, the `Scheduled` exclusion, the ship-by-id refusal
    with the operator override, and readiness and run-show reporting.
 2. **Surfaces:** the `orbit.task.list` range filter and `--scheduled`,
-   CLI/MCP set and clear, the dashboard detail and an editable field, and
+   the dashboard detail and an editable field, and
    the forecast placement.
 3. **Consumers:** orbit-office's To-dos "Schedule…" picker and calendar
    blocks (in that repository's own docs).
@@ -195,7 +203,7 @@ A new admission exclusion, `Scheduled`, beside `ProviderBackoff`:
 ## Open questions
 
 - Should `orbit task list --scheduled` include `proposed` tasks with a
-  future `not_before`? Proposed: yes. The calendar shows planned work
+  future `not_before`? Decided and built: yes. The calendar shows planned work
   before it is approved, labelled as not approved.
 - Should the override be recorded as a forced transition or as its own
   history event? Decided and built: its own event, `schedule_overridden`,

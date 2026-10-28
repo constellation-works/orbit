@@ -355,6 +355,14 @@ fn record(runtime: &OrbitRuntime, input: &Map<String, Value>, value: Value) -> C
     if let Some(source_task_id) = field("source_task_id") {
         let _ = writeln!(out, "{} {}", bold("Source Task:"), source_task_id);
     }
+    for (label, key) in [
+        ("Scheduled:", "not_before"),
+        ("Actual start:", "started_at"),
+    ] {
+        if let Some(value) = field(key) {
+            let _ = writeln!(out, "{} {}", bold(label), timestamp(value));
+        }
+    }
     let _ = writeln!(
         out,
         "{} {}",

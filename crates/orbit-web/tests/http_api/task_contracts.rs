@@ -1833,3 +1833,43 @@ print(json.dumps({'first':samples[0],'samples':samples[1:],'p50_ms':warm[9],'p95
         );
     });
 }
+
+#[test]
+fn scheduled_task_patch_sets_clears_and_reports_actual_start() {
+    isolated(
+        "task_contracts::scheduled_task_patch_sets_clears_and_reports_actual_start",
+        || {
+            let fixture = Fixture::new();
+            let server = fixture.server(true);
+            let task = seed_backlog_task(&fixture.runtime, "Scheduled HTTP task");
+            let response = patch_task(
+                &server,
+                &task.id,
+                json!({"not_before":"2099-02-01T10:00:00+01:00"}),
+            );
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(body_json(response)["not_before"], "2099-02-01T09:00:00Z");
+            let preserved = patch_task(&server, &task.id, json!({"not_before":null}));
+            assert_eq!(preserved.status(), StatusCode::OK);
+            assert_eq!(body_json(preserved)["not_before"], "2099-02-01T09:00:00Z");
+            let bad = patch_task(&server, &task.id, json!({"not_before":"tomorrow"}));
+            assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
+            let error = body_json(bad).to_string();
+            assert!(
+                error.contains("not_before") && error.contains("tomorrow"),
+                "{error}"
+            );
+            assert_eq!(
+                patch_task(&server, &task.id, json!({"not_before": ""})).status(),
+                StatusCode::OK
+            );
+            let shown = body_json(request(&server, &format!("/tasks/{}", task.id)));
+            assert!(shown["not_before"].is_null());
+            assert!(shown["started_at"].is_null());
+            let response = patch_task(&server, &task.id, json!({"status":"in-progress"}));
+            assert_eq!(response.status(), StatusCode::OK);
+            let shown = body_json(request(&server, &format!("/tasks/{}", task.id)));
+            assert!(shown["started_at"].as_str().is_some(), "{shown}");
+        },
+    );
+}

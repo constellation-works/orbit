@@ -64,7 +64,7 @@ pub use light_delivery::{
 };
 pub use schedule::{
     NOT_BEFORE_FIELD, SCHEDULE_OVERRIDDEN_EVENT, SCHEDULED_HOLD_PREFIX, format_not_before,
-    parse_not_before, schedule_overridden, schedule_override_note, scheduled_wait,
+    parse_not_before, schedule_overridden, schedule_override_note, scheduled_wait, task_started_at,
 };
 
 pub use artifacts::{

@@ -1,7 +1,7 @@
 // Orbit dashboard task-domain rendering and actions.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { captureWorkspaceVisit, findRegisteredHost, getHost, getRegisteredHosts, getServingHost, getWorkspace, onWorkspaceChange, panelCanRender, el, infoHint, fetchJson, patchJson, postJson, syncNodes, teardownNode, isAggregateView, isHttpUrl, withHost, withWorkspace, hostWriteRefusal, makeToggleRow, makeDisclosure, makeRowDisclosure, enableRovingRows, makeCopyButton, copyText, copyWithFeedback, runHref, bindTaskLink, clockStamp, formatClock, formatDate, formatDayHeading, onClockZoneChange, statusPill, submissionNoticeLines, stateCell, fmtDuration, elapsedDurationInfo } from './common.js';
+import { captureWorkspaceVisit, findRegisteredHost, getHost, getRegisteredHosts, getServingHost, getWorkspace, onWorkspaceChange, panelCanRender, el, infoHint, fetchJson, patchJson, postJson, syncNodes, teardownNode, isAggregateView, isHttpUrl, withHost, withWorkspace, hostWriteRefusal, makeToggleRow, makeDisclosure, makeRowDisclosure, enableRovingRows, makeCopyButton, copyText, copyWithFeedback, runHref, bindTaskLink, clockStamp, formatDateTime, formatClock, formatDate, formatDayHeading, onClockZoneChange, statusPill, submissionNoticeLines, stateCell, fmtDuration, elapsedDurationInfo } from './common.js';
 import { renderMarkdown, renderMarkdownInline } from './markdown.js';
 import { buildInlineFieldEditor } from './field-editor.js';
 import { DRAIN_POOLS, backlogReadiness, drainReadinessEntry, drainReadinessFor, drainReadinessView, drainWaitSignature } from './drain-waits.js';
@@ -1251,6 +1251,13 @@ function buildTagRow(tags) {
 
 // The task row's OS chips, from the parsed requirement the server attaches;
 // a tag outside the namespace reads as the wait it causes.
+function buildScheduledChip(task, context) {
+  if (task.status !== "backlog" || !task.not_before || task.scheduled_hold === false || Date.parse(task.not_before) <= Date.now()) return null;
+  return el("span", { class: "scheduled-chip", title: "Waiting for the scheduled time; starts on the next admission pass afterwards" }, [
+    "Scheduled ", absTimeNode(context, task.not_before),
+  ]);
+}
+
 function buildOsBadges(task) {
   const requirement = task.os_requirement;
   if (!requirement || typeof requirement !== "object") return [];
@@ -2194,6 +2201,17 @@ export function buildArtifacts(task) {
    `complexity` is not here: it is a fixed set of choices, so it gets a select
    (buildComplexityUpdateControl) rather than a text editor. */
 const TASK_FIELD_EDITORS = {
+  not_before: {
+    label: "scheduled time",
+    multiline: false,
+    toText: (task) => task.not_before || "",
+    renderView: (task) => task.not_before
+      ? clockStamp(el("span", { text: formatDateTime(task.not_before) }), task.not_before)
+      : emptyFieldView("not scheduled"),
+    toPayload: (text) => ({ not_before: text.trim() }),
+    placeholder: "2099-02-01T10:00:00Z",
+    hint: "RFC 3339 with an offset (Z for UTC). Leave empty to clear. Starts on the next admission pass at or after this time.",
+  },
   description: {
     label: "description",
     toText: (task) => task.description || "",
@@ -3742,6 +3760,16 @@ function buildTaskMeta(task, context, { editor, showsEditor, drain }) {
   const head = el("div", { class: "task-meta-block" }, [levers]);
   const riskDetail = buildRiskDetail(task);
   if (riskDetail) head.appendChild(riskDetail);
+  if (showsEditor("not_before")) {
+    head.appendChild(el("div", { class: "task-schedule" }, [
+      el("span", { class: "fact-label", text: "Scheduled" }), editor("not_before"),
+    ]));
+  }
+  if (task.started_at) {
+    head.appendChild(el("div", { class: "task-started-at" }, [
+      el("span", { class: "fact-label", text: "Actual start" }), absTimeNode(context, task.started_at),
+    ]));
+  }
   const lifecycle = buildLifecycleStrip(task.status);
   if (lifecycle) head.appendChild(lifecycle);
   const delivery = buildDeliveryCard(task, drain, context);
@@ -6435,7 +6463,7 @@ export function renderTasks(tasks, context) {
       const run = RUN_GROUPS.has(t.status);
       // Basic hash based on row presentation parameters (selection is painted
       // apart, by syncRowSelection)
-      const rowHash = `${JSON.stringify(t.pilot_warnings || [])}-${JSON.stringify(t.delivery_attention || null)}-${t.id}-${t.title}-${t.status}-${JSON.stringify(t.os_requirement || null)}-${(t.tags || []).filter(isOsTag).join(",")}-${readinessSignature(t)}-${t.status === "backlog" ? drainWaitSignature(t.id) : ""}-${run ? runCellSignature(t) : ""}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${crewOptionsSignature()}-${feedbackSignature(crewFeedback, t.id)}-${quickActionSignature(t)}-${foldedStatusSignature(t.id)}-${riskinessSignature(t)}`;
+      const rowHash = `${JSON.stringify(t.pilot_warnings || [])}-${JSON.stringify(t.delivery_attention || null)}-${t.id}-${t.title}-${t.status}-${JSON.stringify(t.os_requirement || null)}-${(t.tags || []).filter(isOsTag).join(",")}-${t.not_before || ""}-${t.scheduled_hold}-${Boolean(t.not_before && Date.parse(t.not_before) > Date.now())}-${readinessSignature(t)}-${t.status === "backlog" ? drainWaitSignature(t.id) : ""}-${run ? runCellSignature(t) : ""}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${crewOptionsSignature()}-${feedbackSignature(crewFeedback, t.id)}-${quickActionSignature(t)}-${foldedStatusSignature(t.id)}-${riskinessSignature(t)}`;
       const existingRow = existingRowNodes.get(rowKey);
       let row = existingRow && existingRow.dataset.hash === rowHash ? existingRow : null;
       if (!row) {
@@ -6455,6 +6483,7 @@ export function renderTasks(tasks, context) {
             ? el("span", { class: "ws-badge mono", text: t.workspace_name, title: `Workspace: ${t.workspace_name}` })
             : null,
           ...buildOsBadges(t),
+          buildScheduledChip(t, context),
           ...buildReadinessBadge(t),
           ...buildPilotWarningBadge(t),
           ...buildDeliveryAttentionBadge(t),

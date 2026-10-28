@@ -29,6 +29,13 @@ pub struct TaskListFilter {
     /// listing; `scan_before` continuation assumes the canonical order and is
     /// not combined with it.
     pub terminal_last: bool,
+    /// Inclusive lower schedule bound; unscheduled tasks do not match.
+    pub not_before_from: Option<chrono::DateTime<chrono::Utc>>,
+    /// Inclusive upper schedule bound; unscheduled tasks do not match.
+    pub not_before_until: Option<chrono::DateTime<chrono::Utc>>,
+    /// Keep schedules strictly after this instant and order soonest first.
+    /// Takes precedence over `terminal_last`; not combined with `scan_before`.
+    pub scheduled_after: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl TaskListFilter {
@@ -47,6 +54,15 @@ impl TaskListFilter {
 
     pub(crate) fn matches(&self, task: &TaskEnvelopeV2) -> bool {
         self.matches_cursor(task)
+            && self
+                .not_before_from
+                .is_none_or(|from| task.not_before.is_some_and(|at| at >= from))
+            && self
+                .not_before_until
+                .is_none_or(|until| task.not_before.is_some_and(|at| at <= until))
+            && self
+                .scheduled_after
+                .is_none_or(|now| task.not_before.is_some_and(|at| at > now))
             && self.search.as_ref().is_none_or(|query| {
                 task.id.to_lowercase().contains(query) || task.title.to_lowercase().contains(query)
             })
@@ -104,7 +120,10 @@ impl TaskListFilter {
     /// rows name after the freshness scan verifies every `child_of` target.
     /// Parent selections still confirm each envelope before counting/limiting.
     pub(crate) fn is_fully_indexed(&self) -> bool {
-        self.search.is_none()
+        self.not_before_from.is_none()
+            && self.not_before_until.is_none()
+            && self.scheduled_after.is_none()
+            && self.search.is_none()
             && self.task_type.is_none()
             && self.origin.is_none()
             && self.parent_id.is_none()

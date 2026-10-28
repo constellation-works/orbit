@@ -21,6 +21,7 @@ impl ForecastAdmission {
                     task.id = format!("forecast-node-{index}");
                     task.status = TaskStatus::Backlog;
                     task.relations.clear();
+                    task.not_before = None;
                 }
                 task
             })

@@ -29,7 +29,7 @@ use super::write_operations::{ADD, UPDATE};
 use crate::governance::operation::{
     CliArgKind, CliGroup, CliHelp, Description, Effect, EnumValue, NounSpec, OperationSpec,
     ParamSpec, ParamType, ToolOnlyRegistration, UnknownFields, aliased, both, cli_only, defaulted,
-    mcp_only, operation_registry,
+    mcp_only, operation_registry, preserve_empty,
 };
 
 operation_registry! {
@@ -238,7 +238,7 @@ const LIST: TaskOperation = TaskOperation {
     verb: TaskVerb::List,
     cli_path: &["list"],
     tool_name: "orbit.task.list",
-    tool_description: "List Orbit tasks in a {tasks, total, truncated} envelope (default limit 50). With no status filter, non-terminal tasks come first and terminal tasks follow, each newest first; an explicit status filter is newest first. `total` counts all matching tasks and `truncated` reports whether the limit omitted tasks. Each task is a compact row (see `fields`); pass `fields` to add long-text fields such as description or plan. Optional filters: status, parent, type, origin, tag, dependency readiness, path, runs_on. os_requirement is derived from OS tags intersected with the stored crew executor host_os, with source and unresolved/conflict states.",
+    tool_description: "List Orbit tasks in a {tasks, total, truncated} envelope (default limit 50). With no status filter, non-terminal tasks come first and terminal tasks follow, each newest first; an explicit status filter is newest first. `total` counts all matching tasks and `truncated` reports whether the limit omitted tasks. Each task is a compact row (see `fields`); pass `fields` to add long-text fields such as description or plan. Optional filters: status, parent, type, origin, tag, dependency readiness, path, runs_on, not_before_from, not_before_until (inclusive RFC 3339 bounds; unscheduled tasks do not match). scheduled:true lists future schedules soonest first, including proposed tasks. Default rows carry not_before (null when unset). os_requirement is derived from OS tags intersected with the stored crew executor host_os, with source and unresolved/conflict states.",
     cli_about: "List tasks with optional filters",
     cli_help: CliHelp {
         constraints: &[],
@@ -248,6 +248,9 @@ const LIST: TaskOperation = TaskOperation {
         ),
         flag_order: &[
             "status",
+            "scheduled",
+            "not_before_from",
+            "not_before_until",
             "all",
             "limit",
             "priority",
@@ -309,6 +312,27 @@ const LIST: TaskOperation = TaskOperation {
                 ),
                 &["task_type", "taskType"],
             ),
+            both(
+                "scheduled",
+                ParamType::Switch,
+                "Keep only future not_before schedules, soonest first, including proposed tasks. Other filters still apply.",
+                CliArgKind::flag("scheduled"),
+                "List future-scheduled tasks soonest first, including proposed tasks labelled by status",
+            ),
+            preserve_empty(both(
+                "not_before_from",
+                ParamType::String,
+                "Inclusive lower not_before bound (RFC 3339 with an offset). Unscheduled tasks do not match.",
+                CliArgKind::flag("not-before-from"),
+                "Inclusive lower schedule bound (RFC 3339 with an offset)",
+            )),
+            preserve_empty(both(
+                "not_before_until",
+                ParamType::String,
+                "Inclusive upper not_before bound (RFC 3339 with an offset). Unscheduled tasks do not match.",
+                CliArgKind::flag("not-before-until"),
+                "Inclusive upper schedule bound (RFC 3339 with an offset)",
+            )),
             both(
                 "origin",
                 ParamType::Enum(TASK_ORIGIN_VALUES),
@@ -378,7 +402,7 @@ const LIST: TaskOperation = TaskOperation {
             mcp_only(
                 "fields",
                 ParamType::StringList,
-                "Optional per-task field projection as a string or array, using the field names `orbit.task.show` accepts (for example `id`, `title`, `status`). When set, each listed task is an object holding only those fields. Omit it for compact rows (id, title, status, priority, type, dependencies, resolved_dependencies, implemented_by, created_at, updated_at, workspace), the same rows `orbit tool run orbit.task.list` returns. For long-text fields such as description, acceptance_criteria, plan or execution_summary, name them here, or fetch one task with `orbit.task.show`.",
+                "Optional per-task field projection as a string or array, using the field names `orbit.task.show` accepts (for example `id`, `title`, `status`). When set, each listed task is an object holding only those fields. Omit it for compact rows (id, title, status, priority, type, dependencies, resolved_dependencies, implemented_by, not_before, created_at, updated_at, workspace), the same rows `orbit tool run orbit.task.list` returns. For long-text fields such as description, acceptance_criteria, plan or execution_summary, name them here, or fetch one task with `orbit.task.show`.",
             ),
             BOUNDED_VIEW_PARAM,
             mcp_only("offset", ParamType::Integer, "Bounded view list offset"),

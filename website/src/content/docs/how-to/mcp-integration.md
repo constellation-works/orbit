@@ -295,8 +295,21 @@ auto-approve; Orbit still enforces authority on every call.
 - `orbit_task_list` and `orbit_task_eligible` return
   `{ tasks, total, truncated }`. `orbit_task_list` returns compact task rows by
   default (id, title, status, priority, type, dependencies,
-  resolved_dependencies, implemented_by, created_at, updated_at, and workspace).
-  Pass `fields` to add long-text fields such as `description` or `plan`.
+  resolved_dependencies, implemented_by, not_before, created_at, updated_at, and workspace).
+  `not_before` is null when unset. Pass `fields` to select only named fields,
+  including long-text fields such as `description` or `plan`.
+- `orbit_task_list` accepts `not_before_from` and `not_before_until` as RFC 3339
+  instants with offsets, individually or together. Both endpoints are inclusive;
+  tasks without a schedule do not match. Malformed bounds name the input in the
+  error. `scheduled: true` lists future schedules soonest first, including
+  proposed tasks; other filters and the limit still apply.
+- `orbit_task_show` exposes `not_before` and derived `started_at` (the first
+  recorded entry into in-progress), also available through `fields`.
+  `scheduled_hold` reports whether a backlog task is still held by its future
+  schedule, accounting for operator overrides. A task's
+  schedule does not guarantee an exact execution time. Set `not_before` through
+  `orbit_task_add` or `orbit_task_update`; an empty string clears it on update,
+  while null leaves it unchanged.
 - `orbit_task_eligible` rows are minimal: id, title, type, status, priority and
   complexity. The tool takes no `fields` projection. To read a full record, use
   `orbit_task_show`; to add long-text fields to a listing, use `orbit_task_list`
