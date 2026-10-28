@@ -768,6 +768,88 @@ async function checkAuthoringFlow() {
       await page.locator('.ex-list').scrollIntoViewIfNeeded();
       await shot('running');
 
+      // Save and start confirms the definition it shows: while the confirmation
+      // is open its controls are disabled, and edits that still reach the form
+      // (applied here directly) cannot change what Confirm starts.
+      await page.locator('#experiments-new').click();
+      await labelled(form, 'Name').locator('input').fill('frozen');
+      await labelled(form, 'Primary metric').locator('select').selectOption('cost_usd');
+      await form.locator('.exf-save-start').click();
+      const frozenSummary = await form.locator('.exf-confirm').textContent();
+      for (const fragment of ['Start frozen?', 'Shadow', 'treatment weight 1', 'every task']) {
+        assert.ok(frozenSummary.includes(fragment), `confirmation names ${fragment}: ${frozenSummary}`);
+      }
+      const frozenControls = {
+        mode: labelled(form, 'Mode').locator('select'),
+        treatmentWeight: labelled(treatment, 'Weight').locator('input'),
+        tags: labelled(form, 'Tags to include').locator('input'),
+        complexity: form.locator('.exf-population label.exf-check', { hasText: 'medium' }).locator('input'),
+      };
+      await treatment.evaluate(node => node.scrollIntoView({ block: 'start' }));
+      await shot('frozen-arms');
+      await form.locator('.exf-confirm').scrollIntoViewIfNeeded();
+      await shot('start-confirm-frozen');
+      const disabled = {};
+      for (const [name, control] of Object.entries(frozenControls)) disabled[name] = await control.isDisabled();
+      await frozenControls.mode.evaluate(node => { node.value = 'live'; node.dispatchEvent(new Event('change')); });
+      await frozenControls.treatmentWeight.evaluate(node => { node.value = '9'; node.dispatchEvent(new Event('input')); });
+      await frozenControls.tags.evaluate(node => { node.value = 'changed-after-confirmation'; node.dispatchEvent(new Event('input')); });
+      await frozenControls.complexity.evaluate(node => { node.checked = true; node.dispatchEvent(new Event('change')); });
+      await form.locator('.exf-confirm-start').click();
+      await page.locator('#experiments-form').waitFor({ state: 'hidden' });
+      const frozenCreate = requests.find(request => request.method === 'POST' && request.path === '/api/diagnostics/experiments' && request.body.name === 'frozen');
+      assert.ok(frozenCreate, 'the frozen draft is created');
+      assert.equal(frozenCreate.body.mode, 'shadow', 'the created mode is the confirmed shadow');
+      assert.deepEqual(frozenCreate.body.arms.map(arm => [arm.name, arm.weight]), [['control', 1], ['treatment', 1]], 'the created weights are the confirmed ones');
+      assert.deepEqual(frozenCreate.body.population, {}, 'the created population is the confirmed every task');
+      assert.deepEqual(requests.filter(request => request.path.endsWith('/start')).at(-1).body, {}, 'the start carries no edited reason');
+      assert.deepEqual(disabled, { mode: true, treatmentWeight: true, tags: true, complexity: true }, 'definition controls are disabled while the confirmation is open');
+
+      // Back to editing unlocks the form, and a new Save and start confirms the
+      // edited definition.
+      await page.locator('#experiments-new').click();
+      await labelled(form, 'Name').locator('input').fill('recomputed');
+      await labelled(form, 'Primary metric').locator('select').selectOption('cost_usd');
+      await form.locator('.exf-save-start').click();
+      await form.locator('.exf-confirm button', { hasText: 'Back to editing' }).click();
+      assert.equal(await labelled(form, 'Mode').locator('select').isDisabled(), false, 'Back to editing unlocks the form');
+      await labelled(form, 'Mode').locator('select').selectOption('live');
+      await labelled(form.locator('.exf-arm').nth(1), 'Weight').locator('input').fill('9');
+      await labelled(form, 'Tags to include').locator('input').fill('changed-after-confirmation');
+      await form.locator('.exf-save-start').click();
+      const recomputedSummary = await form.locator('.exf-confirm').textContent();
+      for (const fragment of ['Start recomputed?', 'Live', 'treatment weight 9', 'tags include changed-after-confirmation']) {
+        assert.ok(recomputedSummary.includes(fragment), `recomputed confirmation names ${fragment}: ${recomputedSummary}`);
+      }
+      await form.locator('.exf-confirm-start').click();
+      await page.locator('#experiments-form').waitFor({ state: 'hidden' });
+      const recomputedCreate = requests.find(request => request.method === 'POST' && request.body?.name === 'recomputed');
+      assert.ok(recomputedCreate, 'the recomputed draft is created');
+      assert.equal(recomputedCreate.body.mode, 'live');
+      assert.equal(recomputedCreate.body.arms[1].weight, 9);
+      assert.deepEqual(recomputedCreate.body.population, { tags_include: ['changed-after-confirmation'] });
+      await page.locator('.ex-item', { hasText: 'recomputed' }).locator('.ex-status-running').waitFor();
+
+      // Edit-draft Save and start: the same confirmation on a saved draft's form.
+      await page.locator('#experiments-new').click();
+      await labelled(form, 'Name').locator('input').fill('edited');
+      await labelled(form, 'Primary metric').locator('select').selectOption('cost_usd');
+      await form.locator('.exf-save').click();
+      await page.locator('#experiments-form').waitFor({ state: 'hidden' });
+      const edited = page.locator('.ex-item', { hasText: 'edited' });
+      await edited.locator('.exf-edit').click();
+      await labelled(form.locator('.exf-arm').nth(1), 'Weight').locator('input').fill('2');
+      await form.locator('.exf-save-start').click();
+      const editedSummary = await form.locator('.exf-confirm').textContent();
+      for (const fragment of ['Start edited?', 'treatment weight 2', 'every task']) {
+        assert.ok(editedSummary.includes(fragment), `edit confirmation names ${fragment}: ${editedSummary}`);
+      }
+      await form.locator('.exf-confirm-start').click();
+      await page.locator('#experiments-form').waitFor({ state: 'hidden' });
+      const editPatch = requests.filter(request => request.method === 'PATCH').at(-1);
+      assert.equal(editPatch.body.arms[1].weight, 2, 'the patch carries the confirmed weight');
+      await edited.locator('.ex-status-running').waitFor();
+
       // A started experiment's detail says why there is no Edit.
       await page.evaluate(async () => {
         window.experiments.setExperimentId('exp-1');

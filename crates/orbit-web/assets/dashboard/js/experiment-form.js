@@ -352,6 +352,9 @@ function errorSlot(state, field) {
 async function submit(start) {
   const state = form;
   if (!state || state.pending) return;
+  // Save and start writes the definition its confirmation captured, not the
+  // form as it stands when Confirm is pressed.
+  const body = start ? state.confirming.body : definitionBody(state);
   const visit = captureWorkspaceVisit();
   const current = () => form === state && visit.isCurrent();
   state.pending = true;
@@ -359,7 +362,6 @@ async function submit(start) {
   state.errors = {};
   state.status = start ? "Saving and starting…" : "Saving…";
   renderForm();
-  const body = definitionBody(state);
   let saved;
   try {
     saved = state.mode === "create"
@@ -392,6 +394,19 @@ async function submit(start) {
 }
 
 // ---- start confirmation ---------------------------------------------------------------
+
+/// What Save and start confirms, captured when it is pressed. Confirm starts
+/// `body`, the definition these fields describe, so the form can change
+/// afterwards without changing what starts.
+function confirmationOf(state) {
+  return {
+    name: state.fields.name.trim(),
+    arms: state.arms.map((arm) => ({ name: arm.name.trim(), control: arm.control, weight: arm.weight.trim() })),
+    population: populationBody(state.fields),
+    mode: state.fields.mode,
+    body: definitionBody(state),
+  };
+}
 
 function populationText(population) {
   const parts = [];
@@ -530,6 +545,12 @@ function rerender() {
   renderForm();
 }
 
+// The definition's controls are read-only while a request is in flight and
+// while Save and start confirms it; Back to editing unlocks them.
+function locked(state = form) {
+  return Boolean(state?.pending || state?.confirming);
+}
+
 function input(value, onInput, opts = {}) {
   const node = el(opts.multiline ? "textarea" : "input", { class: "exf-control", "aria-label": opts.label || null });
   if (!opts.multiline) node.type = opts.type || "text";
@@ -537,7 +558,7 @@ function input(value, onInput, opts = {}) {
   if (opts.placeholder) node.placeholder = opts.placeholder;
   if (opts.min != null) node.min = String(opts.min);
   node.value = value;
-  node.disabled = Boolean(form?.pending);
+  node.disabled = locked();
   node.addEventListener("input", () => onInput(node.value));
   return node;
 }
@@ -550,7 +571,7 @@ function select(options, value, onChange, label) {
     node.append(option);
   }
   node.value = value;
-  node.disabled = Boolean(form?.pending);
+  node.disabled = locked();
   node.addEventListener("change", () => onChange(node.value));
   return node;
 }
@@ -566,7 +587,7 @@ function field(label, control, error, hint = null) {
 
 function smallButton(textValue, onClick, className = "") {
   const button = el("button", { class: `action exf-small ${className}`.trim(), type: "button", text: textValue });
-  button.disabled = Boolean(form?.pending);
+  button.disabled = locked();
   button.addEventListener("click", onClick);
   return button;
 }
@@ -575,7 +596,7 @@ function rolePicker(roles, label) {
   return el("div", { class: "exf-roles", role: "group", "aria-label": label }, ROLES.map((role) => {
     const box = el("input", { type: "checkbox" });
     box.checked = roles.includes(role);
-    box.disabled = Boolean(form?.pending);
+    box.disabled = locked();
     box.addEventListener("change", () => {
       const at = roles.indexOf(role);
       if (box.checked && at < 0) roles.push(role);
@@ -627,7 +648,7 @@ function populationView(state) {
   const boxes = el("div", { class: "exf-roles", role: "group", "aria-label": "Complexity" }, complexities.map((complexity) => {
     const box = el("input", { type: "checkbox" });
     box.checked = fields.complexity.includes(complexity);
-    box.disabled = state.pending;
+    box.disabled = locked(state);
     box.addEventListener("change", () => {
       fields.complexity = complexities.filter((value) => (value === complexity ? box.checked : fields.complexity.includes(value)));
     });
@@ -662,7 +683,7 @@ function armView(state, arm, index) {
   const control = el("input", { type: "radio", "aria-label": `${arm.name || "arm"} is the control` });
   control.name = "exf-control-arm";
   control.checked = arm.control;
-  control.disabled = state.pending;
+  control.disabled = locked(state);
   control.addEventListener("change", () => {
     state.arms.forEach((other) => { other.control = other === arm; });
     rerender();
@@ -830,12 +851,7 @@ function actionsView(state) {
     const back = el("button", { class: "action cancel", type: "button", text: "Back to editing" });
     back.addEventListener("click", () => { state.confirming = false; rerender(); });
     return el("div", { class: "exf-confirm", role: "group", "aria-label": "Confirm start" }, [
-      ...startSummary({
-        name: state.fields.name.trim(),
-        arms: state.arms.map((arm) => ({ name: arm.name.trim(), control: arm.control, weight: arm.weight.trim() })),
-        population: populationBody(state.fields),
-        mode: state.fields.mode,
-      }),
+      ...startSummary(state.confirming),
       el("div", { class: "exf-buttons" }, [confirm, back]),
     ]);
   }
@@ -844,7 +860,7 @@ function actionsView(state) {
   const start = canStart ? el("button", { class: "action ship exf-save-start", type: "button", text: "Save and start" }) : null;
   if (start) {
     start.disabled = state.pending;
-    start.addEventListener("click", () => { state.confirming = true; rerender(); });
+    start.addEventListener("click", () => { state.confirming = confirmationOf(state); rerender(); });
   }
   const cancel = el("button", { class: "action cancel exf-cancel", type: "button", text: "Cancel" });
   cancel.disabled = state.pending;
