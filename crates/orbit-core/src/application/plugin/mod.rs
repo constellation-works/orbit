@@ -16,7 +16,6 @@
 
 pub(crate) mod build;
 mod conformance;
-mod conformance_gate;
 mod inspect;
 mod install;
 pub(crate) mod lifecycle;
@@ -39,9 +38,9 @@ pub use crate::runtime::plugin::definitions::{
     seeded_definition_name,
 };
 pub use conformance::{
-    PluginTestDeferral, PluginTestOptions, PluginTestOutcome, PluginTestReport, test_plugin_dir,
+    PluginTestDeferral, PluginTestOptions, PluginTestOutcome, PluginTestReport,
+    PluginTestValidationGate, test_plugin_dir,
 };
-pub use conformance_gate::PluginTestValidationGate;
 pub use inspect::{
     PluginDoctorResult, PluginPermissionSummary, PluginRenderedEnvironment, PluginRenderedProfile,
     PluginSummary, PluginToolSummary, PluginValidationReport, list_plugins, plugin_build_doctor,
