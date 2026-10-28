@@ -965,9 +965,6 @@ fn a_spawned_remote_is_operator_matched_and_stopped_on_shutdown() {
                     .lines()
                     .map(|line| serde_json::from_str(line).unwrap())
                     .collect();
-                assert_eq!(events[0]["pid"], first["pid"]);
-                assert_eq!(events[0]["port"], reserved);
-                assert_eq!(events[0]["errno"], libc::EADDRINUSE);
                 assert_eq!(
                     state["reachable"], true,
                     "a proven local collision must reallocate: {state}"
@@ -975,38 +972,102 @@ fn a_spawned_remote_is_operator_matched_and_stopped_on_shutdown() {
                 assert_eq!(state["origin"], "spawned", "{state}");
                 assert_eq!(state["machine_id"], b.machine_id());
                 json_ok(a_server.get("/api/on/hostb/workspaces"));
-                assert_eq!(
-                    calls.len(),
-                    3,
-                    "failed allocation, attach probe, then spawn: {calls:?}"
+                assert!(
+                    calls.len() >= 3,
+                    "failed allocation, successful attach probe, then spawn: {calls:?}"
                 );
+                assert_eq!(calls[0]["pid"], first["pid"]);
                 assert_eq!(calls[0]["mode"], "attach");
-                assert_eq!(calls[1]["mode"], "attach");
-                assert_eq!(calls[2]["mode"], "spawn");
-                assert_ne!(forwarded_port(&calls[1]), reserved);
-                assert_eq!(forwarded_port(&calls[1]), forwarded_port(&calls[2]));
+                assert_eq!(forwarded_port(&calls[0]), reserved);
+                assert_eq!(events.len(), calls.len(), "one bind event per ssh call");
+                let spawn_indices: Vec<usize> = calls
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, call)| (call["mode"] == "spawn").then_some(index))
+                    .collect();
+                assert_eq!(spawn_indices.len(), 1, "exactly one spawn call: {calls:?}");
+                let spawn_index = calls.len() - 1;
+                assert_eq!(spawn_indices[0], spawn_index, "spawn is the final ssh call");
+                let successful_attach_index = spawn_index - 1;
+                assert_eq!(
+                    calls[successful_attach_index]["mode"], "attach",
+                    "spawn follows a successful attach: {calls:?}"
+                );
+
+                for (index, call) in calls[..successful_attach_index].iter().enumerate() {
+                    assert_eq!(call["mode"], "attach", "only attach probes precede spawn");
+                    let event = events
+                        .iter()
+                        .find(|event| event["pid"] == call["pid"])
+                        .unwrap_or_else(|| panic!("missing bind event for attach call: {call:?}"));
+                    assert_eq!(event["mode"], "attach");
+                    assert_eq!(event["port"], forwarded_port(call));
+                    assert_eq!(
+                        event["errno"],
+                        libc::EADDRINUSE,
+                        "every failed attach must be a recorded EADDRINUSE collision: {call:?}, {event:?}"
+                    );
+                    if index > 0 {
+                        assert_ne!(
+                            forwarded_port(call),
+                            reserved,
+                            "only the first attach may use the deliberately reserved port"
+                        );
+                    }
+                }
+                let successful_attach = &calls[successful_attach_index];
+                let successful_attach_event = events
+                    .iter()
+                    .find(|event| event["pid"] == successful_attach["pid"])
+                    .unwrap_or_else(|| {
+                        panic!("missing bind event for successful attach: {successful_attach:?}")
+                    });
+                assert_eq!(successful_attach_event["mode"], "attach");
+                assert_eq!(
+                    successful_attach_event["port"],
+                    forwarded_port(successful_attach)
+                );
+                assert!(
+                    successful_attach_event["errno"].is_null(),
+                    "the attach before spawn must have bound successfully: {successful_attach_event:?}"
+                );
+                assert_ne!(forwarded_port(successful_attach), reserved);
+                let spawn = &calls[spawn_index];
+                let spawn_event = events
+                    .iter()
+                    .find(|event| event["pid"] == spawn["pid"])
+                    .unwrap_or_else(|| panic!("missing bind event for spawn: {spawn:?}"));
+                assert_eq!(spawn_event["mode"], "spawn");
+                assert_eq!(spawn_event["port"], forwarded_port(spawn));
+                assert!(
+                    spawn_event["errno"].is_null(),
+                    "the spawn must bind successfully: {spawn_event:?}"
+                );
+                assert_eq!(forwarded_port(successful_attach), forwarded_port(spawn));
                 let expected = if operator {
                     "orbit web serve --no-open --operator --port 7878"
                 } else {
                     "orbit web serve --no-open --port 7878"
                 };
-                assert_eq!(calls[2]["command"], expected);
+                assert_eq!(spawn["command"], expected);
                 assert_eq!(
                     probes.load(Ordering::SeqCst),
                     0,
                     "even a matching identity on the foreign listener is never read"
                 );
-                assert!(
-                    !alive(first["pid"].as_i64().unwrap()),
-                    "the failed allocation's child is reaped before handoff"
-                );
+                for call in &calls[..successful_attach_index] {
+                    assert!(
+                        !alive(call["pid"].as_i64().unwrap()),
+                        "each failed allocation's child is reaped before handoff"
+                    );
+                }
                 let pids = stub.pids();
                 assert!(
-                    !alive(pids[1]),
+                    !alive(pids[successful_attach_index]),
                     "the successful attach probe is reaped before spawn handoff"
                 );
                 assert!(
-                    alive(pids[2]),
+                    alive(pids[spawn_index]),
                     "only the owned spawn child serves the verified tunnel"
                 );
                 assert!(a_server.terminate().success());
