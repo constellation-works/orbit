@@ -287,6 +287,8 @@ a.agents-cause-note { display: inline-flex; align-items: center; min-height: 44p
   line-height: 15px;
   text-transform: uppercase;
 }
+.agents-tag-unjudged { border-color: var(--fg-disabled); background: transparent; color: var(--fg-mute); }
+.agents-score-value.agents-unjudged { color: var(--fg-mute); font-style: italic; }
 .agents-outcome-outcome_held_up { background: var(--status-done); }
 .agents-outcome-outcome_caught { background: var(--status-review); }
 .agents-outcome-outcome_false_alarm { background: var(--status-proposed); }

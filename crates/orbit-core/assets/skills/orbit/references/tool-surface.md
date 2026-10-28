@@ -386,8 +386,10 @@ nothing, writes nothing and returns no requests.
   an attempt was admitted, are not implementer work and count nowhere on the
   implementers scorecard.
 - **Ranking.** Rows below the minimum support are listed last without a rank. A
-  role whose terms are not computed yet answers `status: not_computed`, with its
-  terms and no rows.
+  reviewer row none of whose work is judged yet is `unjudged`: no rank, null
+  `raw` and `score`, listed after every other row and left out of the fleet
+  average. A role whose terms are not computed yet answers
+  `status: not_computed`, with its terms and no rows.
 - **Switches.** `by_type` returns one cell per (crew, model, tier, type) with
   `n`, `raw`, `crew_mean` and `score`, plus the type list used. `shadow` (with
   `by_type`) returns each crew's draw count and its static, drawn and would-be

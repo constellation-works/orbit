@@ -2,8 +2,8 @@
 // tabs and their ranked-row counts, the attribution strip, ranking selection
 // driving the detail column (rank, score, breakdown, shown-not-scored stats),
 // "How the score works" keeping its state across polls, the empty and
-// not_computed states, the Reviewers provisional banner, `accepts often` tag
-// and verdict-outcome bars, the aggregate placeholder, and the router sending
+// not_computed states, the Reviewers provisional banner, `accepts often` tag,
+// unjudged row and verdict-outcome bars, the aggregate placeholder, and the router sending
 // `#analytics/orchestrators` and old `#agents/<role>` to `#analytics/agents/<role>`.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -447,8 +447,8 @@ assert.equal(byId['agents-count'].textContent, '0 rows · 0 ranked');
 takeAll();
 
 // Reviewers: a banner while any review is younger than the miss lookback,
-// the `accepts often` tag beside a row, yes/no stats and each reviewer's
-// verdict outcomes.
+// the `accepts often` tag beside a row, an unjudged row listed last without
+// a score, yes/no stats and each reviewer's verdict outcomes.
 const REVIEWER_TERMS = [
   { key: 'findings_held', label: 'Findings that held', weight: 1, definition: 'Findings that held, weighted by severity.', group: 'credit' },
   { key: 'false_rejects', label: 'False rejects', weight: -2, definition: 'Rejects the next run proved wrong.', group: 'problem' },
@@ -471,6 +471,8 @@ const reviewers = (provisional, computedAt) => ({
   rows: [
     reviewerRow('vega', 1, 20, { findings_held: 30, false_rejects: 1, missed_regressions: 0 }, 95, 12, [40, 70, false], [8, 6, 1, 0, 5]),
     reviewerRow('lyra', 2, 12, { findings_held: 4, false_rejects: 0, missed_regressions: 1 }, 2.3, 4, [92, 70, true], [9, 1, 0, 1, 1]),
+    { ...reviewerRow('nova', null, 11, { findings_held: 0, false_rejects: 0, missed_regressions: 0 }, null, 11, [null, null, false], [0, 0, 0, 0, 11]),
+      below_support: false, unjudged: true },
   ],
 });
 const routeReviewers = (provisional, computedAt) => url => {
@@ -487,8 +489,17 @@ answer(takeAll(), routeReviewers(16, '2026-10-19T08:10:00.000Z'));
 await settle();
 assert.equal(byId['agents-count-reviewers'].textContent, '2 ranked');
 assert.deepEqual(view().children.map(node => node.dataset.key).filter(Boolean), ['strip', 'banner', 'ranking', 'detail', 'how', 'panel'], 'the banner sits under the strip');
-assert.match(part('banner').textContent, /Provisional\. 16 of 32 reviews in this window are younger than the 30-day miss lookback/);
-assert.deepEqual(rankingRows().map(entry => entry.querySelector('span.agents-tag')?.dataset.tag ?? null), [null, 'accepts_often'], 'only the row well above its peers is tagged');
+assert.match(part('banner').textContent, /Provisional\. 16 of 43 reviews in this window are younger than the 30-day miss lookback/);
+assert.deepEqual(rankingRows().map(entry => entry.querySelector('span.agents-tag')?.dataset.tag ?? null), [null, 'accepts_often', 'unjudged'], 'only the row well above its peers is tagged accepts often, and the unjudged row is marked');
+const nova = rowNamed('nova');
+assert.equal(rankingRows().at(-1), nova, 'the unjudged row is listed last');
+assert.ok(nova.classList.contains('agents-row-unjudged') && nova.classList.contains('agents-row-below'), 'the unjudged row is greyed');
+assert.equal(nova.querySelector('td.agents-rank').textContent, '—', 'an unjudged row has no rank');
+assert.equal(nova.querySelector('span.agents-score-value').textContent, 'unjudged', 'an unjudged row shows no numeric score');
+assert.equal(nova.querySelector('span.agents-bar'), null, 'nor a score bar');
+assert.match(byId['agents-meta'].textContent, /unjudged rows are listed last, without a score/);
+assert.match(part('how').textContent, /no filed finding with a verdict or a landed or dropped task\) is unjudged: it has no score or rank/);
+assert.match(part('how').textContent, /Without a verdict its task's outcome judges it: a task that landed held/);
 assert.match(rowNamed('lyra').querySelector('span.agents-tag').title, /92%.*70%/);
 assert.match(part('detail').textContent, /Accepts oftenno/, 'a boolean stat reads as yes or no');
 assert.match(part('detail').textContent, /Provisional12/);
@@ -496,9 +507,16 @@ click(selectButton('lyra'));
 answer(takeAll(), routeReviewers(16, '2026-10-19T08:10:00.000Z'));
 await settle();
 assert.match(part('detail').textContent, /Accepts oftenyes/);
+click(selectButton('nova'));
+answer(takeAll(), routeReviewers(16, '2026-10-19T08:10:00.000Z'));
+await settle();
+assert.equal(part('detail').querySelector('span.agents-detail-rank').textContent, 'unjudged');
+assert.equal(part('detail').querySelector('div.agents-detail-score').querySelector('strong').textContent, '—');
+assert.match(part('detail').textContent, /Not judged yet: no unit of this row has an outcome/);
 const outcomes = part('panel');
 assert.equal(outcomes.querySelector('h3').textContent, 'How verdicts turned out');
-assert.deepEqual(outcomes.querySelectorAll('li.agents-cause-row').map(item => item.querySelector('span.agents-cause-total').textContent), ['20 reviews', '12 reviews']);
+assert.deepEqual(outcomes.querySelectorAll('li.agents-cause-row').map(item => item.querySelector('span.agents-cause-total').textContent), ['20 reviews', '12 reviews', '11 reviews']);
+assert.ok(outcomes.querySelectorAll('li.agents-cause-row')[2].classList.contains('agents-row-below'), 'the unjudged row is greyed in the outcomes too');
 const lyraBar = outcomes.querySelectorAll('li.agents-cause-row')[1].querySelectorAll('span.agents-cause-seg');
 assert.deepEqual(lyraBar.map(segment => [segment.dataset.outcome, segment.style.width]),
   [['outcome_held_up', '45%'], ['outcome_caught', '5%'], ['outcome_missed', '5%'], ['outcome_unresolved', '5%']], 'segments scale to the busiest reviewer and skip empty outcomes');

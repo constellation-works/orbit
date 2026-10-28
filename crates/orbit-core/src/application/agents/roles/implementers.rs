@@ -337,6 +337,7 @@ fn row_input<'a>(
     RowInput {
         denominators: BTreeMap::new(),
         reviewed_units: Some(reviewed_units),
+        unjudged: false,
         crew: row.0,
         model: row.1,
         units: tasks.len(),

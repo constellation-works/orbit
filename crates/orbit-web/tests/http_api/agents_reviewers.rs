@@ -2,7 +2,8 @@
 //! API and the HTTP API, over fixture tasks whose review gate settlements cite
 //! paths in a real repository: a reject the next run proved wrong, a reject
 //! whose cited path the next run changed, reviewer fixes that held and that
-//! failed, incomplete reviews, a review job's verified findings and a
+//! failed, incomplete reviews, a review job's verified findings, review job
+//! findings judged by their task's outcome, unjudged rows, and a
 //! `review_missed` regression filed long after the review that accepted.
 
 use std::fs;
@@ -14,10 +15,11 @@ use orbit_core::TaskStatus;
 use orbit_core::application::agents::{
     AgentFacts, AgentQuery, AgentRole, Owner, Problem, agent_scorecard,
 };
-use orbit_core::application::task::TaskAddParams;
+use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_types::task::{
-    RegressionEscape, RegressionNature, TASK_ARTIFACT_SCHEMA_VERSION, TASK_COMMENTS_FILE_NAME,
-    TaskCommentRowV2, TaskComplexity, TaskRelation, TaskRelationType, TaskType,
+    DefectSeverity, RegressionClassification, RegressionEscape, RegressionNature, SeveritySource,
+    TASK_ARTIFACT_SCHEMA_VERSION, TASK_COMMENTS_FILE_NAME, TaskCommentRowV2, TaskComplexity,
+    TaskRelation, TaskRelationType, TaskType,
 };
 use serde_json::{Value, json};
 
@@ -151,27 +153,58 @@ fn attempt(fixture: &Fixture, task_id: &str, run_id: &str, start: DateTime<Utc>)
     );
 }
 
-/// A finding a review job filed from `filer`, with finding verification's
-/// verdict on it.
-fn filed_finding(fixture: &Fixture, filer: &str, verdict: &str, severity: Option<&str>) {
-    let id = fixture
+/// A finding a review job filed from `filer`, with no verification verdict:
+/// a `bug` tagged as a review finding and spawned from the job, plus
+/// `relations`.
+fn unverified_finding(
+    fixture: &Fixture,
+    filer: &str,
+    title: &str,
+    relations: Vec<TaskRelation>,
+) -> String {
+    fixture
         .runtime
         .add_task(TaskAddParams {
-            title: format!("review finding {verdict}"),
+            title: title.into(),
             description: "a defect the review job found".into(),
             task_type: Some(TaskType::Bug),
             tags: vec!["delivery-code-review".into()],
             complexity: TaskComplexity::Medium,
-            relations: vec![TaskRelation {
+            relations: [TaskRelation {
                 relation_type: TaskRelationType::SpawnedFrom,
                 target: filer.parse().unwrap(),
                 regression: None,
-            }],
+            }]
+            .into_iter()
+            .chain(relations)
+            .collect(),
             ..Default::default()
         })
         .unwrap()
         .id
-        .to_string();
+        .to_string()
+}
+
+/// Move a fixture task to `status`, as its lifecycle would.
+fn settle_task(fixture: &Fixture, task_id: &str, status: TaskStatus) {
+    fixture
+        .runtime
+        .force_update_task_with_identity(
+            task_id,
+            TaskUpdateParams {
+                status: Some(status),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .unwrap();
+}
+
+/// A finding a review job filed from `filer`, with finding verification's
+/// verdict on it.
+fn filed_finding(fixture: &Fixture, filer: &str, verdict: &str, severity: Option<&str>) -> String {
+    let id = unverified_finding(fixture, filer, &format!("review finding {verdict}"), vec![]);
     let now = Utc::now();
     let mut record = json!({
         "schema_version": 1,
@@ -207,6 +240,32 @@ fn filed_finding(fixture: &Fixture, filer: &str, verdict: &str, severity: Option
     };
     let mut file = fs::OpenOptions::new().append(true).open(events).unwrap();
     writeln!(file, "{}", serde_json::to_string(&row).unwrap()).unwrap();
+    id
+}
+
+/// A review job task whose one attempt, by `crew`, ran from three hours ago
+/// to one hour ago.
+fn review_job(fixture: &Fixture, crew: &str) -> String {
+    let now = Utc::now();
+    let job = task(fixture, &format!("{crew} delivery code review"));
+    implementation_run(
+        fixture,
+        &format!("jrun-{crew}"),
+        &job,
+        crew,
+        Some(&format!("gpt-{crew}")),
+        now - Duration::hours(3),
+        now - Duration::hours(1),
+    );
+    append(
+        fixture,
+        &job,
+        now - Duration::hours(3) + Duration::seconds(1),
+        "started",
+        None,
+        Some(TaskStatus::InProgress),
+    );
+    job
 }
 
 fn reviewers(facts: &AgentFacts, window: &str) -> Value {
@@ -780,6 +839,132 @@ fn reviewer_scorecard_scores_findings_that_held_false_rejects_and_late_misses() 
             assert_eq!(false_rejects, expected);
             assert_eq!(tasks("findings_held"), vec![held.clone()]);
             assert_eq!(detail["provisional"], payload["provisional"]);
+        },
+    );
+}
+
+/// Review job findings without a verification verdict are judged by their
+/// task's outcome: a landed finding holds at the severity rated on its own
+/// `regression_from` link (else low), a recorded verdict still wins over the
+/// outcome, and a finding dropped without one is neutral. A row with no
+/// judged unit has no rank or score, is listed last with the unjudged marker,
+/// and stays out of the fleet average.
+#[test]
+fn reviewer_scorecard_judges_unverified_job_findings_by_task_outcome() {
+    isolated(
+        "agents_reviewers::reviewer_scorecard_judges_unverified_job_findings_by_task_outcome",
+        || {
+            let fixture = Fixture::new();
+            let culprit = task(&fixture, "the work the finding regressed");
+
+            // sol's review job: two unverified findings landed, one rated
+            // high on its regression link and one unrated; a third landed
+            // although verification REJECTED it; a fourth was dropped
+            // without a verdict; a fifth is still open.
+            let sol = review_job(&fixture, "sol");
+            let rated = unverified_finding(
+                &fixture,
+                &sol,
+                "landed, rated high",
+                vec![TaskRelation {
+                    relation_type: TaskRelationType::RegressionFrom,
+                    target: culprit.parse().unwrap(),
+                    regression: Some(RegressionClassification {
+                        nature: RegressionNature::DefectInNew,
+                        escape: RegressionEscape::NoTest,
+                        severity: DefectSeverity::High,
+                        severity_source: SeveritySource::Filer,
+                        sites: Vec::new(),
+                    }),
+                }],
+            );
+            settle_task(&fixture, &rated, TaskStatus::Done);
+            let unrated = unverified_finding(&fixture, &sol, "landed, unrated", vec![]);
+            settle_task(&fixture, &unrated, TaskStatus::Done);
+            let overruled = filed_finding(&fixture, &sol, "REJECTED", None);
+            settle_task(&fixture, &overruled, TaskStatus::Done);
+            let duplicate = unverified_finding(&fixture, &sol, "dropped as a duplicate", vec![]);
+            settle_task(&fixture, &duplicate, TaskStatus::Rejected);
+            unverified_finding(&fixture, &sol, "still open", vec![]);
+
+            // rhea's only finding was archived without landing: judged, but
+            // neutral. nova's findings are all still open: unjudged.
+            let rhea = review_job(&fixture, "rhea");
+            let wont_fix = unverified_finding(&fixture, &rhea, "won't fix", vec![]);
+            settle_task(&fixture, &wont_fix, TaskStatus::Archived);
+            let nova = review_job(&fixture, "nova");
+            unverified_finding(&fixture, &nova, "open one", vec![]);
+            unverified_finding(&fixture, &nova, "open two", vec![]);
+
+            let facts = fixture.runtime.agent_scan().unwrap();
+            let scorecard = reviewers(&facts, "90d");
+            assert_eq!(scorecard["status"], "ok", "{scorecard}");
+            let sol = row(&scorecard, "sol");
+            assert_eq!(
+                (
+                    &sol["units"],
+                    &sol["counts"]["findings_held"],
+                    &sol["counts"]["rejected_findings"],
+                ),
+                (&json!(1), &json!(5), &json!(1)),
+                "landed findings hold at high (4) and the low default (1); the REJECTED verdict \
+                 wins over its landing and the dropped finding costs nothing: {sol}"
+            );
+            assert_eq!(stat(sol, "outcome_caught"), &json!(1), "{sol}");
+            let rhea = row(&scorecard, "rhea");
+            assert_eq!(
+                (
+                    &rhea["unjudged"],
+                    &rhea["counts"]["findings_held"],
+                    &rhea["counts"]["rejected_findings"],
+                    &rhea["score"],
+                ),
+                (&json!(false), &json!(0), &json!(0), &json!(0)),
+                "a finding dropped without a verdict is judged and neutral: {rhea}"
+            );
+            let nova = row(&scorecard, "nova");
+            assert_eq!(
+                (
+                    &nova["unjudged"],
+                    &nova["rank"],
+                    &nova["score"],
+                    &nova["raw"]
+                ),
+                (&json!(true), &Value::Null, &Value::Null, &Value::Null),
+                "a row whose findings are all open is unjudged: {nova}"
+            );
+            assert_eq!(sol["unjudged"], false);
+            let order: Vec<_> = scorecard["rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| (row["crew"].as_str().unwrap(), row["rank"].clone()))
+                .collect();
+            assert_eq!(
+                order,
+                vec![("sol", json!(1)), ("rhea", json!(2)), ("nova", Value::Null)],
+                "the unjudged row is listed after the ranked rows"
+            );
+            assert_eq!(
+                scorecard["fleet_average"],
+                json!(200),
+                "the fleet average is sol's raw 400 and rhea's 0 over two units, without nova: {scorecard}"
+            );
+
+            // The route serves the marker, and the unjudged row's detail.
+            let server = fixture.counted_task_server();
+            let payload = json_ok(server.get(&format!(
+                "/api/agents/reviewers/scorecard?{WS}&window=90d&min_support=1"
+            )));
+            assert_eq!(row(&payload, "nova")["unjudged"], true, "{payload}");
+            let detail = json_ok(server.get(&format!(
+                "/api/agents/reviewers/detail?{WS}&window=90d&min_support=1&crew=nova"
+            )));
+            assert_eq!(
+                (&detail["row"]["unjudged"], &detail["row"]["score"]),
+                (&json!(true), &Value::Null),
+                "{detail}"
+            );
         },
     );
 }

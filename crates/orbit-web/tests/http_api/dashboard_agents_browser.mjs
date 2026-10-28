@@ -5,7 +5,7 @@
 // driving scorecard detail, no detail API reads, the disclosure surviving a refresh, no
 // Implementers role panel or the empty grid row and gap that track would
 // reserve (16px at 1440, 12px at 375), the Reviewers provisional
-// banner, `accepts often` tag and verdict-outcome bars, the Pilots
+// banner, `accepts often` tag, unjudged row and verdict-outcome bars, the Pilots
 // tier-calibration matrices, the empty state, and the 375px layout (ranking
 // scrolling in its own box, detail stacked below, 44px touch targets).
 // Screenshots of each role tab (and the Implementers ranking) at 1440 and 375 go to the evidence directory.
@@ -73,18 +73,18 @@ let orchestratorRows = ORCHESTRATOR_ROWS;
 // Reviewer rows scored as the server does: raw = Σ weight × rate per 100,
 // pulled down toward the fleet average by K = 30 when above it.
 const OUTCOMES = ['outcome_held_up', 'outcome_caught', 'outcome_false_alarm', 'outcome_missed', 'outcome_unresolved'];
-function reviewerRow(crew, model, units, counts, provisional, [gate, jobs, accept, peers, often, minutes], outcomes) {
+function reviewerRow(crew, model, units, counts, provisional, [gate, jobs, accept, peers, often, minutes], outcomes, unjudged = false) {
   const per100 = Object.fromEntries(Object.entries(counts).map(([key, count]) => [key, Math.round((count * 10000) / units) / 100]));
-  const raw = Math.round(terms('reviewers').reduce((sum, term) => sum + term.weight * per100[term.key], 0) * 100) / 100;
+  const raw = unjudged ? null : Math.round(terms('reviewers').reduce((sum, term) => sum + term.weight * per100[term.key], 0) * 100) / 100;
   return {
-    crew, model, units, below_support: units < 10, rank: null, counts, per_100: per100, raw, score: raw, runs_without_model: 0, provisional,
+    crew, model, units, below_support: units < 10, unjudged, rank: null, counts, per_100: per100, raw, score: raw, runs_without_model: 0, provisional,
     stats: [
       { key: 'gate_reviews', label: 'Review gate settlements', value: gate },
       { key: 'review_jobs', label: 'Review job runs that filed findings', value: jobs },
       { key: 'accept_rate', label: 'Accept rate (%)', value: accept },
       { key: 'peer_accept_rate', label: "Peers' accept rate on the same tiers (%)", value: peers },
       { key: 'accepts_often', label: 'Accepts often', value: often },
-      ...OUTCOMES.map((key, index) => ({ key, label: ['Accepted and held up', 'Caught a real problem', 'False alarm', 'Missed a regression', 'Unresolved (not judged yet, incomplete or failed fixes)'][index], value: outcomes[index] })),
+      ...OUTCOMES.map((key, index) => ({ key, label: ['Accepted and held up', 'Caught a real problem', 'False alarm', 'Missed a regression', 'Unresolved (not judged yet, incomplete, failed fixes or findings dropped unverified)'][index], value: outcomes[index] })),
       { key: 'median_review_minutes', label: 'Median review minutes', value: minutes },
     ],
   };
@@ -93,10 +93,14 @@ const REVIEWER_ROWS = [
   reviewerRow('codex-review', 'gpt-5.5-codex', 64, { findings_held: 118, fixes_held: 9, rejected_findings: 7, false_rejects: 3, failed_fixes: 1, missed_regressions: 1, incomplete_reviews: 2 }, 41, [60, 4, 55, 62, false, 11.5], [30, 22, 3, 1, 8]),
   reviewerRow('claude-review', 'claude-opus-5-5', 48, { findings_held: 46, fixes_held: 12, rejected_findings: 4, false_rejects: 1, failed_fixes: 2, missed_regressions: 3, incomplete_reviews: 1 }, 30, [48, 0, 81, 58, true, 8], [34, 8, 1, 3, 2]),
   reviewerRow('gemini-review', 'gemini-3-pro', 6, { findings_held: 6, fixes_held: 0, rejected_findings: 2, false_rejects: 1, failed_fixes: 0, missed_regressions: 0, incomplete_reviews: 0 }, 6, [6, 0, 33, 67, false, 14], [2, 1, 1, 0, 2]),
+  // A review-job-only reviewer whose filed findings are all still open:
+  // unjudged, so no score or rank, listed last, out of the fleet average.
+  reviewerRow('sol-review', 'gpt-6.1-sol', 73, { findings_held: 0, fixes_held: 0, rejected_findings: 0, false_rejects: 0, failed_fixes: 0, missed_regressions: 0, incomplete_reviews: 0 }, 73, [0, 73, null, null, false, null], [0, 0, 0, 0, 73], true),
 ];
-const REVIEWER_FLEET = Math.round((REVIEWER_ROWS.reduce((sum, row) => sum + row.units * row.raw, 0) / REVIEWER_ROWS.reduce((sum, row) => sum + row.units, 0)) * 100) / 100;
-for (const row of REVIEWER_ROWS) row.score = Math.round(Math.min(row.raw, (row.units * row.raw + 30 * REVIEWER_FLEET) / (row.units + 30)) * 100) / 100;
-REVIEWER_ROWS.filter(row => !row.below_support).sort((a, b) => b.score - a.score).forEach((row, index) => { row.rank = index + 1; });
+const JUDGED_REVIEWERS = REVIEWER_ROWS.filter(row => !row.unjudged);
+const REVIEWER_FLEET = Math.round((JUDGED_REVIEWERS.reduce((sum, row) => sum + row.units * row.raw, 0) / JUDGED_REVIEWERS.reduce((sum, row) => sum + row.units, 0)) * 100) / 100;
+for (const row of JUDGED_REVIEWERS) row.score = Math.round(Math.min(row.raw, (row.units * row.raw + 30 * REVIEWER_FLEET) / (row.units + 30)) * 100) / 100;
+JUDGED_REVIEWERS.filter(row => !row.below_support).sort((a, b) => b.score - a.score).forEach((row, index) => { row.rank = index + 1; });
 let computedAt = '2026-10-19T08:00:00.000Z';
 const requests = [];
 let matrixUnavailable = false;
@@ -334,13 +338,20 @@ try {
   pass('disclosure survives a refresh', { panel: await assertPanelOccupiesItsRow('orchestrators') });
 
   // Reviewers: the provisional banner under the strip, the ranking with the
-  // `accepts often` tag, the detail and each reviewer's verdict outcomes.
+  // `accepts often` tag and the unjudged row last, the detail and each
+  // reviewer's verdict outcomes.
   await page.locator('#agents-roles [data-view="reviewers"]').click();
   await body.locator('.agents-banner').waitFor();
   assert.equal(new URL(page.url()).hash, '#analytics/agents/reviewers?window=30d');
-  assert.match(await body.locator('.agents-banner').textContent(), /Provisional\. 77 of 118 reviews in this window are younger than the 30-day miss lookback/);
-  assert.deepEqual(await body.locator('.agents-row .agents-crew').allTextContents(), ['codex-review', 'claude-review', 'gemini-review']);
-  assert.deepEqual(await body.locator('.agents-row .agents-tag').allTextContents(), ['accepts often']);
+  assert.match(await body.locator('.agents-banner').textContent(), /Provisional\. 150 of 191 reviews in this window are younger than the 30-day miss lookback/);
+  assert.deepEqual(await body.locator('.agents-row .agents-crew').allTextContents(), ['codex-review', 'claude-review', 'gemini-review', 'sol-review'], 'the unjudged row is listed after every other row');
+  assert.deepEqual(await body.locator('.agents-row .agents-tag').allTextContents(), ['accepts often', 'unjudged']);
+  const unjudged = body.locator('.agents-row', { hasText: 'sol-review' });
+  assert.equal(await unjudged.evaluate(node => node.classList.contains('agents-row-unjudged') && node.classList.contains('agents-row-below')), true, 'the unjudged row is greyed');
+  assert.equal(await unjudged.locator('.agents-rank').textContent(), '—', 'an unjudged row has no rank');
+  assert.equal(await unjudged.locator('.agents-score-value').textContent(), 'unjudged', 'an unjudged row shows no numeric score');
+  assert.equal(await unjudged.locator('.agents-bar').count(), 0, 'nor a score bar');
+  assert.match(await page.locator('#agents-meta').textContent(), /unjudged rows are listed last, without a score/);
   assert.equal(await body.locator('.agents-row', { hasText: 'claude-review' }).locator('.agents-tag').count(), 1, 'the tag sits on the row accepting well above its peers');
   const order = await page.evaluate(() => {
     const top = selector => document.querySelector(selector).getBoundingClientRect();
@@ -354,7 +365,8 @@ try {
   assert.match(await body.locator('.agents-stats').textContent(), /Accepts oftenyes/);
   assert.match(await body.locator('.agents-stats').textContent(), /Provisional30/);
   const outcomeRows = body.locator('.agents-role-panel-reviewers .agents-cause-row');
-  assert.equal(await outcomeRows.count(), 3);
+  assert.equal(await outcomeRows.count(), 4);
+  assert.equal(await outcomeRows.nth(3).evaluate(node => node.classList.contains('agents-row-below')), true, 'the unjudged row is greyed in the outcomes');
   assert.deepEqual(await outcomeRows.nth(1).locator('.agents-cause-seg').evaluateAll(nodes => nodes.map(node => node.dataset.outcome)),
     ['outcome_held_up', 'outcome_caught', 'outcome_false_alarm', 'outcome_missed', 'outcome_unresolved']);
   assert.equal(await outcomeRows.nth(0).locator('.agents-cause-total').textContent(), '64 reviews');
@@ -363,6 +375,23 @@ try {
   await shot('agents-reviewers-dark-1440');
   await body.locator('.agents-role-panel-reviewers').scrollIntoViewIfNeeded();
   await shot('agents-reviewers-outcomes-dark-1440');
+  // The unjudged row's detail and the disclosure that explains it.
+  await unjudged.locator('.agents-row-select').click();
+  await page.waitForFunction(() => document.querySelector('#agents-detail h3')?.textContent === 'sol-review');
+  assert.equal(await body.locator('.agents-detail-rank').textContent(), 'unjudged');
+  assert.equal(await body.locator('.agents-detail-score').textContent(), '—no score until a unit is judged');
+  assert.match(await body.locator('.agents-detail-raw').textContent(), /Not judged yet: no unit of this row has an outcome/);
+  assert.match(await body.locator('.agents-radar-note').textContent(), /no unit of this row is judged yet/);
+  if (!(await body.locator('.agents-how').evaluate(node => node.open))) await body.locator('.agents-how > summary').click();
+  const how = await body.locator('.agents-how').textContent();
+  assert.match(how, /Without a verdict its task's outcome judges it: a task that landed held/);
+  assert.match(how, /is unjudged: it has no score or rank, is tagged unjudged, is listed after every other row, and stays out of the fleet average/);
+  assert.match(how, /once its task lands, at the highest severity rated on its own regression links, else low/);
+  pass('reviewers unjudged row');
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await shot('agents-reviewers-unjudged-dark-1440');
+  await body.locator('.agents-how').scrollIntoViewIfNeeded();
+  await body.locator('.agents-how').screenshot({ path: path.join(evidence, 'agents-reviewers-how-dark-1440.png'), animations: 'disabled' });
 
   // Implementers uses the shared ranking/detail and shows no role panel.
   await page.locator('#agents-roles [data-view="implementers"]').click();
@@ -586,6 +615,9 @@ try {
   await shot('agents-reviewers-ranking-dark-375');
   await body.locator('.agents-role-panel-reviewers').scrollIntoViewIfNeeded();
   await shot('agents-reviewers-outcomes-dark-375');
+  await page.evaluate(() => document.querySelector('.agents-row-unjudged').scrollIntoView({ block: 'center' }));
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, 'the unjudged row fits 375px');
+  await shot('agents-reviewers-unjudged-dark-375');
   assert.deepEqual(errors, []);
   assert.equal(requests.some(entry => entry.includes('/detail')), false, 'the dashboard never requests agent detail');
   fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ ok: true, results }, null, 2));

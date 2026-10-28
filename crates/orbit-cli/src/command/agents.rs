@@ -73,7 +73,9 @@ pub(crate) fn scorecard_blocks(value: &Value) -> Vec<Block> {
         .trailing_notice(selection_line(value));
     for row in value["rows"].as_array().into_iter().flatten() {
         let mut cells = vec![
-            if row["below_support"] == true {
+            if row["unjudged"] == true {
+                "unjudged".into()
+            } else if row["below_support"] == true {
                 "below".into()
             } else {
                 number(&row["rank"])
@@ -269,7 +271,9 @@ fn per_task_blocks(value: &Value) -> Vec<Block> {
 /// One row's terms, then the tasks behind each nonzero count.
 pub(crate) fn show_blocks(value: &Value) -> Vec<Block> {
     let row = &value["row"];
-    let standing = if row["below_support"] == true {
+    let standing = if row["unjudged"] == true {
+        "unjudged: no unit judged yet".to_string()
+    } else if row["below_support"] == true {
         "below minimum support".to_string()
     } else {
         format!("rank {}", number(&row["rank"]))
