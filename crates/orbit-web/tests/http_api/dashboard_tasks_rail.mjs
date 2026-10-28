@@ -26,7 +26,12 @@ class Node {
       add: name => { if (!classesOf(node).includes(name)) node.className = [...classesOf(node), name].join(' '); },
       remove: name => { node.className = classesOf(node).filter(entry => entry !== name).join(' '); },
       contains: name => classesOf(node).includes(name),
-      toggle: (name, on) => (on ?? !classesOf(node).includes(name)) ? node.classList.add(name) : node.classList.remove(name),
+      toggle: (name, on) => {
+        const present = on ?? !classesOf(node).includes(name);
+        if (present) node.classList.add(name);
+        else node.classList.remove(name);
+        return present;
+      },
     };
   }
   set textContent(value) {
@@ -145,38 +150,43 @@ class Event { constructor(type) { this.type = type; } }
 const setFixtureTimeout = (callback, delay) => setTimeout(callback, delay).unref();
 const localStorageEntries = new Map();
 const copiedTexts = [];
+window.localStorage = {
+  getItem: key => localStorageEntries.get(key) ?? null,
+  setItem: (key, value) => localStorageEntries.set(key, String(value)),
+};
 const context = vm.createContext({
   URLSearchParams, URL, AbortController, console, setTimeout: setFixtureTimeout, clearTimeout, document, window, Node, Event,
-  localStorage: {
-    getItem: key => localStorageEntries.get(key) ?? null,
-    setItem: (key, value) => localStorageEntries.set(key, String(value)),
-  },
+  localStorage: window.localStorage,
   navigator: { clipboard: { writeText: async text => { copiedTexts.push(String(text)); } } },
   requestAnimationFrame: () => 0,
   fetch: () => new Promise(() => {}),
 });
-const modules = new Map();
 const dir = new URL('../../assets/dashboard/js/', import.meta.url);
-const load = name => {
-  if (!modules.has(name)) {
-    const url = new URL(name, dir);
-    modules.set(name, new vm.SourceTextModule(fs.readFileSync(url, 'utf8'), { context, identifier: url.href }));
-  }
-  return modules.get(name);
-};
-// Each module links once. A module another import reaches while it is still
-// linking waits for that link, so its dependencies exist before instantiation.
-const linking = new Map();
-const linker = async specifier => {
-  const name = specifier.replace(/^\.\//, '');
-  const module = load(name);
-  if (!linking.has(name)) linking.set(name, module.link(linker));
-  await linking.get(name);
-  return module;
-};
-const tasksModule = load('tasks.js');
-await tasksModule.link(linker);
-await tasksModule.evaluate();
+async function loadTaskModules(context) {
+  const modules = new Map();
+  const load = name => {
+    if (!modules.has(name)) {
+      const url = new URL(name, dir);
+      modules.set(name, new vm.SourceTextModule(fs.readFileSync(url, 'utf8'), { context, identifier: url.href }));
+    }
+    return modules.get(name);
+  };
+  // Each module links once. A module another import reaches while it is still
+  // linking waits for that link, so its dependencies exist before instantiation.
+  const linking = new Map();
+  const linker = async specifier => {
+    const name = specifier.replace(/^\.\//, '');
+    const module = load(name);
+    if (!linking.has(name)) linking.set(name, module.link(linker));
+    await linking.get(name);
+    return module;
+  };
+  const tasksModule = load('tasks.js');
+  await tasksModule.link(linker);
+  await tasksModule.evaluate();
+  return { tasksModule, modules };
+}
+const { tasksModule, modules } = await loadTaskModules(context);
 const { renderTasks, applyTasksHashQuery, buildTasksHash, setPinnedExternalTask, clearPinnedExternalTask } = tasksModule.namespace;
 const common = modules.get('common.js').namespace;
 
@@ -1352,3 +1362,57 @@ paneBody.querySelector('.decision-requests').querySelectorAll('button').find(nod
 await settleReads();
 assert.equal(decisionReads.length, 2, 'Retry reads the decisions again');
 assert.equal(paneBody.querySelectorAll('.decision-answer').length, 2, 'the retried read restores the labeled options');
+
+// ORB-19489: a reload evaluates the whole renderer graph again. Seed storage
+// before evaluation so loading preferences too early cannot silently use defaults.
+const preferenceTask = task(122, { comments: [
+  { by: 'operator', at: '2026-10-01T08:00:00Z', message: 'Earlier comment' },
+  { by: 'operator', at: '2026-10-01T09:00:00Z', message: 'Later comment' },
+] });
+async function reloadCommentThread(storage) {
+  const fresh = await loadTaskModules(vm.createContext({
+    ...context,
+    window: { location: { search: '', hash: '' }, localStorage: storage },
+    localStorage: storage,
+    fetch: () => new Promise(() => {}),
+  }));
+  fresh.modules.get('common.js').namespace.setWorkspace('ws_orbit');
+  byId['tasks-body'].replaceChildren();
+  paneBody.replaceChildren();
+  fresh.tasksModule.namespace.renderTasks([preferenceTask], {
+    ...taskContext,
+    getTasks: () => [preferenceTask],
+    getTasksMeta: () => ({ total: 1, limit: 50, offset: 0, next_cursor: null }),
+  });
+  clickTitle(byId['tasks-body'].querySelector('.row button.title'));
+  return paneBody.querySelector('.comments-panel');
+}
+function assertCommentPreferences(panel, newestFirst, collapsed) {
+  assert.ok(panel, 'the public renderer opens the comment thread');
+  assert.equal(panel.querySelector('.comment-pref').textContent, newestFirst ? 'newest first' : 'oldest first', 'reload restores the thread order control');
+  assert.deepEqual(panel.querySelectorAll('.comment-card').map(node => node.id), newestFirst
+    ? ['comment-ORB-122-2', 'comment-ORB-122-1']
+    : ['comment-ORB-122-1', 'comment-ORB-122-2'], 'reload applies the preference to the rendered comment order');
+  assert.equal(panel.classList.contains('collapsed'), collapsed, 'reload restores thread disclosure');
+  assert.equal(panel.querySelector('.field-toggle').getAttribute('aria-expanded'), String(!collapsed));
+}
+localStorageEntries.set('orbit.dashboard.comments', JSON.stringify({ newestFirst: true, collapsed: true }));
+const restoredThread = await reloadCommentThread(window.localStorage);
+assertCommentPreferences(restoredThread, true, true);
+// Change both choices through the UI, then reload against the same storage.
+restoredThread.querySelector('.comment-pref').dispatch('click');
+restoredThread.querySelector('.section-title').dispatch('click', { target: restoredThread.querySelector('.field-toggle') });
+assert.deepEqual(JSON.parse(localStorageEntries.get('orbit.dashboard.comments')), { newestFirst: false, collapsed: false });
+assertCommentPreferences(await reloadCommentThread(window.localStorage), false, false);
+localStorageEntries.clear();
+assertCommentPreferences(await reloadCommentThread(window.localStorage), false, false);
+assertCommentPreferences(await reloadCommentThread(undefined), false, false);
+const unavailableStorage = {
+  getItem() { throw new Error('storage unavailable'); },
+  setItem() { throw new Error('storage unavailable'); },
+};
+const unavailableThread = await reloadCommentThread(unavailableStorage);
+assertCommentPreferences(unavailableThread, false, false);
+unavailableThread.querySelector('.comment-pref').dispatch('click');
+unavailableThread.querySelector('.section-title').dispatch('click', { target: unavailableThread.querySelector('.field-toggle') });
+assertCommentPreferences(unavailableThread, true, true);
