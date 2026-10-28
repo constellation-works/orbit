@@ -157,9 +157,11 @@ fn record(runtime: &OrbitRuntime, input: &Map<String, Value>, value: Value) -> C
                         })
                         .unwrap_or_default();
                     format!(
-                        " (nature: {}, escape: {}{sites})",
+                        " (nature: {}, escape: {}, severity: {}, severity source: {}{sites})",
                         part("nature").unwrap_or_default(),
-                        part("escape").unwrap_or_default()
+                        part("escape").unwrap_or_default(),
+                        part("severity").unwrap_or_default(),
+                        part("severity_source").unwrap_or_default()
                     )
                 })
                 .unwrap_or_default();

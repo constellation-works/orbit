@@ -294,7 +294,7 @@ pub(super) const ADD: TaskOperation = TaskOperation {
             mcp_only(
                 "relations",
                 ParamType::Array,
-                "Optional typed task relations as an array of {type, target} objects. A `regression_from` relation may add `regression: {nature, escape, sites?}`: nature is broke_existing, defect_in_new, incomplete, merge_reintroduced, contract_drift or unclassified; escape is no_test, test_not_selected, platform_only, review_missed, spec_ambiguous, nondeterministic or unclassified; optional `sites` lists up to 8 `symbol:` or `file:` selectors of where the defect lives",
+                "Optional typed task relations as an array of {type, target} objects. A `regression_from` relation may add `regression: {nature, escape, severity, severity_source?, sites?}`: nature is broke_existing, defect_in_new, incomplete, merge_reintroduced, contract_drift or unclassified; escape is no_test, test_not_selected, platform_only, review_missed, spec_ambiguous, nondeterministic or unclassified; severity is required and is critical (data loss, a security hole, every drain halted, silently wrong results), high (a core workflow broken with no workaround), medium (a feature broken in a real path, with a workaround), low (an edge case or misleading message) or nit (wording, doc drift, cosmetic); severity_source is filer (the default), operator or backfill; optional `sites` lists up to 8 `symbol:` or `file:` selectors of where the defect lives",
             ),
             both(
                 "crew",
@@ -486,7 +486,7 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
             mcp_only(
                 "relations",
                 ParamType::Array,
-                "Replacement typed task relations as an array of {type, target} objects. A `regression_from` relation may add `regression: {nature, escape, sites?}`: nature is broke_existing, defect_in_new, incomplete, merge_reintroduced, contract_drift or unclassified; escape is no_test, test_not_selected, platform_only, review_missed, spec_ambiguous, nondeterministic or unclassified; optional `sites` lists up to 8 `symbol:` or `file:` selectors of where the defect lives",
+                "Replacement typed task relations as an array of {type, target} objects. A `regression_from` relation may add `regression: {nature, escape, severity, severity_source?, sites?}`: nature is broke_existing, defect_in_new, incomplete, merge_reintroduced, contract_drift or unclassified; escape is no_test, test_not_selected, platform_only, review_missed, spec_ambiguous, nondeterministic or unclassified; severity is critical (data loss, a security hole, every drain halted, silently wrong results), high (a core workflow broken with no workaround), medium (a feature broken in a real path, with a workaround), low (an edge case or misleading message) or nit (wording, doc drift, cosmetic), required on a link the task does not hold yet, while a held link re-sent without one keeps its recorded severity and source; severity_source is filer (the default), operator or backfill, and reads back as verified once finding verification rates the link or default for a link stored without a severity; optional `sites` lists up to 8 `symbol:` or `file:` selectors of where the defect lives",
             ),
             both(
                 "tags",

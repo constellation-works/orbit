@@ -18,7 +18,8 @@ use orbit_common::security::release::sha256_hex;
 use orbit_types::identity::{Crew, agent_family_from_cli, infer_agent_family_from_model};
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
-    Task, TaskComment, TaskComplexity, TaskHistoryEntry, TaskStatus, TaskType,
+    DefectSeverity, SeveritySource, Task, TaskComment, TaskComplexity, TaskHistoryEntry,
+    TaskRelation, TaskRelationType, TaskStatus, TaskType,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -121,15 +122,6 @@ pub enum VerdictConfidence {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum FindingSeverity {
-    Critical,
-    High,
-    Medium,
-    Low,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RejectionReason {
     /// The code does not behave the way the finding claims.
@@ -204,7 +196,7 @@ pub struct VerifierReport {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reproduction: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub severity: Option<FindingSeverity>,
+    pub severity: Option<DefectSeverity>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rejection: Option<FindingRejection>,
 }
@@ -291,7 +283,7 @@ pub struct FindingVerification {
     pub finding_fingerprint: Option<String>,
     pub base_branch: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub severity: Option<FindingSeverity>,
+    pub severity: Option<DefectSeverity>,
     pub evidence: Vec<FindingEvidence>,
     pub reasoning: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -381,6 +373,35 @@ pub(crate) fn latest_verification(history: &[TaskHistoryEntry]) -> Option<Findin
             entry.event == FINDING_VERIFIED_EVENT && entry.by == FINDING_VERIFICATION_ACTOR
         })
         .find_map(|entry| serde_json::from_str(entry.note.as_deref()?).ok())
+}
+
+/// `relations` with every classified `regression_from` link rated at the
+/// CONFIRMED verdict's `severity`, source `verified`, so the verified value
+/// is the one shown and scored. An operator's rating stands. `None` when no
+/// link changes.
+fn verified_relations(
+    relations: &[TaskRelation],
+    severity: DefectSeverity,
+) -> Option<Vec<TaskRelation>> {
+    let mut changed = false;
+    let relations = relations
+        .iter()
+        .cloned()
+        .map(|mut relation| {
+            if relation.relation_type == TaskRelationType::RegressionFrom
+                && let Some(regression) = relation.regression.as_mut()
+                && regression.severity_source != SeveritySource::Operator
+                && (regression.severity, regression.severity_source)
+                    != (severity, SeveritySource::Verified)
+            {
+                regression.severity = severity;
+                regression.severity_source = SeveritySource::Verified;
+                changed = true;
+            }
+            relation
+        })
+        .collect();
+    changed.then_some(relations)
 }
 
 /// Whether `history` past `boundary` records a verdict another run wrote.
@@ -595,8 +616,9 @@ impl OrbitRuntime {
 
     /// Record `record` on `task_id`, prepared in `prepared_status` with
     /// `history_len` history entries: the trusted history entry, the verdict
-    /// comment and, for REJECTED, the move to `rejected` — one write under
-    /// the task lock. A task that left that status, is no longer a review
+    /// comment and, for REJECTED, the move to `rejected`, or for CONFIRMED
+    /// the verified severity on its `regression_from` links — one write
+    /// under the task lock. A task that left that status, is no longer a review
     /// finding, changed its material, or was verified by another run since is
     /// left untouched. Legacy prepared records without a fingerprint are stale.
     pub(crate) fn record_finding_verification(
@@ -649,6 +671,12 @@ impl OrbitRuntime {
                 }
                 let now = Utc::now();
                 let rejected = record.verdict == FindingVerdict::Rejected;
+                let relations = match (record.verdict, record.severity) {
+                    (FindingVerdict::Confirmed, Some(severity)) => {
+                        verified_relations(&task.relations, severity)
+                    }
+                    _ => None,
+                };
                 let updated = self.with_mutation(|| {
                     let updated = self.stores().task_records().update(
                         task_id,
@@ -657,6 +685,7 @@ impl OrbitRuntime {
                             status: rejected.then_some(TaskStatus::Rejected),
                             status_event: rejected.then(|| FINDING_REJECTED_EVENT.to_string()),
                             status_note: rejected.then(|| record.rejection_note()),
+                            relations,
                             append_history: vec![TaskHistoryEntry {
                                 at: now,
                                 by: FINDING_VERIFICATION_ACTOR.to_string(),

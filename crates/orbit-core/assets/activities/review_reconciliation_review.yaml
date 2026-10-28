@@ -95,6 +95,16 @@ spec:
     3. Report each concrete problem as an `open` finding; nothing is repaired
        here. Mark a finding `disposed`, with a reason, only when you examined a
        suspicion and found it is not a defect.
+       Rate `severity` by the worst real impact, not the size of the fix,
+       taking the lower level when torn: `critical` data loss or
+       corruption, a security hole, every drain halted or silently wrong
+       results (a migration drops task history); `high` a core workflow
+       broken with no workaround (every `ui` delivery fails at handoff);
+       `medium` a feature broken or wrong in a real path, with a
+       workaround (`--json` drops a field the plain output shows); `low`
+       an edge case, a misleading message or a minor UX defect (an error
+       names the wrong flag); `nit` wording or doc drift, cosmetic, no
+       behavior impact (a stale sentence in a reference doc).
 
     Return
 
@@ -104,7 +114,7 @@ spec:
       "attempt_id": "<reconciliation_id>",
       "verdict": "accept" | "reject" | "incomplete",
       "summary": "<one paragraph>",
-      "findings": [{"id": "F1", "severity": "high|medium|low",
+      "findings": [{"id": "F1", "severity": "critical|high|medium|low|nit",
                     "summary": "...", "paths": ["..."],
                     "disposition": "open" | {"kind": "disposed", "reason": "..."}}],
       "escalation": "<why, when verdict is not accept>"

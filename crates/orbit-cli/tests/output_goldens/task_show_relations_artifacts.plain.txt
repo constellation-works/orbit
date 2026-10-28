@@ -12,11 +12,13 @@ Dependencies:
   - ORB-00001 [proposed]
 Relations:
   - blocked_by: ORB-00001 [proposed]
+  - regression_from: ORB-00001 [proposed] (nature: defect_in_new, escape: no_test, severity: high, severity source: filer)
 Artifacts: 1
   - evidence.txt (text/plain, 17 bytes)
 Created By: claude
 History:
   [<TIMESTAMP>] claude: created
   [<TIMESTAMP>] claude: updated (task fields updated)
+Source Task: ORB-00001
 Created: <TIMESTAMP>
 Updated: <TIMESTAMP>

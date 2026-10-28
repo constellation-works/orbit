@@ -228,10 +228,12 @@ relations:
     regression:
       nature: defect_in_new
       escape: test_not_selected
+      severity: high
+      severity_source: filer
 ```
 
-Both fields are required inside the payload and take one value from a closed
-set:
+`nature` and `escape` are required inside the payload and take one value from
+a closed set:
 
 - `nature`
   - `broke_existing`: the culprit broke behavior that worked before it landed.
@@ -248,6 +250,18 @@ set:
   - `spec_ambiguous`: the task or spec left the expected behavior open to the shipped reading.
   - `nondeterministic`: the failure depends on timing, ordering or environment and passed when gated.
   - `unclassified`: the filer could not tell how the defect escaped.
+
+`severity` and `severity_source` say how much the defect matters, on the scale
+review findings share (`critical`, `high`, `medium`, `low`, `nit`), and who
+rated it (`filer`, `verified`, `operator`, `backfill`, `default`). The screened
+`orbit.task.add` and `orbit.task.update` writes require `severity` on a new
+classified link; a link the task already holds may be re-sent without one and
+keeps its recorded rating. A severity given alone records source `filer`, and
+only finding verification records `verified`, when it confirms the finding
+that carries the link. A classified link stored before severity existed reads
+as `medium` with source `default`, and is written back that way. Binaries
+before this field refuse a payload that carries it (the payload is
+`deny_unknown_fields`), so hosts sharing a store upgrade together.
 
 The payload is additive. An entry written without it, including every link
 stored before the field existed, reads back with no `regression` key, which is

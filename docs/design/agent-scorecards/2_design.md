@@ -214,6 +214,12 @@ Dollar cost, tokens and wall time are never terms. Every role shows them under *
 
 Today's per-8-active-hours rate toggle is dropped: active hours mean something only for orchestrators. Orchestrators show active hours under **Shown, not scored**.
 
+### 4.6 Severity
+
+Review findings and `regression_from` links share one severity scale with constant weights: critical 8, high 4, medium 2, low 1, nit 0.25 ([ORB-19304]). A held finding adds its weight to **Findings that held**; an escaped or missed regression adds its weight to its term, whose weight is −2, so it costs twice its severity weight. Every other problem counts 1. The rubric with examples is in the orbit skill's task-fields reference.
+
+A regression link records `severity_source`: `filer`, `verified`, `operator`, `backfill` or `default`. A new classified link must carry a severity. Finding verification runs as a different crew from the filer. When it confirms a review-filed finding, its rating replaces the filer's on that finding's links as `verified`, and an `operator` rating stands. So a reviewer cannot earn more by inflating its own findings. Without verification the filer's value scores, and a link stored before severity existed counts as `medium` (`default`). Review gate findings are not verified and count at the reviewer's own severity; a value off the scale counts 1.
+
 ## 5. Roles
 
 ### 5.1 Orchestrators
@@ -265,7 +271,7 @@ Unit: **implemented tasks**, meaning tasks with at least one implementation run 
 | Review rejects | −1 | `reject` verdicts on the row's candidates. |
 | Reviewer repairs | −0.5 | `accept_with_fixes` verdicts on the row's candidates. |
 | Crew-caused rework | −1 | Repeat runs, `[BLOCKED]` or unmerged PRs, and operator requeues with cause `crew`, charged to the run that ended the attempt. Review verdicts are not counted again here. |
-| Escaped regressions | −2 | Regressions with escape `no_test` against tasks whose final implementation run is the row's. |
+| Escaped regressions | −2 | Regressions with escape `no_test` against tasks whose final implementation run is the row's, each counted at its severity weight (§4.6), so one costs −16 (critical) to −0.5 (nit). |
 
 Every scored term uses a fleet expectation for the row's **same task mix**:
 
@@ -360,12 +366,12 @@ Unit: **settled reviews**, meaning review gate attempts by the row's crew and mo
 
 | Term | Weight | Definition |
 |---|---|---|
-| Findings that held | +1 | Findings repaired by the reviewer and validated, open findings on a `reject` that the next implementation run changed a cited path to address, and review-job findings finding verification CONFIRMED; each weighted by severity: critical 8, high 4, medium 2, low 1. |
+| Findings that held | +1 | Findings repaired by the reviewer and validated, open findings on a `reject` that the next implementation run changed a cited path to address, and review-job findings finding verification CONFIRMED; each weighted by severity (§4.6): critical 8, high 4, medium 2, low 1, nit 0.25. A CONFIRMED finding counts at the verifier's severity, a review gate finding at the reviewer's own. |
 | Fixes that held | +1 | `accept_with_fixes` verdicts whose fixes passed owner revalidation and whose task has no regression with escape `review_missed`. |
 | Rejected findings | −1 | Findings closed by an authorized decision (`Disposed`), and findings a review job filed as tasks that finding verification REJECTED. |
 | False rejects | −2 | `reject` verdicts where the next implementation run changed none of the rejected findings' cited paths and the next review accepted. |
 | Failed fixes | −1 | Reviewer fixes that failed owner revalidation and were escalated. |
-| Missed regressions | −4 | Regressions with escape `review_missed` against tasks the row's review accepted, whenever filed. |
+| Missed regressions | −2 | Regressions with escape `review_missed` against tasks the row's review accepted, whenever filed, each counted at its severity weight (§4.6), so one costs −16 (critical) to −0.5 (nit). |
 | Incomplete reviews | −0.5 | `incomplete` verdicts not caused by infrastructure. |
 
 An accept rate never enters the score. A reviewer earns only for verdicts that turned out right. See [Score accuracy, never the volume of objections](./4_decisions.md#score-accuracy-never-the-volume-of-objections). The reject rate, the number of findings and cost are not terms either.
@@ -589,5 +595,6 @@ Each track updates the docs its change makes stale in the same PR. That includes
 - ORB-16957 — track G: CLI and MCP (current).
 - ORB-17118 — Orchestrators credit one point per landed task instead of weighting by self-assessed complexity, drop landed initiative and show unclassified rework and regressions beside the score; smoothing only lowers a score, with K raised from 10 to 30.
 - ORB-17291 — orchestrator rows keyed by the task's `orchestrator_model`, recorded at creation from an explicit input or the orchestrator crew's configured model.
+- ORB-19304 — one severity scale for findings and regression links (critical to nit, weights 8 to 0.25), verified severity scored, escaped and missed regressions weighted by it.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

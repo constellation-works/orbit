@@ -828,7 +828,14 @@ fn task_show_relations_and_artifacts_match_golden() {
     let blocker_id = tasks[1]["id"].as_str().expect("blocker id");
     let update = serde_json::to_string(&json!({
         "id": task_id,
-        "relations": [{"type": "blocked_by", "target": blocker_id}],
+        "relations": [
+            {"type": "blocked_by", "target": blocker_id},
+            {
+                "type": "regression_from",
+                "target": blocker_id,
+                "regression": {"nature": "defect_in_new", "escape": "no_test", "severity": "high"},
+            },
+        ],
     }))
     .expect("serialize task update");
 

@@ -364,7 +364,7 @@ Object.assign(sliced.regressions, {
 });
 sliced.regressions.rows[0].regressed_tasks[1] = {
   ...regressed('ORB-1', 'sol', ['ORB-2', 'ORB-3']),
-  regressions: [link('ORB-2', 'broke_existing', 'no_test', 'dashboard', 'delivery_review'), link('ORB-3', 'absent', 'absent', 'store_migration', 'operator', 'footprint')],
+  regressions: [{ ...link('ORB-2', 'broke_existing', 'no_test', 'dashboard', 'delivery_review'), severity: 'high', severity_source: 'verified' }, { ...link('ORB-3', 'absent', 'absent', 'store_migration', 'operator', 'footprint'), severity: 'absent', severity_source: 'absent' }],
 };
 await serve(sliced);
 const filter = dimension => part('filters').querySelectorAll('select.codebase-select').find(node => node.dataset.dimension === dimension);
@@ -453,8 +453,9 @@ assert.deepEqual(tasks().map(item => item.dataset.wide ?? null), ['5', null, nul
 assert.deepEqual(tasks()[1].querySelectorAll('a.codebase-task-link').map(node => node.textContent), ['ORB-1', 'ORB-2', 'ORB-3']);
 assert.match(tasks()[1].querySelector('a.codebase-task-link').getAttribute('href'), /#tasks\?open=ORB-1$/);
 assert.deepEqual(tasks()[1].querySelectorAll('div.codebase-task-by').map(line => [line.dataset.task, line.querySelectorAll('span.codebase-by-dim').map(tag => tag.dataset.value)]),
-  [['ORB-2', ['broke_existing', 'dashboard', 'delivery_review']], ['ORB-3', ['absent', 'store_migration', 'operator']]], 'each regression names its nature, layer and detector');
-assert.match(tasks()[1].querySelectorAll('span.codebase-by-dim')[4].title, /declared footprint/, 'a layer read from the footprint says so');
+  [['ORB-2', ['broke_existing', 'dashboard', 'delivery_review', 'high']], ['ORB-3', ['absent', 'store_migration', 'operator']]], 'each regression names its nature, layer, detector and severity; an absent payload has no severity');
+assert.match(tasks()[1].querySelectorAll('span.codebase-by-dim').find(tag => tag.dataset.dimension === 'severity').title, /set by verified/, 'the severity tag says who set it');
+assert.match(tasks()[1].querySelectorAll('span.codebase-by-dim')[5].title, /declared footprint/, 'a layer read from the footprint says so');
 assert.equal(tasks()[2].querySelector('span.codebase-crew').textContent, 'unassigned');
 const all = button(part('file-tasks'), 'All 4');
 assert.equal(all.getAttribute('aria-expanded'), 'false');

@@ -11,7 +11,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use chrono::{DateTime, Duration, Utc};
-use orbit_types::task::TaskComplexity;
+use orbit_types::task::{DefectSeverity, TaskComplexity};
 use orbit_types::workflow::ReviewVerdict;
 use serde_json::{Value, json};
 
@@ -22,7 +22,7 @@ use crate::application::agents::facts::{
 };
 use crate::application::agents::score::{Occurrence, RowInput, Stat, Tally, Term, number};
 use crate::application::agents::{AgentFacts, AgentRole, Problem};
-use crate::application::task::{FindingSeverity, FindingVerdict};
+use crate::application::task::FindingVerdict;
 
 pub(super) const ROLE: RoleSpec = RoleSpec {
     unit: "settled reviews",
@@ -38,20 +38,12 @@ const MISS_LOOKBACK_DAYS: i64 = 30;
 /// Accept-rate points above peers on the same tiers that tag a row
 /// `accepts often`.
 const ACCEPTS_OFTEN_POINTS: f64 = 10.0;
-/// Severity weights of a finding that held; any other severity weighs 1.
-const SEVERITY_WEIGHTS: &[(&str, f64)] = &[
-    ("critical", 8.0),
-    ("high", 4.0),
-    ("medium", 2.0),
-    ("low", 1.0),
-];
-
 const TERMS: &[Term] = &[
     Term {
         key: "findings_held",
         label: "Findings that held",
         weight: 1.0,
-        definition: "Findings repaired by the reviewer whose fixes passed owner revalidation, open findings on a reject whose next implementation run changed a path the finding cites, and findings a review job filed that finding verification CONFIRMED; each weighted by severity: critical 8, high 4, medium 2, low 1.",
+        definition: "Findings repaired by the reviewer whose fixes passed owner revalidation, open findings on a reject whose next implementation run changed a path the finding cites, and findings a review job filed that finding verification CONFIRMED; each weighted by severity: critical 8, high 4, medium 2, low 1, nit 0.25. A CONFIRMED finding scores at the severity verification rated; a review gate finding at the reviewer's own.",
         group: "credit",
     },
     Term {
@@ -85,8 +77,8 @@ const TERMS: &[Term] = &[
     Term {
         key: "missed_regressions",
         label: "Missed regressions",
-        weight: -4.0,
-        definition: "Regressions with escape review_missed against tasks the row's review accepted, whenever filed.",
+        weight: -2.0,
+        definition: "Regressions with escape review_missed against tasks the row's review accepted, whenever filed, each weighted by the link's severity: critical 8, high 4, medium 2, low 1, nit 0.25, so one costs -16 to -0.5.",
         group: "problem",
     },
     Term {
@@ -318,7 +310,7 @@ fn rows(facts: &AgentFacts, since: DateTime<Utc>) -> Vec<RowInput<'_>> {
             .add(
                 key,
                 task,
-                1.0,
+                charge.severity_weight(),
                 Occurrence {
                     at: charge.at,
                     detail: format!("{}: {}", charge.problem.as_str(), charge.detail),
@@ -369,20 +361,16 @@ fn held_findings(review: &Review) -> Vec<&Finding> {
     }
 }
 
+/// The weight of a review gate finding's severity; a value off the scale
+/// weighs 1.
 fn severity_weight(severity: &str) -> f64 {
-    SEVERITY_WEIGHTS
-        .iter()
-        .find(|(name, _)| *name == severity)
-        .map_or(1.0, |(_, weight)| *weight)
+    DefectSeverity::parse(severity).map_or(1.0, DefectSeverity::weight)
 }
 
-fn verified_weight(severity: Option<FindingSeverity>) -> f64 {
-    severity_weight(match severity {
-        Some(FindingSeverity::Critical) => "critical",
-        Some(FindingSeverity::High) => "high",
-        Some(FindingSeverity::Medium) => "medium",
-        Some(FindingSeverity::Low) | None => "low",
-    })
+/// The weight of a CONFIRMED finding at the severity verification rated; a
+/// verdict recorded without one weighs as `low`.
+fn verified_weight(severity: Option<DefectSeverity>) -> f64 {
+    severity.unwrap_or(DefectSeverity::Low).weight()
 }
 
 fn tier(complexity: Option<TaskComplexity>) -> &'static str {

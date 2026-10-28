@@ -108,9 +108,9 @@ pub use final_recovery::{
     FinalRecoveryRequest, FinalRecoveryRequeueBound, FinalRecoveryTaskRevision,
 };
 pub use finding_verification::{
-    FINDING_VERIFICATION_SCHEMA_VERSION, FindingEvidence, FindingRejection, FindingSeverity,
-    FindingVerdict, FindingVerification, REVIEW_FINDING_TAGS, RejectionReason, VerdictConfidence,
-    VerifierReport, VerifierVerdict, is_review_finding,
+    FINDING_VERIFICATION_SCHEMA_VERSION, FindingEvidence, FindingRejection, FindingVerdict,
+    FindingVerification, REVIEW_FINDING_TAGS, RejectionReason, VerdictConfidence, VerifierReport,
+    VerifierVerdict, is_review_finding,
 };
 pub(crate) use finding_verification::{
     UNVERIFIED_REVIEW_FINDING, VERIFIABLE_STATUSES, VerdictWrite, VerifierAssignment,

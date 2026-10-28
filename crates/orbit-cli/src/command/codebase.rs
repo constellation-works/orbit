@@ -328,10 +328,12 @@ fn write_tasks(out: &mut String, label: &str, numerator: &str, tasks: &Value) {
         for link in task["regressions"].as_array().into_iter().flatten() {
             let _ = writeln!(
                 out,
-                "      {}  nature {} · escape {} · layer {} ({}) · detected by {}",
+                "      {}  nature {} · escape {} · severity {} ({}) · layer {} ({}) · detected by {}",
                 text(&link["task_id"]),
                 text(&link["nature"]),
                 text(&link["escape"]),
+                text(&link["severity"]),
+                text(&link["severity_source"]),
                 text(&link["layer"]),
                 text(&link["layer_source"]),
                 text(&link["detected_by"]),
