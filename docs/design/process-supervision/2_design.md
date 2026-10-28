@@ -252,7 +252,7 @@ Tests that call a supervisor directly are left out.
 
 | Caller | Entry point | What it needs |
 |--------|-------------|---------------|
-| `orbit-engine/src/activity_job/cli_runner/orchestrator/dispatch.rs` (provider run) | `spawn_for_supervision` + `spawn_with_timeout` | Pre-supervision work on the child (worker registration, PID namespace, broker bind, Linux post-run guard), prompt on stdin, rolling capture with protocol tail, line trace events, `on_spawn`, progress, stopped-descendant reports, build-budget deadline extension, kill at once |
+| `orbit-engine/src/activity_job/cli_runner/orchestrator/dispatch/subprocess.rs` (provider run) | `spawn_for_supervision` + `spawn_with_timeout` | Pre-supervision work on the child (worker registration, PID namespace, broker bind, Linux post-run guard), prompt on stdin, rolling capture with protocol tail, line trace events, `on_spawn`, progress, stopped-descendant reports, build-budget deadline extension, kill at once |
 | `orbit-engine/src/activity_job/cli_runner/auth_probe.rs` (provider auth probe) | `spawn_for_supervision` + `spawn_with_timeout` | Same spawn path, worker registration, 16 KiB capture, deadline |
 
 ### 2.4 Long-lived session callers

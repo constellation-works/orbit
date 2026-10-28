@@ -1,229 +1,70 @@
-//! Provider subprocess dispatch for `backend: cli`: argv and environment
-//! composition, the run's plugin broker, and spawn supervision.
-
-use std::cell::{Cell, RefCell};
 use std::sync::Arc;
-use std::time::Duration;
 
 use orbit_agent::{Agent, AgentConfig, AgentOperation, AgentRequest};
-use orbit_common::process::build_budget::{BuildBudgetWaits, WAIT_DIRECTORY_ENV, read_waits};
-use orbit_common::process::identity::process_start_identity_token;
-use orbit_common::process::stopped_descendants::{StoppedDescendant, stopped_descendant_threshold};
+use orbit_common::process::build_budget::WAIT_DIRECTORY_ENV;
 use orbit_common::security::child_env::{MCP_MANAGED_REGISTRY_ROOT_ENV, MCP_MANAGED_WORKSPACE_ENV};
 use orbit_common::security::redaction::argv_redactor;
 use orbit_tools::plugin::BrokeredCaller;
-use orbit_types::workflow::activity_job::{AgentLoopSpec, EXPLORE_ACTIVITY, V2AuditEventKind};
-use orbit_types::workflow::{
-    ActivityToolDenyPolicy, ExecutorSandboxKind, ExploreBriefAdmission, render_tag_instructions,
-};
-use serde_json::Value;
+use orbit_types::workflow::activity_job::{EXPLORE_ACTIVITY, V2AuditEventKind};
+use orbit_types::workflow::{ActivityToolDenyPolicy, ExecutorSandboxKind, render_tag_instructions};
 
+use crate::activity_job::dispatcher::DispatchOutcome;
 use crate::context::{PluginBrokerRun, ProvenanceEnv, provenance_env};
-use crate::executor::automation::vcs::git::{GitTimeoutBudget, GitTimeoutBudgetGuard};
 
-use super::super::super::audit_writer::V2AuditWriter;
-use super::super::super::dispatcher::{DispatchError, DispatchOutcome};
-use super::super::super::workspace::{WorktreeBoundaryGuard, validate_declared_worktree_pair};
-use super::super::argv::{
+use super::super::super::super::dispatcher::DispatchError;
+use super::super::super::super::workspace::WorktreeBoundaryGuard;
+use super::super::super::argv::{
     apply_provider_runtime_arg_fixups, apply_provider_static_arg_fixups,
     apply_read_only_provider_sandbox, apply_trusted_host_provider_sandbox,
     codex_mcp_server_launch_args, neutralize_inner_sandbox, try_audit_argv_for_dispatch,
 };
-use super::super::envelope::{cli_agent_envelope_json, task_id_from_input, task_ids_from_input};
-use super::super::inspection::{admit_inspection, prepare_inspection_tools};
-use super::super::launcher::{orbit_tool_env, resolve_provider_launcher};
-use super::super::plugin_broker::RunPluginBroker;
-use super::super::prompt_file::PromptFile;
-use super::super::spawn::SpawnError;
-use super::super::stdout_preview::{PROGRESS_MESSAGE_LIMIT_BYTES, bounded_assistant_message};
-use super::super::supervisor::{
-    OutputProgress, ProgressReporter, SpawnTraceContext, SpawnWithTimeoutRequest,
-    StoppedDescendantReporter, spawn_for_supervision, spawn_with_timeout,
-};
-use super::completion::{ProviderExit, project_completion};
-use super::policy::{
-    ActivityToolGrant, activity_policy_env, apply_experiment_tool_overlays,
-    drop_inherited_policy_env, resolve_activity_tool_grant,
-};
-use super::prepare::{
-    SourceCheckout, activity_tool_context, invocation_timeout_seconds, prepare_dispatch_sandbox,
-    prepare_source_checkout, require_conflict_recovery_target, resolve_dispatch_sandbox,
-    trusted_host_admission,
-};
-use crate::context::RuntimeHost;
-
-use super::antigravity_usage::AntigravityUsageRequest;
-use super::environment::{
-    activity_deadline_env, add_browser_kit_env, codex_home, provider_child_environment,
+use super::super::super::envelope::cli_agent_envelope_json;
+use super::super::super::launcher::{orbit_tool_env, resolve_provider_launcher};
+use super::super::super::plugin_broker::RunPluginBroker;
+use super::super::super::prompt_file::PromptFile;
+use super::super::environment::{
+    activity_deadline_env, add_browser_kit_env, provider_child_environment,
     require_claude_worker_credential, require_crew_env,
 };
-use super::evidence::{
-    emit_build_waits, record_scratch_removals, step_error_after_provider_evidence,
-};
-use super::grok_usage::GrokUsageRequest;
-use super::limit::UsageWindowContext;
+use super::super::policy::{activity_policy_env, drop_inherited_policy_env};
+use super::super::prepare::{SourceCheckout, prepare_dispatch_sandbox, resolve_dispatch_sandbox};
+use super::{CliDispatchContext, post_run, preparation, subprocess};
 
-/// How often a running provider's stdout is sampled for progress. Bounds the
-/// staleness of `last_activity_at` and the progress rows one invocation writes.
-const PROVIDER_PROGRESS_INTERVAL: Duration = Duration::from_secs(10);
-
-/// Add the host's `regression_risk` marks to the task snapshot of an
-/// activity that declares how to act on them, and return that instruction
-/// when it did. An activity without one, a prompt with no task snapshot, or
-/// a task with nothing marked leaves the snapshot and instruction as they
-/// are.
-fn attach_regression_risk<'a>(
-    host: &dyn RuntimeHost,
-    spec: &'a AgentLoopSpec,
-    run_id: &str,
-    activity_name: &str,
-    input: &Value,
-    task_ctx: Option<&mut Value>,
-) -> Option<&'a str> {
-    let instruction = spec
-        .regression_risk_instruction
-        .as_deref()
-        .filter(|instruction| !instruction.trim().is_empty())?;
-    let context = task_ctx?.as_object_mut()?;
-    let marks = host.regression_risk_for_agent_input(run_id, activity_name, input)?;
-    context.insert("regression_risk".to_string(), marks);
-    Some(instruction)
-}
-
-/// Ask the host for the task's explore brief when `spec` declares an
-/// `explore_brief_instruction`, record the outcome whatever it is, and put a
-/// delivered brief into the task context. Returns the instruction to append
-/// only when the prompt carries the brief.
-#[allow(clippy::too_many_arguments)]
-fn attach_explore_brief<'a>(
-    host: &dyn RuntimeHost,
-    spec: &'a AgentLoopSpec,
-    run_id: &str,
-    step_id: &str,
-    activity_name: &str,
-    input: &Value,
-    task_ctx: Option<&mut Value>,
-    audit: &V2AuditWriter,
-) -> Option<&'a str> {
-    let instruction = spec
-        .explore_brief_instruction
-        .as_deref()
-        .filter(|instruction| !instruction.trim().is_empty())?;
-    let ExploreBriefAdmission { mut record, brief } =
-        host.explore_brief_for_activity(run_id, activity_name, input)?;
-    let delivered = match (brief, task_ctx.and_then(Value::as_object_mut)) {
-        (Some(brief), Some(context)) if record.deliverable() => {
-            context.insert("explore_brief".to_string(), brief);
-            true
-        }
-        _ => false,
-    };
-    record.delivered = delivered;
-    audit.emit_lossy(V2AuditEventKind::ExploreBriefApplied {
-        step_id: step_id.to_string(),
-        activity_name: activity_name.to_string(),
-        task_id: task_id_from_input(input).unwrap_or_default().to_string(),
-        brief: record,
-    });
-    delivered.then_some(instruction)
-}
-
-/// Run a catalog activity on behalf of a pipeline step whose id differs from
-/// the activity name. Policy and broker authorization use `activity_name`;
-/// audit labels and worktree-boundary reports use `step_id`.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn run_cli_backend_for_step(
-    host: &dyn RuntimeHost,
-    spec: &AgentLoopSpec,
-    step_id: &str,
-    activity_name: &str,
-    run_id: &str,
-    audit: Arc<V2AuditWriter>,
-    input: &Value,
-    fs_profile: Option<&str>,
+pub(super) fn dispatch_prepared_provider(
+    context: CliDispatchContext<'_>,
+    prepared: preparation::PreparedCliDispatch<'_>,
 ) -> Result<DispatchOutcome, DispatchError> {
-    let budget = GitTimeoutBudget::from_input(input)
-        .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?;
-    let _git_timeout_budget = GitTimeoutBudgetGuard::install(budget);
-    // A read-only reviewer edits nothing; any other agent may, so it first
-    // holds the context locks its run's admission deferred.
-    if fs_profile != Some("reviewer") {
-        host.acquire_deferred_footprint(run_id, activity_name)?;
-    }
-    let provider = spec.provider.as_str().to_string();
-    let trusted_host = trusted_host_admission(spec, activity_name, input)?;
-    // Reject an inspection configuration that cannot start (a non-reviewer
-    // profile, a provider with no CLI runtime) before executor lookup can
-    // classify it as a transient missing-CLI error.
-    admit_inspection(&provider, input, fs_profile)?;
-    let mut cli_executor = host.resolve_cli_executor(&provider)?;
-    let inspection_tools =
-        prepare_inspection_tools(&provider, input, cli_executor.inspection_args.as_deref())?;
-    let timeout_seconds =
-        invocation_timeout_seconds(spec, activity_name, trusted_host.as_ref(), input);
-    let wall_clock_timeout = Duration::from_secs(timeout_seconds);
-    let stall_window = host.agent_stall_window();
-
-    let task_ids = task_ids_from_input(input);
-    let task_id = task_id_from_input(input);
-    require_conflict_recovery_target(activity_name, &task_ids, input, run_id)?;
-    let mut grant = resolve_activity_tool_grant(host, spec, activity_name, input, &task_ids)?;
-    // A live experiment arm's tool delta applies after the grant, so the
-    // audit row below and the child's policy envelope carry the treatment.
-    let experiment_overlays =
-        host.experiment_overlays_for_activity(run_id, activity_name, input)?;
-    let experiment_records = apply_experiment_tool_overlays(
-        host,
-        &mut grant,
-        &experiment_overlays,
-        activity_name,
-        input,
-        &task_ids,
-    )?;
-    let ActivityToolGrant {
-        tool_policy,
-        tool_disallow_list,
-        activity_tools,
-    } = grant;
-
-    // §6 allowlist-advisory event — emitted once per invocation before the
-    // subprocess starts so a reviewer can see the enforcement gap at a glance.
-    audit.emit_lossy(V2AuditEventKind::ToolAllowlistHarnessDelegated {
-        provider: provider.clone(),
-        task_id: task_id.map(ToOwned::to_owned),
-        task_ids: task_ids.clone(),
-        requested_tools: activity_tools.requested_tools.clone(),
-        effective_tools: activity_tools.effective_tools.clone(),
-        tools: activity_tools.effective_tools.clone(),
-        tool_policy: Some(tool_policy),
-        tool_disallow_list: tool_disallow_list.clone(),
-        omitted_requirement_notes: activity_tools.omitted_requirement_notes.clone(),
-    });
-
-    let mut task_ctx = host.task_context_for_agent_input(run_id, step_id, input)?;
-    let regression_risk_instruction =
-        attach_regression_risk(host, spec, run_id, activity_name, input, task_ctx.as_mut());
-    let explore_brief_instruction = attach_explore_brief(
+    let CliDispatchContext {
         host,
         spec,
-        run_id,
         step_id,
         activity_name,
-        input,
-        task_ctx.as_mut(),
-        &audit,
-    );
-    let tool_ctx = activity_tool_context(host, spec, run_id, fs_profile, &provider);
-    // A shipment pipeline renders the assigned checkout twice: once as the
-    // child cwd and once inside the agent contract. Validate that pair against
-    // the registered primary before sandbox construction or provider spawn.
-    let declared_worktree_pair = validate_declared_worktree_pair(
-        input,
-        task_ctx.as_ref(),
         run_id,
-        &provider,
-        tool_ctx.workspace_root.as_deref(),
-    )?;
+        audit,
+        input,
+        fs_profile,
+    } = context;
+    let preparation::PreparedCliDispatch {
+        provider,
+        trusted_host,
+        mut cli_executor,
+        inspection_tools,
+        timeout_seconds,
+        wall_clock_timeout,
+        stall_window,
+        task_ids,
+        task_id,
+        tool_disallow_list,
+        activity_tools,
+        task_ctx,
+        regression_risk_instruction,
+        explore_brief_instruction,
+        tool_ctx,
+        declared_worktree_pair,
+        source_checkout,
+        experiment_overlays,
+        experiment_records,
+    } = prepared;
     let SourceCheckout {
         source_cwd,
         inspection,
@@ -231,12 +72,7 @@ pub(crate) fn run_cli_backend_for_step(
         inspection_task_ctx,
         subprocess_cwd,
         subprocess_cwd_string,
-    } = prepare_source_checkout(
-        input,
-        task_ctx.as_ref(),
-        tool_ctx.workspace_root.as_deref(),
-        fs_profile,
-    )?;
+    } = source_checkout;
     let resolved_sandbox = resolve_dispatch_sandbox(
         host,
         &provider,
@@ -427,7 +263,7 @@ pub(crate) fn run_cli_backend_for_step(
         })?;
     let scratch = orbit_common::fs::path::ensure_orbit_scratch_dir(&scratch_root)
         .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?;
-    let _skill_root = super::skills::prepare_experiment_skill_root(
+    let _skill_root = super::super::skills::prepare_experiment_skill_root(
         &provider,
         &experiment_overlays,
         &scratch,
@@ -534,7 +370,7 @@ pub(crate) fn run_cli_backend_for_step(
     // the error string every downstream reader copies [ORB-12467].
     .map(|boundary| {
         boundary
-            .with_audit(Arc::clone(&audit))
+            .with_audit(Arc::clone(audit))
             .with_activity(step_id)
     });
 
@@ -756,231 +592,28 @@ pub(crate) fn run_cli_backend_for_step(
     let plugin_broker = RunPluginBroker::start(host, run_id, broker_run.as_ref(), sandbox);
     child_env.retain(|(key, _)| key != crate::context::PLUGIN_BROKER_ENV);
     child_env.extend(plugin_broker.env());
-    // [ORB-10496] Record the provider child's PID the moment it exists. Emitted
-    // through the same writer, so it is persisted (and therefore readable by
-    // `orbit run show` / the run-status API) while the invocation is still
-    // running — the only in-flight signal for a ship-pipeline agent step.
-    let pid_audit = Arc::clone(&audit);
-    let pid_provider = provider.clone();
-    let on_spawn = move |pid: u32| {
-        pid_audit.emit_lossy(V2AuditEventKind::CliInvocationProcess {
-            provider: pid_provider.clone(),
-            pid,
-            pid_start_time: process_start_identity_token(pid),
-        });
-    };
-
-    // [ORB-13899] Live progress: the newest assistant message and, through
-    // the event time, the last moment the child produced output. Silence
-    // emits nothing, so a quiet child adds no rows; build-budget waits are
-    // recorded only when they change.
-    let progress_audit = Arc::clone(&audit);
-    let progress_provider = provider.clone();
-    let reported_bytes = Cell::new(0usize);
-    let reported_waits = RefCell::new(BuildBudgetWaits::default());
-    let report_progress = |progress: &OutputProgress| {
-        let waits = read_waits(
-            build_wait_directory.path(),
-            timeout_seconds.saturating_mul(1000),
-        );
-        if waits.count > 0 && *reported_waits.borrow() != waits {
-            emit_build_waits(&progress_audit, &progress_provider, &waits);
-            *reported_waits.borrow_mut() = waits;
-        }
-        if progress.observed_bytes == reported_bytes.replace(progress.observed_bytes) {
-            return;
-        }
-        let message = bounded_assistant_message(
-            &progress_provider,
-            &progress.recent,
-            redaction,
-            PROGRESS_MESSAGE_LIMIT_BYTES,
-        );
-        progress_audit.emit_lossy(V2AuditEventKind::CliInvocationActivity {
-            provider: progress_provider.clone(),
-            observed_bytes: progress.observed_bytes as u64,
-            latest_message_truncated: message.as_ref().is_some_and(|message| message.truncated),
-            latest_message: message.map(|message| message.text),
-        });
-    };
-
-    // A descendant the supervisor ended because it stayed stopped: the
-    // operator's record of what was killed and why the agent moved on.
-    let stopped_audit = Arc::clone(&audit);
-    let stopped_provider = provider.clone();
-    let report_stopped = |stopped: &StoppedDescendant| {
-        tracing::warn!(
-            target: "orbit.engine.cli_runner",
-            provider = %stopped_provider,
-            job_run_id = %run_id,
-            pid = stopped.pid,
-            ended = stopped.ended(),
-            "{}",
-            stopped.describe()
-        );
-        stopped_audit.emit_lossy(V2AuditEventKind::CliInvocationStoppedDescendant {
-            provider: stopped_provider.clone(),
-            pid: stopped.pid,
-            pid_start_time: stopped.pid_start_time.clone(),
-            command: stopped.command.clone(),
-            stopped_ms: u64::try_from(stopped.stopped_for.as_millis()).unwrap_or(u64::MAX),
-            ended: stopped.ended(),
-            error: stopped.end_error.clone(),
-        });
-    };
-
-    let usage_context = UsageWindowContext {
-        antigravity: (provider == "antigravity").then(|| AntigravityUsageRequest {
-            program: resolved_program.clone(),
-            args: cli_executor.args.clone(),
-            environment: child_env.clone(),
-            cwd: subprocess_cwd.clone(),
-        }),
-        codex_home: (provider == "codex")
-            .then(|| codex_home(&child_env))
-            .flatten(),
-        grok: (provider == "grok")
-            .then(|| GrokUsageRequest::from_env(&child_env))
-            .flatten(),
-    };
-    // A managed Linux Bubblewrap launch snapshots the write-policy gaps its
-    // mounts cannot cover while compiling those mounts; take that snapshot off
-    // the spawned child rather than walking the worktree a second time.
-    let mut linux_post_run_guard = None;
-    let spawn_result = spawn_for_supervision(
-        &resolved_program,
-        &subprocess_args,
-        &child_env,
-        subprocess_cwd.as_deref(),
+    let process_exit = subprocess::invoke_cli_provider(subprocess::CliProviderInvocation {
+        context,
+        provider: &provider,
+        resolved_program: &resolved_program,
+        subprocess_args: &subprocess_args,
+        child_env: &child_env,
+        subprocess_cwd: &subprocess_cwd,
+        subprocess_cwd_string: &subprocess_cwd_string,
         sandbox,
-        &provider,
-    )
-    .and_then(|mut spawned| {
-        let registered = host
-            .register_worker_process(spawned.child.pid())
-            .and_then(|()| {
-                if sandbox.is_some_and(|sandbox| {
-                    sandbox.kind == orbit_types::workflow::ExecutorSandboxKind::LinuxBwrap
-                }) {
-                    host.register_worker_pid_namespace(spawned.child.pid())
-                } else {
-                    Ok(())
-                }
-            });
-        if let Err(error) = registered {
-            return Err(SpawnError::permanent(error.to_string()));
-        }
-        plugin_broker.bind_sandbox(spawned.child.pid());
-        linux_post_run_guard = spawned.take_linux_post_run_guard();
-        spawn_with_timeout(SpawnWithTimeoutRequest {
-            program: &resolved_program,
-            args: &subprocess_args,
-            stdin_bytes,
-            env: &child_env,
-            cwd: subprocess_cwd.as_deref(),
-            timeout: wall_clock_timeout,
-            sandbox,
-            trace: SpawnTraceContext {
-                provider: &provider,
-                job_run_id: run_id,
-                task_id: task_id_from_input(input),
-                cwd: subprocess_cwd_string.as_deref(),
-            },
-            output_capture_limit: None,
-            on_spawn: Some(&on_spawn),
-            on_progress: Some(ProgressReporter {
-                interval: PROVIDER_PROGRESS_INTERVAL,
-                report: &report_progress,
-            }),
-            stopped_descendants: Some(StoppedDescendantReporter {
-                threshold: stopped_descendant_threshold(),
-                report: &report_stopped,
-            }),
-            spawned_child: Some(spawned),
-            stall_window,
-        })
-    });
-    // The provider has exited, timed out, or failed to start: nothing in its
-    // sandbox may reach the broker any longer.
-    drop(plugin_broker);
-
-    let (stdout, stderr, exit_code, duration, timed_out, stalled) = match spawn_result {
-        Ok(result) => result,
-        Err(err) => {
-            if let Some(boundary) = worktree_boundary.take() {
-                boundary.verify_after_provider(
-                    host,
-                    false,
-                    input.get("failed_step_id").and_then(Value::as_str),
-                    &task_ids,
-                )?;
-            }
-            // Spawn-layer classification (ORB-10006): executable missing /
-            // permission denied fail fast; resource exhaustion (EAGAIN,
-            // ENOMEM, ...) and other transient host failures stay retryable
-            // at the step layer.
-            return Err(if err.permanent {
-                DispatchError::CliInvocationPermanent(err.message)
-            } else {
-                DispatchError::CliInvocationFailed(err.message)
-            });
-        }
-    };
-
-    // A post-run check fails the step, but the run trail must still hold the
-    // provider's output. Refresh before those writes: a sandboxed provider may
-    // have opened the granted SQLite/WAL files while this worker kept its
-    // pre-spawn handles, and every clone of that store shares the connection.
-    // The swap happens only after the replacement is open and writable, so a
-    // failure before it leaves the previous connection and a failure after it
-    // leaves the new one. Blobs and `CliInvocationFinished` are recorded on
-    // whichever connection remains, then inspection, the Linux guard, and the
-    // worktree boundary run. Integrity failures keep that classification.
-    let refresh_error = host
-        .refresh_persistence_after_cli_provider()
-        .err()
-        .map(|error| {
-            DispatchError::CliInvocationPermanent(format!(
-                "refresh durable store after provider `{provider}` exited: {error}"
-            ))
-        });
-
-    let stdout_blob_ref = audit.write_blob(stdout.bytes());
-    let stderr_blob_ref = audit.write_blob(stderr.bytes());
-    let build_budget_waits = read_waits(
-        build_wait_directory.path(),
-        timeout_seconds.saturating_mul(1000),
-    );
-    emit_build_waits(&audit, &provider, &build_budget_waits);
-    audit.emit_lossy(V2AuditEventKind::CliInvocationFinished {
-        provider: provider.clone(),
-        exit_code,
-        duration_ms: duration.as_millis() as u64,
-        stdout_blob_ref: stdout_blob_ref.clone(),
-        stderr_blob_ref: stderr_blob_ref.clone(),
-        harness_version: None,
-        timed_out,
-    });
-
-    let inspection_error = inspection
-        .as_ref()
-        .and_then(|snapshot| snapshot.verify().err());
-    let guard_error = linux_post_run_guard.as_ref().and_then(|guard| {
-        match guard.verify(scratch_dir.as_deref()) {
-            Ok(removed) => {
-                record_scratch_removals(&audit, &provider, guard.profile(), &removed);
-                None
-            }
-            Err(error) => Some(DispatchError::CliInvocationPermanent(error.to_string())),
-        }
-    });
-    let post_run_error = inspection_error.or(guard_error).or(refresh_error);
-
-    let completion = project_completion(ProviderExit {
-        host,
-        spec,
-        input,
-        run_id,
+        stdin_bytes,
+        wall_clock_timeout,
+        timeout_seconds,
+        stall_window,
+        build_wait_directory: &build_wait_directory,
+        redaction,
+        cli_executor: &cli_executor,
+        plugin_broker,
+        worktree_boundary: &mut worktree_boundary,
+        task_ids: &task_ids,
+    })?;
+    post_run::finish_cli_dispatch(post_run::CliProviderCompletion {
+        context,
         provider,
         model,
         task_ids: &task_ids,
@@ -990,25 +623,12 @@ pub(crate) fn run_cli_backend_for_step(
         redaction,
         timeout_seconds,
         argv_redacted,
-        // A blob that could not be stored has no ref to cite.
-        stdin_blob_ref: stdin_blob_ref.unwrap_or_default(),
-        stdout_blob_ref: stdout_blob_ref.clone().unwrap_or_default(),
-        stderr_blob_ref: stderr_blob_ref.clone().unwrap_or_default(),
-        stdout,
-        stderr,
-        exit_code,
-        duration,
-        timed_out,
-        stalled,
-        stall_window: stall_window.unwrap_or_default(),
+        stdin_blob_ref,
         print_timeout,
-        usage_context,
-        build_budget_waits,
-    });
-    step_error_after_provider_evidence(
-        completion,
-        post_run_error,
-        stdout_blob_ref.as_deref().unwrap_or_default(),
-        stderr_blob_ref.as_deref().unwrap_or_default(),
-    )
+        stall_window,
+        inspection: inspection.as_ref(),
+        scratch_dir: scratch_dir.as_deref(),
+        build_wait_directory: &build_wait_directory,
+        process_exit,
+    })
 }

@@ -27,7 +27,7 @@ everything from GitHub (`task_claimed_pr_pipeline`, `task_landing_pipeline`, `vc
 ## Problem
 
 Every Orbit delivery runs an agent as a local subprocess in a local worktree
-(`crates/orbit-engine/src/activity_job/cli_runner/orchestrator/dispatch.rs`,
+(`crates/orbit-engine/src/activity_job/cli_runner/orchestrator/dispatch/preparation.rs`,
 `run_cli_backend_for_step`; entry point `run_cli_backend` in `entry.rs`). Throughput is bounded by
 the host:
 about ten concurrent agents on either the Mac or a Linux server before CPU, ports and

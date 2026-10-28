@@ -29,6 +29,7 @@ use serde_json::{Value, json};
 const RUN_ID: &str = "jrun-final-recovery";
 
 #[cfg(unix)]
+#[path = "prompt.rs"]
 mod prompt;
 
 /// How a scripted deterministic call ends.

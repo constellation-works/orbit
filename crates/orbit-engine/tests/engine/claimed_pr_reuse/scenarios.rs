@@ -27,6 +27,7 @@ use serde_json::{Value, json};
 
 use super::git_fixture;
 
+#[path = "final_recovery.rs"]
 mod final_recovery;
 
 const CHILD_ENV: &str = "ORBIT_CLAIMED_PR_REUSE_CHILD";

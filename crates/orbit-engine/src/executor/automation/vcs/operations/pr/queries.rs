@@ -3,20 +3,17 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use serde_json::{Value, json};
 
-use super::input::{optional_string, required_string, valid_expected_remote_sha};
-use super::process::{execute, execute_with_transient_retry, run_vcs_process, succeeded};
-use super::{BASE_MODIFIED_REFUSAL, DEFAULT_TIMEOUT_MS, SLOW_TIMEOUT_MS};
-
-/// GitHub's reason for refusing a merge because another merge moved the base
-/// between its mergeability check and the mutation (F2026-10-071). The `sha`
-/// condition was not what failed.
-const BASE_MODIFIED_REASON: &str = "Base branch was modified. Review and try the merge again.";
+use super::super::DEFAULT_TIMEOUT_MS;
+use super::super::input::{optional_string, required_string};
+use super::super::process::execute_with_transient_retry;
 
 /// Upper bound on pull requests one listing of every open pull request reads.
 const PR_LIST_OPEN_LIMIT: &str = "500";
 
 /// The pull requests on one head branch in `state`.
-pub(super) fn pr_list(input: &Value) -> Result<Value, OrbitError> {
+pub(in crate::executor::automation::vcs::operations) fn pr_list(
+    input: &Value,
+) -> Result<Value, OrbitError> {
     let head = required_string(input, "head")?;
     let state = optional_string(input, "state").unwrap_or("open");
     list_pull_requests(
@@ -34,7 +31,9 @@ pub(super) fn pr_list(input: &Value) -> Result<Value, OrbitError> {
 
 /// Every open pull request with its body, which is how a run finds its
 /// tasks' earlier delivery pull requests. Bounded by [`PR_LIST_OPEN_LIMIT`].
-pub(super) fn pr_list_open(input: &Value) -> Result<Value, OrbitError> {
+pub(in crate::executor::automation::vcs::operations) fn pr_list_open(
+    input: &Value,
+) -> Result<Value, OrbitError> {
     list_pull_requests(
         input,
         &[
@@ -75,78 +74,9 @@ fn list_pull_requests(input: &Value, filters: &[&str]) -> Result<Value, OrbitErr
     Ok(json!({ "pull_requests": pull_requests }))
 }
 
-/// One create attempt. `pr_open` owns retries so it can reconcile an ambiguous
-/// response with a head lookup before sending another mutation.
-pub(super) fn pr_create(input: &Value) -> Result<Value, OrbitError> {
-    let title = required_string(input, "title")?;
-    let body = required_string(input, "body")?;
-    let base = required_string(input, "base")?;
-    let head = required_string(input, "head")?;
-    let workspace_path = required_string(input, "workspace_path")?;
-    let mut args = vec![
-        "pr".to_string(),
-        "create".to_string(),
-        "--title".to_string(),
-        title.to_string(),
-        "--body".to_string(),
-        body.to_string(),
-        "--base".to_string(),
-        base.to_string(),
-        "--head".to_string(),
-        head.to_string(),
-    ];
-    // `pr.draft`, `pr.labels` and `pr.reviewers`; absent fields add nothing.
-    if input.get("draft").and_then(Value::as_bool) == Some(true) {
-        args.push("--draft".to_string());
-    }
-    for (field, flag) in [("labels", "--label"), ("reviewers", "--reviewer")] {
-        for value in optional_string_list(input, field)? {
-            args.push(flag.to_string());
-            args.push(value);
-        }
-    }
-    let result = execute(
-        "gh",
-        args,
-        Some(Path::new(workspace_path)),
-        SLOW_TIMEOUT_MS,
-        "PR create",
-    )?;
-    Ok(json!({
-        "url": result.stdout.trim(),
-        "stdout": result.stdout,
-        "stderr": result.stderr,
-    }))
-}
-
-/// A list of non-empty strings at `field`; absent or null is empty. A value
-/// that could be read as a flag is refused, since it is passed to `gh`.
-fn optional_string_list(input: &Value, field: &str) -> Result<Vec<String>, OrbitError> {
-    let Some(values) = input.get(field).filter(|value| !value.is_null()) else {
-        return Ok(Vec::new());
-    };
-    let invalid = || {
-        OrbitError::InvalidInput(format!(
-            "private automation VCS PR create input.{field} must be an array of non-empty \
-             strings that do not start with '-'"
-        ))
-    };
-    values
-        .as_array()
-        .ok_or_else(invalid)?
-        .iter()
-        .map(|value| {
-            value
-                .as_str()
-                .map(str::trim)
-                .filter(|value| !value.is_empty() && !value.starts_with('-'))
-                .map(ToOwned::to_owned)
-                .ok_or_else(invalid)
-        })
-        .collect()
-}
-
-pub(super) fn pr_view(input: &Value) -> Result<Value, OrbitError> {
+pub(in crate::executor::automation::vcs::operations) fn pr_view(
+    input: &Value,
+) -> Result<Value, OrbitError> {
     let selector = required_string(input, "pr")?;
     let workspace_path = required_string(input, "workspace_path")?;
     if !valid_pr_selector(selector) {
@@ -176,233 +106,12 @@ pub(super) fn pr_view(input: &Value) -> Result<Value, OrbitError> {
     Ok(json!({ "pull_request": pull_request }))
 }
 
-/// [ORB-15308] Close one pull request of this repository, by number, with a
-/// comment saying why. Single-shot: a retry after an ambiguous failure could
-/// post the comment twice.
-pub(super) fn pr_close(input: &Value) -> Result<Value, OrbitError> {
-    let number = required_string(input, "pr")?;
-    let comment = required_string(input, "comment")?;
-    let workspace_path = required_string(input, "workspace_path")?;
-    if !number.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err(OrbitError::InvalidInput(format!(
-            "invalid private automation VCS PR close selector '{number}'; expected a pull \
-             request number in the workspace repository"
-        )));
-    }
-    let args = vec![
-        "pr".to_string(),
-        "close".to_string(),
-        number.to_string(),
-        "--comment".to_string(),
-        comment.to_string(),
-    ];
-    let result = execute(
-        "gh",
-        args,
-        Some(Path::new(workspace_path)),
-        DEFAULT_TIMEOUT_MS,
-        "PR close",
-    )?;
-    Ok(json!({
-        "stdout": result.stdout,
-        "stderr": result.stderr,
-    }))
-}
-
-/// [ORB-15956] Merge the base branch's current tip into a pull request's
-/// branch, as the provider's "update branch" does. `expected_head_sha` makes
-/// the provider refuse a head that moved after the caller read it.
-/// Single-shot: a retry after an ambiguous failure could merge twice.
-pub(super) fn pr_update_branch(input: &Value) -> Result<Value, OrbitError> {
-    let number = required_string(input, "pr")?;
-    let expected_head = required_string(input, "expected_head_sha")?;
-    let workspace_path = required_string(input, "workspace_path")?;
-    if !number.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err(OrbitError::InvalidInput(format!(
-            "invalid private automation VCS PR update selector '{number}'; expected a pull \
-             request number in the workspace repository"
-        )));
-    }
-    if !valid_expected_remote_sha(Some(expected_head)) {
-        return Err(OrbitError::InvalidInput(
-            "PR branch update requires an exact 40- or 64-character expected_head_sha".into(),
-        ));
-    }
-    let result = execute(
-        "gh",
-        vec![
-            "api".to_string(),
-            format!("repos/{{owner}}/{{repo}}/pulls/{number}/update-branch"),
-            "--method".to_string(),
-            "PUT".to_string(),
-            "-f".to_string(),
-            format!("expected_head_sha={expected_head}"),
-        ],
-        Some(Path::new(workspace_path)),
-        SLOW_TIMEOUT_MS,
-        "PR branch update",
-    )?;
-    Ok(json!({
-        "stdout": result.stdout,
-        "stderr": result.stderr,
-    }))
-}
-
-pub(super) fn pr_merge(input: &Value) -> Result<Value, OrbitError> {
-    let selector = required_string(input, "pr")?;
-    let workspace_path = required_string(input, "workspace_path")?;
-    let strategy = optional_string(input, "strategy").unwrap_or("squash");
-    let strategy_flag = match strategy {
-        "squash" => "--squash",
-        "merge" => "--merge",
-        "rebase" => "--rebase",
-        other => {
-            return Err(OrbitError::InvalidInput(format!(
-                "invalid private automation VCS merge strategy '{other}'"
-            )));
-        }
-    };
-    // `--auto` queues GitHub's own auto-merge, which still waits for every
-    // required check and branch protection. There is deliberately no
-    // administrative bypass (`--admin`) in this surface.
-    let auto = input.get("auto").and_then(Value::as_bool).unwrap_or(false);
-    if let Some(reviewed_head) = optional_string(input, "reviewed_head_sha") {
-        if auto {
-            return Err(OrbitError::InvalidInput(
-                "review_gate_stale: deferred auto-merge cannot guarantee the reviewed head; wait for checks and request a synchronous merge".to_string(),
-            ));
-        }
-        let report_base_modified = input
-            .get("report_base_modified")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        return pr_merge_reviewed(
-            selector,
-            workspace_path,
-            strategy,
-            reviewed_head,
-            report_base_modified,
-        );
-    }
-    let mut args = vec![
-        "pr".to_string(),
-        "merge".to_string(),
-        selector.to_string(),
-        strategy_flag.to_string(),
-    ];
-    if auto {
-        args.push("--auto".to_string());
-    }
-    let result = execute(
-        "gh",
-        args,
-        Some(Path::new(workspace_path)),
-        SLOW_TIMEOUT_MS,
-        "PR merge",
-    )?;
-    Ok(json!({
-        "stdout": result.stdout,
-        "stderr": result.stderr,
-    }))
-}
-
-/// Use the synchronous REST mutation: `sha` is checked by GitHub when it
-/// merges, and this endpoint never enables auto-merge or enters a merge queue.
-/// `gh pr merge --match-head-commit` alone is insufficient because the CLI
-/// can choose deferred semantics for a queue-required branch.
-///
-/// [ORB-14205] With `report_base_modified`, the provider's base-modification
-/// refusal returns `{"merged": false, "refusal": "base_modified"}` with the
-/// raw output, so the caller can decide whether to ask again. Every other
-/// failure, and that one without the opt-in, stays an error.
-fn pr_merge_reviewed(
-    selector: &str,
-    workspace_path: &str,
-    strategy: &str,
-    reviewed_head: &str,
-    report_base_modified: bool,
-) -> Result<Value, OrbitError> {
-    // Managed completion supplies a number in the current repository. Refuse
-    // other selectors here rather than resolving a URL into a different repo.
-    if selector.is_empty() || !selector.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err(OrbitError::InvalidInput(
-            "reviewed PR merge requires a pull request number in the workspace repository".into(),
-        ));
-    }
-    if !valid_expected_remote_sha(Some(reviewed_head)) {
-        return Err(OrbitError::InvalidInput(
-            "reviewed PR merge requires an exact 40- or 64-character reviewed_head_sha".into(),
-        ));
-    }
-    let result = run_vcs_process(
-        "gh",
-        vec![
-            "api".to_string(),
-            format!("repos/{{owner}}/{{repo}}/pulls/{selector}/merge"),
-            "--method".to_string(),
-            "PUT".to_string(),
-            "-f".to_string(),
-            format!("sha={reviewed_head}"),
-            "-f".to_string(),
-            format!("merge_method={strategy}"),
-        ],
-        Some(Path::new(workspace_path)),
-        SLOW_TIMEOUT_MS,
-    )?;
-    if report_base_modified && is_base_modified_refusal(&result) {
-        return Ok(json!({
-            "merged": false,
-            "refusal": BASE_MODIFIED_REFUSAL,
-            "stdout": result.stdout,
-            "stderr": result.stderr,
-        }));
-    }
-    let result = succeeded(result, "reviewed PR merge")?;
-    let response: Value = serde_json::from_str(&result.stdout).map_err(|error| {
-        OrbitError::Execution(format!("reviewed PR merge returned invalid JSON: {error}"))
-    })?;
-    if response.get("merged").and_then(Value::as_bool) != Some(true) {
-        return Err(OrbitError::Execution(
-            "reviewed PR merge did not confirm a synchronous merge; deferred merges are unsupported".into(),
-        ));
-    }
-    let landed_commit = required_string(&response, "sha")?;
-    Ok(json!({
-        "stdout": result.stdout,
-        "stderr": result.stderr,
-        "landed_commit": landed_commit,
-    }))
-}
-
-/// True only for a completed `gh api` failure whose whole diagnostic is the
-/// provider's base-modification refusal with HTTP 405: stderr is exactly
-/// `gh: <reason> (HTTP 405)` and the response body, when present, is a JSON
-/// error naming the same reason and status. Other 405s (policy, queue,
-/// protection), other statuses, timeouts, and anything ambiguous do not match.
-fn is_base_modified_refusal(result: &orbit_exec::ExecutionResult) -> bool {
-    if result.success
-        || result.timed_out
-        || result.stderr.trim() != format!("gh: {BASE_MODIFIED_REASON} (HTTP 405)")
-    {
-        return false;
-    }
-    let body = result.stdout.trim();
-    if body.is_empty() {
-        return true;
-    }
-    let Ok(Value::Object(body)) = serde_json::from_str::<Value>(body) else {
-        return false;
-    };
-    body.get("message").and_then(Value::as_str) == Some(BASE_MODIFIED_REASON)
-        && body
-            .get("status")
-            .is_none_or(|status| status.as_str() == Some("405") || status.as_u64() == Some(405))
-}
-
 /// Read the repository merge methods and the target branch's linear-history
 /// rule in one GraphQL snapshot. Completion resolves a method from this live
 /// state before asking GitHub to merge; it never mutates repository settings.
-pub(super) fn pr_merge_capabilities(input: &Value) -> Result<Value, OrbitError> {
+pub(in crate::executor::automation::vcs::operations) fn pr_merge_capabilities(
+    input: &Value,
+) -> Result<Value, OrbitError> {
     let selector = required_string(input, "pr")?;
     let workspace_path = required_string(input, "workspace_path")?;
     let pr_number = pr_number_from_selector(selector).ok_or_else(|| {
@@ -557,7 +266,9 @@ fn normalize_merge_capabilities(
 /// concerns its callers need. Completion asks a different question — is this PR
 /// actually merged, and if not, what is holding it — so it selects the merge
 /// state fields instead of widening a shared projection.
-pub(super) fn pr_status(input: &Value) -> Result<Value, OrbitError> {
+pub(in crate::executor::automation::vcs::operations) fn pr_status(
+    input: &Value,
+) -> Result<Value, OrbitError> {
     let selector = required_string(input, "pr")?;
     let workspace_path = required_string(input, "workspace_path")?;
     if !valid_pr_selector(selector) {
@@ -573,7 +284,7 @@ pub(super) fn pr_status(input: &Value) -> Result<Value, OrbitError> {
         "number,state,isDraft,mergedAt,mergeable,mergeStateStatus,statusCheckRollup,reviewDecision,headRefName,headRefOid,baseRefName,mergeCommit,url,autoMergeRequest".to_string(),
     ];
     let result = if input.get("deadline_ms").is_some() {
-        super::super::completion_deadline::Deadline::from_input(input)?.execute(
+        super::super::super::completion_deadline::Deadline::from_input(input)?.execute(
             "gh",
             args,
             Path::new(workspace_path),
@@ -603,7 +314,9 @@ pub(super) fn pr_status(input: &Value) -> Result<Value, OrbitError> {
 /// check run's own and its app's identity. The
 /// answer carries the head commit it describes; the reader in `pr/answers.rs`
 /// refuses one that is truncated or names another head.
-pub(super) fn pr_required_checks(input: &Value) -> Result<Value, OrbitError> {
+pub(in crate::executor::automation::vcs::operations) fn pr_required_checks(
+    input: &Value,
+) -> Result<Value, OrbitError> {
     let selector = required_string(input, "pr")?;
     let workspace_path = required_string(input, "workspace_path")?;
     let Some(number) = pr_number_from_selector(selector) else {
@@ -630,7 +343,7 @@ pub(super) fn pr_required_checks(input: &Value) -> Result<Value, OrbitError> {
         format!("query={query}"),
     ];
     let result = if input.get("deadline_ms").is_some() {
-        super::super::completion_deadline::Deadline::from_input(input)?.execute(
+        super::super::super::completion_deadline::Deadline::from_input(input)?.execute(
             "gh",
             args,
             Path::new(workspace_path),
