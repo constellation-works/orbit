@@ -661,6 +661,50 @@ For provider IDs, dispatch precedence and refusal diagnostics, see
 [Provider identity and resolution](providers.md#provider-identity-and-resolution).
 To add a lane or fix its login, follow [Provider setup](providers.md#provider-setup).
 
+### Crew names containing a colon
+
+The pool grammar reserves `:` for weights: `workflow.*_complexity_crews` and
+`workflow.purpose_crews.*` entries are written `name` or `name:weight`. Orbit
+therefore refuses any crew whose name contains a colon, both where it is
+defined and in `orbit config set crews.<name>.<field>`. It checks each config
+file on its own as it loads, before the layers merge. A `config.toml` that
+already defines such a crew, such as `[crews."gpt-5:codex"]`, stops every
+command that loads configuration, including `orbit config show`,
+`orbit config set` and `orbit doctor`. The refusal names the defining file:
+
+```
+error: invalid input: [crews]: crew name 'gpt-5:codex' must not contain ':'; ... The crew is defined in '~/.orbit/config.toml'; Orbit refuses to load that config, so `orbit config set` cannot repair it either. Edit '~/.orbit/config.toml' and rename or remove the [crews."gpt-5:codex"] table, then rerun the command
+```
+
+Two routes that look like repairs do not work:
+
+- `orbit config set` loads the same files first, so it is refused too. Edit the
+  file by hand.
+- A workspace override does not help. The global file is still checked before
+  the merge, so a valid `<workspace>/.orbit/config.toml` leaves the refusal in
+  place. A workspace table with the same colon name is refused by the same check.
+
+Repair it by editing only the file the refusal names:
+
+1. Rename the table to a name without a colon, such as `[crews."gpt-5-codex"]`,
+   or delete it if nothing uses it. Keep the crew's other fields, every other
+   table, and any `env` entries unchanged; those entries hold variable names,
+   not values, so leave them as they are.
+2. Update every reference to the old name:
+   - `workflow.default_crew`. When any crew is defined, Orbit requires this key
+     to name one, and a value naming an undefined crew fails the load with
+     `crew '<name>' is not defined in [crews.*]`.
+   - Each entry of `workflow.*_complexity_crews`, `workflow.type_complexity_crews`
+     and `workflow.purpose_crews.<purpose>`: replace the old name and keep any
+     `:weight` suffix on that entry.
+   - A task's crew, with `orbit task update <task-id> --crew <new-name>`.
+     Changing it to an empty value draws a fresh crew instead.
+3. Run `orbit config show`. It should exit 0 and list the renamed crew with its
+   `ENABLED` state. Then run `orbit doctor`. Once configuration loads, a later
+   row about a provider CLI, sandbox or permissions is a separate finding, not
+   a symptom of the crew rename; for a missing CLI, follow
+   [Provider setup](providers.md#provider-setup).
+
 ## Executor definitions
 
 Four executor settings decide whether a crew can run on a host and how it

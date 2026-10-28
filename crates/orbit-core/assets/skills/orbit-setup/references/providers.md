@@ -71,6 +71,10 @@ naming the crew: correct the name or deliberately enable it, then recheck.
    enabled = true
    ```
 
+   Crew names may not contain `:`, which pool weights reserve. If a config file
+   already names a crew that way, follow
+   [Crew names containing a colon](configuration.md#crew-names-containing-a-colon).
+
    Set it as default with `orbit config set workflow.default_crew copilot` (add
    `--global` for a user-wide default). Check `orbit config show`; a task pin or
    pool assignment can still outrank it. Changing the default does not dispatch work.
