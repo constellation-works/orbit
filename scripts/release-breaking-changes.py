@@ -217,6 +217,7 @@ def schema_facts(schema, path, facts):
     """Flatten the structural facts of a JSON schema; descriptions are skipped."""
     if not isinstance(schema, dict):
         return
+    facts.setdefault("schema_nodes", set()).add(path)
     if "type" in schema:
         facts.setdefault("type", {})[path] = json.dumps(schema["type"], sort_keys=True)
     if "enum" in schema:
@@ -278,6 +279,8 @@ def detect_mcp_changes(git, parent, commit, changed):
                 for value in sorted(values - after["enum"][path]):
                     report(f"`{name}` `{path}` enum value {value} removed")
         for path, required in sorted(after.get("required", {}).items()):
+            if path not in before.get("schema_nodes", set()):
+                continue
             for prop in sorted(required - before.get("required", {}).get(path, set())):
                 report(f"`{name}` property `{path}.{prop}` newly required")
     return found
