@@ -535,6 +535,59 @@ On a replica checkout the same cron routine runs against that host's own store
 and does not call the owner. Enable it there when this machine is the only
 place those rows live. A delivery- or state-triggered copy stays owner-only.
 
+## Admission receipt storage
+
+Workspaces that admit tasks for replica checkouts keep admission request
+history apart from ordinary store garbage collection. Logical payload
+accounting and permanent replay tombstones are not file-size reclaim; for
+file size, see Store retention above.
+
+```bash
+orbit doctor admission-receipts          # read-only inspection
+orbit doctor admission-receipts --json
+```
+
+Run the inspection on the owning checkout, or through the owner's federated
+selector. A replica checkout refuses owner tools and names the owner to
+contact instead. The report carries three separate totals, each with a count
+and logical payload bytes: full admission receipts, permanent tombstones, and
+claim-mutation receipts. Logical bytes count UTF-8 JSON payload lengths only;
+they exclude row keys, indexes, free pages and write-ahead log state, and are
+not filesystem usage.
+
+The read-only inspection refuses while a commit is pending recovery rather
+than repairing state. Recover first, then re-run the inspection.
+
+Compaction is explicit maintenance, never automatic: admitting tasks does not
+scan receipt history, so idle payloads accumulate until an operator runs it.
+Capture the read-only report before and after to verify the change. Run
+compaction only when deliberately authorized:
+
+```bash
+orbit doctor admission-receipts --compact
+```
+
+Under the exclusive admission boundary it first recovers pending commits,
+then replaces eligible full receipts with permanent tombstones. A tombstone
+keeps only the originating machine identity, request identity and input
+digest in the same persisted encoding as replay. Eligible are idle receipts
+with no claim and receipts whose claim has settled, except failed or revoked
+claims that kept a pull request: those keep their full receipt to authorize
+later external-merge settlement. Unsettled claims — claimed, running,
+handed-off and repair-pending — keep their full receipts, as does a receipt
+whose claim record is missing. Reservation expiry and age never count as
+settlement, and there is no age-based tombstone deletion.
+
+Replay stays refused: an exact replay of a tombstoned request reports expiry,
+and a replay with changed input reports a mismatch; neither admits again.
+Repeated runs are idempotent and report how many receipts were compacted plus
+the resulting storage snapshot.
+
+Claim-mutation receipts are reported alongside but pruned separately: they are
+kept for seven days after settlement and this command does not run that
+pruning. Never delete receipts by age or edit the store directly; use only the
+inspection and `--compact` above.
+
 ## Logs
 
 The global JSONL trace at `~/.orbit/state/logs/orbit.jsonl` rotates from
