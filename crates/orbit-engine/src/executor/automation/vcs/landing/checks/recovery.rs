@@ -351,6 +351,19 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
                         "workspace_path": workspace.to_string_lossy(),
                     }),
                 )?;
+                let event = jobs
+                    .iter()
+                    .filter(|job| job.run_id == Some(run_id))
+                    .find_map(|job| {
+                        head_jobs
+                            .iter()
+                            .find(|original| {
+                                original["run_id"].as_u64() == Some(run_id)
+                                    && original["job_id"].as_u64() == Some(job.job_id)
+                            })
+                            .map(|original| original["event"].clone())
+                    })
+                    .unwrap_or(Value::Null);
                 let rerun_jobs = jobs.iter().filter(|job| job.run_id == Some(run_id)).map(|job| {
                     let original = head_jobs.iter().find(|original| {
                         original["run_id"].as_u64() == Some(run_id)
@@ -366,7 +379,7 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
                 host.record_handoff_landing_history(
                     &context.handoff_id,
                     "ci_check_rerun",
-                    &json!({"head":head,"run_id":run_id,"pr_number":pr,"event":"pull_request","jobs":rerun_jobs})
+                    &json!({"head":head,"run_id":run_id,"pr_number":pr,"event":event,"jobs":rerun_jobs})
                         .to_string(),
                 )?;
             }
