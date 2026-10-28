@@ -229,7 +229,7 @@ The present-tense line is omitted when a finished drain or a no-forecast pass
 shows retained history. Shadow decisions are labelled as hypothetical; they do
 not hold admissions. With no block (off mode or an older drain), no line
 appears. JSON preserves the complete recorded block, including the profile
-source (`exact`, `without_complexity`, `base_class`,
+source (`crew`, `exact`, `without_complexity`, `base_class`,
 `heaviest_of_class`, `heaviest_on_host`, or `none`).
 
 `orbit run readiness` shows the same last-pass snapshot, CPU and memory peaks,
