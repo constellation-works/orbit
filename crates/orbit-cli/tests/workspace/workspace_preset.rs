@@ -322,6 +322,16 @@ fn valid_plugin_seeded_preset_applies_and_records_provenance() {
 /// Install and enable a plugin that ships job `digest` and a disabled routine
 /// `digest` targeting it, the shape a distribution's own plugin has.
 fn install_job_plugin(machine: &Machine, work: &Path, namespace: &str) {
+    install_job_plugin_impl(machine, work, namespace, false);
+}
+
+/// Like [`install_job_plugin`], but the plugin declares a config schema
+/// admitting only `mode = "good"`, with that value as its manifest default.
+fn install_schema_job_plugin(machine: &Machine, work: &Path, namespace: &str) {
+    install_job_plugin_impl(machine, work, namespace, true);
+}
+
+fn install_job_plugin_impl(machine: &Machine, work: &Path, namespace: &str, with_schema: bool) {
     let root = machine
         .home
         .join(format!("plugin-sources/{namespace}/.orbit-plugin"));
@@ -351,6 +361,13 @@ fn install_job_plugin(machine: &Machine, work: &Path, namespace: &str) {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&backend, fs::Permissions::from_mode(0o755)).expect("chmod backend");
     }
+    if with_schema {
+        fs::write(
+            root.join("config.schema.json"),
+            "{\"type\":\"object\",\"properties\":{\"mode\":{\"type\":\"string\",\"enum\":[\"good\"]}},\"additionalProperties\":false}\n",
+        )
+        .expect("plugin config schema");
+    }
     let mut manifest = format!(
         "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: {namespace}\n  version: 0.1.0\n  description: Preset fixture plugin.\nspec:\n  backend:\n    type: exec\n    command: bin/backend.sh\n  tools:\n    - name: ping\n      description: Answer.\n      execution_kind: read_only\n      input_schema:\n        type: object\n  definitions:\n"
     );
@@ -358,6 +375,11 @@ fn install_job_plugin(machine: &Machine, work: &Path, namespace: &str) {
         fs::create_dir_all(root.join(kind)).expect("plugin definition directory");
         fs::write(root.join(kind).join("digest.yaml"), body).expect("plugin definition");
         manifest.push_str(&format!("    {kind}: [{kind}/*.yaml]\n"));
+    }
+    if with_schema {
+        manifest.push_str(
+            "  config:\n    schema: config.schema.json\n    defaults:\n      mode: good\n",
+        );
     }
     fs::write(root.join("plugin.yaml"), manifest).expect("plugin manifest");
     let added = machine.run(
@@ -445,6 +467,129 @@ fn preset_enables_routine_whose_target_job_an_enabled_plugin_supplies() {
         .expect("applied preset provenance");
     assert!(
         provenance.contains("plugin-target"),
+        "provenance must name the applied preset:\n{provenance}"
+    );
+}
+
+fn write_plugin_config_preset(path: &Path, name: &str, namespace: &str, mode: &str) {
+    fs::write(
+        path,
+        format!(
+            "name = \"{name}\"\n\n[enable]\nroutines = [\"{namespace}-digest\"]\n\n[config.plugins.{namespace}]\nmode = \"{mode}\"\n"
+        ),
+    )
+    .expect("write preset");
+}
+
+/// ORB-19283: a preset setting a plugin value its schema rejects must be
+/// refused against the staged config, before any write, naming the setting.
+#[test]
+fn preset_refuses_schema_invalid_plugin_config_before_init_writes() {
+    let machine = Machine::new();
+    let work = machine.repo("plugin-schema-bad");
+    let init = machine.run(&work, &["workspace", "init", "--name", "plugin-schema-bad"]);
+    assert!(init.status.success(), "{}", output_text(&init));
+    install_schema_job_plugin(&machine, &work, "delta");
+    let seeded = work.join(".orbit/routines/delta-digest.yaml");
+    let routine_before = fs::read_to_string(&seeded).expect("seeded routine");
+    assert!(
+        routine_before.contains("enabled: false"),
+        "seeded routine starts disabled:\n{routine_before}"
+    );
+    let config_before = fs::read(work.join(".orbit/config.toml")).expect("workspace config");
+    let registry_before = fs::read(machine.registry()).unwrap_or_default();
+    let preset = machine.repos.join("plugin-schema-bad.toml");
+    write_plugin_config_preset(&preset, "plugin-schema-bad", "delta", "bad");
+
+    let refused = machine.run(
+        &work,
+        &[
+            "workspace",
+            "init",
+            "--name",
+            "plugin-schema-bad",
+            "--force",
+            "--preset",
+            preset.to_str().expect("preset path"),
+        ],
+    );
+    let text = output_text(&refused);
+    assert!(
+        !refused.status.success() && text.contains("plugins.delta.mode"),
+        "a schema-invalid staged plugin setting must refuse, naming it: {text}"
+    );
+    assert_eq!(
+        fs::read(work.join(".orbit/config.toml")).expect("workspace config after"),
+        config_before,
+        "a refused preset must not change workspace config"
+    );
+    assert_eq!(
+        fs::read(machine.registry()).unwrap_or_default(),
+        registry_before,
+        "a refused preset must not change registration"
+    );
+    assert_eq!(
+        fs::read_to_string(&seeded).expect("routine after"),
+        routine_before,
+        "a refused preset must not change the seeded routine"
+    );
+    assert!(
+        !work.join(".orbit/state/workspace-preset.json").exists(),
+        "a refused preset must not record provenance: {text}"
+    );
+}
+
+/// ORB-19283: one valid preset repairs a schema-invalid plugin value already
+/// on disk and enables that plugin's seeded routine in the same application.
+#[test]
+fn preset_repairs_plugin_config_and_enables_routine_in_one_application() {
+    let machine = Machine::new();
+    let work = machine.repo("plugin-schema-repair");
+    let init = machine.run(
+        &work,
+        &["workspace", "init", "--name", "plugin-schema-repair"],
+    );
+    assert!(init.status.success(), "{}", output_text(&init));
+    install_schema_job_plugin(&machine, &work, "delta");
+    let config_path = work.join(".orbit/config.toml");
+    let mut config = fs::read_to_string(&config_path).expect("workspace config");
+    config.push_str("\n[plugins.delta]\nmode = \"bad\"\n");
+    fs::write(&config_path, config).expect("write invalid plugin config");
+    let preset = machine.repos.join("plugin-schema-repair.toml");
+    write_plugin_config_preset(&preset, "plugin-schema-repair", "delta", "good");
+
+    let applied = machine.run(
+        &work,
+        &[
+            "workspace",
+            "init",
+            "--name",
+            "plugin-schema-repair",
+            "--force",
+            "--preset",
+            preset.to_str().expect("preset path"),
+        ],
+    );
+    let text = output_text(&applied);
+    assert!(
+        applied.status.success(),
+        "a valid preset must repair the plugin config and enable its routine: {text}"
+    );
+    let config = fs::read_to_string(&config_path).expect("workspace config after");
+    assert!(
+        config.contains("good") && !config.contains("bad"),
+        "the repaired config must hold the accepted value:\n{config}"
+    );
+    let routine =
+        fs::read_to_string(work.join(".orbit/routines/delta-digest.yaml")).expect("seeded routine");
+    assert!(
+        routine.contains("enabled: true"),
+        "the preset must enable the plugin-seeded routine:\n{routine}\n{text}"
+    );
+    let provenance = fs::read_to_string(work.join(".orbit/state/workspace-preset.json"))
+        .expect("applied preset provenance");
+    assert!(
+        provenance.contains("plugin-schema-repair"),
         "provenance must name the applied preset:\n{provenance}"
     );
 }

@@ -13,6 +13,7 @@
 //! that whole sequence inside [`ConfigStore::with_write_lock`], so concurrent
 //! edits of one file serialize instead of refusing each other.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -321,6 +322,32 @@ impl ConfigStore {
                     &self.doc.to_string(),
                 )
                 .map(|resolved| resolved.snapshot)
+            }
+        }
+    }
+
+    /// The effective `[plugins.<ns>]` sections of this staged document
+    /// layered over the global config at `global_root`, as a runtime load
+    /// would resolve them. Lets a caller that stages a workspace edit in
+    /// memory validate plugin-owned sections against the staged values
+    /// before anything is written.
+    pub fn plugin_sections_with_global(
+        &self,
+        global_root: &Path,
+    ) -> Result<BTreeMap<String, JsonValue>, OrbitError> {
+        match self.scope {
+            ConfigScope::Global => Ok(self.resolved()?.plugins),
+            ConfigScope::Workspace => {
+                let workspace_root = self.path.parent().ok_or_else(|| {
+                    OrbitError::InvalidInput(
+                        "workspace config path has no parent directory".to_string(),
+                    )
+                })?;
+                let roots = ConfigRoots::new(global_root, workspace_root);
+                Ok(
+                    validate_staged_workspace_document(&roots, &self.path, &self.doc.to_string())?
+                        .plugins,
+                )
             }
         }
     }
