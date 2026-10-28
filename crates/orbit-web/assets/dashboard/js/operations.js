@@ -1,4 +1,4 @@
-// Routine-definition, host clock, and auto-task operations [ORB-10875, ORB-10876].
+// Operations render orchestration, refresh wiring and re-exports [ORB-10875, ORB-10876].
 
 import { fetchJson, requestPanel } from './common.js';
 import { editingIn } from './schedule-editor.js';
