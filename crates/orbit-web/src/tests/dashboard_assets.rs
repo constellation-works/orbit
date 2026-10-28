@@ -117,7 +117,7 @@ fn dashboard_markdown_call_sites_use_sanitizing_wrapper() {
             "{name} must not bypass the sanitizing markdown wrapper (raw marked output is unsanitized HTML: use renderMarkdown(...) instead of marked(...)/marked.parse(...))"
         );
     }
-    for wanted in ["app.js", "js/tasks.js", "js/plugins.js"] {
+    for wanted in ["app.js", "js/task-actions.js", "js/plugins.js"] {
         assert!(
             by_name(wanted).contains("renderMarkdown("),
             "{wanted} must call the sanitizing markdown wrapper renderMarkdown("
