@@ -422,10 +422,6 @@ pub const DEFAULT_JOB_FILES: &[(&str, &str)] = &[
         include_str!("../../orbit-core/assets/jobs/crew_performance_refresh_pipeline.yaml"),
     ),
     (
-        "workspace_ship_pipeline",
-        include_str!("../../orbit-core/assets/jobs/workspace_ship_pipeline.yaml"),
-    ),
-    (
         "workspace_auto_pipeline",
         include_str!("../../orbit-core/assets/jobs/workspace_auto_pipeline.yaml"),
     ),

@@ -47,7 +47,7 @@
 //! costs the recovery path nothing.
 //!
 //! `blocked` is a deliberate dead end for automation: workflow admission
-//! accepts only `backlog` and `in-progress`, so the ship sweep skips these
+//! accepts only `backlog` and `in-progress`, so drains skip these
 //! tasks. The ways out are a human/orchestrator decision (moving the task
 //! to `backlog` or `in-progress` with `orbit.task.update`), a final-recovery
 //! requeue, or resuming the run that blocked it.

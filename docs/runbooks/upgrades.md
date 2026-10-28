@@ -172,8 +172,8 @@ read-compatible or breaking migration beyond them) does not fail at once:
      automatically at most once from that checkpoint (`orbit job resume <run_id>`
      remains available for manual continuation). The clock resumes only runs the
      current upgrade interrupted — within the last 30 minutes. It skips a run
-     interrupted by an earlier upgrade, a drain (or `workspace_ship_pipeline`
-     wrapper) whose window has elapsed or whose admissions were stopped, and a run
+     interrupted by an earlier upgrade, a drain whose window has elapsed or whose
+     admissions were stopped, and a run
      superseded by a newer run of the same drain or routine. Each resume and skip
      is recorded once as a `pipeline.run.upgrade_resume` audit event with its
      reason, and a run with a recorded decision is not reconsidered.

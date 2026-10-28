@@ -25,7 +25,7 @@ use tempfile::tempdir;
 
 const FOREIGN_DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
-fn explicit_root_spellings_select_the_same_generation_host_sweep_and_admission_roots() {
+fn explicit_root_spellings_select_the_same_generation_host_registry_and_admission_roots() {
     for (raw, suffix) in [
         ("~", ""),
         ("~/x", "x"),
@@ -71,14 +71,18 @@ fn explicit_root_spellings_select_the_same_generation_host_sweep_and_admission_r
                 serde_json::from_slice(&hosts.get_output().stdout).expect("hosts JSON");
             assert_eq!(hosts["hosts"][0]["name"], "root-spelling-host");
 
-            let sweep = selected()
-                .args(["run", "ship-sweep", "--dry-run", "--json"])
+            let workspaces = selected()
+                .args(["workspace", "list", "--json"])
                 .assert()
                 .success();
-            let sweep: Value =
-                serde_json::from_slice(&sweep.get_output().stdout).expect("sweep JSON");
-            assert_eq!(sweep["workspaces"], 1, "{raw}: {sweep}");
-            assert_eq!(sweep["reports"][0]["workspace_name"], "root-spelling");
+            let workspaces: Value =
+                serde_json::from_slice(&workspaces.get_output().stdout).expect("workspaces JSON");
+            assert_eq!(
+                workspaces.as_array().map(Vec::len),
+                Some(1),
+                "{raw}: {workspaces}"
+            );
+            assert_eq!(workspaces[0]["name"], "root-spelling");
 
             let preflight = selected()
                 .args(["update", "--preflight", "--json"])
@@ -841,8 +845,8 @@ fn update_with_uninitialized_root_still_requires_a_workspace() {
 fn generation_admission_contracts_0() {
     for (name, check) in [
         (
-            "explicit_root_spellings_select_the_same_generation_host_sweep_and_admission_roots",
-            explicit_root_spellings_select_the_same_generation_host_sweep_and_admission_roots
+            "explicit_root_spellings_select_the_same_generation_host_registry_and_admission_roots",
+            explicit_root_spellings_select_the_same_generation_host_registry_and_admission_roots
                 as fn(),
         ),
         (

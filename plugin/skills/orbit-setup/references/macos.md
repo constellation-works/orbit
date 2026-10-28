@@ -45,7 +45,7 @@ token, and only its source needs exporting (and, for the clock, a line in
 ## The clock env file
 
 launchd starts `orbit clock tick` with no login environment, so runs the clock
-starts (`ship-sweep-*`, auto-tasks) never see `~/.zprofile`. The unit file
+starts (routines, auto-tasks) never see `~/.zprofile`. The unit file
 holds no secret. Instead the tick reads `~/.orbit/clock.env`:
 
 ```bash

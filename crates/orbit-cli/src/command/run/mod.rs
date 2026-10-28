@@ -20,7 +20,6 @@ pub mod ship;
 mod show;
 mod steps;
 pub(crate) mod support;
-pub mod sweep;
 pub mod task_pilot;
 mod trace;
 mod worktree_gc;

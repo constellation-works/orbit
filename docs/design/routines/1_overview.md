@@ -40,12 +40,12 @@ initialization and persisted debt. [3_vision.md](./3_vision.md) holds deferred w
 > catalog from `orbit-registry` with registered runtimes; `orbit-automation` owns
 > the scheduler kernels, with Core supplying task facts, dispatch and status assembly.
 
-`orbit workspace init` seeds eleven default routine templates (`ci_failure_sweep`,
+`orbit workspace init` seeds ten default routine templates (`ci_failure_sweep`,
 `dependabot_alert_sweep`, `task_pilot`, `finding_verification`, `pilot_warning_triage`,
-`blocked_task_triage`, `ship_sweep`, `worktree_gc`, `store_gc`, `crew_performance_refresh`,
+`blocked_task_triage`, `worktree_gc`, `store_gc`, `crew_performance_refresh`,
 and `task_publication`) under
 `.orbit/routines/`. Their routine names use hyphens and the registered workspace name as a
-suffix (for example, `task-pilot-<workspace-name>`). Ten defaults are `enabled: false`;
+suffix (for example, `task-pilot-<workspace-name>`). Nine defaults are `enabled: false`;
 `crew_performance_refresh`, added by [ORB-17816], is seeded enabled and runs hourly
 at :23. With `workflow.crew_performance = "off"` it skips the scan and writes no
 snapshot, while still recording a job run. [ORB-18378] added disabled weekly
@@ -90,9 +90,9 @@ Orbit is the right owner because the hard parts already exist here:
 1. **Execution.** The [activity-job](../activity-job/1_overview.md) layer provides typed,
    auditable runnable units and an orchestration grammar. Routines add only a *trigger source*
    in front of it — not a new runtime.
-2. **Cross-workspace dispatch precedent.** `orbit run ship-sweep` already enumerates the
-   global workspace registry from an unattended scheduler and dispatches runs with
-   per-workspace opt-in and failure isolation. Routines generalize that shape.
+2. **Cross-workspace dispatch precedent.** `orbit run ship-sweep` (since retired) enumerated
+   the global workspace registry from an unattended scheduler and dispatched runs with
+   per-workspace opt-in and failure isolation. Routines generalized that shape.
 3. **Local durable state.** Orbit already persists run state in workspace-local SQLite
    stores; routine state follows the same pattern.
 

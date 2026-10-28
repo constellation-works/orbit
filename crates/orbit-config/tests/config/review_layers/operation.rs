@@ -232,6 +232,25 @@ fn retired_record_sites_loads_with_a_warning_and_refuses_edits() {
     );
 }
 
+/// `workflow.auto_ship` was retired with the ship sweep it opted into: a
+/// config that still sets it loads with a deprecation warning, and edits are
+/// refused with the retirement note.
+#[test]
+fn retired_auto_ship_loads_with_a_warning_and_refuses_edits() {
+    let (_config, logs) = load_workspace("[workflow]\nauto_ship = true\n");
+    assert!(
+        warned_deprecated(&logs, "workflow.auto_ship"),
+        "auto_ship ignored with a deprecation warning: {logs}"
+    );
+    let error = admit_settable_config_key("workflow.auto_ship").expect_err("retired key refused");
+    assert!(
+        error
+            .to_string()
+            .contains("ship sweep it opted into was removed"),
+        "the refusal says the ship sweep was removed: {error}"
+    );
+}
+
 #[test]
 fn retired_review_keys_are_not_settable() {
     for key in [

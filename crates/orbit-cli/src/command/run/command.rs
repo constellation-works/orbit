@@ -17,7 +17,6 @@ use super::readiness::ReadinessCommand;
 use super::settlements::RunSettlementsArgs;
 use super::ship;
 use super::show::RunShowArgs;
-use super::sweep;
 use super::task_pilot;
 use super::trace::RunTraceArgs;
 
@@ -26,7 +25,6 @@ Workflow entrypoints:
   orbit run auto [--for 30m] [--concurrency <N>] [--complete]
   orbit run auto --stop
   orbit run ship [task_id ...] [--complete]
-  orbit run ship-sweep [--dry-run] [--json]
   orbit run task-pilot [task_id ...]
   orbit run job <job_id> [--input key=value] [--json]
   orbit run agent <prompt> [--cwd DIR] [--crew NAME] [--timeout SECONDS] [--provider-sandbox MODE]
@@ -69,7 +67,6 @@ stage counts, and review rebuilds still use repository build-budget slots.
 Workflows:
   auto        Drain the workspace backlog for a window; --stop ends new admissions
   ship        Ship backlog or explicitly selected tasks through the gated task pipeline
-  ship-sweep  Dispatch ship runs in every registered workspace with ready backlog tasks
   task-pilot  Preflight proposed/backlog tasks and persist validated selectors
   job         Run an arbitrary job by ID
   agent       Invoke an agent on the host for exploration or debugging (operator only)
@@ -110,9 +107,6 @@ pub enum RunSubcommand {
     Auto(auto::AutoCommand),
     /// Ship backlog or explicitly selected tasks through the gated task pipeline
     Ship(ship::ShipCommand),
-    /// Dispatch ship runs in every registered workspace with ready backlog tasks
-    #[command(name = "ship-sweep")]
-    ShipSweep(sweep::ShipSweepCommand),
     /// Preflight proposed/backlog tasks and persist validated selectors
     #[command(name = "task-pilot")]
     TaskPilot(task_pilot::TaskPilotCommand),
@@ -149,9 +143,6 @@ impl Execute for RunSubcommand {
         match self {
             RunSubcommand::Auto(command) => command.execute(runtime),
             RunSubcommand::Ship(command) => command.execute(runtime),
-            // Normally dispatched before runtime init (see main.rs); the
-            // registry-driven sweep never uses the cwd-derived runtime.
-            RunSubcommand::ShipSweep(command) => command.execute_without_runtime(None),
             RunSubcommand::TaskPilot(command) => command.execute(runtime),
             RunSubcommand::Readiness(command) => command.execute(runtime),
             RunSubcommand::Profiles(command) => command.execute(runtime),

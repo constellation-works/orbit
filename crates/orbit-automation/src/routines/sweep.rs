@@ -38,9 +38,6 @@ pub enum RunOwnerLiveness {
 /// fake so the sweep's fire / retry / overlap / outcome-sync orchestration is
 /// exercised deterministically without spawning pipeline workers.
 pub trait RoutineDispatch {
-    /// Running workspace auto coordinator, if one owns this source workspace.
-    fn live_workspace_drain(&self, source_orbit_dir: &Path) -> Result<Option<String>, OrbitError>;
-
     fn evaluate_delivery(
         &self,
         _routine: &LoadedRoutine,
@@ -616,43 +613,6 @@ fn fire(
         return Ok(RoutineSweepReport {
             slot: Some(slot.to_string()),
             ..skipped(routine, "overlap_in_flight")
-        });
-    }
-
-    if definition.target.job_name() == "workspace_ship_pipeline"
-        && let Some(drain_run_id) = dispatch.live_workspace_drain(&routine.source_orbit_dir)?
-    {
-        let reason = format!("workspace_drain_live: {drain_run_id}");
-        // The due slot's first attempt is consumed as skipped. A retry must
-        // not be: that row occupies the attempt key, the failed predecessor
-        // stays the latest non-skipped fire, and every later tick reports
-        // `slot_already_claimed` instead of dispatching. Leave the retry
-        // unclaimed so a later tick can fire the next free attempt.
-        if attempt == 1 && !options.dry_run {
-            let claimed = store.routine_record_fire_intent(&RoutineFireIntentParams {
-                routine_name: name.clone(),
-                slot: slot.to_string(),
-                attempt,
-                source_workspace: routine.source_workspace.clone(),
-            })?;
-            if !claimed {
-                return Ok(RoutineSweepReport {
-                    slot: Some(slot.to_string()),
-                    ..skipped(routine, "slot_already_claimed")
-                });
-            }
-            store.routine_mark_fire_outcome(
-                name,
-                slot,
-                attempt,
-                RoutineFireState::Skipped,
-                Some(&reason),
-            )?;
-        }
-        return Ok(RoutineSweepReport {
-            slot: Some(slot.to_string()),
-            reason: Some(reason),
-            ..skipped(routine, "workspace_drain_live")
         });
     }
 

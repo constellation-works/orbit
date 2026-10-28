@@ -105,7 +105,7 @@ request, or a failed merge or push, fails the run and leaves the task in
 `review`.
 
 Local ship and auto runs require completion authorization on that run;
-scheduled ship sweeps never complete tasks. For
+routines never complete tasks. For
 [distributed handoffs](../../how-to/distributed-drain/), the owner can instead
 set `workflow.distributed_completion = "done"` to authorize landing accepted
 handoffs automatically. Its default, `"review"`, waits for **Approve handoff**
@@ -147,7 +147,6 @@ of child runs.
 | Command | What it does |
 |---|---|
 | `orbit run task-pilot` | Prepare `proposed` and `backlog` tasks by pinning the files each one touches. Promotes and dispatches nothing. |
-| `orbit run ship-sweep` | Start a ship run in every workspace with `[workflow] auto_ship = true` and ready work. Meant for a scheduler; never completes. |
 | `orbit run job <job-id>` | Run any job definition directly. `--wait` blocks until it finishes. |
 
 The [CLI reference](../../reference/cli/) lists every flag.

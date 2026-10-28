@@ -1,6 +1,7 @@
 # Superseded `ship_sweep` default (shipped 2026-07-15 to 2026-10-06): cron
 # `*/20 * * * *` matched the 1200-second drain, so `overlap: forbid` skipped
-# the next fire [ORB-14358]. Kept as a provenance shape only — see
+# the next fire [ORB-14358]. `ship_sweep` has since been retired, so a copy of
+# this shape is judged retired too. Kept as a provenance shape only — see
 # `SUPERSEDED_ROUTINE_TEMPLATES` in `application/routines/seed.rs`.
 # Default workspace ship-sweep routine. Seeded into
 # `.orbit/routines/` with a workspace-unique name resolved at seed time. It is

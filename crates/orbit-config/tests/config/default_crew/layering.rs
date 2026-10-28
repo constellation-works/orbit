@@ -23,7 +23,7 @@ inherit = true
 pass = ["GLOBAL_SECRET"]
 "#,
     );
-    default_crew_write_config(workspace.path(), "[workflow]\nauto_ship = true\n");
+    default_crew_write_config(workspace.path(), "[decision_channel]\nenabled = true\n");
 
     let config = ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path()))
         .expect("workspace config loads");

@@ -12,9 +12,8 @@ pub(super) const POOLS_KEY: &str = "auto_crew_pools";
 /// policy-bearing parent, so an ordinary `run ship` routes a crew-less task
 /// exactly as a drain does. System, review and preparation jobs are absent
 /// from the list and keep their own crew selection.
-pub(super) const POLICY_PIPELINES: [&str; 6] = [
+pub(super) const POLICY_PIPELINES: [&str; 5] = [
     "workspace_auto_pipeline",
-    "workspace_ship_pipeline",
     "task_auto_pipeline",
     "task_gate_pipeline",
     "task_local_pipeline",

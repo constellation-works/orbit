@@ -69,10 +69,9 @@ and validation evidence, not by drifting in.
 ### Graduated
 
 - **Workspace-local ship-sweep convergence ([ORB-10207], [Delegate workspace ship routines through a synchronous wrapper job](./4_decisions.md#delegate-workspace-ship-routines-through-a-synchronous-wrapper-job)).** The default
-  `ship_sweep` routine delegates synchronously to the normal shipment pipeline for only
-  its source workspace. It is seeded disabled and enabled through the versioned
-  definition. The legacy global CLI entrypoint remains during burn-in; removing it is a
-  separate compatibility task.
+  `ship_sweep` routine delegated synchronously to the normal shipment pipeline for only
+  its source workspace. It, its wrapper job and the global CLI entrypoint have since been
+  retired in favour of `orbit run auto` drains and `orbit run ship`.
 
 ---
 

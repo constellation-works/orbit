@@ -756,13 +756,6 @@
       "path": null,
       "shadowed_by": []
     },
-    "workflow.auto_ship": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
     "workflow.base_branch": {
       "scope": "workspace",
       "state": "set",

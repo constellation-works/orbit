@@ -17,7 +17,7 @@ fn review_timing_resolves_built_in_then_global_then_workspace_with_its_layer() {
             .operation
     };
 
-    review_layers_write_config(workspace.path(), "[workflow]\nauto_ship = true\n");
+    review_layers_write_config(workspace.path(), "[decision_channel]\nenabled = true\n");
     let built_in = load();
     assert!(!built_in.review_before_landing.value && !built_in.review_before_pr.value);
     assert_eq!(

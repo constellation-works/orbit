@@ -275,7 +275,7 @@ fn settings_rows_report_built_in_fallback_equality_and_global_reach() {
     std::fs::write(
         global.join("config.toml"),
         "[review]\nminutes = 45\n\n\
-         [workflow]\nauto_ship = true\n\n\
+         [decision_channel]\nenabled = true\n\n\
          [ci_failure]\noperator_suppression_hours = 12\n\n\
          [execution.codex]\nsandbox = \"read-only\"\n\n\
          [execution.env]\npass = [\"GLOBAL_TOKEN\"]\n",
@@ -284,7 +284,8 @@ fn settings_rows_report_built_in_fallback_equality_and_global_reach() {
     std::fs::write(
         workspace.join("config.toml"),
         "[review]\nminutes = 120\ntiming = \"off\"\n\n\
-         [workflow]\nauto_ship = true\ndefault_crew = \"sol\"\n\n\
+         [decision_channel]\nenabled = true\n\n\
+         [workflow]\ndefault_crew = \"sol\"\n\n\
          [execution.codex]\nsandbox = \"danger-full-access\"\n\n\
          [crews.sol]\nprovider = \"codex\"\nmodel = \"sol-model\"\n",
     )
@@ -314,7 +315,7 @@ fn settings_rows_report_built_in_fallback_equality_and_global_reach() {
     // A workspace value that restates global, and one that restates the
     // built-in default the global file never sets.
     assert_eq!(
-        row(&effective, "workflow.auto_ship")["equals"],
+        row(&effective, "decision_channel.enabled")["equals"],
         json!({"global": true, "built_in": false})
     );
     let timing = row(&effective, "review.timing");
@@ -397,7 +398,7 @@ fn settings_rows_report_built_in_fallback_equality_and_global_reach() {
         json!({"state": "overridden", "workspace_value": 120, "equals_global": false})
     );
     assert_eq!(
-        row(&global_view, "workflow.auto_ship")["reach"],
+        row(&global_view, "decision_channel.enabled")["reach"],
         json!({"state": "overridden", "workspace_value": true, "equals_global": true})
     );
     assert_eq!(
@@ -438,7 +439,7 @@ fn settings_rows_report_built_in_fallback_equality_and_global_reach() {
         json!({"global": null, "built_in": true})
     );
     assert_eq!(
-        row(&workspace_view, "workflow.auto_ship")["equals"],
+        row(&workspace_view, "decision_channel.enabled")["equals"],
         json!({"global": true, "built_in": false})
     );
     assert_eq!(workspace_view["crews_enumerated"], json!(false));
@@ -718,7 +719,7 @@ fn literal_and_json_key_writes_preserve_their_input_contracts() {
     // A JSON string stays a string; raw CLI syntax infers a boolean.
     config::set_key(
         &runtime,
-        "workflow.auto_ship",
+        "decision_channel.enabled",
         &json!("true"),
         ConfigScope::Workspace,
         ConfigWriteInit::RequireExisting,
@@ -727,7 +728,7 @@ fn literal_and_json_key_writes_preserve_their_input_contracts() {
     assert_eq!(std::fs::read(&path).unwrap(), bytes);
     let written = config::set_key_literal(
         &runtime,
-        "workflow.auto_ship",
+        "decision_channel.enabled",
         "true",
         ConfigScope::Workspace,
         ConfigWriteInit::RequireExisting,

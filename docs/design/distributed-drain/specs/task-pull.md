@@ -571,7 +571,7 @@ inspection/recovery is required when no worker settles the claim. See [2_design.
 - Pull and task promotion do not grant merge authority; explicit handoff approval does.
 - The handoff's captured `review` contract sets any required before-PR or before-landing
   evidence; task status `review` alone is not review evidence.
-- Existing ship-sweep routines, wrapper, CLI, and owner-local drains cannot bypass this admission
+- Explicit ship runs and owner-local drains cannot bypass this admission
   contract; queued/bound leaf runs and unrepresented admissions consume capacity exactly once.
 
 ## Required failure coverage
@@ -696,7 +696,7 @@ older executors refuse schema 2 rather than silently applying a transition witho
 ### Owner landing consumer
 
 Recording completion authority dispatches the owner-local `task_landing_pipeline` from the outbox in
-the same call, so authorized work lands with no drain, ship sweep, routine or schedule running.
+the same call, so authorized work lands with no drain, routine or schedule running.
 Handoff identity keys one durable landing attempt and the dispatch key: a merged handoff refuses
 re-dispatch, a live owner job is not dispatched twice, and a pending request whose job was never submitted
 or whose exact owner job is durably terminal is recovered as the next attempt by an explicit dispatch pass.

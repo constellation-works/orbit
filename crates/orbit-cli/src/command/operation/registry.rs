@@ -163,12 +163,6 @@ impl Commands {
                         Some("ship"),
                         RuntimeNeed::Required,
                     ),
-                    RunSubcommand::ShipSweep(_) => (
-                        "ship-sweep",
-                        Some("workflow"),
-                        Some("ship-sweep"),
-                        RuntimeNeed::Forbidden,
-                    ),
                     RunSubcommand::TaskPilot(_) => (
                         "task-pilot",
                         Some("workflow"),

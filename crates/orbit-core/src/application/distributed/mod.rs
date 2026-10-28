@@ -30,11 +30,10 @@
 //! # The retained entry points
 //!
 //! This module also owns [`OrbitRuntime::drain_entry_admission`](crate::OrbitRuntime::drain_entry_admission) [ORB-12500]:
-//! the one decision an explicit ship, an explicit owner drain and the
-//! independent registry-driven ship sweep all take before they dispatch
-//! anything. It is here rather than beside any one of them because its whole
-//! purpose is that none of the three keeps a private idea of what the host is
-//! already doing.
+//! the one decision an explicit ship, an explicit owner drain and a replay all
+//! take before they dispatch anything. It is here rather than beside any one
+//! of them because its whole purpose is that none of them keeps a private idea
+//! of what the host is already doing.
 //!
 //! [design §4.1]: ../../../../../docs/design/distributed-drain/2_design.md
 //! [spec]: ../../../../../docs/design/distributed-drain/specs/task-pull.md

@@ -152,6 +152,11 @@ pub(crate) const DEPRECATED_CONFIG_KEYS: &[(&str, &str)] = &[
         "workflow.regression_risk.record_sites",
         "ignored: regression.sites on regression_from links are always recorded; delete the key",
     ),
+    (
+        "workflow.auto_ship",
+        "ignored: the ship sweep it opted into was removed; dispatch with `orbit run auto` \
+     drains or `orbit run ship`, and delete the key",
+    ),
 ];
 
 const SWEEP_POOL_NOTE: &str = "translated to workflow.purpose_crews.sweep_tasks, the one pool \

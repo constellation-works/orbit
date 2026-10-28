@@ -15,8 +15,8 @@
 //! - it is a claimed execution, which only the owner's claim recovery may
 //!   re-admit (a claim that cannot be read is not a decision: the run is left
 //!   for a later tick, as a live worker is);
-//! - it is a drain (or the ship wrapper around one) whose admissions were
-//!   stopped or whose window has elapsed — a resumed drain's first pass
+//! - it is a drain whose admissions were stopped or whose window has
+//!   elapsed — a resumed drain's first pass
 //!   admits before it re-reads the window;
 //! - a newer run of the same drain, or of the same routine, superseded it;
 //! - generic resume refuses it.
@@ -51,12 +51,8 @@ const UPGRADE_RESUME_SCAN_LIMIT: usize = 256;
 /// Successful run submissions allowed during one clock tick.
 const UPGRADE_RESUME_TICK_LIMIT: usize = 32;
 
-/// Drain coordinators, and the ship wrapper whose window is its drain's.
-const DRAIN_JOBS: [&str; 3] = [
-    "workspace_auto_pipeline",
-    "workspace_pull_pipeline",
-    "workspace_ship_pipeline",
-];
+/// Drain coordinators.
+const DRAIN_JOBS: [&str; 2] = ["workspace_auto_pipeline", "workspace_pull_pipeline"];
 
 /// Newest runs of a job scanned for one that supersedes the candidate.
 const SUPERSEDE_SCAN_LIMIT: usize = 50;
@@ -249,13 +245,16 @@ impl OrbitRuntime {
 
         let state = self.read_run_state(&run.run_id)?;
         if DRAIN_JOBS.contains(&run.job_id.as_str()) {
-            if self.upgrade_resume_drain_stopped(run, state.as_ref())? {
+            if state
+                .as_ref()
+                .is_some_and(|state| state.admissions_stopped() || state.drain_cancelling())
+            {
                 return Ok(Skip::new(
                     "drain_admissions_stopped",
                     "an operator stopped this drain's admissions",
                 ));
             }
-            let deadline = self.drain_window_deadline(run, state.as_ref())?;
+            let deadline = drain_window_deadline(run, state.as_ref());
             if deadline <= now {
                 return Ok(Skip::new(
                     "drain_window_elapsed",
@@ -286,34 +285,6 @@ impl OrbitRuntime {
         Ok(None)
     }
 
-    /// A ship wrapper delegates its admission window and stop control to its
-    /// blocking `workspace_auto_pipeline` child.
-    fn upgrade_resume_drain_stopped(
-        &self,
-        run: &JobRun,
-        state: Option<&PipelineState>,
-    ) -> Result<bool, OrbitError> {
-        if state.is_some_and(|state| state.admissions_stopped() || state.drain_cancelling()) {
-            return Ok(true);
-        }
-        if run.job_id != "workspace_ship_pipeline" {
-            return Ok(false);
-        }
-        for dispatch in state
-            .iter()
-            .flat_map(|state| &state.child_dispatches)
-            .filter(|dispatch| dispatch.job_name == "workspace_auto_pipeline")
-        {
-            if self
-                .read_run_state(&dispatch.child_run_id)?
-                .is_some_and(|state| state.admissions_stopped() || state.drain_cancelling())
-            {
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    }
-
     /// A claimed follower leaf or a run bound to an execution claim.
     pub(super) fn is_claimed_execution(&self, run_id: &str) -> Result<bool, OrbitError> {
         if self.stores().jobs().local_pull_for_run(run_id)?.is_some() {
@@ -325,47 +296,6 @@ impl OrbitRuntime {
                 .as_ref()
                 .is_some_and(|bound| bound.run_id == run_id)
         }))
-    }
-
-    /// The deadline the drain stamped when it opened its window, or the later
-    /// one an operator extended it to [ORB-15383]. The ship wrapper holds no
-    /// window of its own, so its window is the one its drain child stamped. A
-    /// run that never stamped one gets a window opened at its start, so
-    /// replaying `open_window` cannot stretch it.
-    fn drain_window_deadline(
-        &self,
-        run: &JobRun,
-        state: Option<&PipelineState>,
-    ) -> Result<DateTime<Utc>, OrbitError> {
-        if let Some(deadline) = state.and_then(super::drain_deadline) {
-            return Ok(deadline);
-        }
-        for dispatch in state.iter().flat_map(|state| &state.child_dispatches) {
-            if let Some(deadline) = self
-                .read_run_state(&dispatch.child_run_id)?
-                .as_ref()
-                .and_then(super::drain_deadline)
-            {
-                return Ok(deadline);
-            }
-        }
-        let opened = run.started_at.unwrap_or(run.created_at);
-        let seconds = run
-            .input
-            .as_ref()
-            .and_then(|input| input.get("for_seconds"))
-            .and_then(|value| match value {
-                Value::Number(number) => number.as_f64(),
-                Value::String(text) => text.trim().parse().ok(),
-                _ => None,
-            })
-            .filter(|seconds: &f64| seconds.is_finite() && *seconds > 0.0)
-            .unwrap_or(0.0);
-        Ok(
-            TimeDelta::try_milliseconds((seconds * 1000.0).round() as i64)
-                .and_then(|window| opened.checked_add_signed(window))
-                .unwrap_or(opened),
-        )
     }
 
     /// A run of the same job created after `run`, fired by `routine` when one
@@ -423,6 +353,30 @@ impl OrbitRuntime {
             ),
         );
     }
+}
+
+/// The deadline the drain stamped when it opened its window, or the later one
+/// an operator extended it to [ORB-15383]. A run that never stamped one gets a
+/// window opened at its start, so replaying `open_window` cannot stretch it.
+fn drain_window_deadline(run: &JobRun, state: Option<&PipelineState>) -> DateTime<Utc> {
+    if let Some(deadline) = state.and_then(super::drain_deadline) {
+        return deadline;
+    }
+    let opened = run.started_at.unwrap_or(run.created_at);
+    let seconds = run
+        .input
+        .as_ref()
+        .and_then(|input| input.get("for_seconds"))
+        .and_then(|value| match value {
+            Value::Number(number) => number.as_f64(),
+            Value::String(text) => text.trim().parse().ok(),
+            _ => None,
+        })
+        .filter(|seconds: &f64| seconds.is_finite() && *seconds > 0.0)
+        .unwrap_or(0.0);
+    TimeDelta::try_milliseconds((seconds * 1000.0).round() as i64)
+        .and_then(|window| opened.checked_add_signed(window))
+        .unwrap_or(opened)
 }
 
 /// Whether an upgrade quiesced the run or refused its worker's admission.

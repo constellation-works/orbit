@@ -32,7 +32,6 @@ orbit run readiness                        # explain current auto-drain eligibil
 orbit run readiness <task-id> --json        # explain selected task IDs as JSON
 orbit run ship <task-id> --complete  # ... and also carry it through to `done`
 orbit run ship <task-id> --review before-landing # ... and review the PR before it lands
-orbit run ship-sweep --dry-run      # what every registered workspace would ship
 ```
 
 `ship` with no IDs discovers ready backlog work itself. `--mode` defaults to the
@@ -600,16 +599,17 @@ in the first place, see [multi-host.md](../../orbit-setup/references/multi-host.
 
 ## Unattended shipping
 
-`orbit run ship-sweep` and the `ship-sweep` routine dispatch without a human
-present, and neither ever grants `--complete`. The command dispatches only
-workspaces with `workflow.auto_ship = true`. The routine does not read
-`workflow.auto_ship`; its `enabled: true` is the only switch, and it ships only
-its own workspace. Before enabling either:
+An `orbit run auto` drain is the way to ship without a human watching: it
+admits the ready backlog for its window, one workspace per drain, and never
+grants `--complete` unless the operator passed it. No routine ships work; the
+retired `ship-sweep` routine and command are gone, and a workspace that still
+holds the routine loads it, warns, and never runs it. Before leaving a drain
+unattended:
 
 - Confirm the registered workspace base branch (else `workflow.base_branch`) points where PRs should actually land.
 - Enable worktree GC first — unattended shipping is the fastest way to fill a
   disk with abandoned worktrees. → [maintenance.md](../../orbit-setup/references/maintenance.md)
-- Watch `orbit run ship-sweep --dry-run` across a realistic backlog first.
+- Check `orbit run readiness` across a realistic backlog first.
 
 ## Handoff discipline
 
@@ -635,8 +635,7 @@ source delivery and lifecycle.
 `orbit run ship --complete` and `orbit run auto --complete` are the operator's
 explicit authorization for one submitted run to finish delivery and take the
 tasks it ships from `review` to `done`. Default-off, and never enabled by
-workspace configuration, an environment variable, or an unattended routine such
-as `ship-sweep`.
+workspace configuration, an environment variable, or a routine.
 
 - Local mode completes only after the bundle merged *and* pushed; a failed
   publication leaves the task in `review`.

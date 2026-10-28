@@ -53,14 +53,14 @@ A routine says **which job fires, and when**. It is one YAML file under
 
 ```yaml
 schemaVersion: 1
-name: ship_sweep_myrepo
+name: ci_failure_sweep_myrepo
 enabled: true
 trigger:
-  cron: "*/30 * * * *"
+  cron: "5 * * * *"
   missed_run: skip
-target: job:workspace_ship_pipeline
+target: job:ci_failure_sweep_pipeline
 policy:
-  timeout_minutes: 120
+  timeout_minutes: 30
   overlap: forbid
 ```
 

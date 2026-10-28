@@ -179,14 +179,6 @@ impl RuntimeKernel {
             .unwrap_or_else(|| self.workflow_base_branch())
     }
 
-    /// Whether this workspace opted into unattended ship dispatch
-    /// (`[workflow] auto_ship` in the active `config.toml`; defaults to
-    /// `false`). Consulted by `orbit run ship-sweep` and other schedulers
-    /// before dispatching ship runs nobody explicitly asked for.
-    pub fn workflow_auto_ship(&self) -> bool {
-        self.context.settings().workflow_auto_ship()
-    }
-
     /// The current last-known-good `[workflow.mid_run_steering]` settings,
     /// refreshed at prompt and gate checkpoints. Steering defaults off.
     pub fn mid_run_steering(&self) -> orbit_config::MidRunSteeringSettings {

@@ -266,8 +266,8 @@ pub enum LandingStartState {
 }
 
 /// Durable outbox consumed by the owner landing job. A pending request survives
-/// restart without a drain or ship sweep; only verified completion or explicit
-/// revocation settles it.
+/// restart without a drain; only verified completion or explicit revocation
+/// settles it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LandingStartRequest {
     pub handoff_id: String,

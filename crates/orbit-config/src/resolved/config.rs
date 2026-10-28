@@ -73,9 +73,6 @@ pub struct ResolvedConfig {
     /// Config-only `[workflow] base_branch` fallback (default `"main"`).
     /// Delivery defaults prefer the registered workspace base branch.
     pub workflow_base_branch: String,
-    /// Opt-in for unattended ship dispatch (`[workflow] auto_ship`; defaults
-    /// to `false`).
-    pub workflow_auto_ship: bool,
     /// Host pressure thresholds and the throttle enable switch.
     pub resource_throttle: crate::registry::ResourceThrottleSettings,
     /// Host-wide forecast thresholds and profile bounds; currently settings only.
@@ -131,7 +128,6 @@ impl ResolvedConfig {
             },
             automation_stall_window_minutes: snapshot.automation_stall_window_minutes,
             workflow_base_branch: snapshot.workflow_base_branch.clone(),
-            workflow_auto_ship: snapshot.workflow_auto_ship,
             resource_throttle: snapshot.resource_throttle(),
             auto_concurrency: snapshot.auto_concurrency(),
             crews: default_crews(),
@@ -367,7 +363,6 @@ impl ResolvedConfig {
             },
             automation_stall_window_minutes: snapshot.automation_stall_window_minutes,
             workflow_base_branch: snapshot.workflow_base_branch.clone(),
-            workflow_auto_ship: snapshot.workflow_auto_ship,
             resource_throttle: snapshot.resource_throttle(),
             auto_concurrency: snapshot.auto_concurrency(),
             crews,

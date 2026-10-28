@@ -31,12 +31,6 @@ macro_rules! with_tail_keys {
         tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<String>| resolve_choice(raw, "band", "workflow.admission_affinity", &orbit_types::task::AdmissionAffinityReach::CHOICES),
     },
-    workflow_auto_ship: bool => bool {
-        key: "workflow.auto_ship", value_type: "bool",
-        description: "Opt this workspace in to unattended ship-sweep dispatch.",
-        section: ConfigSection::Delivery, order: 40,
-        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(false)),
-    },
     workflow_base_branch: String => String {
         key: "workflow.base_branch", value_type: "string",
         description: "Fallback base branch for ship, auto, and the task pilot.",

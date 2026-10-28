@@ -24,7 +24,7 @@ export async function checkSettingsMutationOwnership(browser, origin, evidence =
       const payload = {
         config_set: { authorized: true },
         sections: [{ token: 'workflow', keys: [
-          row('workflow.base_branch', 'agent-main'), row('workflow.auto_ship', true, 'bool'),
+          row('workflow.base_branch', 'agent-main'), row('pr.draft', true, 'bool'),
           row('workflow.resource_throttle.enabled', true, 'bool'),
         ] }],
         crews: [{ name: 'fixture', provider: 'codex', model: 'fixture', source: 'workspace' }],
@@ -106,11 +106,11 @@ export async function checkSettingsMutationOwnership(browser, origin, evidence =
       check(writes.length === 4 && reloads === 1, 'the replacement bulk operation finishes its own keys');
       results.push('bulk-reset-preserves-new-operation-ownership');
       reset();
-      refuseKey = 'workflow.auto_ship';
+      refuseKey = 'pr.draft';
       click('button', 'Remove all 3 workspace values');
       await settled();
       check(writes.length === 3 && writes.every((entry) => entry.url.endsWith('scope=workspace&workspace=ws-a')), 'same-visit bulk requests retain their workspace');
-      check(body.textContent.includes('Removed 2 workspace value(s). Failed: workflow.auto_ship: fixture refusal'), 'same-visit successes and per-key refusal are reported');
+      check(body.textContent.includes('Removed 2 workspace value(s). Failed: pr.draft: fixture refusal'), 'same-visit successes and per-key refusal are reported');
       refuseKey = null;
       results.push('bulk-same-visit-sequential-successes-and-per-key-refusal');
 
@@ -124,11 +124,11 @@ export async function checkSettingsMutationOwnership(browser, origin, evidence =
             if (transition === 'replacement') click('.drawer-actions button', 'Close');
             else if (transition === 'host') common.setHost('remote');
             else { common.setWorkspace('ws-b'); common.setWorkspace('ws-a'); }
-            context.rerender(); openDrawer('workflow.auto_ship');
+            context.rerender(); openDrawer('pr.draft');
             const draws = redraws;
             await release(failure);
             check(reloads === 0 && redraws === draws, `${action}/${transition}: retired drawer refreshed the new session`);
-            check(body.querySelector('.config-drawer .config-key')?.textContent === 'workflow.auto_ship', 'replacement drawer stays open');
+            check(body.querySelector('.config-drawer .config-key')?.textContent === 'pr.draft', 'replacement drawer stays open');
             check(!body.textContent.includes('retired refusal'), 'replacement drawer inherits no old refusal');
             results.push(`drawer-${action}-${transition}-${failure ? 'refusal' : 'success'}-retires`);
           }

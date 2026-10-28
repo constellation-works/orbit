@@ -449,7 +449,6 @@ warning. A `[crews.system]` table you define is an ordinary crew.
 |---|---|
 | `workflow.base_branch` | **Advanced.** string · **Default:** `main`<br>Base branch for ship, auto, and the task pilot when the registered workspace has none. |
 | `workflow.default_crew` | string · **Default:** See [Crews](#crews)<br>Crew for a task that names none and gets no override. |
-| `workflow.auto_ship` | bool · **Default:** `false`<br>Opt this workspace in to `orbit run ship-sweep`. The seeded `ship-sweep` routine does not read it; its `enabled:` flag is its switch. |
 | `workflow.low_complexity_crews` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for low-complexity tasks with no crew, and for the task pilot and PR auto-fix while their purpose pools are unset. |
 | `workflow.medium_complexity_crews` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for medium-complexity tasks with no crew, and for step-failure and PR conflict recovery while their purpose pool is unset. |
 | `workflow.hard_complexity_crews` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for hard-complexity tasks with no crew. |

@@ -398,9 +398,6 @@ pub struct OrbitRuntimeSettings {
     pr_settings: orbit_config::PrSettings,
     /// Config-only `[workflow] base_branch` fallback (default `"main"`).
     workflow_base_branch: String,
-    /// Opt-in for unattended ship dispatch
-    /// (`[workflow] auto_ship` in `config.toml`, default `false`).
-    workflow_auto_ship: bool,
     resource_throttle: orbit_config::ResourceThrottleSettings,
     /// Initial global `[machine.auto_concurrency]` policy, used as the
     /// admission cache's last-known-good fallback before its first refresh.
@@ -513,7 +510,6 @@ impl OrbitRuntimeSettings {
         pr_config: PrConfig,
         pr_settings: orbit_config::PrSettings,
         workflow_base_branch: String,
-        workflow_auto_ship: bool,
         resource_throttle: orbit_config::ResourceThrottleSettings,
         auto_concurrency: orbit_config::AutoConcurrencySettings,
         workflow_required_validation_commands: Vec<String>,
@@ -568,7 +564,6 @@ impl OrbitRuntimeSettings {
             pr_config,
             pr_settings,
             workflow_base_branch,
-            workflow_auto_ship,
             resource_throttle,
             auto_concurrency,
             workflow_required_validation_commands,
@@ -762,10 +757,6 @@ impl OrbitRuntimeSettings {
 
     pub(crate) fn auto_concurrency(&self) -> &orbit_config::AutoConcurrencySettings {
         &self.auto_concurrency
-    }
-
-    pub(crate) fn workflow_auto_ship(&self) -> bool {
-        self.workflow_auto_ship
     }
 
     pub(crate) fn workflow_required_validation_commands(&self) -> &[String] {

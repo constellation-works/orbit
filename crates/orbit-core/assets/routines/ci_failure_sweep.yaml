@@ -13,8 +13,8 @@
 # completion.
 #
 # Cadence is hourly, on a minute that stacks with none of the other shipped
-# defaults (worktree GC holds :35, the Dependabot sweep 03:25, and the ship sweep
-# :00/:20/:40). `overlap: forbid` plus the job's `max_active_runs: 1` keep the
+# defaults (worktree GC holds :35 and the Dependabot sweep 03:25).
+# `overlap: forbid` plus the job's `max_active_runs: 1` keep the
 # sweep single-flight, so a sweep that runs long skips its next slot rather than
 # double-filing; the job's failure-key dedupe makes a repeat pass idempotent in
 # any case.

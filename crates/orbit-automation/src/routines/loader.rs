@@ -40,6 +40,11 @@ pub const RETIRED_ROUTINE_JOBS: &[(&str, &str)] = &[
         "a failed run leaves its task blocked with the failure attached; re-backlogging is a \
          deliberate human transition",
     ),
+    (
+        "workspace_ship_pipeline",
+        "scheduled shipping was removed; `orbit run auto` drains dispatch the backlog and \
+         `orbit run ship` ships on demand",
+    ),
 ];
 
 /// Why a routine targeting `job` is retired, when that job is one a prior

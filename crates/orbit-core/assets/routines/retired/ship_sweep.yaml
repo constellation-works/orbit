@@ -1,0 +1,20 @@
+# Retired `ship_sweep` default (last shipped 2026-10-27). The scheduled ship
+# sweep is gone: dispatch runs through `orbit run auto` drains, and
+# `orbit run ship` ships on demand, so this routine has no job to fire. Kept as
+# a provenance shape only, so `orbit workspace sync` can tell an Orbit-seeded
+# copy from an operator-authored one — see `RETIRED_ROUTINE_FILES` in
+# `application/routines/seed.rs`.
+schemaVersion: 1
+name: __ORBIT_ROUTINE_NAME__
+description: >
+  Ship this workspace's ready backlog through the normal gated task pipeline.
+  Disabled by default; set enabled to true in this versioned definition to
+  opt this workspace into scheduled shipment.
+enabled: false
+trigger:
+  cron: "*/30 * * * *"
+  missed_run: skip
+target: job:workspace_ship_pipeline
+policy:
+  timeout_minutes: 120
+  overlap: forbid

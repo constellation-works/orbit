@@ -11,17 +11,13 @@
 /// claim ledger and one destination-authority rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DrainEntryPoint {
-    /// `orbit run auto`, and the seeded `ship_sweep` routine and
-    /// `workspace_ship_pipeline` wrapper that invoke the drain beneath it.
+    /// `orbit run auto`.
     OwnerDrain,
     /// `orbit run ship`, `orbit.workflow.ship`, and the dashboard endpoint —
     /// the explicit shipment surfaces, with or without named tasks.
     ExplicitShip,
     /// Whole-run replay from the CLI or dashboard.
     Replay,
-    /// The independent registry-driven `orbit run ship-sweep` CLI, which
-    /// dispatches per workspace without a workspace runtime of its own.
-    ShipSweep,
 }
 
 impl DrainEntryPoint {
@@ -31,7 +27,6 @@ impl DrainEntryPoint {
             DrainEntryPoint::OwnerDrain => "orbit.workflow.auto",
             DrainEntryPoint::ExplicitShip => "orbit.workflow.ship",
             DrainEntryPoint::Replay => "orbit.job.replay",
-            DrainEntryPoint::ShipSweep => "orbit.run.ship-sweep",
         }
     }
 }
