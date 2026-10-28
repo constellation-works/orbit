@@ -340,19 +340,7 @@ pub fn check_worker_host_input(input: &Value, host_call: bool) -> Result<(), Orb
     Ok(())
 }
 
-/// Type a call the owner never answered as an owner-route failure
-/// [ORB-14257]: the step it fails carries the marker, so a claimed leaf that
-/// lost its route to the owner settles as a release rather than as a failure
-/// of its candidate. A call the owner could not serve only because a lock
-/// stayed held is typed transient the same way [ORB-15088], so a step it
-/// fails — a rebase onto a moved base included — never settles as the
-/// candidate's failure or as a base conflict. It also carries the
-/// owner-busy marker, so the release a claimed leaf settles with blames
-/// neither its host nor its crew and the drain backs off instead. The variant
-/// is kept; a refusal, an ambiguous outcome and a local error are left as
-/// they are.
-/// Whether an owner error says the record does not exist, in process or
-/// across the owner route.
+/// Whether an owner error says the record does not exist, in process or across the owner route.
 fn is_not_found(error: &OrbitError) -> bool {
     matches!(
         error,
@@ -364,6 +352,17 @@ fn is_not_found(error: &OrbitError) -> bool {
     )
 }
 
+/// Type a call the owner never answered as an owner-route failure
+/// [ORB-14257]: the step it fails carries the marker, so a claimed leaf that
+/// lost its route to the owner settles as a release rather than as a failure
+/// of its candidate. A call the owner could not serve only because a lock
+/// stayed held is typed transient the same way [ORB-15088], so a step it
+/// fails — a rebase onto a moved base included — never settles as the
+/// candidate's failure or as a base conflict. It also carries the
+/// owner-busy marker, so the release a claimed leaf settles with blames
+/// neither its host nor its crew and the drain backs off instead. The variant
+/// is kept; a refusal, an ambiguous outcome and a local error are left as
+/// they are.
 fn owner_route_failure(error: OrbitError) -> OrbitError {
     let typed = |message: String| {
         format!(
