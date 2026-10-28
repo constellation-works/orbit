@@ -3,9 +3,16 @@
 //! shows one with its event timeline, `/diagnostics/experiments/{id}/readout`
 //! returns the JSON `orbit.experiment.readout` returns plus `cumulative`, and
 //! `POST /diagnostics/experiments/{id}/conclude` records an operator's decision
-//! through the same `change_experiment` path as the CLI.
+//! through the same `change_experiment` path as the CLI. The list and the
+//! detail carry `authoring` for the operator's create, edit and start routes
+//! in [`authoring`].
 
+mod authoring;
 mod cumulative;
+
+pub(in crate::api) use authoring::{
+    diagnostics_experiment_create, diagnostics_experiment_start, diagnostics_experiment_update,
+};
 
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{Path, Query, State};
@@ -24,9 +31,19 @@ pub(in crate::api) struct ExperimentReadoutQuery {
     metric: Option<String>,
 }
 
-pub(in crate::api) async fn diagnostics_experiments(Ws(runtime): Ws) -> Response {
-    match super::super::blocking("experiment list", move || runtime.experiment_progress()).await {
-        Ok(experiments) => Json(json!({ "experiments": experiments })).into_response(),
+pub(in crate::api) async fn diagnostics_experiments(
+    State(state): State<DashboardState>,
+    Ws(runtime): Ws,
+) -> Response {
+    let operator_session = state.operator_session();
+    match super::super::blocking("experiment list", move || {
+        let experiments = runtime.experiment_progress()?;
+        let authoring = authoring::experiment_authoring(&runtime, operator_session);
+        Ok(json!({ "experiments": experiments, "authoring": authoring }))
+    })
+    .await
+    {
+        Ok(body) => Json(body).into_response(),
         Err(response) => *response,
     }
 }
@@ -41,12 +58,14 @@ pub(in crate::api) async fn diagnostics_experiment(
         state.operator_session(),
     )
     .is_ok();
+    let operator_session = state.operator_session();
     match super::super::blocking("experiment show", move || {
         let view = runtime.experiment_view(&id)?;
         let mut body = serde_json::to_value(&view).map_err(|error| {
             orbit_core::OrbitError::Execution(format!("experiment view is not JSON: {error}"))
         })?;
         body["conclude_authorized"] = json!(conclude_authorized);
+        body["authoring"] = authoring::experiment_authoring(&runtime, operator_session);
         Ok(body)
     })
     .await

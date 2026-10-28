@@ -3,7 +3,8 @@
 // readout: arm cards, a forest plot of every metric's difference from
 // control, the primary metric's cumulative per-arm series, the
 // per-complexity table, crew mix, health warnings and the event timeline.
-// An operator concludes a running or paused experiment from this page.
+// An operator concludes a running or paused experiment from this page, and
+// creates, edits and starts drafts through experiment-form.js.
 // Read from /api/diagnostics/experiments[/{id}[/readout]]; conclude posts
 // to /api/diagnostics/experiments/{id}/conclude.
 // Pure vanilla JS, split into ES modules with no build step; every node is
@@ -20,6 +21,7 @@ import {
 } from './common.js';
 import { setActiveTab } from './router.js';
 import { svg, linePath } from './sparkline.js';
+import { draftActions, lockedNote, syncExperimentAuthoring } from './experiment-form.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -82,6 +84,7 @@ function clearExperiments() {
 
 export function placeholdExperimentsAggregate() {
   clearExperiments();
+  syncExperimentAuthoring(null);
   renderPanelPlaceholder(BODY);
 }
 
@@ -120,7 +123,9 @@ export function fetchAndRenderExperiments() {
   }
   const request = id
     ? () => readDetail(id)
-    : () => fetchJson(ENDPOINT).then((body) => ({ kind: "list", experiments: body.experiments || [] }));
+    : () => fetchJson(ENDPOINT).then((body) => ({
+      kind: "list", experiments: body.experiments || [], authoring: body.authoring || null,
+    }));
   return requestPanel(BODY, `experiments:${id || ""}`, request, (payload) => {
     if (getWorkspaceRevision() !== revision || selectedId !== id) return;
     lastPayload = payload;
@@ -137,11 +142,13 @@ export function renderExperiments() {
   }
   if (!lastPayload || !panelCanRender(BODY)) return;
   const count = $(COUNT);
+  const authoring = lastPayload.authoring || lastPayload.experiment?.authoring || null;
+  syncExperimentAuthoring(authoring, fetchAndRenderExperiments);
   let nodes;
   if (lastPayload.kind === "list") {
     const total = lastPayload.experiments.length;
     if (count) count.textContent = `${total} experiment${total === 1 ? "" : "s"}`;
-    nodes = [listView(lastPayload.experiments)];
+    nodes = [listView(lastPayload.experiments, authoring)];
   } else if (lastPayload.kind === "missing") {
     if (count) count.textContent = "not found";
     nodes = [missingView(lastPayload)];
@@ -262,11 +269,13 @@ function empty(title, detail) {
 
 // ---- list ---------------------------------------------------------------------
 
-function listView(experiments) {
+function listView(experiments, authoring) {
   if (!experiments.length) {
     return card("Experiments", [empty(
       "No experiments in this workspace",
-      "Define one with orbit experiment create; it appears here once created.",
+      authoring?.create?.authorized
+        ? "Define one with New experiment or orbit experiment create; it appears here once created."
+        : "Define one with orbit experiment create; it appears here once created.",
     )]);
   }
   const rank = (status) => {
@@ -276,10 +285,10 @@ function listView(experiments) {
   const sorted = [...experiments].sort((a, b) =>
     rank(a.status) - rank(b.status) || String(b.created_at).localeCompare(String(a.created_at)));
   return el("div", { class: "ex-list", role: "list", "aria-label": "Experiments" },
-    sorted.map(listItem));
+    sorted.map((experiment) => listItem(experiment, authoring)));
 }
 
-function listItem(experiment) {
+function listItem(experiment, authoring) {
   const min = num(experiment.min_sample);
   const arms = experiment.arms || [];
   const enrollment = new Map((experiment.enrollment || []).map((row) => [row.arm, row]));
@@ -327,6 +336,7 @@ function listItem(experiment) {
     el("div", { class: "ex-item-meta", text: meta }),
     el("div", { class: "ex-arms-progress", role: "list", "aria-label": "Enrollment per arm" }, rows),
     extras.length ? el("div", { class: "ex-item-meta", text: extras.join(" · ") }) : null,
+    draftActions(experiment, authoring),
   ]);
 }
 
@@ -401,6 +411,8 @@ function headerCard(experiment, readout) {
       el("span", { text: "Promotion task " }),
       taskLink(promotion),
     ]) : null,
+    draftActions(experiment, experiment.authoring),
+    lockedNote(experiment, experiment.authoring),
   ]);
 }
 

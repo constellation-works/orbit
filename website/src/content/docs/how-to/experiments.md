@@ -362,7 +362,11 @@ forest plot of every measured metric's difference from control, the
 primary metric's cumulative per-arm series, the per-complexity table, the
 crew mix, and the event timeline. An operator session also gets the
 conclude form described in
-[Use the dashboard](../dashboard/#experiments).
+[Use the dashboard](../dashboard/#experiments), and can define, edit, and
+start drafts there with **New experiment**, **Edit**, and **Start**. The
+dashboard applies the same checks as `orbit experiment create`, `update`,
+and `start`. See
+[Create, edit, and start an experiment](../dashboard/#create-edit-and-start-an-experiment).
 
 ## See also
 

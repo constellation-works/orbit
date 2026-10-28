@@ -1,8 +1,8 @@
 ---
 title: "Scope: randomized experiments over agent treatments"
 owner: claude
-last_updated: 2026-10-26
-last_validated: 2026-10-26
+last_updated: 2026-10-27
+last_validated: 2026-10-27
 status: Draft
 stage: building
 next: "Raise a concluded-or-due experiment through the human decision channel (open; decision requests are task-bound today)"
@@ -15,7 +15,7 @@ tags: [experiments, admission, tag-instructions, crew-pools, analytics, decision
 
 # Scope: randomized experiments over agent treatments
 
-Status: building. Phase 1 (records and shadow assignment) and the instruction and tool surfaces of phase 2 are implemented: a `live` experiment applies them on owner and claimed runs, and every dispatch it changes records an `activity.experiment_overlay_applied` audit row with the digest of what it received. Removal is refused for the tools the agent handoff contract needs (`orbit.task.show`, `orbit.task.update`, `orbit.task.artifact.put`); a `false` instruction entry leaves Orbit's shipped default tag instructions out of that role. The per-arm readout (`orbit experiment readout`, `orbit.experiment.readout` and `GET /api/diagnostics/experiments/{id}/readout`) computes outcomes, intervals, the sample-ratio and drift checks and the verdict on read. The Analytics › Experiments dashboard page lists each experiment's per-arm progress toward `min_sample` (`GET /api/diagnostics/experiments`) and opens one (`GET /api/diagnostics/experiments/{id}`, plus the readout with its cumulative primary-metric series) to arm cards, a forest plot, the per-complexity table, crew mix, health warnings and the event timeline. An operator concludes from that page, the CLI or `orbit.experiment.conclude`: the conclusion event stores the readout JSON at that moment, assignment stops, and a chosen arm files one proposed promotion task. Concluding changes no configuration or repository file.
+Status: building. Phase 1 (records and shadow assignment) and the instruction and tool surfaces of phase 2 are implemented: a `live` experiment applies them on owner and claimed runs, and every dispatch it changes records an `activity.experiment_overlay_applied` audit row with the digest of what it received. Removal is refused for the tools the agent handoff contract needs (`orbit.task.show`, `orbit.task.update`, `orbit.task.artifact.put`); a `false` instruction entry leaves Orbit's shipped default tag instructions out of that role. The per-arm readout (`orbit experiment readout`, `orbit.experiment.readout` and `GET /api/diagnostics/experiments/{id}/readout`) computes outcomes, intervals, the sample-ratio and drift checks and the verdict on read. The Analytics › Experiments dashboard page lists each experiment's per-arm progress toward `min_sample` (`GET /api/diagnostics/experiments`) and opens one (`GET /api/diagnostics/experiments/{id}`, plus the readout with its cumulative primary-metric series) to arm cards, a forest plot, the per-complexity table, crew mix, health warnings and the event timeline. An operator concludes from that page, the CLI or `orbit.experiment.conclude`: the conclusion event stores the readout JSON at that moment, assignment stops, and a chosen arm files one proposed promotion task. Concluding changes no configuration or repository file. An operator also defines, edits and starts experiments from that page: **New experiment** opens a form over the whole definition (population, arms with their crew, instruction, tool, skill and config overlays, primary metric, guardrails, sample rules, mode and reason), a draft card offers Edit and Start, and **Save and start** saves then starts after a confirmation naming the arms, weights and population. The routes `POST /api/diagnostics/experiments`, `PATCH /api/diagnostics/experiments/{id}` and `POST /api/diagnostics/experiments/{id}/start` are operator-only and call the same `create_experiment`, `update_experiment` and `change_experiment` as `orbit.experiment.create`, `update` and `start`, so core's validation and refusals apply unchanged and each write records its event with actor `dashboard` and the given reason. Pause, resume, reweight, clone and abandon stay on the CLI and tools.
 Skills, crew pools and allowlisted config values are also live. Skill replacement currently supports Claude on Unix through an invocation-local discovery root; other providers refuse the overlay. Bundles are pinned to the run base, carried in claimed captures, and recorded with per-bundle digests (see [configuration](../../CONFIG.md#experiments--experiments-over-agent-treatments)).
 
 Bearing: Orbit already has most of the parts an experiment needs, scattered across
@@ -260,7 +260,9 @@ Policy only. Experiment definitions are store records.
   Each experiment opens to arm cards (n, primary metric with interval, guardrail status), a
   forest plot of each metric's difference from control, cumulative per-arm series on the
   shared trend ladder, the per-complexity table, health warnings (sample ratio, drift, open
-  lagging outcomes), the event timeline, and the conclude action for operators.
+  lagging outcomes), the event timeline, and the conclude action for operators. Operators
+  also create a draft, edit a draft and start one there, through the same core lifecycle as
+  `orbit.experiment.create`, `update` and `start`.
 
 ## Non-goals
 

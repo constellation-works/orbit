@@ -1030,9 +1030,10 @@ Open **Experiments** (`#analytics/experiments`) to watch the experiments
 running in the selected workspace: which arm each enrolled task drew, how
 close each arm is to its minimum sample, and what the readout says so far.
 Experiments are per workspace, so **All workspaces** shows the usual
-placeholder asking you to select one. Define, start, pause, and reweight
-experiments from a terminal; this view reads them and, for an operator,
-concludes one. See [Run an experiment](../experiments/).
+placeholder asking you to select one. With an
+[operator session](#authorization) you can define, edit, and start
+experiments here and conclude one; pause, resume, reweight, clone, and
+abandon stay in the terminal. See [Run an experiment](../experiments/).
 
 The list sorts running first, then paused, draft, concluded, and
 abandoned, newest first within a status. Each entry shows the hypothesis,
@@ -1094,6 +1095,48 @@ default; no winner files nothing. Concluding changes no configuration or
 repository file, and the card says so. Without operator authority, or
 once the experiment has concluded or been abandoned, the card is absent
 and the view is read-only.
+
+### Create, edit, and start an experiment
+
+With an operator session, **New experiment** in the Experiments header
+opens a form above the list:
+
+- **Name**, **Mode** (`shadow`, the default, assigns tasks and applies
+  nothing; `live` applies each arm's overlay), and **Hypothesis**.
+- **Population**: complexity checkboxes, and task types, tags to include,
+  tags to exclude, and origins as comma-separated lists. An empty filter
+  enrolls every task.
+- **Arms**: one arm is the control, picked with its radio button; every
+  other arm is a treatment. Each arm has a name, a weight, and collapsible
+  overlay sections: **Crew pool** (crews this workspace configures, each
+  with a weight), **Instructions** (a repository file per role, or
+  suppress the default), **Tools** (add or remove), **Skills** (replace a
+  skill with a repository bundle; Claude on Unix only), and **Config
+  values** (only keys `experiments.config_keys` allows). **Add treatment**
+  adds an arm.
+- **Primary metric**, **Minimum sample per arm**, **Maximum days**, and
+  **Guardrails** (a metric and a threshold such as `-5pt`, `+0.5`, or
+  `+3pt`).
+- **Reason**, recorded with the change.
+
+**Save draft** creates a draft. **Save and start** first shows what the
+start does: the arms with their weights, the population, and the mode.
+Confirm to save and start in one step. If Orbit refuses the start, the
+draft stays saved and open in the form, and the message says so.
+
+A draft's card, in the list and on its page, has **Edit** and **Start**.
+Edit opens the same form on the saved definition. Start asks for the same
+confirmation, with an optional reason. Once an experiment has started, its
+definition can no longer be edited: the card has no Edit, and its page
+says so.
+
+The form adds no rules of its own. Orbit checks the definition exactly as
+`orbit experiment create`, `update`, and `start` do, and shows its message
+next to the field it names, such as a guardrail threshold under
+**Guardrails** or a crew pool problem in that arm's **Crew pool**.
+Starting is refused while `experiments.enabled` is false or
+`experiments.max_running` experiments are already running. Each change
+appears in the timeline with actor `dashboard`.
 
 ## Automation
 

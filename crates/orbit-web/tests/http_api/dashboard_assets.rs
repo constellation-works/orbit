@@ -290,6 +290,36 @@ fn experiment_cumulative_tooltips_stay_inside_the_chart_and_viewport() {
     );
 }
 
+/// Analytics › Experiments authoring in Chromium at 1440 and 375 px: the New
+/// experiment form creates a draft (a refused guardrail shows under
+/// Guardrails, crew pickers list only configured crews), a draft card edits
+/// and starts it after a confirmation naming arms, weights and population,
+/// Save and start does both, and a started experiment's detail says it can no
+/// longer be edited.
+#[test]
+#[ignore = "requires ORBIT_PLAYWRIGHT_MODULE and ORBIT_EXPERIMENTS_BROWSER_EVIDENCE_DIR"]
+fn experiment_authoring_creates_edits_and_starts_a_draft() {
+    let output = std::process::Command::new("node")
+        .arg(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/http_api/dashboard_experiments_browser.mjs"),
+        )
+        .arg(std::env::var_os("ORBIT_PLAYWRIGHT_MODULE").expect("prepared Playwright module"))
+        .arg(
+            std::env::var_os("ORBIT_EXPERIMENTS_BROWSER_EVIDENCE_DIR")
+                .expect("browser evidence directory"),
+        )
+        .arg("--authoring")
+        .output()
+        .expect("node is required to execute the experiment authoring browser fixture");
+    assert!(
+        output.status.success(),
+        "experiment authoring flow failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 #[test]
 #[ignore = "requires ORBIT_PLAYWRIGHT_MODULE and ORBIT_CONTEXT_BASENAME_BROWSER_EVIDENCE_DIR"]
 fn context_selector_basenames_keep_contention_colors_and_return_to_normal_on_refresh() {

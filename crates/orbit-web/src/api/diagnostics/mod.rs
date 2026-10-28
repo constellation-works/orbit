@@ -27,7 +27,8 @@ pub(super) use diff_stats::diagnostics_diff_stats;
 pub(super) use durations::diagnostics_implement_one;
 pub(super) use errors::list_diagnostics_errors;
 pub(super) use experiments::{
-    diagnostics_experiment, diagnostics_experiment_conclude, diagnostics_experiment_readout,
+    diagnostics_experiment, diagnostics_experiment_conclude, diagnostics_experiment_create,
+    diagnostics_experiment_readout, diagnostics_experiment_start, diagnostics_experiment_update,
     diagnostics_experiments,
 };
 pub(super) use friction::list_diagnostics_friction;

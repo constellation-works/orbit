@@ -197,8 +197,68 @@ textarea.ex-conclude-control { resize: vertical; min-height: 72px; }
 .ex-promotion { margin: 8px 0 0; font: 13px var(--font-sans); }
 .ex-task-link { color: var(--accent); overflow-wrap: anywhere; }
 
+/* Operator authoring: the New experiment / edit-draft form above the list,
+   and a draft card's Edit and Start actions with Start's confirmation. */
+.ex-head-end { display: inline-flex; align-items: center; gap: 10px; }
+.ex-form-host { padding: 16px; border-bottom: 1px solid var(--hair); background: var(--bg); }
+.exf { display: flex; flex-direction: column; gap: 14px; }
+.exf-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); gap: 10px 14px; align-items: start; }
+.exf-field { display: grid; gap: 4px; min-width: 0; }
+.exf-label { color: var(--fg-dim); font: 12px var(--font-sans); }
+.exf-hint { margin: 0; color: var(--fg-mute); font: 12px var(--font-sans); overflow-wrap: anywhere; }
+.exf-note { margin: 0; color: #f2c46d; font: 12.5px var(--font-sans); overflow-wrap: anywhere; }
+.exf-locked { color: var(--fg-mute); }
+.exf-control {
+  width: 100%; min-width: 0; box-sizing: border-box; min-height: 34px; padding: 6px 8px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-elev); color: var(--fg); font: 13px var(--font-sans);
+}
+textarea.exf-control { resize: vertical; min-height: 56px; }
+.exf-control:disabled { opacity: 0.7; }
+.exf-section {
+  display: flex; flex-direction: column; gap: 10px; min-width: 0; margin: 0; padding: 12px;
+  border: 1px solid var(--hair); border-radius: 8px;
+}
+.exf-section > legend { padding: 0 6px; color: var(--fg); font: 600 13px var(--font-sans); }
+.exf-roles { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.exf-check { display: inline-flex; align-items: center; gap: 6px; color: var(--fg); font: 13px var(--font-sans); }
+.exf-control-pick { align-self: end; min-height: 34px; }
+.exf-arm {
+  display: flex; flex-direction: column; gap: 10px; min-width: 0; padding: 12px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--bg-sunk);
+}
+.exf-arm-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.exf-surface { border-top: 1px solid var(--hair); padding-top: 8px; }
+.exf-surface > summary { cursor: pointer; color: var(--fg-dim); font: 600 12.5px var(--font-sans); }
+.exf-surface[open] > summary { margin-bottom: 8px; color: var(--fg); }
+.exf-surface > * + * { margin-top: 8px; }
+.exf-row { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+.exf-instruction { grid-template-columns: 90px minmax(0, 1fr) minmax(0, 2fr); }
+.exf-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+.exf-small { height: 28px; font-size: 12px; }
+.exf-error {
+  margin: 0; padding: 6px 10px; border-left: 3px solid var(--danger-fg); border-radius: 4px;
+  background: var(--danger-wash); color: var(--danger-fg); font: 12.5px var(--font-sans); overflow-wrap: anywhere;
+}
+.exf-footer { display: flex; flex-direction: column; gap: 8px; }
+.exf-status { margin: 0; min-height: 1em; color: var(--fg-mute); font: 12px var(--font-sans); }
+.exf-confirm {
+  display: flex; flex-direction: column; gap: 8px; padding: 12px;
+  border: 1px solid var(--accent-line); border-radius: 8px; background: var(--accent-wash);
+}
+.exf-confirm-title { margin: 0; color: var(--fg); font: 600 13.5px var(--font-sans); overflow-wrap: anywhere; }
+.exf-confirm-facts { display: grid; gap: 4px; margin: 0; }
+.exf-confirm-facts > div { display: grid; grid-template-columns: 90px 1fr; gap: 8px; font: 12.5px var(--font-sans); }
+.exf-confirm-facts dt { color: var(--fg-mute); }
+.exf-confirm-facts dd { margin: 0; color: var(--fg); overflow-wrap: anywhere; }
+.exf-draft-actions { display: flex; flex-direction: column; gap: 8px; }
+
 @media (max-width: 760px) {
   .panel > .body.experiments-body { padding: 10px; }
+  .ex-form-host { padding: 10px; }
+  .exf-row, .exf-instruction { grid-template-columns: 1fr; }
+  .exf-confirm-facts > div { grid-template-columns: 1fr; }
+  .exf-buttons .action { min-height: 40px; }
   .ex-arm-progress { grid-template-columns: 1fr auto; }
   .ex-arm-progress .ex-progress { grid-column: 1 / -1; grid-row: 2; }
   .ex-forest-row { grid-template-columns: 1fr auto; }

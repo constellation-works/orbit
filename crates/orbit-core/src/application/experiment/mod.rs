@@ -6,6 +6,7 @@ mod assignment;
 mod capture;
 mod definition;
 pub(crate) use capture::validate_experiment_capture;
+pub use definition::{EXPERIMENT_COMPLEXITIES, EXPERIMENT_METRICS};
 mod lifecycle;
 mod overlay;
 mod progress;
