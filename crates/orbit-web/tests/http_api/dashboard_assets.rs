@@ -294,8 +294,8 @@ fn experiment_cumulative_tooltips_stay_inside_the_chart_and_viewport() {
 /// experiment form creates a draft (a refused guardrail shows under
 /// Guardrails, crew pickers list only configured crews), a draft card edits
 /// and starts it after a confirmation naming arms, weights and population,
-/// Save and start does both, and a started experiment's detail says it can no
-/// longer be edited.
+/// Save and start does both and locks the definition it confirms, and a
+/// started experiment's detail says it can no longer be edited.
 #[test]
 #[ignore = "requires ORBIT_PLAYWRIGHT_MODULE and ORBIT_EXPERIMENTS_BROWSER_EVIDENCE_DIR"]
 fn experiment_authoring_creates_edits_and_starts_a_draft() {
