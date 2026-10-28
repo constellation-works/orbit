@@ -1049,9 +1049,10 @@ tier down the side, observed tier across the top. The diagonal is on tier.
 tasks assessed above it. **Not placed** counts tasks without a tier or a
 priced implementation. Cost only places tasks in tiers; it is never scored.
 
-With **all** selected, Agents covers the last 90 days. From a terminal,
-`orbit agents scorecard --role <role>` prints the same ranking and
-`orbit agents show --role <role> --crew <crew>` one row's tasks.
+From a terminal, `orbit agents scorecard --role <role>` ranks one role's
+crews and models over its own `--window` (`30d` by default, not the dashboard
+window), and `orbit agents show --role <role> --crew <crew>` lists one row's
+tasks.
 
 ### Experiments
 
