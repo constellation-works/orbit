@@ -145,7 +145,7 @@ impl AssistanceResult {
                 }
                 (AssistanceValue::Choice(v), AssistanceQuestion::Choice { allowed, .. }) => {
                     !allowed.contains(v)
-                        || a.probability.is_none()
+                        || !choice_is_consistent(v, a.probability, &a.probabilities)
                         || a.probabilities
                             .iter()
                             .map(|p| &p.value)
@@ -178,4 +178,33 @@ impl AssistanceResult {
             !abstains && q.min_confidence().zip(confidence).is_some_and(|(min, p)| p >= min)
         }) { AssistanceDisposition::Suggested } else { AssistanceDisposition::Uncertain };
     }
+}
+
+/// Largest allowed gap between a choice's confidence and the chosen value's
+/// probability, and between that probability and the most probable value.
+const CHOICE_CONFIDENCE_TOLERANCE: f64 = 0.01;
+
+/// The confidence must match the chosen value's probability, and no value may be
+/// more probable than it, both within `CHOICE_CONFIDENCE_TOLERANCE`.
+fn choice_is_consistent(
+    chosen: &str,
+    confidence: Option<f64>,
+    probabilities: &[AssistanceProbability],
+) -> bool {
+    let Some(confidence) = confidence else {
+        return false;
+    };
+    let Some(chosen_probability) = probabilities
+        .iter()
+        .find(|p| p.value == chosen)
+        .map(|p| p.probability)
+    else {
+        return false;
+    };
+    let most_probable = probabilities
+        .iter()
+        .map(|p| p.probability)
+        .fold(f64::NEG_INFINITY, f64::max);
+    (confidence - chosen_probability).abs() <= CHOICE_CONFIDENCE_TOLERANCE
+        && most_probable - chosen_probability <= CHOICE_CONFIDENCE_TOLERANCE
 }

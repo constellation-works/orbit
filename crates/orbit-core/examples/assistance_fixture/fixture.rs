@@ -250,7 +250,7 @@ impl AssistanceFixture {
     pub(super) fn good_response(&self) -> Value {
         let answers:Vec<Value>=self.contract.questions.iter().map(|(name,q)| match q {
             AssistanceQuestion::Predicate { .. }=>json!({"type":"predicate","name":name,"probability":0.98}),
-            AssistanceQuestion::Choice { allowed,.. }=>json!({"type":"choice","name":name,"choice":allowed[0],"confidence":0.98,
+            AssistanceQuestion::Choice { allowed,.. }=>json!({"type":"choice","name":name,"choice":allowed[0],"confidence":1.0,
                 "probabilities":allowed.iter().enumerate().map(|(i,v)| json!({"value":v,"probability":if i==0 {1.0} else {0.0}})).collect::<Vec<_>>()}),
         }).collect();
         json!({"model":"gpt-6-luna","answers":answers,"usage":{"input_tokens":100,"output_tokens":0}})

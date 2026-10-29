@@ -478,6 +478,18 @@ fn fixture_restart_retry(root: &Path, schema: &Value) -> FixtureResult {
     Ok(())
 }
 
+/// Gives `value` all of the first answer's probability mass, so the distribution
+/// agrees with a choice of `value`.
+fn concentrate_choice_mass(body: &mut Value, value: &str) -> FixtureResult {
+    for p in body["answers"][0]["probabilities"]
+        .as_array_mut()
+        .ok_or("probabilities missing")?
+    {
+        p["probability"] = json!(if p["value"] == value { 1.0 } else { 0.0 });
+    }
+    Ok(())
+}
+
 fn fixture_validation(root: &Path, schema: &Value) -> FixtureResult {
     let f = AssistanceFixture::open_fixture(root, schema, "task_quality")?;
     for (subject, mut body, reason) in [
@@ -567,8 +579,53 @@ fn fixture_validation(root: &Path, schema: &Value) -> FixtureResult {
             .reason,
         AssistanceReason::Malformed
     );
+    // The chosen value must be the most probable one, and its confidence must be
+    // that value's probability.
+    let mut not_most_probable = choice.good_response();
+    not_most_probable["answers"][0]["confidence"] = json!(0.98);
+    concentrate_choice_mass(&mut not_most_probable, "misclassified_hold")?;
+    let id = choice.enqueue(choice.request("not-most-probable")?)?;
+    choice.respond(not_most_probable)?;
+    choice.process()?;
+    let result = choice
+        .record(&id)?
+        .result
+        .ok_or("missing contradictory choice")?;
+    assert_eq!(
+        (result.reason, result.disposition),
+        (AssistanceReason::Malformed, AssistanceDisposition::Invalid)
+    );
+    let mut miscalibrated = choice.good_response();
+    miscalibrated["answers"][0]["confidence"] = json!(0.5);
+    let id = choice.enqueue(choice.request("miscalibrated-confidence")?)?;
+    choice.respond(miscalibrated)?;
+    choice.process()?;
+    let result = choice
+        .record(&id)?
+        .result
+        .ok_or("missing miscalibrated choice")?;
+    assert_eq!(
+        (result.reason, result.disposition),
+        (AssistanceReason::Malformed, AssistanceDisposition::Invalid)
+    );
+    let mut spread = choice.good_response();
+    spread["answers"][0]["confidence"] = json!(0.95);
+    spread["answers"][0]["probabilities"][0]["probability"] = json!(0.95);
+    spread["answers"][0]["probabilities"][1]["probability"] = json!(0.05);
+    let id = choice.enqueue(choice.request("consistent-spread")?)?;
+    choice.respond(spread)?;
+    choice.process()?;
+    assert_eq!(
+        choice
+            .record(&id)?
+            .result
+            .ok_or("missing consistent choice")?
+            .disposition,
+        AssistanceDisposition::Suggested
+    );
     let mut abstain = choice.good_response();
     abstain["answers"][0]["choice"] = json!("insufficient_evidence");
+    concentrate_choice_mass(&mut abstain, "insufficient_evidence")?;
     let id = choice.enqueue(choice.request("abstain")?)?;
     choice.respond(abstain)?;
     choice.process()?;
