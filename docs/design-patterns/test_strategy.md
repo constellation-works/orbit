@@ -66,6 +66,60 @@ The nextest phase (in hosted CI, each shard job) runs on a 4-vCPU runner with ev
 
 `.config/nextest.toml` profile `ci` sets `test-threads` to 6 and `retries` to 0. Six is two extra slots on the 4-vCPU runner: enough to overlap that wait-bound fraction, and short of doubling the CPU-bound tests. The profile inherits the default profile, so the group caps stay `stateful-runtime` 1, `task-contracts` 4, and `mcp-contracts` 8. `scripts/ci-guardrails.sh`, the hosted nextest shards and the Linux sandbox gate select it with `--profile ci`. A local run that does not pass `--profile ci` keeps the default profile, whose thread count is the logical CPU count. `NEXTEST_TEST_THREADS`, including the value `scripts/build-budget.py` exports from the host `test-threads` file, still overrides the profile.
 
+The CI profile also gives priority 100 to six measured long tests:
+`task_delivery::source_repair::published_completion_scenarios`,
+`pr_landing::validation_repairs_and_logs`,
+`pr_landing::ci_rerun::owner_retry_preserves_read_only_and_independent_candidate_routes`,
+`public_tool_surface::github_log_goldens::every_selected_window_hides_credential_fragments`,
+`events::change_stream_notices_other_process_writes_and_resumes_after_reconnect`
+and `origin_fetch_hold::worktree_setup_origin_outage_holds_backlog_and_fails_in_progress`.
+The 2026-10-29 hosted audit observed 111.484, 49.947, 58.482 and 38.865 seconds
+for the first four respectively (different runs; these are not additive).
+The exhaustive credential
+window test completed last in shard 3 of run 40941281957; the completion carrier
+finished near the end of shard 2 of run 40945863498. A complete local baseline
+shard on the delivery base finished with the change-stream test (10.913 seconds)
+and the dashboard codebase fixture (30.133 seconds). The former is prioritized;
+the latter now completes its unanswered mock fetches during teardown, letting
+the production API's `finally` clear its real request timers. This keeps every
+view assertion and the production timeout, and asserts no fetch remains
+unanswered. The same baseline measured 51.195 seconds for the origin-outage
+recovery test; priority keeps its deliberate transport deadline checks intact.
+Starting the long tests before the ordinary queue overlaps their remaining rows with other work instead
+of leaving idle slots at the tail. The [nextest priority setting](https://nexte.st/docs/configuration/test-priorities/)
+requires version 0.9.91 or newer; hosted CI already pins 0.9.136. Priority
+changes order only, preserving count-partition membership, ignored applicability,
+zero retries, process isolation and all inherited group limits. No case or
+assertion is removed. A complete local shard comparison measures scheduling;
+only complete candidate hosted jobs and the subsequent PR distribution can
+establish whether the 600-second p90 requirement is restored.
+
+The controlled 2026-10-29 comparison used independent extracts and targets at
+base `08bd9305eac9`, Rust 1.98.1, nextest 0.9.136, four Cargo jobs and six
+nextest slots on one shared 32-CPU Linux host. Compiler caches and incremental
+compilation were off; dependency sources were already downloaded. Cold means
+a fresh target, warm means the same arm's compiled target; OS caches were not
+flushed. Each complete portable shard ran alone, sequentially:
+
+| Target stratum / arm | Shard 1 s | Shard 2 s | Shard 3 s |
+|---|---:|---:|---:|
+| Cold / baseline | 123.275 | 136.145 | 139.097 |
+| Cold / candidate | 115.502 | 107.769 | 133.496 |
+| Warm / baseline | 117.989 | 130.298 | 142.389 |
+| Warm / candidate | 116.464 | 108.002 | 134.845 |
+
+Every arm selected the same 3,190 portable identities and 61 ignored identities,
+partitioned 1,082/1,062/1,046 exactly once. Each retained the same failed
+`review_reset_claimed::claimed_leaf_review_escalation_requeues_onto_a_new_claim`
+case (`before_pr_unsupported`), so these timings are not full-suite passes.
+The longest individual shard improved by 5.601 seconds cold and 7.544 seconds
+warm. The continuous **sequential** warm build/archive/list/shard replay fell
+from 414.711 to 382.314 seconds; that is not a parallel hosted-job saving.
+Cold build/archive times were 199.409/184.836 seconds, with unchanged Rust and
+build flags: no compile saving is attributed to this change. The 64-second
+critical-path goal is not demonstrated, and candidate hosted jobs and the
+latest-20 PR distribution remain outstanding through normal publication.
+
 `scripts/ci-guardrails.sh` arranges the full run around that phase. After formatting, the exclusive self-tests start one at a time at normal priority in their own lane. The repository-guard pool and the workflow test build run beside them in Linux's idle scheduling class, and both the pool and the lane join before any test runs. `test-ci-download-verified.py`, which waits out fixed delays for nearly all of its wall time, starts beside the pool outside its window and joins with it. nextest then runs the binaries listed from the folded test build (`--binaries-metadata`) without invoking Cargo. Production Clippy, doctests and documentation run beside it in Linux's idle scheduling class, on CPU time the tests leave idle, and join before the supply-chain gate. Documentation runs under production Clippy's lint environment, so it reuses that pass's check of the workspace and only runs rustdoc. The Check job's dev and test profiles carry no debuginfo (`CARGO_PROFILE_DEV_DEBUG` and `CARGO_PROFILE_TEST_DEBUG` are `0` in `ci.yml`); coverage keeps line tables in its own workflow. The `cpu-util:` line samples the whole host, so it includes that idle-class work. Every command that compiles workspace members after the folded build runs through `scripts/with-test-build-lint.sh`. Cargo fingerprints `RUSTC_WORKSPACE_WRAPPER` and `CLIPPY_ARGS`, so a nextest run without them recompiled every workspace member.
 
 Timing evidence from 2026-10-17, in wall seconds from the `ci-guardrails-phase:` lines. The hosted column is a slow 4-vCPU runner (run 39042835730; Check job 1261 s, of which guardrails took 1214 s). The local columns ran the guardrails before and after this layout on one host pinned to four cores (`taskset -c 0-3`, `CARGO_INCREMENTAL=0`, after a source change to `orbit-common`), so they compare layouts rather than predict hosted time. The after column gives both samples.

@@ -462,7 +462,14 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   their concatenation with
   `ci-repack-nextest.py unpack SOURCE DESTINATION --parts N`, and runs
   `cargo nextest run --profile ci --partition count:k/N`
-  from it. A build that fails before the upload fails the wait at once.
+  from it. Profile `ci` starts six measured long tests first,
+  using nextest's per-test priority (requires nextest 0.9.91 or newer).
+  This changes scheduling within each shard, keeping every test identity,
+  ignored-test rule, count partition, group cap and isolated process. The
+  default local profile keeps its ordinary order. See the
+  [timing notes](design-patterns/test_strategy.md#quality-and-the-10-minute-budget)
+  before interpreting a local replay as hosted budget evidence.
+  A build that fails before the upload fails the wait at once.
   Repacking preserves every tar byte; it never extracts members or replaces
   an existing destination. Both zstd stages must succeed before publishing
   the destination, and corrupt input, a missing part, missing zstd or encoder
