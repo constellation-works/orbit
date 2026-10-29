@@ -224,8 +224,7 @@ The payload carries:
 
 ## 4. Pipeline
 
-`task_gate_pipeline` already chooses `task_{{ input.mode }}_pipeline`
-(`crates/orbit-core/assets/jobs/task_gate_pipeline.yaml:10-12`). A new `task_cloud_pipeline` slots in beside
+`task_gate_pipeline` already chooses `task_{{ input.mode }}_pipeline` by default. A `delivery:<job>` tag on a bundled task can instead select another active job that declares the mode in `task_delivery.modes` (`crates/orbit-core/assets/jobs/task_gate_pipeline.yaml:10-13`). A new `task_cloud_pipeline` slots in beside
 `task_pr_pipeline` and reuses the gate's locks and eligibility checks unchanged. Its steps
 are deterministic actions. None of them is an `agent_loop`, so the envelope contract doesn't
 apply.
