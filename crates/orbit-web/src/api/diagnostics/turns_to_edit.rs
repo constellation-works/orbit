@@ -3,9 +3,10 @@
 //!
 //! Each terminal task counts once, in the bucket of its index `updated_at`.
 //! Its score is the first-edit score of its first implement invocation, the
-//! same definition the experiment readout uses. A task whose first
-//! invocation has no scoreable edit is excluded and counted, never averaged
-//! as zero.
+//! same definition the experiment readout uses. Tasks without a score are
+//! excluded and counted, never averaged as zero. Empty traces are counted
+//! separately from populated traces with no recognized editor call; a shell
+//! such as `command_execution` is not an edit and is never averaged as zero.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -158,8 +159,10 @@ pub(in crate::api) async fn diagnostics_turns_to_edit(
 #[derive(Clone, Copy)]
 enum Contribution {
     Scored(u64, u64),
-    /// The first implement invocation recorded no detectable edit.
-    NoEdit,
+    /// The first implement invocation has no tool calls to inspect.
+    EmptyTrace,
+    /// The populated first implement trace has no recognized editor call.
+    NoDetectableEdit,
     /// No implement invocation is linked to the task.
     NoInvocation,
 }
@@ -169,7 +172,8 @@ enum Contribution {
 #[derive(Clone, Default)]
 struct Cell {
     samples: Vec<(u64, u64)>,
-    no_edit: u64,
+    empty_trace: u64,
+    no_detectable_edit: u64,
     no_invocation: u64,
 }
 
@@ -177,13 +181,46 @@ impl Cell {
     fn record(&mut self, contribution: Contribution) {
         match contribution {
             Contribution::Scored(turns, bytes) => self.samples.push((turns, bytes)),
-            Contribution::NoEdit => self.no_edit += 1,
+            Contribution::EmptyTrace => self.empty_trace += 1,
+            Contribution::NoDetectableEdit => self.no_detectable_edit += 1,
             Contribution::NoInvocation => self.no_invocation += 1,
         }
     }
 
     fn is_empty(&self) -> bool {
-        self.samples.is_empty() && self.no_edit == 0 && self.no_invocation == 0
+        self.samples.is_empty()
+            && self.empty_trace == 0
+            && self.no_detectable_edit == 0
+            && self.no_invocation == 0
+    }
+
+    fn task_count(&self) -> u64 {
+        self.samples.len() as u64 + self.empty_trace + self.no_detectable_edit + self.no_invocation
+    }
+
+    fn coverage_json(&self) -> Value {
+        let measured = self.samples.len() as u64;
+        let tasks = self.task_count();
+        let invocations = tasks - self.no_invocation;
+        let trace_rate = if invocations == 0 {
+            Value::Null
+        } else {
+            json!((invocations - self.empty_trace) as f64 / invocations as f64)
+        };
+        let measured_rate = if tasks == 0 {
+            Value::Null
+        } else {
+            json!(measured as f64 / tasks as f64)
+        };
+        json!({
+            "tasks": tasks,
+            "measured": measured,
+            "empty_trace": self.empty_trace,
+            "no_detectable_edit": self.no_detectable_edit,
+            "no_invocation": self.no_invocation,
+            "trace_rate": trace_rate,
+            "measured_rate": measured_rate,
+        })
     }
 
     fn to_json(&self) -> Value {
@@ -197,8 +234,12 @@ impl Cell {
             "mean_result_bytes": mean_bytes,
             "median_result_bytes": median_bytes,
             "thin": n > 0 && n < MIN_TASKS,
-            "excluded_no_edit": self.no_edit,
+            // Keep the previous aggregate field for existing clients.
+            "excluded_no_edit": self.empty_trace + self.no_detectable_edit,
+            "excluded_empty_trace": self.empty_trace,
+            "excluded_no_detectable_edit": self.no_detectable_edit,
             "excluded_no_invocation": self.no_invocation,
+            "tasks": self.task_count(),
         })
     }
 }
@@ -289,7 +330,7 @@ fn turns_to_edit_trend(
         }
     }
     let mut tag_counts: BTreeMap<&str, u64> = BTreeMap::new();
-    let mut provider_counts: BTreeMap<String, u64> = BTreeMap::new();
+    let mut provider_coverage: BTreeMap<String, Cell> = BTreeMap::new();
     let mut overall = Cell::default();
     let mut other_provider = 0u64;
     for (index, row) in &in_window {
@@ -297,10 +338,21 @@ fn turns_to_edit_trend(
             *tag_counts.entry(tag.as_str()).or_default() += 1;
         }
         let first = first_by_task.get(&row.task_id);
+        let contribution = match first {
+            None => Contribution::NoInvocation,
+            Some(first) => match first.score {
+                Some((turns, bytes)) => Contribution::Scored(turns, bytes),
+                None if first.empty_trace => Contribution::EmptyTrace,
+                None => Contribution::NoDetectableEdit,
+            },
+        };
         if let Some(first) = first
             && !first.agent.is_empty()
         {
-            *provider_counts.entry(first.agent.clone()).or_default() += 1;
+            provider_coverage
+                .entry(first.agent.clone())
+                .or_default()
+                .record(contribution);
         }
         if let Some(wanted) = filters.provider.as_deref()
             && let Some(first) = first
@@ -315,13 +367,6 @@ fn turns_to_edit_trend(
             "with"
         } else {
             "without"
-        };
-        let contribution = match first {
-            None => Contribution::NoInvocation,
-            Some(first) => match first.score {
-                Some((turns, bytes)) => Contribution::Scored(turns, bytes),
-                None => Contribution::NoEdit,
-            },
         };
         let entry = series
             .entry((row.complexity.clone(), cohort))
@@ -357,9 +402,12 @@ fn turns_to_edit_trend(
     let mut tags: Vec<(&str, u64)> = tag_counts.into_iter().collect();
     tags.sort_by(|(left, left_n), (right, right_n)| right_n.cmp(left_n).then(left.cmp(right)));
     tags.truncate(AVAILABLE_TAGS);
-    let mut providers: Vec<(String, u64)> = provider_counts.into_iter().collect();
-    providers.sort_by(|(left, left_n), (right, right_n)| {
-        right_n.cmp(left_n).then_with(|| left.cmp(right))
+    let mut providers: Vec<(String, Cell)> = provider_coverage.into_iter().collect();
+    providers.sort_by(|(left, left_coverage), (right, right_coverage)| {
+        right_coverage
+            .task_count()
+            .cmp(&left_coverage.task_count())
+            .then_with(|| left.cmp(right))
     });
 
     Ok(json!({
@@ -374,6 +422,7 @@ fn turns_to_edit_trend(
             .collect::<Vec<_>>(),
         "series": series,
         "total": overall.to_json(),
+        "coverage": overall.coverage_json(),
         "excluded_other_provider": other_provider,
         "available_tags": tags
             .into_iter()
@@ -381,7 +430,13 @@ fn turns_to_edit_trend(
             .collect::<Vec<_>>(),
         "available_providers": providers
             .into_iter()
-            .map(|(provider, tasks)| json!({ "provider": provider, "tasks": tasks }))
+            .map(|(provider, coverage)| {
+                json!({
+                    "provider": provider,
+                    "tasks": coverage.task_count(),
+                    "coverage": coverage.coverage_json(),
+                })
+            })
             .collect::<Vec<_>>(),
     }))
 }

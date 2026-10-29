@@ -1,8 +1,8 @@
 // Usage: node dashboard_metrics_browser.mjs /path/to/playwright/index.mjs .orbit/tmp/metrics-browser
 // Analytics › Metrics (ORB-15746) through the shipped app, router, renderer and
-// CSS: duration, completion and defect trends, series toggles, statistic and table
-// views, hover and keyboard tooltips, window changes, the empty window with
-// its widen action, token-filter races, and narrow phone layouts.
+// CSS: duration, completion, defect and diagnostic trends, series toggles,
+// statistic and table views, hover and keyboard tooltips, window changes,
+// token-filter races, and narrow phone layouts.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -138,6 +138,46 @@ function tokens(key, url) {
   };
 }
 
+function turns(key, url) {
+  const { count, window, start } = trendWindow(key);
+  const selectedProvider = url.searchParams.get('provider');
+  const selectedTags = (url.searchParams.get('tags') || '').split(',').filter(Boolean);
+  const providers = [
+    { provider: 'codex', tasks: 2, coverage: { tasks: 2, measured: 1, empty_trace: 0, no_detectable_edit: 1, no_invocation: 0, trace_rate: 1, measured_rate: 0.5 } },
+    { provider: 'claude', tasks: 2, coverage: { tasks: 2, measured: 0, empty_trace: 2, no_detectable_edit: 0, no_invocation: 0, trace_rate: 0, measured_rate: 0 } },
+  ];
+  const cell = selectedProvider === 'claude'
+    ? { n: 0, tasks: 3, excluded_empty_trace: 2, excluded_no_detectable_edit: 0, excluded_no_edit: 2, excluded_no_invocation: 1 }
+    : { n: 1, tasks: 5, excluded_empty_trace: 2, excluded_no_detectable_edit: 1, excluded_no_edit: 3, excluded_no_invocation: 1 };
+  const measured = cell.n;
+  const coverage = {
+    tasks: cell.tasks, measured,
+    empty_trace: cell.excluded_empty_trace,
+    no_detectable_edit: cell.excluded_no_detectable_edit,
+    no_invocation: cell.excluded_no_invocation,
+    trace_rate: (cell.tasks - cell.excluded_empty_trace) / cell.tasks,
+    measured_rate: measured / cell.tasks,
+  };
+  const point = {
+    ...cell,
+    mean_turns: measured ? 1 : null, median_turns: measured ? 1 : null,
+    mean_result_bytes: measured ? 0 : null, median_result_bytes: measured ? 0 : null,
+    thin: measured > 0 && measured < 3,
+  };
+  return {
+    window, outcome: url.searchParams.get('outcome') || 'done', provider: selectedProvider,
+    tags: selectedTags, min_tasks: 3, truncated: false,
+    bucket_starts: Array.from({ length: count }, (_, i) => start(i)),
+    series: [{ complexity: 'medium', cohort: 'all', points: Array.from({ length: count }, (_, i) => i === count - 1 ? point : {
+      n: 0, tasks: 0, mean_turns: null, median_turns: null, mean_result_bytes: null, median_result_bytes: null,
+      thin: false, excluded_empty_trace: 0, excluded_no_detectable_edit: 0, excluded_no_edit: 0, excluded_no_invocation: 0,
+    }), total: point }],
+    total: point, coverage, excluded_other_provider: selectedProvider === 'claude' ? 2 : 0,
+    available_providers: providers,
+    available_tags: [{ tag: 'quality', tasks: 3 }],
+  };
+}
+
 // Distinct values expose stale workspace, window and filter results when a
 // filtered trend is opened after being absent from the preceding panel poll.
 function filteredTrend(url) {
@@ -208,6 +248,7 @@ function payloadFor(url) {
       requests.push(`task_tokens?since=${url.searchParams.get('since')}&scope=${url.searchParams.get('scope')}&workspace=${url.searchParams.get('workspace')}`);
       tokenTagRequests.push((url.searchParams.get('tags') || '').split(',').filter(Boolean));
       return tokens(url.searchParams.get('since'), url);
+    case '/api/diagnostics/turns_to_edit': return turns(url.searchParams.get('since'), url);
     case '/api/diagnostics/diff_stats':
     case '/api/diagnostics/delivery_friction': return filteredTrend(url);
     case '/api/crews': return { default_crew: null, crews: [] };
@@ -703,7 +744,7 @@ try {
 
   for (const [name, chart] of [
     ['implement_one duration', 'duration'], ['Tasks completed', 'completed'], ['Defects', 'defects'],
-    ['Tokens per task', 'tokens'],
+    ['Tokens per task', 'tokens'], ['Turns to first edit', 'turns'],
   ]) {
     await body.getByRole('tab', { name, exact: true }).click();
     await body.locator(`.mx-chart-${chart}`).waitFor();
@@ -713,6 +754,29 @@ try {
       await page.screenshot({ path: path.join(evidence, `${chart}-dark-${width}.jpg`), type: 'jpeg', quality: 78, fullPage: true, animations: 'disabled' });
     }
   }
+  await body.getByRole('tab', { name: 'Turns to first edit', exact: true }).click();
+  await body.locator('.mx-chart-turns').waitFor();
+  assert.match(await body.locator('.mx-chart .mx-notes').textContent(), /2 had an empty or unavailable tool trace/);
+  assert.match(await body.locator('.mx-chart .mx-notes').textContent(), /populated trace without a recognized editor/);
+  assert.match(await body.locator('.mx-chart .mx-notes').textContent(), /codex: 1\/2 measured/);
+  assert.match(await body.locator('.mx-chart .mx-notes').textContent(), /1 populated without a recognized editor/);
+  assert.match(await body.locator('.mx-chart .mx-notes').textContent(), /claude: no tool telemetry/);
+  const providerPicker = body.getByRole('combobox', { name: 'Provider' });
+  assert.match(await providerPicker.locator('option[value="claude"]').textContent(), /0\/2 measured · 0%/);
+  await page.setViewportSize({ width: 1440, height: 1200 });
+  await body.locator('.mx-chart-turns').scrollIntoViewIfNeeded();
+  await page.screenshot({ path: path.join(evidence, 'turns-coverage-dark-1440.jpg'), type: 'jpeg', quality: 78, fullPage: true, animations: 'disabled' });
+  await page.setViewportSize({ width: 375, height: 1100 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, 'turns coverage fits the 375px view');
+  await page.screenshot({ path: path.join(evidence, 'turns-coverage-dark-375.jpg'), type: 'jpeg', quality: 78, fullPage: true, animations: 'disabled' });
+  await page.setViewportSize({ width: 1440, height: 1200 });
+  await providerPicker.selectOption('claude');
+  await body.locator('.mx-empty').waitFor();
+  assert.match(await body.locator('.mx-empty').textContent(), /No measured first edits/);
+  assert.match(await body.locator('.mx-empty').textContent(), /empty or unavailable tool trace/);
+  assert.match(await body.locator('.mx-empty').textContent(), /no tool telemetry/);
+  assert.ok(apiRequests.some(value => value.startsWith('/api/diagnostics/turns_to_edit?') && new URL(value, origin).searchParams.get('provider') === 'claude'));
+  pass('turns coverage categories and provider rates');
   assert.deepEqual(errors, [], 'no browser errors');
   fs.writeFileSync(path.join(evidence, 'metrics-assertions.json'), JSON.stringify({ passed: true, assertions, apiRequests }, null, 2));
   console.log(`PASS: ${assertions.length} Analytics › Metrics scenarios.`);
