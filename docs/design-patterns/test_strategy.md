@@ -480,9 +480,11 @@ Cargo links each top-level `crates/<crate>/tests/<name>.rs` file and each `crate
 
 `orbit-agent` keeps provider projection and response regressions in the existing
 [`provider_invocation/response.rs`](../../crates/orbit-agent/tests/provider_invocation/response.rs)
-integration module, with fixture cases grouped under `response/projection.rs`
-and `response/envelope.rs`. Exported `normalize_cli_stdout`,
-`project_cli_response`, `latest_assistant_message`,
+integration module, which wires the `response/projection.rs` and
+`response/envelope.rs` fixture modules. A few shared capture cases stay in the
+parent module: the `provider_long_prompt_requests` cases cover Claude streamed
+usage and per-request Codex rollout usage from captured provider data. Exported
+`normalize_cli_stdout`, `project_cli_response`, `latest_assistant_message`,
 `antigravity_terminal_error_diagnostic`, and `ParsedStdout` accept the same
 crafted captures as the former sibling unit tests. Parser edge cases, failure
 synthesis, transcript disclosure and usage rollups therefore need no private
