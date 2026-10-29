@@ -299,3 +299,41 @@ pub trait ResourceUsageStoreBackend: Send + Sync {
         limit: usize,
     ) -> Result<usize, OrbitError>;
 }
+
+/// Latest own resource usage of a process, bound to its kernel identity.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkerProcessResources {
+    pub pid: u32,
+    pub starttime: u64,
+    pub command: String,
+    pub memory_bytes: u64,
+    /// Own CPU time over monotonic wall time, in cores; absent at baseline.
+    pub cpu_cores: Option<f64>,
+}
+
+/// Bounded snapshot captured before a watchdog signals a worker's tree.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkerResourceLimitEvidence {
+    pub workspace_id: String,
+    pub run_id: String,
+    pub observed_at: DateTime<Utc>,
+    pub memory_bytes: u64,
+    pub process_count: usize,
+    pub memory_max_bytes: Option<u64>,
+    pub tasks_max: u32,
+    /// The eight largest physical footprints, descending; no argv or env.
+    pub top_processes: Vec<WorkerProcessResources>,
+}
+
+/// Durable watchdog breach evidence, separate from profile minute rows.
+pub trait WorkerResourceLimitStoreBackend: Send + Sync {
+    fn record_worker_resource_limit_evidence(
+        &self,
+        evidence: &WorkerResourceLimitEvidence,
+    ) -> Result<(), OrbitError>;
+    fn worker_resource_limit_evidence(
+        &self,
+        workspace_id: &str,
+        run_id: &str,
+    ) -> Result<Option<WorkerResourceLimitEvidence>, OrbitError>;
+}

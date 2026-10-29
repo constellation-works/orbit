@@ -150,7 +150,7 @@ impl OrbitRuntime {
             .input
             .clone()
             .unwrap_or_else(|| Value::Object(Default::default()));
-        // Telemetry only. Linux samples the worker scope and skips a worker
+        // Resource telemetry. Linux samples the worker scope and skips a worker
         // with none; macOS samples the process tree and skips a sample it
         // cannot read. Either way the sampler never touches the run's
         // outcome. Stopped before the run is finalized, so its last minute
@@ -161,6 +161,8 @@ impl OrbitRuntime {
         // validation, event persistence, and resume-state reads cannot escape
         // with a durable `running` projection.
         let outcome = (|| {
+            #[cfg(target_os = "macos")]
+            let _watchdog = self.start_worker_watchdog(run)?;
             if crate::application::job::claimed::CLAIMED_LEAF_JOBS.contains(&run.job_id.as_str()) {
                 if let Some(selection) = self
                     .read_run_state(&run.run_id)?

@@ -282,11 +282,33 @@ By default, containment falls back to the old behaviour, with one warning per
 Orbit process (`orbit log tail --level warn --target orbit.core.job_run`: "pipeline
 workers launch without a bounded systemd scope"), when it is disabled or when
 `systemd-run --user --scope` cannot reach a user manager on Linux (containers,
-sandboxes, sessions without `XDG_RUNTIME_DIR`). macOS and other platforms
-without systemd launch uncontained silently: no warning is logged. With
+sandboxes, sessions without `XDG_RUNTIME_DIR`). macOS instead uses an in-worker watchdog when containment is enabled. Every
+second it checks the tracked process/session set's total physical footprint and
+process count against `machine.worker_memory_max` and `machine.worker_tasks_max`.
+It records the eight largest consumers, sends descendants SIGTERM, escalates to
+SIGKILL after one second, finalizes the run as failed and terminates the worker
+last. The worker owns the watchdog, so exiting the submitting CLI does not stop
+it. `orbit doctor` and submission notes label this **watchdog**, never kernel
+containment. `off` disables it; memory high-water throttling and CPU quota are
+not implemented on macOS. Percent memory limits use physical RAM; `infinity`
+disables only the memory ceiling. The five-second profile sampler is unchanged.
+
+A watchdog breach carries `worker_resource_limit` in `orbit run show`, with
+command names, PIDs and memory bytes for top consumers. Durable resource evidence
+in `worker_resource_limits` retains the same bounded snapshot with start keys,
+CPU rates (absent at the first reading), totals, limits and observation time,
+one row per workspace/run until that run is deleted. Read it through `WorkerResourceLimitStoreBackend`
+when inspecting resource history. Arguments and environment are not collected.
+
+Polling can overshoot between checks. Unreadable snapshots skip a check. A
+process that calls `setsid` after leaving the tree and any children it starts
+escape tracking; a session that starts and loses its leader between checks can
+also be missed. A killed worker cannot run its watchdog. These are watchdog
+gaps, not guarantees of kernel containment. Other platforms without systemd
+still launch uncontained silently. With
 `machine.worker_containment = "strict"` or `--strict-worker-containment` on
 `orbit run ship` or `orbit run auto`, an unavailable scope instead refuses the
-worker before spawn; `orbit run show` reports
+worker before spawn, including macOS (strict keeps its kernel-only meaning); `orbit run show` reports
 `worker_containment_unavailable` and the reason. The CLI flag is inherited by
 the auto coordinator's leaf workers. Uncontained workers share the launching
 service's cgroup. The rendered `orbit-sweep.service`

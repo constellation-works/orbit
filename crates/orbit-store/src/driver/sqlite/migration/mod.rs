@@ -33,6 +33,7 @@ mod retention_analytics;
 mod routine;
 mod task_commit_journal;
 mod task_reservations;
+mod worker_resource_limits;
 
 // Schema steps, referenced by the ordered `ledger::MIGRATIONS` registry.
 use admission_reservations::apply_admission_reservations;
@@ -91,6 +92,7 @@ use task_reservations::{
     apply_lease_notices, apply_task_reservation_lease_queue, apply_task_reservation_lease_token,
     apply_task_reservation_leases, apply_workspace_claim_scope,
 };
+use worker_resource_limits::apply_worker_resource_limits;
 
 // The ledger tests reach schema introspection through `super::super::*`.
 #[cfg(test)]

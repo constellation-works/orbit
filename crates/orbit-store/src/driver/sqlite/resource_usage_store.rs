@@ -27,7 +27,7 @@ fn bytes(value: u64) -> i64 {
 
 fn encode<T: serde::Serialize>(value: &T) -> Result<String, OrbitError> {
     serde_json::to_string(value)
-        .map_err(|error| OrbitError::Store(format!("encode an admission forecast: {error}")))
+        .map_err(|error| OrbitError::Store(format!("encode resource evidence: {error}")))
 }
 
 /// A JSON column read back; a value this binary cannot read is a
@@ -569,5 +569,38 @@ impl Store {
             }
         }
         Ok(intervals)
+    }
+}
+
+impl crate::contracts::WorkerResourceLimitStoreBackend for Store {
+    fn record_worker_resource_limit_evidence(
+        &self,
+        evidence: &crate::contracts::WorkerResourceLimitEvidence,
+    ) -> Result<(), OrbitError> {
+        let encoded = encode(evidence)?;
+        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+            tx.connection()
+                .execute(
+                    "INSERT INTO worker_resource_limits (workspace_id, run_id, evidence_json)
+                 VALUES (?1, ?2, ?3) ON CONFLICT (workspace_id, run_id)
+                 DO UPDATE SET evidence_json = excluded.evidence_json",
+                    params![evidence.workspace_id, evidence.run_id, encoded],
+                )
+                .map(|_| ())
+                .map_err(sqlite_store_error)
+        })
+    }
+
+    fn worker_resource_limit_evidence(
+        &self,
+        workspace_id: &str,
+        run_id: &str,
+    ) -> Result<Option<crate::contracts::WorkerResourceLimitEvidence>, OrbitError> {
+        use rusqlite::OptionalExtension;
+        self.read()?.query_row(
+            "SELECT evidence_json FROM worker_resource_limits WHERE workspace_id = ?1 AND run_id = ?2",
+            params![workspace_id, run_id],
+            |row| decode(0, &row.get::<_, String>(0)?),
+        ).optional().map_err(sqlite_store_error)
     }
 }
