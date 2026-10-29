@@ -122,7 +122,7 @@ migration are in [remote-access.md](../../orbit-setup/references/remote-access.m
 | Task attachments | `orbit_task_artifact_put`, `orbit_task_artifact_get` | Task artifact commands; source path is on the executing host and must resolve inside the workspace checkout |
 | Retrieval | `orbit_search` | `orbit search`; `orbit search reindex` rebuilds the index |
 | Agent scorecards | `orbit_agents_scorecard` and `orbit_agents_show` (`role`: `orchestrators`, `implementers`, `reviewers`, or `pilots`) | `orbit agents scorecard --role <role>` and `orbit agents show --role <role> --crew <crew>`. `orbit.orchestrator.scorecard` and `orbit.orchestrator.show` stay advertised as deprecated aliases of the orchestrators role and are removed in the next release |
-| Codebase risk | `orbit_codebase_analytics`, `orbit_codebase_show`, and `orbit_codebase_related` | `orbit codebase analytics`, `orbit codebase show <path>`, and `orbit codebase related <path>`. Regressions ranking and path detail count recorded sites, not declared footprints; regression-risk prompt marks count declared footprints; related paths are landed co-change |
+| Codebase risk | `orbit_codebase_analytics`, `orbit_codebase_show`, and `orbit_codebase_related` | `orbit codebase analytics`, `orbit codebase show <path>`, and `orbit codebase related <path>`. The analytics and show metrics, attribution, filters, and response fields are described below. Regression-risk prompt marks count declared footprints; related paths are landed co-change |
 | Friction | `orbit_friction_add/update`; list with `orbit_search` `kind: "friction"` and no `query`; move to the owning workspace with `update` `rehome_to` | `orbit friction list`, `rehome`, and additional show/stats/tags/resolve commands |
 | Submit explicit tasks | `orbit_workflow_ship` (review-only; no completion input) | `orbit run ship`, `run auto` (`--auto-fix` also has an operator-only dashboard checkbox; no MCP auto-fix start input) |
 | Forecast mode for a local drain | `orbit_workflow_auto` `action: "start"` accepts `auto_concurrency: "off"`, `"shadow"` or `"enforce"`; omission follows the configured host mode each admission pass. Pull drains refuse this override and use the executor host mode. | `orbit run auto --auto-concurrency <MODE>`; omission has the same live host default. Explicit overrides and inheritance source (`explicit` or `configured`) survive restart/resume without writing config; host thresholds and provider-limit policy refresh next pass, caching unchanged config by mtime and retaining the previous policies with a warning on invalid config; run show and readiness expose `mode`, `source` and the current `configured_mode`. This selects forecast policy only: normal operator authority, worker ceiling and host thresholds still apply. |
@@ -139,6 +139,92 @@ migration are in [remote-access.md](../../orbit-setup/references/remote-access.m
 | Host agent invocation | `orbit_agent_invoke` when advertised and authorized | `orbit run agent <prompt>`; returns a run ID, or the answer with `--wait` |
 | Distributed drain | Internal runtime protocol; no ordinary MCP tools | `orbit run auto --pull` uses a launch-selected owner route for probe, receipt lookup, task admission, bind and settle. These five operations have no public schemas, and public calls refuse both canonical and formerly advertised names; client names or initialize metadata cannot enable the route. Matching internal protocol support is required on both endpoints, with no public fallback. Use owner-side `orbit tool run orbit.drain.probe`, `orbit.drain.receipt.lookup` and `orbit.drain.claims` for supported diagnostics under the required identified/operator authority. Do not call pull, bind or settle by hand: admission and claim mutations retain machine/run fences. Handoff approval is an owner-dashboard action with no CLI verb or tool. Handoff revocation and claim recovery are operator-only: `orbit task revoke-handoff` and `orbit task recover-claim`, with the tools `orbit.task.revoke_handoff` and `orbit.task.recover_claim`, which managed runs cannot call. See [distributed-drain.md](setup/distributed-drain.md). |
 | Setup and maintenance | Discover any server extensions; do not guess | config, doctor, search reindex, audit, GC, filesystem profiles, skill, routine, sweep, job/activity catalogs, workspace role/sync/publication |
+
+### Codebase analytics and path detail
+
+Use `orbit_codebase_analytics` to compare repository paths across the codebase
+risk rankings. Pass a `path` returned in a ranking row to
+`orbit_codebase_show` to inspect that path's standing in every ranking and
+follow its counts to tasks, regression sites, lock waiters, or coupled paths.
+Both tools use the same selection: `window` (`7d`, `30d`, `90d`, or `all`,
+default `90d`), `min_support` (minimum denominator, default `15`) and `rollup`
+(`file`, parent `dir`, or `crate`, default `file`). `touched` means the task's
+declared footprint (`context_files`, including widened selectors), not the
+landed diff.
+
+Analytics returns six path rankings and an `overlap` summary. Each rate row
+includes its numerator and denominator. Rankings use distinct tasks as their
+counts, except lock contention, which counts distinct requesting identities,
+and change coupling, which counts reservations. Rows need a numerator and at
+least `min_support` denominator support, are sorted by rate then numerator
+then path, and analytics returns at most 25 per ranking. `below_support`
+counts rows omitted for low support. `show` reports the path's 1-based rank
+over the full ranking and whether its denominator is below support; a missing
+ranking row is `null`.
+
+The ranking sections mean:
+
+- `regressions`: done tasks with an incoming regression link whose recorded
+  site attributes the task to the path, divided by done tasks whose declared
+  footprint touched it. A task attributed by a site outside its footprint is
+  added to that path's denominator, so its rate stays at most 1. Recorded
+  directory sites cover their descendant keys. The response includes task
+  counts, sites, and the link breakdowns described below.
+- `footprint_misses`: tasks whose declared footprint was widened onto the
+  path during the window, divided by active tasks whose footprint touched it.
+  `widenings` counts widening events, while the rate counts each task once.
+- `blocked`: tasks blocked by a run failure or recorded base conflict on the
+  path, divided by active tasks whose footprint touched it (plus any
+  conflicting paths outside that footprint). Unclassified blocks are reported
+  separately, including per-path counts; infrastructure, manual,
+  base-conflict, run-failure, and non-failure totals are also exposed.
+- `rejected`: tasks rejected after a job run, divided by tasks with a run
+  whose footprint touched the path. Proposal-stage rejections without a run
+  are excluded.
+- `lock_contention`: distinct requesters refused a lock on the path divided
+  by distinct requesters with a reservation or refusal there. The response
+  includes reservation and denial counts, wait summaries, and a second list
+  ranked by total wait time.
+- `change_coupling`: pairs of paths reserved together, ranked by Jaccard rate
+  (`reservations naming both ÷ reservations naming either`). Pair support is
+  the number of reservations naming both. Reservations covering more than
+  12 files are excluded.
+
+`overlap` lists paths appearing in at least two of the first 25 rows of
+`regressions`, `footprint_misses`, `blocked`, and `rejected`, plus each path's
+rankings and its highest non-rejection rate. `ranked_paths` is the number of
+distinct paths across those four lists.
+
+Regression attribution and filters apply to `regressions`, its path detail,
+and the crew and complexity rates. A link's `nature` and `escape` come from
+its recorded classification; a missing classification is `absent`, distinct
+from an explicit `unclassified`. `layer` describes where the fix landed,
+using landed paths or, when unavailable, its declared footprint. `detected_by`
+comes from the regression task's tags or its filer. Filters `nature`,
+`escape`, `layer`, and `detected_by` combine: every selected dimension must
+match. `absent` selects links without a recorded classification.
+
+The regression section's `breakdowns` count links by nature, escape, layer,
+and detector while retaining filters on the other dimensions. `cross_tabs`
+contains link counts for nature × escape and escape × layer under the full
+filter. `by_crew` and `by_complexity` are rates of done tasks with a matching
+regression link within each crew or complexity group; missing values appear
+as `unassigned` and `unset`. Each path row also has per-crew numerator,
+denominator, and rate. A regressed task entry includes its crew, complexity,
+regression task IDs, matching regression links, and sites attributing it to
+that path. `unsited` counts regressed tasks and links whose kept links have no
+valid recorded site; they are not attributed across the task's footprint.
+
+In `show`, each task-rate ranking entry carries its rate, numerator,
+denominator, rank, and support status, plus the evidence behind its numerator.
+The regression detail lists the recorded site selectors under the path and
+their regressed and regression tasks. Its `unsited` task count is limited to
+regressed tasks that declared the path but have no site attributing them to
+any path. Lock detail lists refused requesters and wait episodes.
+`change_coupling` reports the path's reservation count and ranked pairs; each
+pair includes its Jaccard rate, rank, reservation counts for both paths, and
+requesters. The same four regression filters narrow regression counts and
+drill-downs; they do not change the other rankings.
 
 `orbit_workflow_run_show` and each `orbit_workflow_run_list` item are
 operator-only (denied for agent sessions) and carry the same run projection
