@@ -406,15 +406,28 @@ guarded packaged AppArmor profile checks. See the
 [Ubuntu needrestart manual](https://manpages.ubuntu.com/manpages/noble/man1/needrestart.1.html)
 for the environment override; this does not change a persistent host setting.
 
+The dev profile and the test profile that inherits it build dependencies at
+optimization level 1. This reduces cold dependency compilation compared with
+level 2; measure build time and shard runtime together when changing it.
+Workspace members retain their existing unoptimized debug profile, and release
+builds retain their release profile. The profile change also applies to local
+and macOS/Windows dev and test builds.
+The macOS target-cache keys include the installed Rust toolchain, lockfiles,
+all Cargo manifests and `.cargo/config.toml`, so a profile change can save a
+new cache after rebuilding. Toolchain-specific and legacy restore prefixes
+still allow compatible artifacts to be reused.
+
 The test gate in `ci.yml` runs on parallel runners from one build:
 
 - `Test build` runs `ci-guardrails.sh --test-archive PATH`. It runs the folded
   workflow test build, then `cargo nextest archive` of the workspace's lib, bin
   and test targets under the same lint environment, so the archive costs no
   compile. `ci-repack-nextest.py pack SOURCE DESTINATION --parts N` re-encodes
-  the same tar stream with zstd level 6, a 512 MiB history window and every
+  the same tar stream with zstd level 3, a 512 MiB history window and every
   core for transfer, then splits it into `DESTINATION.1` to `DESTINATION.N`
   (`NEXTEST_ARCHIVE_PARTS` in `ci.yml`).
+  Level 3 reduces encoding time while retaining long-distance deduplication;
+  compare pack/restore time and transfer bytes together on hosted candidates.
   This captures repeated linked executable sections beyond the native
   archive's 2 MiB window. It requires the runner's `zstd` CLI; the decoder
   is capped at the same 512 MiB window the encoder may emit. The job uploads
@@ -427,6 +440,19 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   (except for an [affected-crates archive](#pr-test-selection)), and no shard
   selects a test outside the full list. A failure fails `Test build`,
   and so the Check job's wait, while the shards already run.
+  The build job then runs workspace doctests through `with-test-build-lint.sh`,
+  using the same lint environment as the folded build. Calling the existing
+  wrapper directly supports PR heads whose guard CLI predates the workflow;
+  `ci-guardrails.sh --test-doctests` provides the same command for local replays.
+  It reuses those linked libraries;
+  running doctests in Check would compile them again after its metadata-only
+  production Clippy. This still runs every workspace doctest for an affected
+  selection, compiling any libraries that selection did not build. A doctest
+  failure fails `Test build` and the Check wait. The step also runs after an
+  earlier build-job failure unless cancelled, retaining its diagnostics.
+  The shards continue to await
+  the final upload, so neither this check nor the partition proof delays their
+  start.
 - `Test shard k/N` jobs, one per shard, start beside the build and set up
   their runner. Each waits through
   [ci-await-jobs.py](../scripts/ci-await-jobs.py) `--step` for the build's
@@ -462,7 +488,7 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   the upload step ahead of the partition guard, and the Check job's wait names
   the build and every shard.
 - `Check / Clippy / Test` runs `ci-guardrails.sh --checks`: formatting, every
-  repository guard and self-test, production Clippy, doctests, documentation
+  repository guard and self-test, production Clippy, documentation
   and the supply-chain gate, with no workspace test build or nextest. It then
   waits for `Test build` and every shard, and fails as soon as one of them
   completes without success. Its elapsed time therefore covers the whole gate,
@@ -482,6 +508,24 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   even when every awaited job succeeded. Failed, skipped or cancelled jobs and
   steps still fail the wait at once, and transient API errors are retried within
   the remaining budget.
+  For a single-page response with an ETag, both waits issue authenticated
+  conditional requests every three seconds. An unchanged `304 Not Modified` reuses
+  the last complete listing and consumes no primary GitHub API quota
+  ([GitHub conditional requests](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api#use-conditional-requests)).
+  This shortens the two detection delays between upload, shard execution and
+  the final Check result. A changed response still checks every named job and
+  step. Missing ETags, API errors, fewer than 100 remaining primary requests,
+  or a paginated listing retain the 15-second interval (`--poll-seconds`).
+  A first-page ETag never stands in for later pages: those runs use the full
+  paginated listing. Server `X-Poll-Interval` and `Retry-After` minimums and
+  the absolute deadline apply to both intervals. Each wait prints
+  `ci-await-api: listings=... not_modified=... paginated=...` for the hosted
+  phase and quota readout. Across four waits, a three-second cadence makes at
+  most 80 listing calls per minute before API latency, below the secondary
+  [REST limit of 900 points per minute](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#about-secondary-rate-limits) for these GET requests; other repository
+  traffic shares the limits, and changed responses still consume primary
+  quota. Check those counters and response fallback behavior on candidate
+  hosted jobs instead of assuming every poll is free.
 
 Locally, `make ci` keeps the single-process full mode: the folded build, then
 nextest from its binary listing.

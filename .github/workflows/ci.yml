@@ -723,6 +723,18 @@ jobs:
       - name: Prove the shards cover every test
         run: ./scripts/ci-guardrails.sh --test-partitions "$RUNNER_TEMP/nextest-archive.tar.zst"
 
+      # Reuse the folded build's linked libraries, instead of rebuilding them
+      # in Check after its metadata-only production Clippy. The shards can
+      # already run, and Check awaits this job's conclusion as well as theirs.
+      - name: Run workspace doctests
+        if: ${{ !cancelled() }}
+        # A PR head can predate the workflow's new guard CLI mode. Use its
+        # existing folded-build wrapper directly, with the same Cargo command.
+        run: |
+          set -euo pipefail
+          TIMEFORMAT='doctests_seconds=%R'
+          time ./scripts/with-test-build-lint.sh cargo test --no-fail-fast --workspace --doc
+
       - name: Report disk usage
         if: always()
         run: |

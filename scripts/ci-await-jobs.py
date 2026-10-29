@@ -12,6 +12,12 @@ and its conclusion stays the gate's result. It reads the run's jobs through
 the latest attempt of each job. A job that completes with any conclusion but
 success fails the wait at once. API errors are retried until the timeout.
 
+Single-page listings use ETag conditional requests at three-second intervals.
+Authenticated 304 responses do not consume GitHub's primary rate limit.
+Without an ETag, on API errors, with fewer than 100 primary requests left,
+or when pagination is needed, --poll-seconds (default 15) remains the interval.
+The server's X-Poll-Interval and Retry-After minimums also apply.
+
 --timeout-seconds is one absolute budget for the whole wait. Each `gh api`
 listing runs under the remaining budget, and the poll sleep is clipped to it. A
 listing still running at expiry is killed and reaped (at most
@@ -45,11 +51,10 @@ class ListingTimeout(Exception):
     """The job listing was still running when the wait budget ran out."""
 
 
-def list_jobs(repository, run_id, remaining):
-    """Return {name: job}, or None on an API error; raise ListingTimeout past `remaining` seconds."""
+def request_job_listing(arguments, remaining):
+    """Run a listing under the remaining deadline, killing and reaping it at expiry."""
     child = subprocess.Popen(
-        ["gh", "api", "--paginate", "--jq", FIELDS,
-         f"repos/{repository}/actions/runs/{run_id}/jobs?filter=latest&per_page=100"],
+        ["gh", "api", *arguments],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     try:
         stdout, stderr = child.communicate(timeout=max(remaining, 0))
@@ -64,16 +69,87 @@ def list_jobs(repository, run_id, remaining):
     finally:
         if child.poll() is None:
             child.kill()
-    if child.returncode != 0:
-        print(f"ci-await: job listing failed (exit {child.returncode}): {stderr.strip()}",
+    status = child.returncode
+    # gh exits 1 for HTTP 304 even with --include. It is a successful
+    # conditional response, not a transport error that should slow polling.
+    status_line = stdout.partition("\n")[0].split()
+    if ("--include" in arguments and len(status_line) >= 2
+            and status_line[0].startswith("HTTP/") and status_line[1] == "304"):
+        status = 0
+    if status != 0:
+        print(f"ci-await: job listing failed (exit {status}): {stderr.strip()}",
               file=sys.stderr)
-        return None
-    jobs = {}
-    for line in stdout.splitlines():
-        if line.strip():
-            job = json.loads(line)
-            jobs[job["name"]] = job
-    return jobs
+    return status, stdout
+
+
+class JobListingPoller:
+    """Cache only a complete latest-attempt listing, never a partial page."""
+
+    def __init__(self, repository, run_id, poll_seconds):
+        self.endpoint = f"repos/{repository}/actions/runs/{run_id}/jobs?filter=latest&per_page=100"
+        self.fallback_seconds = poll_seconds
+        self.poll_seconds = poll_seconds
+        self.etag = None
+        self.jobs = None
+        self.paginated = False
+        self.requests = 0
+        self.not_modified = 0
+        self.server_minimum = 0
+        self.primary_remaining = 1000
+
+    def read_job_listing(self, remaining):
+        started = time.monotonic()
+        self.poll_seconds = max(self.server_minimum, self.fallback_seconds)
+        self.requests += 1
+        if self.paginated:
+            status, stdout = request_job_listing(
+                ["--paginate", "--jq", FIELDS, self.endpoint], remaining)
+            if status:
+                return None
+            return {job["name"]: job for line in stdout.splitlines() if line.strip()
+                    for job in [json.loads(line)]}
+        arguments = ["--include", self.endpoint]
+        if self.etag:
+            arguments += ["--header", f"If-None-Match: {self.etag}"]
+        status, stdout = request_job_listing(arguments, remaining)
+        head, _, body = stdout.partition("\n\n")
+        status_line = head.splitlines()[0].split() if head else []
+        http_status = status_line[1] if len(status_line) >= 2 else ""
+        headers = {name.lower(): value.strip() for line in head.splitlines()[1:]
+                   for name, separator, value in [line.partition(":")] if separator}
+        try:
+            self.server_minimum = float(headers.get("x-poll-interval", str(self.server_minimum)))
+            minimum = max(self.server_minimum, float(headers.get("retry-after", "0")))
+            self.primary_remaining = int(headers.get("x-ratelimit-remaining", str(self.primary_remaining)))
+            if self.primary_remaining == 0 and "x-ratelimit-reset" in headers:
+                minimum = max(minimum, float(headers["x-ratelimit-reset"]) - time.time())
+            if http_status in ("403", "429") and "retry-after" not in headers:
+                minimum = max(minimum, 60)
+        except ValueError:
+            minimum, self.primary_remaining = self.fallback_seconds, 0
+        self.poll_seconds = max(minimum, self.fallback_seconds)
+        if status:
+            return None
+        if http_status == "304" and self.jobs is not None:
+            self.not_modified += 1
+        elif http_status == "200":
+            # A first-page ETag says nothing about later pages. Retain the
+            # original fully paginated listing and cadence for larger runs.
+            if 'rel="next"' in headers.get("link", ""):
+                self.paginated = True
+                remaining -= time.monotonic() - started
+                if remaining <= 0:
+                    raise ListingTimeout
+                return self.read_job_listing(remaining)
+            payload = json.loads(body)
+            self.jobs = {job["name"]: job for job in payload["jobs"]}
+            self.etag = headers.get("etag")
+        else:
+            print(f"ci-await: job listing returned unexpected HTTP status {http_status}", file=sys.stderr)
+            return None
+        if self.etag and self.primary_remaining >= 100:
+            self.poll_seconds = max(minimum, min(3, self.fallback_seconds))
+        return self.jobs
 
 
 def elapsed(started, completed):
@@ -94,6 +170,16 @@ def main():
     args = parser.parse_args()
     repository = os.environ["GITHUB_REPOSITORY"]
     run_id = os.environ["GITHUB_RUN_ID"]
+    poller = JobListingPoller(repository, run_id, args.poll_seconds)
+    try:
+        return await_workflow_jobs(args, poller)
+    finally:
+        print(f"ci-await-api: listings={poller.requests} not_modified={poller.not_modified} "
+              f"paginated={str(poller.paginated).lower()}")
+
+
+def await_workflow_jobs(args, poller):
+    """Keep the whole gate's original success, failure and absolute-deadline rules."""
 
     deadline = time.monotonic() + args.timeout_seconds
     reported = set()
@@ -105,7 +191,7 @@ def main():
         listing = "listing unavailable"
         if remaining > 0:
             try:
-                jobs = list_jobs(repository, run_id, remaining)
+                jobs = poller.read_job_listing(remaining)
             except ListingTimeout:
                 blocked = True
                 listing = "job listing still running at the deadline, killed"
@@ -156,7 +242,7 @@ def main():
             print(f"ci-await: timed out after {args.timeout_seconds:g} s waiting for {waiting}",
                   file=sys.stderr)
             return 1
-        time.sleep(min(args.poll_seconds, remaining))
+        time.sleep(min(poller.poll_seconds, remaining))
 
 
 if __name__ == "__main__":

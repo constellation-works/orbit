@@ -22,17 +22,19 @@ done
 # Modes: the default full run (`make ci`); --fast (`make ci-fast`); the offline
 # file/metadata-only --static (`make ci-guards`); and the two
 # parts of the split hosted workflow (.github/workflows/ci.yml). --checks runs
-# everything except the workspace test build and nextest. --test-archive PATH
+# everything except the workspace test build, doctests and nextest. --test-archive PATH
 # runs only the workspace test build and archives its test binaries for the
 # parallel nextest shards. --test-partitions PATH proves the shards' count
-# partitions of that archive cover every test.
+# partitions of that archive cover every test. --test-doctests runs doctests
+# on the test-build runner, reusing its libraries after the archive upload.
 fast=false
 static=false
 checks=false
 archive=""
 partitions=false
+test_doctests=false
 usage() {
-  echo "usage: ci-guardrails.sh [--fast | --static | --checks | --test-archive PATH | --test-partitions PATH]" >&2
+  echo "usage: ci-guardrails.sh [--fast | --static | --checks | --test-archive PATH | --test-partitions PATH | --test-doctests]" >&2
   exit 2
 }
 case "${1:-}" in
@@ -40,6 +42,7 @@ case "${1:-}" in
   --fast) fast=true ;;
   --static) fast=true; static=true ;;
   --checks) checks=true ;;
+  --test-doctests) test_doctests=true ;;
   --test-archive | --test-partitions)
     [[ -n "${2:-}" ]] || usage
     [[ "$1" == --test-partitions ]] && partitions=true
@@ -53,7 +56,7 @@ esac
 # Several guardrail scripts shell out to ripgrep; a missing `rg` degrades
 # them silently (empty search results read as "clean" or, worse, as false
 # violations). Fail fast instead. [ORB-10021]
-if [[ -z "$archive" ]] && ! command -v rg >/dev/null 2>&1; then
+if [[ -z "$archive" && "$test_doctests" == false ]] && ! command -v rg >/dev/null 2>&1; then
   echo "ci-guardrails: ripgrep (rg) is required; install it before running" >&2
   exit 1
 fi
@@ -150,6 +153,12 @@ run_phase() {
 }
 
 export GIT_OPTIONAL_LOCKS=0
+
+if [[ "$test_doctests" == true ]]; then
+  run_phase doctests "$repo_root/scripts/with-test-build-lint.sh" \
+    cargo test --no-fail-fast --workspace --doc
+  exit 0
+fi
 
 # The hosted test-build job: the folded workspace test build, then an archive
 # of its test binaries and the `orbit` binary the CLI fixtures execute. The
@@ -403,17 +412,21 @@ with_production_lint() {
     "$@"
 }
 
-# Production clippy, doctests, then documentation. Each takes the Cargo build
+# Production clippy, local doctests, then documentation. Each takes the Cargo build
 # lock, so they run in sequence; a failure still reports the later phases, and
 # the first failure is the chain's status. Production clippy is the only pass
 # that denies clippy::disallowed_methods, so test-only channels stay exempt on
 # the folded build; it checks lib and bin targets and writes no test binary.
 # Doctests use the folded build's lint environment and so reuse its library
-# artifacts.
+# artifacts. Hosted doctests run on the test-build runner instead: --checks
+# has only checked metadata, so building doctest libraries there would repeat
+# the test-build runner's code generation and dependency compilation.
 run_check_chain() {
   local status=0 next=0
   run_phase clippy-production with_production_lint run_lowered cargo check --workspace --lib --bins || status=$?
-  run_phase doctests run_lowered "$lint" cargo test --no-fail-fast --workspace --doc || next=$?
+  if [[ "$checks" == false ]]; then
+    run_phase doctests run_lowered "$lint" cargo test --no-fail-fast --workspace --doc || next=$?
+  fi
   if [[ "$status" -eq 0 ]]; then status="$next"; fi
   next=0
   RUSTDOCFLAGS="-D warnings" run_phase documentation with_production_lint run_lowered cargo doc --no-deps --workspace || next=$?
@@ -576,8 +589,8 @@ if [[ "$checks" == true ]]; then
   # The hosted Check job builds no test binaries: the test-build job does, and
   # the shard jobs run nextest. The check chain starts beside the pool and the
   # exclusive lane, in the idle class like the build it replaces there, so the
-  # exclusive suites keep normal-priority CPU to themselves. Doctests build
-  # their own libraries here under the same lint environment.
+  # exclusive suites keep normal-priority CPU to themselves. Doctests reuse
+  # the test-build job's libraries there, after the archive upload.
   start_check_chain
   join_guard_pool
   join_exclusive_lane

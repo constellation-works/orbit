@@ -114,6 +114,8 @@ elif sys.argv[1] == "test" and "--message-format" in sys.argv:
                               "profile": {"test": True}, "executable": target["binary"],
                               "target": {"name": target["name"], "kind": [target["kind"]]}}))
 elif sys.argv[1] == "test":
+    if "--doc" in sys.argv:
+        raise SystemExit(int(os.environ.get("GUARD_TEST_DOC_EXIT", "0")))
     args = sys.argv[2:]
     split = args.index("--") if "--" in args else len(args)
     for line in fixture_libtest.cargo_listing(fixture_libtest.load_targets(), args[:split], args[split:]):
@@ -923,7 +925,7 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         self.assertEqual(foreground["nice"], os.getpriority(os.PRIO_PROCESS, 0))
         background = [row for row in observed
                       if row["argv"][0] in ("check", "test", "doc")]
-        self.assertEqual(len(background), 3, observed)
+        self.assertEqual(len(background), 2, observed)
         for row in background:
             self.assertGreater(row["nice"], foreground["nice"], (row, foreground))
 
@@ -978,7 +980,26 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         self.assertEqual(result.returncode, 7, result.stderr)
         self.assertIn("ci-guardrails-phase: workspace-test-partitions wall_seconds=", result.stderr)
 
-        # --checks: everything else, with no test build and no nextest.
+        # Hosted doctests reuse the archive build's libraries on that runner,
+        # after upload, rather than compiling them again in the Check job.
+        self.log.write_text("")
+        env_log.write_text("")
+        result = self.run_guard("ci-guardrails.sh", "--test-doctests")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        doctest_call = ["test", "--no-fail-fast", "--workspace", "--doc"]
+        self.assertEqual([json.loads(line) for line in self.log.read_text().splitlines()],
+                         [doctest_call], "doctests must not trigger a separate production check or test build")
+        [doctests] = [json.loads(line) for line in env_log.read_text().splitlines()]
+        for key in ("RUSTC_WORKSPACE_WRAPPER", "CLIPPY_ARGS"):
+            self.assertEqual(doctests[key], archived[0][key],
+                             "doctests must reuse the folded build's Cargo fingerprint")
+        self.assertIn("ci-guardrails-phase: doctests wall_seconds=", result.stderr)
+        result = self.run_guard("ci-guardrails.sh", "--test-doctests",
+                                env_overrides={"GUARD_TEST_DOC_EXIT": "9"})
+        self.assertEqual(result.returncode, 9, result.stderr)
+        self.assertRegex(result.stderr, r"ci-guardrails-phase: doctests wall_seconds=\d+ exit=9")
+
+        # --checks: everything else, with no doctests, test build or nextest.
         for call in self.guard_calls.iterdir():
             call.unlink()
         self.log.write_text("")
@@ -991,10 +1012,11 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         self.assertNotIn(folded, calls)
         self.assertFalse(any(call[:1] == ["nextest"] for call in calls), calls)
         for expected in (["fmt", "--all", "--", "--check"], ["check", "--workspace", "--lib", "--bins"],
-                         ["test", "--no-fail-fast", "--workspace", "--doc"], ["doc", "--no-deps", "--workspace"]):
+                         ["doc", "--no-deps", "--workspace"]):
             self.assertIn(expected, calls)
+        self.assertFalse(any("--doc" in call for call in calls), calls)
         phases = dict(re.findall(r"ci-guardrails-phase: (\S+) wall_seconds=\d+ exit=(\d+)", result.stderr))
-        for phase in ("fmt", "clippy-production", "doctests", "documentation", "repository-guards"):
+        for phase in ("fmt", "clippy-production", "documentation", "repository-guards"):
             self.assertEqual(phases.get(phase), "0", result.stderr)
         # The check chain shares the host with the exclusive suites, so it runs
         # lowered like the build it replaces there.
