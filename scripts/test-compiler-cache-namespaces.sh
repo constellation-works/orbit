@@ -151,7 +151,7 @@ release_port() {
 WAIT_TIMEOUT="${ORBIT_COMPILER_CACHE_NS_WAIT_SECONDS:-300}"
 [[ "$WAIT_TIMEOUT" =~ ^[1-9][0-9]*$ ]] || fail "namespace wait seconds must be a positive integer"
 
-WORKDIR="$(mktemp -d)"
+WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/orbit-cache-ns.XXXXXX")"
 PIDS=()
 STAGE="fixture-setup"
 PARTICIPANTS=()
@@ -281,7 +281,15 @@ def descendants(pid):
 
 
 deadline = time.monotonic() + int(sys.argv[1])
-process = subprocess.Popen(sys.argv[2:], start_new_session=True)
+process = subprocess.Popen(sys.argv[2:], process_group=0)
+# An owned, unreaped anchor reserves the group even if polling reaps the
+# transport. Ignore TERM so the group has a live member until the final KILL
+# (Darwin refuses signals to a group containing only zombies). This supervisor
+# is single-threaded, so setting the inherited disposition before exec is safe.
+anchor = subprocess.Popen(
+    [sys.executable, "-c", "import sys; sys.stdin.buffer.read()"],
+    stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, process_group=process.pid,
+    preexec_fn=lambda: signal.signal(signal.SIGTERM, signal.SIG_IGN))
 status = None
 try:
     while status is None and not cancelled and time.monotonic() < deadline:
@@ -301,14 +309,16 @@ finally:
     grace_end = time.monotonic() + 1
     reap_end = grace_end + 1
     terminated = set()
+    group_killed = False
     while True:
         owned = descendants(os.getpid())
         sig = signal.SIGKILL if time.monotonic() >= grace_end else signal.SIGTERM
-        try:
+        if not group_killed:
             os.killpg(process.pid, sig)
-        except ProcessLookupError:
-            pass
+            group_killed = sig == signal.SIGKILL
         for pid in reversed(owned):
+            if pid == anchor.pid:
+                continue
             if sig == signal.SIGTERM and pid in terminated:
                 continue
             try:
@@ -316,16 +326,29 @@ finally:
                 terminated.add(pid)
             except ProcessLookupError:
                 pass
-        try:
-            while os.waitpid(-1, os.WNOHANG)[0]:
+        # Reap specific descendants only; the anchor keeps the identity
+        # reserved until all group signals are finished.
+        for pid in reversed(owned):
+            if pid in (process.pid, anchor.pid):
+                continue
+            try:
+                os.waitpid(pid, os.WNOHANG)
+            except ChildProcessError:
                 pass
-        except ChildProcessError:
+        remaining = [pid for pid in descendants(os.getpid()) if pid not in (process.pid, anchor.pid)]
+        if process.poll() is not None and not remaining:
             break
         if time.monotonic() >= reap_end:
             print("namespace descendants did not reap after SIGKILL", file=sys.stderr)
             status = 125
             break
         time.sleep(0.02)
+    # Kill the still-reserved anchor with the final group signal. Never signal
+    # this numeric group again, even if a wait or a cleanup assertion fails.
+    if not group_killed:
+        os.killpg(process.pid, signal.SIGKILL)
+    process.wait(timeout=1)
+    anchor.wait(timeout=1)
 
 sys.exit(status)
 PYSUPERVISOR
@@ -338,6 +361,9 @@ write_probe() {
 name = "orbit_cache_probe"
 version = "0.1.0"
 edition = "2021"
+
+# TMPDIR may be under the benchmark checkout, outside its workspace members.
+[workspace]
 EOF
   printf 'pub fn value() -> i32 { %s }\n' "$value" >"$dest/src/lib.rs"
   cat >"$dest/src/main.rs" <<'EOF'

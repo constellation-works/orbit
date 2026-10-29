@@ -1350,9 +1350,19 @@ updated_at: 2026-01-01T00:00:00Z
             [orbit_bin, "--root", str(root), "--workspace", str(work), "tool", "run", "orbit.task.show",
              "--input", json.dumps({"id":task_id,"model":"codex"}), "--format", "json"],
             work, [], lambda evidence: parse_json(evidence, "tool task.show"))
+
+    def reindex_stats(evidence):
+        body = parse_json(evidence, "search reindex")
+        # The isolated workspace contains the seeded task with nonempty text.
+        # Counts are usize fields, so booleans and coercible strings are invalid.
+        if (not isinstance(body, dict)
+                or any(type(body.get(key)) is not int for key in ("tasks", "chunks"))
+                or body["tasks"] < 1 or body["chunks"] < body["tasks"]):
+            raise ValueError("search reindex did not report positive task/chunk statistics for seeded data")
+
     checked("search-observability-boundary",
             [orbit_bin, "--root", str(root), "--workspace", str(work), "search", "reindex", "--json"],
-            work, ["search-reindex-reports-chunks"], lambda evidence: parse_json(evidence, "search reindex"))
+            work, ["search-reindex-reports-chunks"], reindex_stats)
     checked("search-observability-boundary",
             [orbit_bin, "--root", str(root), "--workspace", str(work), "doctor", "--json"],
             work, ["doctor-reports-isolated-workspace-health"], lambda evidence: parse_json(evidence, "doctor"))
@@ -1453,19 +1463,56 @@ spec:
                        timeout=30)
     failure = None
     try:
-        responses = {body["id"]: body for line in mcp_evidence["stdout"].splitlines()
-                     if line.strip() and (body := json.loads(line)).get("id") is not None}
+        responses = {}
+        for line in mcp_evidence["stdout"].splitlines():
+            if not line.strip():
+                continue
+            body = json.loads(line)
+            if not isinstance(body, dict) or body.get("jsonrpc") != "2.0":
+                raise ValueError("MCP response is not a JSON-RPC 2.0 envelope")
+            response_id = body.get("id")
+            if (type(response_id) is not int or response_id not in range(1, 6)
+                    or response_id in responses
+                    or ("result" in body) == ("error" in body)):
+                raise ValueError("MCP response has an invalid/duplicate id or result/error envelope")
+            responses[response_id] = body
+        if set(responses) != set(range(1, 6)):
+            raise ValueError("MCP did not respond to every request")
+        for response_id in range(1, 5):
+            body = responses[response_id]
+            if "error" in body or not isinstance(body["result"], dict) or body["result"].get("isError"):
+                raise ValueError(f"MCP request {response_id} failed")
+        negotiated = responses[1]["result"]
+        capabilities = negotiated.get("capabilities")
+        if (negotiated.get("protocolVersion") != initialize["params"]["protocolVersion"]
+                or not isinstance(capabilities, dict)
+                or not isinstance(capabilities.get("tools"), dict)):
+            raise ValueError("MCP initialize did not negotiate the supported protocol and tools capability")
         tool_names = {tool["name"] for tool in responses[2]["result"]["tools"]}
         if "orbit_task_show" not in tool_names:
             raise ValueError("tools/list omitted orbit_task_show")
-        if task_id not in json.dumps(responses[4]) or "error" in responses[4]:
-            raise ValueError("MCP task.show did not return the bound task")
-        if "error" not in responses[5] and not responses[5].get("result", {}).get("isError"):
-            raise ValueError("MCP cross-workspace task.show was not refused")
+        task_payload = responses[4]["result"].get("structuredContent")
+        if (not isinstance(task_payload, dict) or task_payload.get("id") != task_id
+                or task_payload.get("title") != "QA behavioral fixture"
+                or task_payload.get("acceptance_criteria") != ["fixture round trip"]):
+            raise ValueError("MCP task.show did not return the bound task payload")
+        refusal = responses[5]
+        if "error" in refusal:
+            error = refusal["error"]
+            if (not isinstance(error, dict) or type(error.get("code")) is not int
+                    or not isinstance(error.get("message"), str) or not error["message"]):
+                raise ValueError("MCP cross-workspace response is not an RPC refusal")
+        else:
+            refusal_payload = refusal["result"].get("structuredContent")
+            if (refusal["result"].get("isError") is not True
+                    or not isinstance(refusal_payload, dict)
+                    or not isinstance(refusal_payload.get("code"), str) or not refusal_payload["code"]
+                    or not isinstance(refusal_payload.get("message"), str) or not refusal_payload["message"]):
+                raise ValueError("MCP cross-workspace task.show was not a structured refusal")
         workspace_names = {item.get("name") for item in responses[3]["result"]["structuredContent"]["workspaces"]}
         if "qa-primary" not in workspace_names:
             raise ValueError("MCP workspace.list omitted the bound workspace")
-    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+    except (AttributeError, KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
         failure = str(error)
     add_result(results, "mcp-wire-boundary", finalize_result(mcp_evidence,
         ["initialize-negotiates-jsonrpc", "tools-list-is-structured", "workspace-list-returns-bound-checkout",
