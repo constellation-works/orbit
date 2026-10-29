@@ -66,7 +66,7 @@ A breaking on-disk change must ship its migration in the same PR:
 - **SQLite schema:** add to `MIGRATIONS` and bump `SUPPORTED_SCHEMA_VERSION` in `crates/orbit-store/src/driver/sqlite/migration/ledger/registry.rs`.
 - **Everything else** (directories, non-SQLite state files, log and index locations, file formats): add a `LAYOUT_MIGRATIONS` entry and bump `SUPPORTED_LAYOUT_VERSION` in `crates/orbit-store/src/workflow/layout/registry.rs`.
 
-Each entry declares `MigrationCompatibility::Additive` (older binaries open the state read-only) or `::Breaking` (older binaries refuse and name the migration). Declare `Breaking` when unsure. The contract is in [docs/design/state-compatibility](docs/design/state-compatibility/2_design.md).
+Each entry declares `MigrationCompatibility::Additive` (older binaries can read the state and keep writing), `::ReadCompatible` (older binaries open SQLite state read-only; newer layout state requires an updated binary) or `::Breaking` (older binaries refuse and name the migration). Declare `Breaking` when unsure. The contract is in [docs/design/state-compatibility](docs/design/state-compatibility/2_design.md).
 
 Layout migrations must be idempotent or staged (write new, then swap). They auto-apply when a workspace opens and re-run after a crash, because `state/layout.version` only advances after an entry succeeds. `orbit migrate --dry-run` lists pending migrations.
 
