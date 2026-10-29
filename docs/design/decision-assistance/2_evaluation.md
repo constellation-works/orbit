@@ -66,6 +66,8 @@ calls, or advisory display. Implementation:
   adjudication with `adjudicator_id`, `adjudicator_role`, `adjudicated_at`,
   both `original_labels` (each retaining labeler identity, role, timestamp and
   value) and a `rationale_category`; the adjudicator must be a third person.
+  The adjudicator sees both original labels and the evidence available at
+  intake, not later outcomes.
   The adjudicated `value` is the accepted label. Unresolvable
   cases are labeled `insufficient_evidence` or excluded with a recorded
   reason — never force-labeled. Author dismissals of advisory flags are
