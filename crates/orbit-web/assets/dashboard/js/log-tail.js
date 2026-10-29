@@ -148,6 +148,9 @@ function applyDockMode() {
     btn.setAttribute("aria-selected", on ? "true" : "false");
     btn.tabIndex = on ? 0 : -1;
   }
+  // Each tab's first card sits at its own depth (Locks held follows the
+  // hidden Auto-drain column), so the dock re-levels on every switch.
+  alignTasksDock();
 }
 
 function dockModes() {
@@ -193,10 +196,12 @@ export function revealDockStart() {
   card.scrollIntoView?.({ block: "nearest" });
 }
 
-/// Level the dock with the first task block. `--tasks-dock-lead` on
-/// #tasks-dock is the room above #side-dock that takes, and tasks.css gives it
-/// to the fixed message area. It is measured from the dock's own top, which
-/// the lead does not move, so a repeat run settles on the same value.
+/// Level the active tab's first card with the first task block.
+/// `--tasks-dock-lead` on #tasks-dock is the room above #side-dock that takes,
+/// and tasks.css gives it to the fixed message area; the tab bar sits inside
+/// that room, above the line. It is measured from the dock's own top and the
+/// card's place inside #side-dock, neither of which the lead moves, so a
+/// repeat run settles on the same value.
 export function alignTasksDock() {
   const dock = $("tasks-dock");
   const body = $("tasks-body");
@@ -205,14 +210,25 @@ export function alignTasksDock() {
   // The first status card starts at the list's top (its first child has no
   // margin, and notices sit in the message area), scrolled or not.
   const current = parseFloat(dock.style.getPropertyValue("--tasks-dock-lead")) || 0;
-  const lead = Math.max(0, Math.round((body.getBoundingClientRect().top - dock.getBoundingClientRect().top) * 100) / 100);
+  const lead = Math.max(0, Math.round((body.getBoundingClientRect().top - dock.getBoundingClientRect().top - firstDockCardOffset(side)) * 100) / 100);
   if (Math.abs(lead - current) >= 0.01) dock.style.setProperty("--tasks-dock-lead", `${lead}px`);
+}
+
+// How far below #side-dock's top the active tab's first shown card starts:
+// Auto-drain on Drain, Locks held on Locks held, the log on Log. The pane's
+// scroll is added back so a scrolled Drain pane measures the same.
+function firstDockCardOffset(side) {
+  const pane = [...side.querySelectorAll(":scope > .dock-pane")].find((node) => node.getClientRects().length);
+  if (!pane) return 0;
+  const card = [...pane.querySelectorAll(".panel")].find((node) => node.getClientRects().length) || pane;
+  return card.getBoundingClientRect().top + pane.scrollTop - side.getBoundingClientRect().top;
 }
 
 // Re-level whenever something above the first task block, or the dock itself,
 // changes size: the toolbar or status pills wrapping, the pager or the create
-// form coming and going, the dock coming back after a task closes. Passing
-// notices sit in the message area and move nothing.
+// form coming and going, the dock coming back after a task closes, the tab bar
+// changing height. A tab switch re-levels from applyDockMode. Passing notices
+// sit in the message area and move nothing.
 function wireDockAlignment() {
   const dock = $("tasks-dock");
   const panel = $("tasks-panel");
@@ -225,6 +241,8 @@ function wireDockAlignment() {
   };
   const resize = new ResizeObserver(queue);
   resize.observe(dock);
+  const head = dock.querySelector("#side-dock > .dock-head");
+  if (head) resize.observe(head);
   for (const node of panel.children) resize.observe(node);
   for (const node of panel.querySelectorAll(":scope > header > *")) resize.observe(node);
   queue();
