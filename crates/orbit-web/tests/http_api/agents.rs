@@ -387,6 +387,255 @@ fn implementers_report_cost_duration_tiers_and_first_reviews_without_scoring_cos
     );
 }
 
+/// Partially priced work keeps the complete-cohort cost unavailable while
+/// reporting measured, unpriced and missing-run coverage over the counted
+/// attempts behind it; a valid zero cost stays zero and neither coverage
+/// nor pricing changes scores or ranks.
+#[test]
+fn implementers_report_cost_coverage_without_averaging_priced_attempts() {
+    isolated(
+        "agents::implementers_report_cost_coverage_without_averaging_priced_attempts",
+        || {
+            use orbit_core::InvocationInsertParams;
+            use orbit_core::application::agents::{AgentQuery, agent_detail, agent_scorecard};
+            use orbit_types::telemetry::InvocationTrace;
+            let fixture = Fixture::new();
+            let now = Utc::now();
+            let priced_cost = |fixture: &Fixture, run: &str, cost: f64, task: &str| {
+                fixture
+                    .runtime
+                    .insert_invocation_trace_record(&InvocationInsertParams {
+                        job_run_id: run.into(),
+                        account: None,
+                        activity_id: "implement_one".into(),
+                        agent: "codex".into(),
+                        provider: None,
+                        model: None,
+                        task_ids: vec![task.into()],
+                        trace: InvocationTrace {
+                            provider_cost_usd: Some(cost),
+                            ..Default::default()
+                        },
+                    })
+                    .unwrap();
+            };
+            let landed_task = |fixture: &Fixture, title: &str| {
+                add(
+                    fixture,
+                    Owned {
+                        title,
+                        orchestrator: None,
+                        origin: None,
+                        complexity: TaskComplexity::Medium,
+                        status: TaskStatus::Done,
+                        relations: vec![],
+                    },
+                )
+            };
+            // One priced and one unpriced local run for `coverage`, both
+            // with no recorded model so they share one row.
+            for (run, priced) in [
+                ("jrun-coverage-priced", true),
+                ("jrun-coverage-unpriced", false),
+            ] {
+                let id = landed_task(&fixture, run);
+                let start = now - Duration::hours(3);
+                implementation_run(
+                    &fixture,
+                    run,
+                    &id,
+                    "coverage",
+                    None,
+                    start,
+                    now - Duration::hours(2),
+                );
+                append(
+                    &fixture,
+                    &id,
+                    start,
+                    "started",
+                    None,
+                    Some(TaskStatus::InProgress),
+                );
+                append(
+                    &fixture,
+                    &id,
+                    now - Duration::hours(2),
+                    "status_changed",
+                    None,
+                    Some(TaskStatus::Done),
+                );
+                if priced {
+                    priced_cost(&fixture, run, 6.0, &id);
+                }
+            }
+            // One attempt pulled by another machine with no run recorded.
+            let missing = landed_task(&fixture, "missing run");
+            append(
+                &fixture,
+                &missing,
+                now - Duration::hours(4),
+                "crew_assigned",
+                Some("assigned crew `coverage` from pool:medium"),
+                None,
+            );
+            append(
+                &fixture,
+                &missing,
+                now - Duration::hours(3),
+                "pulled_by",
+                Some(&json!({"machine_id": "hm_fixture"}).to_string()),
+                Some(TaskStatus::InProgress),
+            );
+            append(
+                &fixture,
+                &missing,
+                now - Duration::hours(2),
+                "status_changed",
+                None,
+                Some(TaskStatus::Done),
+            );
+            // A separate row whose only run cost a valid zero.
+            let zero = landed_task(&fixture, "zero cost");
+            let start = now - Duration::hours(3);
+            implementation_run(
+                &fixture,
+                "jrun-zero",
+                &zero,
+                "zero",
+                None,
+                start,
+                now - Duration::hours(2),
+            );
+            append(
+                &fixture,
+                &zero,
+                start,
+                "started",
+                None,
+                Some(TaskStatus::InProgress),
+            );
+            append(
+                &fixture,
+                &zero,
+                now - Duration::hours(2),
+                "status_changed",
+                None,
+                Some(TaskStatus::Done),
+            );
+            priced_cost(&fixture, "jrun-zero", 0.0, &zero);
+
+            let query = AgentQuery::parse(Some("30d"), Some(1)).unwrap();
+            let facts = fixture.runtime.agent_scan().unwrap();
+            let card = agent_scorecard(
+                &facts,
+                AgentRole::Implementers,
+                &query,
+                std::time::Duration::ZERO,
+            );
+            let stat = |row: &Value, key: &str| {
+                row["stats"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|stat| stat["key"] == key)
+                    .unwrap()["value"]
+                    .clone()
+            };
+            let coverage = card["rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["crew"] == "coverage")
+                .unwrap()
+                .clone();
+            assert_eq!(
+                stat(&coverage, "cost_per_weighted_landed"),
+                Value::Null,
+                "one missing run suppresses the complete-cohort average, never a priced-only average"
+            );
+            assert_eq!(
+                stat(&coverage, "cost_coverage"),
+                json!("1 measured · 1 unpriced · 1 missing run of 3 counted attempts")
+            );
+            assert_eq!(
+                stat(&coverage, "cost_coverage_attempts"),
+                json!(3),
+                "the named denominator is the counted attempts behind the cost calculation"
+            );
+            assert_eq!(stat(&coverage, "cost_measured_attempts"), json!(1));
+            assert_eq!(stat(&coverage, "cost_unpriced_attempts"), json!(1));
+            assert_eq!(stat(&coverage, "cost_missing_run_attempts"), json!(1));
+            let zero_row = card["rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["crew"] == "zero")
+                .unwrap();
+            assert_eq!(
+                stat(zero_row, "cost_per_weighted_landed"),
+                json!(0.0),
+                "valid zero spend stays zero"
+            );
+            assert_eq!(stat(zero_row, "cost_measured_attempts"), json!(1));
+            let (score, rank) = (coverage["score"].clone(), coverage["rank"].clone());
+
+            let server = fixture.server(false);
+            let http_card = json_ok(server.get(&format!(
+                "/api/agents/implementers/scorecard?{WS}&window=30d&min_support=1"
+            )));
+            assert_eq!(
+                http_card["rows"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|row| row["crew"] == "coverage")
+                    .unwrap(),
+                &coverage
+            );
+            let detail = agent_detail(
+                &facts,
+                AgentRole::Implementers,
+                &query,
+                "coverage",
+                Some("model unknown"),
+                std::time::Duration::ZERO,
+            )
+            .unwrap();
+            assert_eq!(detail["row"], coverage);
+            let http_detail = json_ok(server.get(&format!("/api/agents/implementers/detail?{WS}&crew=coverage&model=model%20unknown&min_support=1")));
+            assert_eq!(http_detail["row"], coverage);
+
+            // Pricing the unpriced run updates coverage only: the missing
+            // run still suppresses the average and the score is unchanged.
+            priced_cost(&fixture, "jrun-coverage-unpriced", 12.0, &missing);
+            let next = agent_scorecard(
+                &fixture.runtime.agent_scan().unwrap(),
+                AgentRole::Implementers,
+                &query,
+                std::time::Duration::ZERO,
+            );
+            let next_coverage = next["rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["crew"] == "coverage")
+                .unwrap();
+            assert_eq!(stat(next_coverage, "cost_per_weighted_landed"), Value::Null);
+            assert_eq!(stat(next_coverage, "cost_measured_attempts"), json!(2));
+            assert_eq!(stat(next_coverage, "cost_unpriced_attempts"), json!(0));
+            assert_eq!(
+                (
+                    next_coverage["score"].clone(),
+                    next_coverage["rank"].clone()
+                ),
+                (score, rank),
+                "cost coverage never changes score or rank"
+            );
+        },
+    );
+}
+
 /// One fixture workspace, read through the runtime API and the routes: every
 /// problem has exactly one owner or a Not scored reason and the attribution
 /// totals are the problems behind the four roles; a task two crews worked

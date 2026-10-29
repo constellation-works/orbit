@@ -296,6 +296,15 @@ fn row_input<'a>(
     let mut run_ids = BTreeSet::new();
     let mut missing_runs = false;
     let mut runs_without_model = 0;
+    // Cost coverage over the same counted attempts the cost calculation
+    // walks, attempt by attempt rather than by distinct run: a run shared
+    // by two attempts covers both, and one attempt without a priced run
+    // suppresses the complete-cohort average below. Display only; it
+    // never enters tallies, denominators or scores.
+    let mut cost_attempts = 0usize;
+    let mut cost_measured_attempts = 0usize;
+    let mut cost_unpriced_attempts = 0usize;
+    let mut cost_missing_run_attempts = 0usize;
     for &task in tasks {
         *tiers.entry(tier(task)).or_default() += 1;
         for attempt in task
@@ -307,11 +316,20 @@ fn row_input<'a>(
             if let Some(end) = attempt.end {
                 durations.push((end - attempt.start).num_milliseconds().max(0) as f64 / 1000.0);
             }
+            cost_attempts += 1;
             match attempt.runner.run_id.as_deref() {
                 Some(id) => {
                     run_ids.insert(id);
+                    if facts.run_costs.get(id).copied().flatten().is_some() {
+                        cost_measured_attempts += 1;
+                    } else {
+                        cost_unpriced_attempts += 1;
+                    }
                 }
-                None => missing_runs = true,
+                None => {
+                    missing_runs = true;
+                    cost_missing_run_attempts += 1;
+                }
             }
         }
     }
@@ -352,6 +370,33 @@ fn row_input<'a>(
                 cost.filter(|_| landed > 0.0)
                     .map(|cost| json!(cost / landed))
                     .unwrap_or(Value::Null),
+            ),
+            stat(
+                "cost_coverage",
+                "Cost coverage (counted attempts)",
+                json!(format!(
+                    "{cost_measured_attempts} measured · {cost_unpriced_attempts} unpriced · {cost_missing_run_attempts} missing run of {cost_attempts} counted attempts"
+                )),
+            ),
+            stat(
+                "cost_coverage_attempts",
+                "Cost coverage denominator (counted attempts)",
+                json!(cost_attempts),
+            ),
+            stat(
+                "cost_measured_attempts",
+                "Cost measured attempts",
+                json!(cost_measured_attempts),
+            ),
+            stat(
+                "cost_unpriced_attempts",
+                "Cost unpriced attempts",
+                json!(cost_unpriced_attempts),
+            ),
+            stat(
+                "cost_missing_run_attempts",
+                "Cost missing-run attempts",
+                json!(cost_missing_run_attempts),
             ),
             stat(
                 "median_run_seconds",
