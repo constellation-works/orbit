@@ -243,8 +243,10 @@ unavailability failure is recorded for this host only: until its backoff
 lapses the local drain draws no task onto that crew, not only the held one,
 and moving the held task through another status does not lift that. Sign
 the provider in again on that host; tasks draw the crew once the outage
-lapses. An unavailability hold placed on another host excludes nothing
-here. A provider usage-budget wait instead reports `reason:
+lapses. An unavailability hold placed on another host excludes only the
+crews carried from an earlier still-standing capacity, limit, or refusal
+hold; those stay excluded on every machine. A provider usage-budget wait
+instead reports `reason:
 "provider_limit"` with a `Provider limits:` line naming each gated window,
 its reset, and the skipped crews; `orbit doctor` warns on the provider's
 `provider-limits` row. Nothing failed and nothing needs repair there: the

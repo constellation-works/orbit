@@ -778,8 +778,8 @@ owns delivery:
   (`deferred_conflicts`) any held task an executor would run as an excluded crew, its own or the
   executor's default. A hold placed because a provider was unavailable on the owner
   (`[provider_unavailable]` on an owner-local run, [ORB-16379]) names the owner's machine and
-  excludes nothing from another executor, whose login is its own; capacity, limit and refusal
-  holds exclude on every executor. The owner's own outage records keep only its local drain off
+  excludes from another executor, whose login is its own, only the crews it carries from an
+  earlier standing capacity, limit or refusal hold, which exclude on every executor. The owner's own outage records keep only its local drain off
   the crew. `environment` and `owner_route`
   are the host's own failures: they suppress the host for the window (`crews.host_suppressed`),
   so the drain requests nothing more whatever crew a task names, and the owner holds every task

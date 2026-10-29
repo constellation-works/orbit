@@ -12,9 +12,10 @@
 //! redirect the task, which waits out the hold instead.
 //!
 //! [ORB-16379] Local admission reads the task's hold as this machine sees
-//! it, so an unavailable hold placed on another host excludes nothing here,
-//! and widens it by this host's live crew outages, so one failed login keeps
-//! every task off that crew here until the outage lapses. Pull admission
+//! it, so an unavailable hold placed on another host excludes here only the
+//! crews it carries from an earlier standing hold. It also widens the hold by
+//! this host's live crew outages, so one failed login keeps every task off
+//! that crew here until the outage lapses. Pull admission
 //! reads the hold as the executor's machine sees it and leaves the owner's
 //! outages out: they are not the executor's.
 
