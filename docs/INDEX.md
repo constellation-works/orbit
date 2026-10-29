@@ -126,7 +126,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Path Leases](./design/path-leases/1_overview.md) | Preemption and signed webhooks remain later work | claude |
 | [Web Terminal](./design/web-terminal/1_scope.md) | Phase 2: ORB-18489 PTY sessions and local terminal routes; phase 1 landed | claude |
 
-### Designing (6)
+### Designing (7)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
@@ -135,7 +135,8 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Conflict Budget](./design/conflict-budget/1_scope.md) | Settle the open questions (sum vs max, where weights live), then file phase 1 | claude |
 | [Script Steps](./design/script-steps/1_scope.md) | Review this scope; then file phase 1 (script manifests, `target: script:` parsing, the grant store and `orbit script grant`, with nothing executing yet) | claude |
 | [Symbol Risk Index](./design/symbol-risk-index/1_scope.md) | Daniel reviews this scope and 2_design.md; implementation tasks are filed after acceptance | claude |
-| [Visual Review](./design/visual-review/1_scope.md) | Daniel accepts or amends this design; implementation tasks are filed after acceptance | claude |
+| [Ux Rules](./design/ux-rules/1_scope.md) | Phase 1 (rule runner, result schema, CLI rules) is filed; build before the visual-review mock phases | claude |
+| [Visual Review](./design/visual-review/1_scope.md) | UX rules phases 1-2 come first (they deliver the view manifest and capture settings); then this design's phases, all filed | claude |
 
 ### Shipped (34)
 
@@ -241,7 +242,8 @@ a conservative title/status fallback.
 | [Terminal Interface](./design/terminal-interface/1_overview.md) | House style for orbit-cli terminal output — machine-readable first, borderless single-line tables, semantic color resolved at the sink. | Accepted | claude |
 | [Usage Pressure](./design/usage-pressure/1_scope.md) | Scope: weight crew pool draws by how much of each provider account's usage window would expire unused, so Orbit spends the capacity that is about to reset before the capacity that is not | Draft | claude |
 | [User Interface](./design/user-interface/1_overview.md) | Orbit UI covers the dashboard and HTTP API owned by `orbit-web`; `orbit-cli` is the thin `orbit web serve` / `connect` command adapter. | Draft | gemini |
-| [Visual Review](./design/visual-review/1_scope.md) | Scope: Orbit captures before/after screenshots of the views a change touches on the final candidate, runs deterministic layout and accessibility checks, and has a vision-capable crew review them against reference views and a design rubric, with findings verified by a different crew | Draft | claude |
+| [Ux Rules](./design/ux-rules/1_scope.md) | Scope: break the ux-review-ui and ux-review-cli prompts into named, executable rules (Playwright measurements for the dashboard and website, PTY captures for the CLI and MCP surface), run them on a routine, and file one task per failing rule and target, so the LLM reviews keep only the judgement work | Draft | claude |
+| [Visual Review](./design/visual-review/1_scope.md) | Scope: for tasks tagged verify-mock-ui, the implementer compares its build against the attached mocks while it works, then Orbit captures the mocked views on the final candidate, runs deterministic checks, and has a vision crew compare each capture with its mock, with findings verified by a different crew | Draft | claude |
 | [Web Terminal](./design/web-terminal/1_scope.md) | Scope: an interactive shell on any registered host from the dashboard — a PTY over a WebSocket, carried by the existing host forward, behind a browser-session credential that a confined agent cannot read. | Draft | claude |
 
 ### Archived designs
