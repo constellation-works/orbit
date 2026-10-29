@@ -50,6 +50,9 @@ impl AssistanceSettings {
         let invalid = || {
             OrbitError::InvalidInput("invalid host assistance settings: check bounds, allocation, contract and workspace grants".into())
         };
+        let invalid_digest = || {
+            OrbitError::InvalidInput("invalid host assistance settings: contract_digest must be 'sha256:' followed by 64 lowercase hex digits".into())
+        };
         self.limits.validate_limits().map_err(|_| invalid())?;
         if !assistance::assistance_identifier(&self.budget.epoch)
             || self.budget.token_ceiling > i64::MAX as u64
@@ -69,6 +72,9 @@ impl AssistanceSettings {
         }
         let mut seen = BTreeSet::new();
         for policy in &self.policies {
+            if !assistance::assistance_is_digest(&policy.contract_digest) {
+                return Err(invalid_digest());
+            }
             if !seen.insert((&policy.workspace_id, &policy.use_case))
                 || [
                     &policy.workspace_id,
@@ -79,7 +85,6 @@ impl AssistanceSettings {
                 .iter()
                 .any(|s| !assistance::assistance_identifier(s))
                 || policy.model != "gpt-6-luna"
-                || !assistance::assistance_is_digest(&policy.contract_digest)
                 || policy.evidence_fields.is_empty()
                 || policy.evidence_fields.len() > 128
                 || policy

@@ -119,10 +119,13 @@ client-build failures, which are conservatively charged.
 
 Each policy requires `workspace_id`, `use_case`, `model` (`gpt-6-luna`),
 `model_revision` (an operator-maintained cache epoch), `policy_version`,
-`contract_digest` (SHA-256 of the serialized typed contract), `evidence_fields`,
+`contract_digest` (the `sha256:`-prefixed lowercase-hex SHA-256 digest of the
+`serde_json::to_vec` serialization of the typed contract, e.g. `sha256:`
+followed by 64 `0-9a-f` characters), `evidence_fields`,
 `evidence_ref_prefixes`, and `credential_env`. Its optional `mode` defaults to
-`off`. The digest binds exact question names/types, choices, rubrics, criterion
-references, versions and evaluated thresholds. Consumer taxonomies remain in
+`off`. A bare 64-character hex string without the `sha256:` prefix, or
+uppercase hex, is rejected. The digest binds exact question names/types,
+choices, rubrics, criterion references, versions and evaluated thresholds. Consumer taxonomies remain in
 the consumer. Evidence field/reference grants can only be narrowed by a packet;
 ungranted fields/references are omitted with explicit truncation metadata.
 

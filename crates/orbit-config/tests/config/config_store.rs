@@ -415,3 +415,49 @@ fn partial_assistance_tables_still_reject_unknown_fields() {
         );
     }
 }
+
+#[test]
+fn malformed_contract_digest_names_field_and_expected_format() {
+    fn settings_with_digest(digest: &str) -> orbit_config::assistance::AssistanceSettings {
+        orbit_config::assistance::AssistanceSettings {
+            policies: vec![orbit_config::assistance::AssistancePolicy {
+                workspace_id: "workspace_1".into(),
+                use_case: "task_quality".into(),
+                mode: orbit_types::assistance::AssistanceMode::Off,
+                model: "gpt-6-luna".into(),
+                model_revision: "rev_1".into(),
+                policy_version: "v1".into(),
+                contract_digest: digest.into(),
+                evidence_fields: vec!["title".into()],
+                evidence_ref_prefixes: vec!["task:".into()],
+                credential_env: "ORBIT_ASSISTANCE_KEY".into(),
+            }],
+            ..Default::default()
+        }
+    }
+
+    // [ORB-19819]: the prefixed lowercase digest is the only accepted shape.
+    const VALID_DIGEST: &str =
+        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    settings_with_digest(VALID_DIGEST)
+        .validate_assistance_settings()
+        .expect("prefixed lowercase digest is valid");
+
+    for malformed in [
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "sha256:0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF",
+    ] {
+        let error = settings_with_digest(malformed)
+            .validate_assistance_settings()
+            .expect_err("malformed digest must be rejected");
+        let message = error.to_string();
+        assert!(
+            message.contains("contract_digest"),
+            "digest refusal names the field: {message}"
+        );
+        assert!(
+            message.contains("sha256:") && message.contains("64") && message.contains("lowercase"),
+            "digest refusal names the expected format: {message}"
+        );
+    }
+}
