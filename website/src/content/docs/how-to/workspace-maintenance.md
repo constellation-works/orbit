@@ -130,7 +130,7 @@ A task is left alone when any of these hold:
 
 Each change sets `crew_source` to `backfill:admission` and appends a `crew_assigned` history entry naming the previous and new crew. Running the backfill again changes nothing.
 
-The report names the workspace, how many tasks had a delivery crew selection (`examined`), how many changed (`changed`), and each change:
+The report names the workspace, how many tasks it examined (`examined`), how many changed (`changed`), and each change. `examined` counts tasks with a delivery crew selection to copy, plus tasks whose latest local run was cancelled before implementing: a cancelled latest run is counted whether or not it recorded a crew selection, and the backfill then leaves the task unchanged unless a claimed-leaf settlement is newer (as above). The summary line keeps the CLI's `tasks with a delivery crew selection` wording, but its count includes those cancelled tasks:
 
 ```text
 task crew backfill in workspace ws_0123456789abcdef: 2 changed of 9 tasks with a delivery crew selection
@@ -138,7 +138,7 @@ task crew backfill in workspace ws_0123456789abcdef: 2 changed of 9 tasks with a
   ABC-2: day-crew -> night-shift
 ```
 
-`(none)` means the task had no recorded crew. `--json` carries the same report under `task_crew_backfill` with `workspace`, `examined`, `changed`, and `tasks` (`task_id`, `from`, `to` per change).
+`(none)` means the task had no recorded crew. `--json` carries the same report under `task_crew_backfill` with `workspace`, `examined`, `changed`, and `tasks` (`task_id`, `from`, `to` per change), where `examined` uses the same count described above.
 
 This is a different repair from `--backfill-diff-stats`, which records landed line counts for done tasks and takes `--limit`. The two flags cannot be combined with each other, and neither combines with `--dry-run`; `--limit` only applies to the diff-stats backfill. There is no built-in undo for the crew repair beyond the per-task history entries it appends, and only runs and settlements visible in this workspace's store count: deliveries whose records live on another host are not repaired from here.
 
