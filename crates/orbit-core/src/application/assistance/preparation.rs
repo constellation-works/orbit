@@ -34,6 +34,7 @@ pub(super) fn prepare_assistance_work(
     settings: &AssistanceSettings,
     adapter: &dyn AssistanceAdapter,
     now: DateTime<Utc>,
+    template: Option<&assistance::AssistanceContract>,
 ) -> Result<AssistanceWork, AssistanceReason> {
     request.validate_request()?;
     if secrets.len() > 128
@@ -72,8 +73,11 @@ pub(super) fn prepare_assistance_work(
     }
     request = adapter.prepare_assistance_request(request, secrets, policy)?;
     request.validate_request()?;
-    let contract =
-        serde_json::to_vec(&request.contract).map_err(|_| AssistanceReason::InvalidRequest)?;
+    if let Some(template) = template {
+        super::templates::validate_assistance_expansion(&request.contract, template)?;
+    }
+    let contract = serde_json::to_vec(template.unwrap_or(&request.contract))
+        .map_err(|_| AssistanceReason::InvalidRequest)?;
     if assistance::assistance_digest(&contract) != policy.contract_digest {
         return Err(AssistanceReason::InvalidRequest);
     }

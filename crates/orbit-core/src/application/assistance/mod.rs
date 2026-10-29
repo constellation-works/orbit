@@ -2,6 +2,7 @@
 //! evidence; this service cannot mutate tasks, reviews, human answers or jobs.
 
 mod preparation;
+mod templates;
 
 use std::sync::Arc;
 
@@ -50,6 +51,22 @@ pub struct AssistanceService {
 }
 
 impl AssistanceService {
+    /// Local host-grant identity. This neither resolves credentials nor writes
+    /// work; consumers use it to leave disabled workspaces entirely untouched.
+    pub fn assistance_policy_epoch(
+        &self,
+        workspace: &str,
+        use_case: &str,
+    ) -> Result<Option<String>, OrbitError> {
+        let settings = (self.settings)()?;
+        settings.validate_assistance_settings()?;
+        settings
+            .assistance_policy(workspace, use_case)
+            .filter(|p| p.mode != AssistanceMode::Off)
+            .map(|p| preparation::assistance_policy_digest(&settings, p))
+            .transpose()
+    }
+
     /// Does not start workers, resolve credentials or activate consumers.
     pub fn new(
         store: Arc<dyn AssistanceStoreBackend>,
@@ -76,6 +93,26 @@ impl AssistanceService {
         request: AssistanceRequest,
         supplied_secrets: &[String],
     ) -> Result<AssistanceAdmission, OrbitError> {
+        self.enqueue_assistance_template(request, supplied_secrets, None)
+    }
+
+    /// Admit bounded expansions of a host-granted question template. Expanded
+    /// names and criterion references cannot change its questions or rubric.
+    pub fn enqueue_expanded_assistance(
+        &self,
+        request: AssistanceRequest,
+        supplied_secrets: &[String],
+        template: &orbit_types::assistance::AssistanceContract,
+    ) -> Result<AssistanceAdmission, OrbitError> {
+        self.enqueue_assistance_template(request, supplied_secrets, Some(template))
+    }
+
+    fn enqueue_assistance_template(
+        &self,
+        request: AssistanceRequest,
+        supplied_secrets: &[String],
+        template: Option<&orbit_types::assistance::AssistanceContract>,
+    ) -> Result<AssistanceAdmission, OrbitError> {
         let settings = (self.settings)()?;
         settings.validate_assistance_settings()?;
         let Some(policy) = settings
@@ -92,6 +129,7 @@ impl AssistanceService {
             &settings,
             self.adapter.as_ref(),
             now,
+            template,
         )
         .map_err(|_| {
             OrbitError::InvalidInput(
@@ -107,6 +145,17 @@ impl AssistanceService {
         &self,
         workspace: &str,
         use_case: &str,
+    ) -> Result<Option<String>, OrbitError> {
+        self.process_next_assistance_checked(workspace, use_case, |_| Ok(true))
+    }
+
+    /// Consumer freshness fence, checked outside store transactions immediately
+    /// before and after I/O. A superseded subject is retained as a stale attempt.
+    pub fn process_next_assistance_checked(
+        &self,
+        workspace: &str,
+        use_case: &str,
+        is_current: impl Fn(&AssistanceRequest) -> Result<bool, OrbitError>,
     ) -> Result<Option<String>, OrbitError> {
         let settings = (self.settings)()?;
         settings.validate_assistance_settings()?;
@@ -135,7 +184,9 @@ impl AssistanceService {
                         .as_ref()
                         == Some(&digest)
             });
-        let mut result = if !before_matches {
+        let mut result = if !is_current(&claim.work.request)? {
+            AssistanceResult::assistance_gap(AssistanceReason::Superseded)
+        } else if !before_matches {
             AssistanceResult::assistance_gap(AssistanceReason::ConfigurationChanged)
         } else if (self.clock)() >= claim.deadline {
             AssistanceResult::assistance_gap(AssistanceReason::TimeoutUnknown)
@@ -153,6 +204,8 @@ impl AssistanceService {
             });
         if !after_matches {
             result = AssistanceResult::assistance_gap(AssistanceReason::ConfigurationChanged);
+        } else if !is_current(&claim.work.request)? {
+            result = AssistanceResult::assistance_gap(AssistanceReason::Superseded);
         }
         result.validate_result(&claim.work.request.contract);
         // Returned vendor strings are never an arbitrary persisted text channel.

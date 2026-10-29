@@ -113,12 +113,11 @@ Where each feature in `docs/design/` stands, from the `stage` and `next` fields 
 entry doc. Stages run idea, designing, building, shipped, with parked for work on hold.
 Live task progress is in Orbit; this board records what the feature lead last set.
 
-### Building (9)
+### Building (8)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
 | [Backlog Forecast](./design/backlog-forecast/1_scope.md) | Review residual phases, shadow resource-fit counterfactuals, follower capacity and richer calibration remain open after the six v2 factors. | claude |
-| [Decision Assistance](./design/decision-assistance/1_scope.md) | Implement opt-in consumer collectors; coordinate independent labels and separately authorized live evaluation before advisory activation. | codex |
 | [Distributed Drain](./design/distributed-drain/1_overview.md) | Implement admission receipt compaction and accounting (ORB-19424). | claude |
 | [Experiments](./design/experiments/1_scope.md) | Raise a concluded-or-due experiment through the human decision channel (open; decision requests are task-bound today) | claude |
 | [Explore Brief](./design/explore-brief/1_scope.md) | Finish the remaining trial prerequisites before starting the three-arm trial | claude |
@@ -177,10 +176,11 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Usage Pressure](./design/usage-pressure/1_scope.md) | — | claude |
 | [User Interface](./design/user-interface/1_overview.md) | — | gemini |
 
-### Parked (1)
+### Parked (2)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
+| [Decision Assistance](./design/decision-assistance/1_scope.md) | Improve rubrics/packets, independently adjudicate permitted data and register an unopened holdout before any activation; advisory rollout remains parked. | codex |
 | [Project Learnings](./design/project-learnings/4_decisions.md) | Retired by decision (ORB-10736); candidate to move under _archived | claude |
 
 ## Designs

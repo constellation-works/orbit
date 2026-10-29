@@ -364,6 +364,7 @@ impl OrbitRuntime {
     ) -> Result<DesktopTaskWriteResult, OrbitError> {
         let refresh = || {
             let task = self.desktop_side_effect_task(id)?;
+            self.schedule_task_quality_after_commit(&task);
             self.stores().task_records().index_task(&task);
             if let Some(request_id) = request_id {
                 self.desktop_close_transition_prs(request_id, &task);
