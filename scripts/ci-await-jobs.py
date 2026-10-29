@@ -97,26 +97,8 @@ class JobListingPoller:
         self.server_minimum = 0
         self.primary_remaining = 1000
 
-    def read_job_listing(self, remaining):
-        started = time.monotonic()
-        self.poll_seconds = max(self.server_minimum, self.fallback_seconds)
-        self.requests += 1
-        if self.paginated:
-            status, stdout = request_job_listing(
-                ["--paginate", "--jq", FIELDS, self.endpoint], remaining)
-            if status:
-                return None
-            return {job["name"]: job for line in stdout.splitlines() if line.strip()
-                    for job in [json.loads(line)]}
-        arguments = ["--include", self.endpoint]
-        if self.etag:
-            arguments += ["--header", f"If-None-Match: {self.etag}"]
-        status, stdout = request_job_listing(arguments, remaining)
-        head, _, body = stdout.partition("\n\n")
-        status_line = head.splitlines()[0].split() if head else []
-        http_status = status_line[1] if len(status_line) >= 2 else ""
-        headers = {name.lower(): value.strip() for line in head.splitlines()[1:]
-                   for name, separator, value in [line.partition(":")] if separator}
+    def _backoff_minimum(self, headers, http_status):
+        """Fold one response's backoff headers into the poll interval floor."""
         try:
             self.server_minimum = float(headers.get("x-poll-interval", str(self.server_minimum)))
             minimum = max(self.server_minimum, float(headers.get("retry-after", "0")))
@@ -127,6 +109,79 @@ class JobListingPoller:
                 minimum = max(minimum, 60)
         except ValueError:
             minimum, self.primary_remaining = self.fallback_seconds, 0
+        return minimum
+
+    def _parse_paginated_listing(self, stdout):
+        """Split a --paginate --include --jq listing into per-page responses."""
+        pages = []
+        lines = stdout.splitlines()
+        index = 0
+        while index < len(lines):
+            if not lines[index].startswith("HTTP/"):
+                index += 1
+                continue
+            parts = lines[index].split()
+            http_status = parts[1] if len(parts) >= 2 else ""
+            index += 1
+            headers = {}
+            while index < len(lines) and lines[index].strip():
+                name, separator, value = lines[index].partition(":")
+                if separator:
+                    headers[name.strip().lower()] = value.strip()
+                index += 1
+            if index < len(lines) and not lines[index].strip():
+                index += 1
+            body = []
+            while index < len(lines) and not lines[index].startswith("HTTP/"):
+                body.append(lines[index])
+                index += 1
+            pages.append((http_status, headers, body))
+        return pages
+
+    def read_job_listing(self, remaining):
+        started = time.monotonic()
+        self.poll_seconds = max(self.server_minimum, self.fallback_seconds)
+        self.requests += 1
+        if self.paginated:
+            status, stdout = request_job_listing(
+                ["--include", "--paginate", "--jq", FIELDS, self.endpoint], remaining)
+            pages = self._parse_paginated_listing(stdout)
+            if not pages:
+                if status:
+                    return None
+                try:
+                    return {job["name"]: job for line in stdout.splitlines() if line.strip()
+                            for job in [json.loads(line)]}
+                except (ValueError, KeyError):
+                    return None
+            minimum = self.server_minimum
+            for http_status, headers, _ in pages:
+                minimum = max(minimum, self._backoff_minimum(headers, http_status))
+            self.poll_seconds = max(minimum, self.fallback_seconds)
+            if status:
+                return None
+            jobs = {}
+            try:
+                for http_status, _, body in pages:
+                    if http_status != "200":
+                        return None
+                    for line in body:
+                        if line.strip():
+                            job = json.loads(line)
+                            jobs[job["name"]] = job
+            except (ValueError, KeyError):
+                return None
+            return jobs
+        arguments = ["--include", self.endpoint]
+        if self.etag:
+            arguments += ["--header", f"If-None-Match: {self.etag}"]
+        status, stdout = request_job_listing(arguments, remaining)
+        head, _, body = stdout.partition("\n\n")
+        status_line = head.splitlines()[0].split() if head else []
+        http_status = status_line[1] if len(status_line) >= 2 else ""
+        headers = {name.lower(): value.strip() for line in head.splitlines()[1:]
+                   for name, separator, value in [line.partition(":")] if separator}
+        minimum = self._backoff_minimum(headers, http_status)
         self.poll_seconds = max(minimum, self.fallback_seconds)
         if status:
             return None
@@ -137,10 +192,13 @@ class JobListingPoller:
             # original fully paginated listing and cadence for larger runs.
             if 'rel="next"' in headers.get("link", ""):
                 self.paginated = True
+                first_minimum = minimum
                 remaining -= time.monotonic() - started
                 if remaining <= 0:
                     raise ListingTimeout
-                return self.read_job_listing(remaining)
+                jobs = self.read_job_listing(remaining)
+                self.poll_seconds = max(self.poll_seconds, first_minimum, self.fallback_seconds)
+                return jobs
             payload = json.loads(body)
             self.jobs = {job["name"]: job for job in payload["jobs"]}
             self.etag = headers.get("etag")
