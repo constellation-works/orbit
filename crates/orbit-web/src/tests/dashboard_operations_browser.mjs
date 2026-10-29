@@ -284,7 +284,7 @@ try {
   });
   await page.evaluate(async () => {
     const { initRouter, initTabs } = await import('/js/router.js');
-    const { setDockMode } = await import('/js/log-tail.js');
+    const { setDockMode, setDockRouteShown } = await import('/js/log-tail.js');
     let tab = 'operations';
     let diag = 'incidents';
     let jobs = 'live';
@@ -310,6 +310,7 @@ try {
       getRunLogs: () => [], setRunLogs: () => {}, getExpandedSteps: () => new Set(), setExpandedSteps: () => {},
       getLastRuns: () => [], refreshDashboard: () => {}, renderDiagnostics: () => {},
       fitLogPanelToViewport: () => {}, setDrainView: (mode) => setDockMode(mode),
+      setDockRouteShown,
       getIncidentsView: () => incidentsView, setIncidentsView: (value) => { incidentsView = value; },
       getAnalyticsSubtab: () => analytics, setAnalyticsSubtab: (value) => { analytics = value; },
       getReliabilityView: () => reliabilityView, setReliabilityView: (value) => { reliabilityView = value; },
@@ -1128,36 +1129,6 @@ try {
     if (animation !== 'none') throw new Error(`Reduced-motion drain indicator ${selector} animates: ${animation}`);
   }
   await page.emulateMedia({ reducedMotion: 'no-preference' });
-  // ORB-19691: below 1000px the dock is not beside the list, so an explicit dock
-  // route shows it in place of the list. Back returns to the list from the
-  // keyboard, and no step overflows the document.
-  await page.setViewportSize({ width: 375, height: 812 });
-  await page.click('#global-drain-state');
-  await page.locator('#side-dock[data-mode="drain"]').waitFor({ state: 'visible' });
-  const phoneDockRoute = () => page.evaluate(() => ({
-    list: document.querySelector('#tasks-main > .col-tasks').getClientRects().length > 0,
-    dock: document.getElementById('side-dock').getClientRects().length > 0,
-    hash: location.hash,
-  }));
-  let phoneRoute = await phoneDockRoute();
-  if (phoneRoute.list || !phoneRoute.dock || !phoneRoute.hash.includes('dock=drain')) {
-    throw new Error(`The phone Global Drain indicator must show the dock in place of the list: ${JSON.stringify(phoneRoute)}`);
-  }
-  await assertNoOverflow('phone Drain dock route at 375px');
-  await page.waitForTimeout(350);
-  await page.screenshot({ path: path.join(evidence, 'tasks-dock-phone-drain-dark-375.png'), animations: 'disabled' });
-  await page.evaluate(() => { location.hash = '#tasks?dock=log'; });
-  await page.locator('#side-dock[data-mode="log"] #log-panel').waitFor({ state: 'visible' });
-  phoneRoute = await phoneDockRoute();
-  if (phoneRoute.list || !phoneRoute.dock) throw new Error(`A phone Log deep link must show the dock in place of the list: ${JSON.stringify(phoneRoute)}`);
-  await assertNoOverflow('phone Log dock route at 375px');
-  await page.waitForTimeout(350);
-  await page.screenshot({ path: path.join(evidence, 'tasks-dock-phone-log-dark-375.png'), animations: 'disabled' });
-  await page.locator('#dock-back-tasks').focus();
-  await page.keyboard.press('Enter');
-  await page.locator('#tasks-main > .col-tasks').waitFor({ state: 'visible' });
-  phoneRoute = await phoneDockRoute();
-  if (phoneRoute.dock || phoneRoute.hash.includes('dock=')) throw new Error(`Back to tasks must return to the list without dock=: ${JSON.stringify(phoneRoute)}`);
   await page.setViewportSize({ width: 1280, height: 900 });
   await drainCheck('1280', null);
   // The approve-proposed opt-in and the live window's approvals line fit the
@@ -1279,6 +1250,37 @@ try {
       && globalThis.logSnapshotAttempts() >= 1
       && !globalThis.logFixtureStream;
   });
+  // ORB-19691: the fixture now has both production route callbacks and the
+  // log-tail Back handler before exercising the phone dock routes.
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.click('#global-drain-state');
+  await page.locator('#side-dock[data-mode="drain"]').waitFor({ state: 'visible' });
+  const phoneDockRoute = () => page.evaluate(() => ({
+    list: document.querySelector('#tasks-main > .col-tasks').getClientRects().length > 0,
+    dock: document.getElementById('side-dock').getClientRects().length > 0,
+    hash: location.hash,
+  }));
+  let phoneRoute = await phoneDockRoute();
+  if (phoneRoute.list || !phoneRoute.dock || !phoneRoute.hash.includes('dock=drain')) {
+    throw new Error(`The phone Global Drain indicator must show the dock in place of the list: ${JSON.stringify(phoneRoute)}`);
+  }
+  await assertNoOverflow('phone Drain dock route at 375px');
+  await page.waitForTimeout(350);
+  await page.screenshot({ path: path.join(evidence, 'tasks-dock-phone-drain-dark-375.png'), animations: 'disabled' });
+  await page.evaluate(() => { location.hash = '#tasks?dock=log'; });
+  await page.locator('#side-dock[data-mode="log"] #log-panel').waitFor({ state: 'visible' });
+  phoneRoute = await phoneDockRoute();
+  if (phoneRoute.list || !phoneRoute.dock) throw new Error(`A phone Log deep link must show the dock in place of the list: ${JSON.stringify(phoneRoute)}`);
+  await assertNoOverflow('phone Log dock route at 375px');
+  await page.waitForTimeout(350);
+  await page.screenshot({ path: path.join(evidence, 'tasks-dock-phone-log-dark-375.png'), animations: 'disabled' });
+  await page.locator('#dock-back-tasks').focus();
+  await page.keyboard.press('Enter');
+  await page.locator('#tasks-main > .col-tasks').waitFor({ state: 'visible' });
+  phoneRoute = await phoneDockRoute();
+  if (phoneRoute.dock || phoneRoute.hash.includes('dock=')) throw new Error(`Back to tasks must return to the list without dock=: ${JSON.stringify(phoneRoute)}`);
+  await page.evaluate(() => { location.hash = '#tasks?dock=log'; });
+  await page.locator('#side-dock[data-mode="log"] #log-panel').waitFor({ state: 'visible' });
   // Hiding the tab must cancel the snapshot backoff. A background tab neither
   // retries nor opens a stream; showing it resumes, and only the recovered
   // snapshot may open the EventSource.
