@@ -700,7 +700,7 @@ fn run() {
             &root,
             matches!(
                 runtime_need,
-                RuntimeNeed::ReadOnly | RuntimeNeed::PluginReadOnly
+                RuntimeNeed::ReadOnly | RuntimeNeed::PluginReadOnly | RuntimeNeed::HostReadOnly
             ),
             participant_role(&cli.command),
             handover_capability(&cli.command),
@@ -842,6 +842,12 @@ fn run() {
             },
             RuntimeNeed::PluginReadOnly => {
                 RegisteredRuntimeFactory::initialize_plugin_read_only_with_overrides(
+                    root_override.as_deref(),
+                    workspace_selector.as_deref(),
+                )
+            }
+            RuntimeNeed::HostReadOnly => {
+                RegisteredRuntimeFactory::initialize_host_read_only_with_overrides(
                     root_override.as_deref(),
                     workspace_selector.as_deref(),
                 )

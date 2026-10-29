@@ -212,6 +212,193 @@ fn workspace_list_from_unregistered_cwd_joins_foreign_generation_without_writes(
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn task_list_from_unregistered_cwd_does_not_return_unbound_tasks() {
+    if crate::isolated_test::run_in_child(
+        "generation_participation::task_list_from_unregistered_cwd_does_not_return_unbound_tasks",
+    ) {
+        return;
+    }
+
+    use orbit_common::fs::generation::{Access, GenerationGuard, Participant, ParticipantRole};
+
+    let host = Host::new();
+    let root = host.home.join(".orbit");
+    let root_str = root.to_str().expect("utf8 root").to_string();
+    let sentinel_title = "unbound sentinel ORB-19676";
+    // A live dashboard would already have opened the databases before a
+    // foreign reader joins, so seed them here as well.
+    host.orbit(&host.temp.path().join("alpha"), &["task", "list", "--json"]);
+    // Seed the shared unbound partition through the documented explicit-root
+    // path: export one registered task, then import it into the synthetic
+    // `ws_unbound-data-dir` workspace. The unbound workspace has no registry
+    // row, so seed it first; import then lands there and explicit-root list
+    // reads it back.
+    let alpha = host.temp.path().join("alpha");
+    {
+        let index = root.join("tasks").join("index.sqlite");
+        let conn = rusqlite::Connection::open(&index).expect("open task registry");
+        conn.execute(
+            "INSERT OR IGNORE INTO workspace_bindings \
+             (workspace_id, slug, repo_fingerprint, created_at, updated_at) \
+             VALUES (?1, ?2, NULL, ?3, ?3)",
+            rusqlite::params![
+                "ws_unbound-data-dir",
+                "unbound-data-dir",
+                "2026-01-01T00:00:00+00:00",
+            ],
+        )
+        .expect("seed unbound workspace");
+    }
+    let add = host
+        .command(&alpha)
+        .args([
+            "task",
+            "add",
+            "--title",
+            sentinel_title,
+            "--complexity",
+            "low",
+        ])
+        .output()
+        .expect("add sentinel to alpha");
+    assert!(
+        add.status.success(),
+        "task add in alpha must succeed: {}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+    let archive = host.temp.path().join("sentinel.tar.zst");
+    let archive_str = archive.to_str().expect("utf8 archive").to_string();
+    let export = host
+        .command(&alpha)
+        .args(["task", "export", "-o", &archive_str])
+        .output()
+        .expect("export sentinel");
+    assert!(
+        export.status.success(),
+        "task export from alpha must succeed: {}",
+        String::from_utf8_lossy(&export.stderr)
+    );
+    let import = host
+        .command(&alpha)
+        .args([
+            "--root",
+            &root_str,
+            "task",
+            "import",
+            &archive_str,
+            "--task-workspace",
+            "ws_unbound-data-dir",
+        ])
+        .output()
+        .expect("import sentinel to the unbound partition");
+    assert!(
+        import.status.success(),
+        "explicit-root task import must land in the unbound partition: {}",
+        String::from_utf8_lossy(&import.stderr)
+    );
+    let unbound = host
+        .command(&alpha)
+        .args([
+            "--root",
+            &root_str,
+            "tool",
+            "run",
+            "orbit.task.list",
+            "--input",
+            r#"{"model":"codex"}"#,
+        ])
+        .output()
+        .expect("list unbound tasks");
+    assert!(
+        unbound.status.success(),
+        "explicit-root task list must succeed: {}",
+        String::from_utf8_lossy(&unbound.stderr)
+    );
+    let unbound_tasks: Value =
+        serde_json::from_slice(&unbound.stdout).expect("unbound task list JSON");
+    let unbound_list = unbound_tasks
+        .get("tasks")
+        .and_then(Value::as_array)
+        .expect("task array");
+    assert!(
+        unbound_list
+            .iter()
+            .any(|task| task["title"].as_str() == Some(sentinel_title)),
+        "fixture must seed the sentinel in the unbound partition: {unbound_tasks}"
+    );
+
+    let cwd = host.temp.path().join("unregistered");
+    fs::create_dir(&cwd).expect("unregistered cwd");
+    let identity = orbit_core::composition::compiled_compatibility();
+    let digest = "a".repeat(64);
+    let _record = GenerationGuard::acquire(&root, &digest).expect("record foreign digest");
+    let _generation = GenerationGuard::join(
+        &root,
+        &Participant {
+            digest: &digest,
+            identity: &identity,
+            role: ParticipantRole::Dashboard,
+            access: Access::Write,
+            handover: None,
+            in_activity: false,
+        },
+        Duration::ZERO,
+        || Ok(identity.store_schema.version),
+    )
+    .expect("hold live compatible foreign generation");
+    let generation_before = fs::read(root.join(".generation.lock")).expect("generation record");
+    let partitions = || {
+        let mut entries = fs::read_dir(root.join("tasks/workspaces"))
+            .expect("task partitions")
+            .map(|entry| entry.expect("partition entry").file_name())
+            .collect::<Vec<_>>();
+        entries.sort();
+        entries
+    };
+    let partitions_before = partitions();
+
+    // A task-scoped read from an unregistered checkout must refuse with the
+    // registration hint instead of opening the shared unbound partition that
+    // holds the sentinel [ORB-19676].
+    let output = host
+        .command(&cwd)
+        .args(["task", "list", "--json"])
+        .output()
+        .expect("run orbit task list");
+    assert!(
+        !output.status.success(),
+        "unregistered task list must refuse without a cwd binding"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let combined = format!("{stderr}\n{stdout}");
+    assert!(
+        combined.contains("not inside a registered workspace")
+            && combined.contains("orbit workspace init"),
+        "unregistered task list must refuse with the registration hint: {combined}"
+    );
+    assert!(
+        !combined.contains(sentinel_title),
+        "unregistered task list must not return another data directory's tasks: {combined}"
+    );
+    assert!(
+        !cwd.join(".orbit").exists(),
+        "listing must not bind the cwd"
+    );
+    assert_eq!(
+        partitions(),
+        partitions_before,
+        "listing must not mint a partition"
+    );
+    assert_eq!(
+        fs::read(root.join(".generation.lock")).expect("generation record after listing"),
+        generation_before,
+        "listing must retain the live foreign generation"
+    );
+}
+
 #[test]
 fn dashboard_routine_status_registers_nothing_per_request() {
     let host = Host::new();

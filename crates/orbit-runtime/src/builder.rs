@@ -33,14 +33,17 @@ use crate::{HostLifetime, WorkspaceRuntimeBinding};
 use orbit_store::skill_store::SkillCatalog;
 
 /// Job-run partition used when an explicit `--root` data directory is opened
-/// without a selected checkout, or a write-free read has no workspace binding.
-/// Never written to `config.yaml` and never inserted as a
-/// `workspace_checkout_bindings` row.
+/// without a selected checkout. Never written to `config.yaml` and never
+/// inserted as a `workspace_checkout_bindings` row.
 ///
 /// Public because it is the one partition id no registry ever claims: host
 /// maintenance that decides whether a task-store partition is orphaned must
 /// recognize it rather than delete the tasks every `--root` write lands in
 /// [ORB-12119].
+///
+/// A write-free read from an unregistered checkout has no partition and is
+/// refused: it must not observe this shared id, which an unrelated explicit
+/// `--root` data directory writes to [ORB-19676].
 pub const UNBOUND_DATA_DIR_PARTITION_ID: &str = "ws_unbound-data-dir";
 
 /// How much state a runtime may write while it is being composed.
@@ -415,9 +418,11 @@ pub(crate) fn build_context_from_roots(
 /// (`workspace_bindings.workspace_id`, the directory name under
 /// `tasks/workspaces/`), not the workspace-registry `ws_*` id: a checkout
 /// bound before `workspace init` supplied an id keeps a minted
-/// `<slug>-<hash>` partition, and an unselected `--root` data directory or
-/// unbound write-free read lands in [`UNBOUND_DATA_DIR_PARTITION_ID`]. Only
-/// `binding.logical_workspace_id` names a workspace-registry row.
+/// `<slug>-<hash>` partition, and an unselected `--root` data directory lands
+/// in [`UNBOUND_DATA_DIR_PARTITION_ID`]. An unbound write-free read from an
+/// unregistered checkout is refused rather than opening the shared unbound
+/// id [ORB-19676]. Only `binding.logical_workspace_id` names a
+/// workspace-registry row.
 fn build_v2_task_backends(
     global_root: &Path,
     paths: &WorkspacePaths,
@@ -496,11 +501,18 @@ fn build_v2_task_backends(
         },
     };
     if write_free {
-        // Host-scoped reads such as workspace listing need no cwd binding.
-        // The observational backend opens an absent partition without creating
-        // it, so retain write-free access without registering the checkout.
-        let partition_id =
-            partition_id.unwrap_or_else(|| UNBOUND_DATA_DIR_PARTITION_ID.to_string());
+        // Host-scoped reads open through the explicit `--root` branch above
+        // and never reach this fallback. A task-scoped read from an
+        // unregistered checkout has no partition and must not observe the
+        // shared unbound data-dir id that an unrelated explicit `--root`
+        // data directory writes to, so refuse with the registration hint
+        // instead of opening it [ORB-19676].
+        let Some(partition_id) = partition_id else {
+            return Err(OrbitError::WorkspaceError(format!(
+                "current directory is not inside a registered workspace ({}); run `orbit workspace init` first or pass `--workspace <name>` or `--root <path/to/.orbit>`",
+                paths.repo_root.display()
+            )));
+        };
         return compose_task_backends(registry, partition_id, store, access);
     }
     let binding = registry.bind_workspace(BindWorkspaceParams {
