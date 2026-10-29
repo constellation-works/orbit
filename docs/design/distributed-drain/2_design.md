@@ -1159,8 +1159,11 @@ This workspace checks out the producer before candidate scripts, starts `/usr/bi
 directly as the step shell, clears the environment to explicit identity/token bindings, fixes
 tool search to `/usr/bin:/bin`, creates an empty gh configuration directory, and verifies the
 actual helper bytes against the isolated base checkout with `/usr/bin/git` before executing
-them. Hashing uses `--no-filters`, and all verification reads use `--no-replace-objects`, so
-local clean filters and replacement refs cannot substitute the compared bytes or source tree. Python startup and imports cannot use candidate `PYTHONPATH`, user site or the
+them. It hashes the actual file bytes and verifies each commit/tree object's content identity
+from the immutable trusted base to the helper blob. Mutable HEAD/refs, clean filters, replacement
+refs and substituted object-file contents cannot supply the expected identity. It executes the
+verified bytes with the producer's original argv and main-module globals, without reopening
+the writable path. Python startup and imports cannot use candidate `PYTHONPATH`, user site or the
 working/script directory; `GITHUB_PATH` cannot substitute the interpreter or gh; an overwritten
 helper fails closed without emitting evidence. The executable workflow fixture actually attempts
 those interpositions plus a helper overwrite between checkout and launch. Repository imports, if needed by another workspace, must come

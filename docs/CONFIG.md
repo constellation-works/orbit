@@ -2281,7 +2281,9 @@ Each `[[review.host_evidence]]` rule has `kind` (`codeql` or `host_sandbox_test`
   invocation must exclude ambient imports, shell hooks, configuration and executable search, and
   re-establish the actual producer bytes after the last candidate operation; this workspace uses
   an absolute isolated interpreter, a cleared environment and a raw git byte check before launch
-  with clean filters and replacement-object indirection disabled.
+  anchored through hash-verified commit/tree objects from the immutable trusted base,
+  excluding mutable refs, clean filters and replacement-object indirection; execution uses
+  those verified bytes without reopening the helper path.
   Runner/OS and filesystem integrity remain prerequisites; this is no attestation against a
   compromised runner. Changed/legacy/spoofed sources, an overwritten helper or records grant no
   dependency-only authority. `ci_check_rerun_reserved` consumes the shared once-per-head budget

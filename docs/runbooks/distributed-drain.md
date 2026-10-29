@@ -1807,7 +1807,9 @@ one. From then on:
   it. This workspace uses an absolute isolated Python step shell, a cleared
   allowlisted environment, fixed system tool paths, fresh gh configuration and a
   raw `/usr/bin/git` byte check against the isolated base checkout before launch,
-  with clean filters and replacement-object indirection disabled.
+  anchored through hash-verified commit/tree objects from the immutable trusted base,
+  excluding mutable refs, clean filters and replacement-object indirection. It executes those
+  verified bytes without reopening the helper path.
   It executes the producer in a complete separate event-base checkout. An overwritten
   helper fails closed without evidence. The v1
   `orbit-dependency-evidence:` record binds the
