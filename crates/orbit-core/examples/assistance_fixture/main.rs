@@ -381,6 +381,123 @@ fn fixture_send_failure_reconciliation(root: &Path, schema: &Value) -> FixtureRe
     Ok(())
 }
 
+fn fixture_http_status_retry(root: &Path, schema: &Value) -> FixtureResult {
+    // A revoked credential (401) is definitive: the same request fails again,
+    // so it completes after one attempt and one reservation with no retry.
+    let f = AssistanceFixture::open_fixture(&root.join("rejected"), schema, "task_quality")?;
+    let id = f.enqueue(f.request("revoked-credential")?)?;
+    let work = f.record(&id)?.work;
+    let charge = work
+        .budget
+        .assistance_charge_bound(u64::from(work.limits.max_input_tokens))
+        .ok_or("synthetic charge bound missing")?;
+    for _ in 0..2 {
+        f.transport
+            .replies
+            .lock()
+            .map_err(|_| "replies lock")?
+            .push_back(Ok(AssistanceHttpResponse {
+                status: 401,
+                body: br#"{"error":"revoked"}"#.to_vec(),
+            }));
+    }
+    f.process()?;
+    f.advance(i64::from(work.limits.retry_delay_seconds) + 1)?;
+    f.process()?;
+    let record = f.record(&id)?;
+    assert_eq!(
+        record.attempts.len(),
+        1,
+        "definitive 401 was retried: attempts={}",
+        record.attempts.len()
+    );
+    assert_eq!(
+        record
+            .result
+            .as_ref()
+            .ok_or("missing rejection result")?
+            .reason,
+        AssistanceReason::Refused
+    );
+    let accounting = f.store.assistance_accounting("synthetic-only/1")?;
+    assert_eq!(accounting.attempts, 1);
+    assert_eq!(accounting.outcome_unknown_attempts, 0);
+    assert_eq!(
+        accounting.reserved_tokens,
+        u64::from(work.limits.max_input_tokens)
+    );
+    assert_eq!(accounting.reserved_charge_microusd, charge);
+    assert_eq!(
+        f.transport.bodies.lock().map_err(|_| "body lock")?.len(),
+        1,
+        "definitive 401 reached the provider twice"
+    );
+
+    // A 503 may succeed later, so it keeps the bounded retry: two attempts and
+    // two reservations, then the good retry completes without a third attempt.
+    let g = AssistanceFixture::open_fixture(&root.join("overloaded"), schema, "task_quality")?;
+    let id = g.enqueue(g.request("overloaded")?)?;
+    let work = g.record(&id)?.work;
+    let charge = work
+        .budget
+        .assistance_charge_bound(u64::from(work.limits.max_input_tokens))
+        .ok_or("synthetic charge bound missing")?;
+    g.transport
+        .replies
+        .lock()
+        .map_err(|_| "replies lock")?
+        .push_back(Ok(AssistanceHttpResponse {
+            status: 503,
+            body: br#"{"error":"overloaded"}"#.to_vec(),
+        }));
+    g.process()?;
+    let after_first = g.record(&id)?;
+    assert_eq!(after_first.attempts.len(), 1);
+    assert_eq!(
+        after_first
+            .result
+            .as_ref()
+            .ok_or("missing overload result")?
+            .reason,
+        AssistanceReason::Unavailable
+    );
+    g.advance(i64::from(work.limits.retry_delay_seconds))?;
+    g.respond(g.good_response())?;
+    g.process()?;
+    let after_retry = g.record(&id)?;
+    assert_eq!(after_retry.attempts.len(), 2);
+    assert_eq!(after_retry.attempts[0].ordinal, 1);
+    assert_eq!(after_retry.attempts[1].ordinal, 2);
+    assert_ne!(
+        after_retry.attempts[1].attempt_id,
+        after_retry.attempts[0].attempt_id
+    );
+    assert_eq!(
+        after_retry
+            .result
+            .as_ref()
+            .ok_or("missing overload retry result")?
+            .disposition,
+        AssistanceDisposition::Suggested
+    );
+    let retry_accounting = g.store.assistance_accounting("synthetic-only/1")?;
+    assert_eq!(retry_accounting.attempts, 2);
+    assert_eq!(retry_accounting.outcome_unknown_attempts, 0);
+    assert_eq!(
+        retry_accounting.reserved_tokens,
+        u64::from(work.limits.max_input_tokens) * 2
+    );
+    assert_eq!(retry_accounting.reserved_charge_microusd, charge * 2);
+    g.advance(i64::from(work.limits.retry_delay_seconds))?;
+    g.process()?;
+    assert_eq!(g.record(&id)?.attempts.len(), 2);
+    assert_eq!(
+        g.store.assistance_accounting("synthetic-only/1")?.attempts,
+        2
+    );
+    Ok(())
+}
+
 fn fixture_credential_refusal_releases_reservation(root: &Path, schema: &Value) -> FixtureResult {
     // Unavailable credentials refuse locally: no request leaves the host, so no
     // reservation may survive and the allocation must not drain.
@@ -928,6 +1045,7 @@ fn main() -> FixtureResult {
         fixture_service_boundaries(&root.join("service"), &schema)?;
         fixture_completed_result_outlives_queue_age(&root.join("completed"), &schema)?;
         fixture_send_failure_reconciliation(&root.join("send-failure"), &schema)?;
+        fixture_http_status_retry(&root.join("http-status"), &schema)?;
         fixture_credential_refusal_releases_reservation(&root.join("credential"), &schema)?;
         fixture_deadline_before_send_is_not_unknown(&root.join("deadline"), &schema)?;
         fixture_restart_retry(&root.join("restart"), &schema)?;

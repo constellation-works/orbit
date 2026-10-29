@@ -70,6 +70,22 @@ struct DecisionUsage {
     // Provider's cache/detail fields are not instructions or text to persist.
 }
 
+/// Fixed reason for a fully received Decisions status. A later attempt cannot
+/// fix a definitive client rejection, so only a timeout, rate limit or server
+/// error keeps the bounded settlement retry (see `assistance_settle_claim`).
+/// Serialized reasons are unchanged: rejections reuse `Refused`, unexpected
+/// statuses reuse `Malformed`, and retriable statuses reuse `Unavailable`.
+fn decisions_status_reason(status: u16) -> AssistanceReason {
+    match status {
+        // A timed-out, rate-limited or failed provider may succeed later.
+        408 | 429 | 500..=599 => AssistanceReason::Unavailable,
+        // Any other client rejection is definitive: the same request fails again.
+        400..=499 => AssistanceReason::Refused,
+        // No Decisions redirect or alternate success is defined outside 200.
+        _ => AssistanceReason::Malformed,
+    }
+}
+
 pub(super) fn translate_assistance_decision(
     response: AssistanceHttpResponse,
     request: &AssistanceRequest,
@@ -77,7 +93,7 @@ pub(super) fn translate_assistance_decision(
     revision: &str,
 ) -> AssistanceResult {
     if response.status != 200 {
-        return AssistanceResult::assistance_gap(AssistanceReason::Unavailable);
+        return AssistanceResult::assistance_gap(decisions_status_reason(response.status));
     }
     let parsed: DecisionResponse = match serde_json::from_slice(&response.body) {
         Ok(parsed) => parsed,
