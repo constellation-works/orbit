@@ -1112,6 +1112,36 @@
         "## Attach the ledger",
         "## Check and record",
         "## Comment-only diffs",
+        "## Escalate repeat skips",
+        "## Select a batch (preparation, before admission)",
+        "## The standard",
+        "## Use the prepared footprint"
+      ],
+      "digest": "ad34a5772c8daeaba6eaccfc8b7b277cbdae3a96c9bc974ba3cce0045a617902",
+      "revision": "bc20d79ea76a390ee70585d11d6e095c13f28531",
+      "settings": {
+        "complexity": "low",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "low",
+        "schedule": {
+          "cron": "45 6 * * *"
+        },
+        "tags": [
+          "comment-hygiene"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# No context_files and proposed on purpose: the batch is known only after",
+        "# backlog. The executing run never writes its own scope.",
+        "# operator) persists the selected file: selectors and it is approved to",
+        "# selection, so the instance waits in proposed — never a backlog",
+        "# whole-tree holder — until pre-admission preparation (task pilot or",
+        "## Attach the ledger",
+        "## Check and record",
+        "## Comment-only diffs",
         "## Select a batch (preparation, before admission)",
         "## The standard",
         "## Use the prepared footprint"
@@ -3628,6 +3658,32 @@
       ],
       "digest": "3a60f26187d0e6fa996e208c9405e7d2fde94b0088fbbe6ae2b0354fffbe4a0f",
       "revision": "eee82459d578dfca467ec25cebd03d4203edeaf6",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "20 7 * * 1"
+        },
+        "tags": [
+          "run-failure-patterns",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## 1. Windows",
+        "## 2. Measure the rate",
+        "## 3. Find the classes that drive it",
+        "## 4. Check coverage and effectiveness",
+        "## 5. Filing",
+        "## 6. Report and cursor",
+        "## Rules and command surfaces"
+      ],
+      "digest": "6aef74de96a9cedcf5def415dba69bf9b725aa4105be14ea82a0050431830d11",
+      "revision": "0244fbcf8be2d0c60c3225cbe94a4907ea5e9cac",
       "settings": {
         "complexity": "medium",
         "dedupe": "skip_if_open",

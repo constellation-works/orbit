@@ -212,16 +212,20 @@ template:
 
     ## Pass B — one area, read in full
 
-    **Partition.** One area per discovered package. Split a package over 20,000
-    non-test lines into one area per top-level source directory, with leftover
-    root files as their own area.
+    **Partition.** One area per discovered package. If an area exceeds 20,000
+    non-test lines, split it into one area per immediate source subdirectory,
+    with source files directly in that directory as a sibling area. Apply this
+    split recursively to each resulting over-limit directory area until every
+    area is at or below 20,000 non-test lines. If directly contained files
+    alone exceed the limit, make each file its own area.
 
-    **Select.** Score each area by non-test lines changed since its last
-    reviewed SHA (`git diff --numstat <last_sha> <pinned_sha> -- <area>`,
-    excluding tests); for a never-reviewed area use the last 30 days of
-    history. Skip an area when over half its files sit in the `context_files`
-    of an open `code-health` task or of any in-progress or review task. Review
-    the highest-scoring remaining area. Record every score.
+    **Select.** Score each resulting area independently by non-test lines
+    changed since that area's last reviewed SHA (`git diff --numstat
+    <last_sha> <pinned_sha> -- <area>`, excluding tests); for a never-reviewed
+    area use the last 30 days of history. Skip an area when over half its files
+    sit in the `context_files` of an open `code-health` task or of any
+    in-progress or review task. Review the highest-scoring remaining area.
+    Record every score and keep a review cursor for each resulting area.
 
     **Clone scan (whole repository, cheap).** Write a throwaway script under
     `.orbit/tmp/` that normalises non-test source lines of the discovered
