@@ -97,6 +97,12 @@ if ! command -v cargo >/dev/null 2>&1; then
   skip "cargo not on PATH"
 fi
 
+# The supervisor below starts participants with subprocess.Popen(process_group=),
+# which needs Python 3.11. Refuse here, before WORKDIR and any participant or
+# cache daemon. The disabled-cache and namespace-unavailable exits above never
+# reach this, so they need no Python.
+"$ROOT/scripts/require-python.sh" || exit 1
+
 HOLD_PID=""
 HOLD_RELEASE=""
 alloc_port() {

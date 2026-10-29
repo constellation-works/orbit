@@ -298,6 +298,11 @@ scripts/test-compiler-cache.sh
 ORBIT_COMPILER_CACHE_REQUIRE_NS=1 scripts/test-compiler-cache-namespaces.sh
 ```
 
+The namespace script needs Python 3.11+ first on `PATH`, because its supervisor
+starts participants with `process_group=`. When the cache and user namespaces are
+available, it refuses an older `python3` before starting any participant and
+names the interpreter and version it found.
+
 On a control failure, the namespace script prints the stage, participant names
 (C/D, or E for warm reuse), exact exit statuses, and each participant's stdout
 and stderr before removing its temporary files. Each stream is limited to
