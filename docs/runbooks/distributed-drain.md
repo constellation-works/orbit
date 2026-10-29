@@ -1796,14 +1796,19 @@ one. From then on:
   `ORBIT_DEPENDENCY_PRODUCER`, `ORBIT_DEPENDENCY_PRODUCER_SHA`,
   `ORBIT_DEPENDENCY_JOB_NAME`, `ORBIT_DEPENDENCY_STEP` and
   `ORBIT_DEPENDENCY_EXECUTION: isolated-source-v1`. The last binding promises
-  that source acquisition precedes candidate commands and the workspace-owned
-  invocation excludes ambient imports, shell hooks, tool search and configuration.
+  that source acquisition precedes candidate commands, the workspace-owned
+  invocation excludes ambient imports, shell hooks, tool search and configuration,
+  and the actual producer bytes are re-established after the last candidate
+  operation. Earlier steps share the workspace and could overwrite the checkout;
+  the launch must verify runtime bytes, since blob parity alone cannot detect it.
   The adapter verifies the source promise against the record's `execution_contract`
   and immutable workflow bytes, not by interpreting a language or trusting a label
   alone. Inspect the actual invocation and its executable regressions when adopting
   it. This workspace uses an absolute isolated Python step shell, a cleared
-  allowlisted environment, fixed system tool paths and fresh gh configuration.
-  It executes the producer in a complete separate event-base checkout. The v1
+  allowlisted environment, fixed system tool paths, fresh gh configuration and a
+  `/usr/bin/git` byte check against the isolated base checkout before launch.
+  It executes the producer in a complete separate event-base checkout. An overwritten
+  helper fails closed without evidence. The v1
   `orbit-dependency-evidence:` record binds the
   repository, workflow execution and producer revisions, run/attempt,
   waiter job/failed step and failed dependency identities. The adapter checks

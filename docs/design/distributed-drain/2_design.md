@@ -1147,18 +1147,22 @@ immutable checkout action and the trusted workflow's `ORBIT_DEPENDENCY_PRODUCER`
 `ORBIT_DEPENDENCY_PRODUCER_SHA` bindings. Its working directory is that checkout. Checkout parity
 alone does not authenticate execution: the workflow also declares
 `ORBIT_DEPENDENCY_EXECUTION: isolated-source-v1`, bound to the record's `execution_contract`.
-This workspace-owned promise requires trusted source acquisition before candidate commands and
+This workspace-owned promise requires trusted source acquisition before candidate commands,
 an absolute invocation entrypoint that excludes ambient import, shell-hook, configuration and
-executable search inputs before executing the producer. The adapter authenticates the promise
-and exact workflow/producer blobs; it does not interpret a programming language or treat a
-record as proof of isolation. Maintainers must validate the invocation's implementation.
+executable search inputs, and re-established producer bytes after the last candidate-controlled
+operation. Earlier job steps share the workspace and could overwrite the checkout with ordinary
+writes; GitHub blob parity alone cannot detect that runtime overwrite. The adapter authenticates
+the promise and exact workflow/producer blobs; it does not interpret a programming language or
+treat a record as proof of isolation. Maintainers must validate the invocation's implementation.
 
 This workspace checks out the producer before candidate scripts, starts `/usr/bin/python3 -I`
 directly as the step shell, clears the environment to explicit identity/token bindings, fixes
-tool search to `/usr/bin:/bin`, and creates an empty gh configuration directory. Python startup
-and imports cannot use candidate `PYTHONPATH`, user site or the working/script directory;
-`GITHUB_PATH` cannot substitute the interpreter or gh. The executable workflow fixture actually
-attempts those interpositions. Repository imports, if needed by another workspace, must come
+tool search to `/usr/bin:/bin`, creates an empty gh configuration directory, and verifies the
+actual helper bytes against the isolated base checkout with `/usr/bin/git` before executing
+them. Python startup and imports cannot use candidate `PYTHONPATH`, user site or the
+working/script directory; `GITHUB_PATH` cannot substitute the interpreter or gh; an overwritten
+helper fails closed without emitting evidence. The executable workflow fixture actually attempts
+those interpositions plus a helper overwrite between checkout and launch. Repository imports, if needed by another workspace, must come
 from the authenticated source tree under its own isolation implementation. Core remains
 language-neutral. This boundary trusts runner/OS binaries, installed system libraries, Actions
 runtime and filesystem integrity. It does **not** attest against same-user filesystem writes,

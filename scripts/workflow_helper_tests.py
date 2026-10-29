@@ -66,6 +66,7 @@ class WorkflowHelperRevisionTests(unittest.TestCase):
         # bounds the real producer's API wait; it does not supply isolation.
         import shlex
         import shutil
+        import subprocess
         scratch = ROOT / ".orbit/tmp"
         scratch.mkdir(parents=True, exist_ok=True)
         step = next(s for s in self.document["jobs"]["ci"]["steps"]
@@ -75,10 +76,22 @@ class WorkflowHelperRevisionTests(unittest.TestCase):
             trusted = root / step.get("working-directory", ".")
             (trusted / "scripts").mkdir(parents=True)
             reached = root / "trusted-invocation"
-            (trusted / "scripts/ci-await-jobs.py").write_text(
+            stub = (
                 f"from pathlib import Path\nPath({str(reached)!r}).write_text('reached')\n"
                 "import runpy, sys\nsys.argv += ['--timeout-seconds', '1']\n"
                 f"runpy.run_path({str(ROOT / 'scripts/ci-await-jobs.py')!r}, run_name='__main__')\n")
+            (trusted / "scripts/ci-await-jobs.py").write_text(stub)
+            subprocess.run(["git", "init"], cwd=trusted, capture_output=True, check=True)
+            subprocess.run(["git", "config", "user.email", "fixture@example.invalid"],
+                           cwd=trusted, capture_output=True, check=True)
+            subprocess.run(["git", "config", "user.name", "Fixture"],
+                           cwd=trusted, capture_output=True, check=True)
+            subprocess.run(["git", "add", "scripts/ci-await-jobs.py"],
+                           cwd=trusted, capture_output=True, check=True)
+            subprocess.run(["git", "commit", "-m", "trusted producer"],
+                           cwd=trusted, capture_output=True, check=True)
+            base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=trusted,
+                                  capture_output=True, text=True, check=True).stdout.strip()
             command = root / "step"
             command.write_text(step["run"])
             marker = root / "interposed"
@@ -92,13 +105,19 @@ class WorkflowHelperRevisionTests(unittest.TestCase):
                 file = poison / executable
                 file.write_text(f"#!{sys.executable}\n" + attack)
                 file.chmod(0o755)
-            for case in ("pythonpath", "cwd", "python-executable", "gh-executable"):
+            for case in ("pythonpath", "cwd", "python-executable", "gh-executable",
+                         "helper_overwrite"):
                 with self.subTest(case=case):
+                    (trusted / "scripts/ci-await-jobs.py").write_text(stub)
                     for module in ("argparse", "subprocess", "sitecustomize"):
                         (trusted / "scripts" / (module + ".py")).unlink(missing_ok=True)
                     reached.unlink(missing_ok=True)
                     if marker.exists():
                         marker.unlink()
+                    if case == "helper_overwrite":
+                        # An earlier candidate step overwrites the trusted
+                        # checkout with ordinary workspace writes before launch.
+                        (trusted / "scripts/ci-await-jobs.py").write_text(attack)
                     path = os.environ["PATH"]
                     if case == "python-executable":
                         path = str(poison) + ":" + path
@@ -116,6 +135,7 @@ class WorkflowHelperRevisionTests(unittest.TestCase):
                                GITHUB_JOB="ci", GITHUB_WORKFLOW_REF="fixture/orbit/.github/workflows/ci.yml@refs/pull/1/merge",
                                NEXTEST_SHARDS="3")
                     env.update(step.get("env", {}))
+                    env["ORBIT_DEPENDENCY_PRODUCER_SHA"] = base
                     # No credentials: authentic gh refuses locally, never querying GitHub.
                     env.pop("GH_TOKEN", None)
                     if case == "pythonpath":
@@ -125,7 +145,10 @@ class WorkflowHelperRevisionTests(unittest.TestCase):
                         [word.replace("{0}", str(command)) for word in shlex.split(shell)],
                         step="dependency producer ambient " + case, cwd=trusted, env=env,
                         text=True, capture_output=True)
-                    self.assertTrue(reached.exists(), result.stdout + result.stderr)
+                    if case == "helper_overwrite":
+                        self.assertFalse(reached.exists(), result.stdout + result.stderr)
+                    else:
+                        self.assertTrue(reached.exists(), result.stdout + result.stderr)
                     self.assertFalse(marker.exists(), result.stdout + result.stderr)
                     self.assertNotIn("orbit-dependency-evidence:", result.stdout)
                     self.assertNotEqual(result.returncode, 0)

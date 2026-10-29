@@ -465,9 +465,22 @@ class NextestShardWorkflowTests(unittest.TestCase):
         if step.get("working-directory"):
             # Stub only the producer boundary, leaving the actual hardened
             # workflow shell and argument construction in execution.
+            import subprocess
             helper = cwd / "scripts/ci-await-jobs.py"
             helper.parent.mkdir(parents=True, exist_ok=True)
             helper.write_text(f"import json, sys\nopen({str(self.calls)!r}, 'a').write(json.dumps(sys.argv) + '\\n')\n")
+            subprocess.run(["git", "init"], cwd=cwd, capture_output=True, check=True)
+            subprocess.run(["git", "config", "user.email", "fixture@example.invalid"],
+                           cwd=cwd, capture_output=True, check=True)
+            subprocess.run(["git", "config", "user.name", "Fixture"],
+                           cwd=cwd, capture_output=True, check=True)
+            subprocess.run(["git", "add", "scripts/ci-await-jobs.py"],
+                           cwd=cwd, capture_output=True, check=True)
+            subprocess.run(["git", "commit", "-m", "trusted producer"],
+                           cwd=cwd, capture_output=True, check=True)
+            env["ORBIT_DEPENDENCY_PRODUCER_SHA"] = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=cwd,
+                capture_output=True, text=True, check=True).stdout.strip()
         script = self.root / "step-script"
         script.write_text(step["run"])
         shell = step.get("shell", "bash --noprofile --norc -e -o pipefail {0}")

@@ -535,6 +535,7 @@ jobs:
         run: |
           import os
           import runpy
+          import subprocess
           import sys
           import tempfile
 
@@ -551,7 +552,33 @@ jobs:
           # executable-search environment reaches the producer or its gh.
           with tempfile.TemporaryDirectory(prefix="orbit-ci-producer-") as config:
               os.environ["GH_CONFIG_DIR"] = config
-              sys.argv = ["scripts/ci-await-jobs.py", "--job", "Test build"]
+              # Earlier job steps share the workspace and could have
+              # overwritten the trusted checkout. Re-establish the actual
+              # producer bytes from the isolated base checkout after the
+              # last candidate-controlled operation, before executing them.
+              producer = os.environ["ORBIT_DEPENDENCY_PRODUCER"]
+              expected_base = os.environ["ORBIT_DEPENDENCY_PRODUCER_SHA"]
+              os.environ["GIT_CONFIG_GLOBAL"] = "/dev/null"
+              os.environ["GIT_CONFIG_SYSTEM"] = "/dev/null"
+              for key in [key for key in os.environ if key.startswith("GIT_")
+                          and key not in ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM")]:
+                  del os.environ[key]
+
+              def verified_output(*args):
+                  completed = subprocess.run(
+                      ["/usr/bin/git", *args],
+                      capture_output=True, text=True, timeout=10, check=False)
+                  if completed.returncode != 0:
+                      raise SystemExit(
+                          f"trusted producer verification failed: git {' '.join(args)}")
+                  return completed.stdout.strip()
+
+              if verified_output("rev-parse", "HEAD") != expected_base:
+                  raise SystemExit("producer source differs from its trusted base")
+              if verified_output("hash-object", producer) != verified_output(
+                      "rev-parse", f"HEAD:{producer}"):
+                  raise SystemExit("producer helper differs from its trusted source")
+              sys.argv = [producer, "--job", "Test build"]
               for shard in range(1, int(os.environ["NEXTEST_SHARDS"]) + 1):
                   sys.argv += ["--job", f"Test shard {shard}/{os.environ['NEXTEST_SHARDS']}"]
               runpy.run_path(sys.argv[0], run_name="__main__")
