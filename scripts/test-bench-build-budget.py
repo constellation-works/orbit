@@ -165,6 +165,15 @@ def scenario_existing_root(root, script):
             errors.append("pre-existing sentinel changed: " + relative)
     if result_sentinel.read_text(encoding="utf-8") != "operator result\n":
         errors.append("pre-existing result changed")
+    # An existing empty directory is refused too. The result sentinel above is
+    # refused by its own check, so only this case isolates the workdir refusal.
+    case, work, events, env = make_fixture(root, script, "existing-empty-root")
+    work.mkdir()
+    result = run(script, env)
+    if result.returncode == 0:
+        errors.append("existing empty workdir was accepted")
+    if read_events(events):
+        errors.append("a command or cleanup ran before rejecting the empty workdir")
     return errors
 
 
@@ -183,6 +192,18 @@ def scenario_root_symlink(root, script):
         errors.append("a command or cleanup ran before rejecting the workdir symlink")
     if sentinel.read_text(encoding="utf-8") != "keep\n":
         errors.append("symlink target sentinel changed")
+    # A dangling symlink is refused too. Without the symlink check, the workdir
+    # resolves to the missing target and the claim creates it.
+    case, work, events, env = make_fixture(root, script, "root-dangling-symlink")
+    missing = case / "missing-target"
+    work.symlink_to(missing, target_is_directory=True)
+    result = run(script, env)
+    if result.returncode == 0:
+        errors.append("dangling workdir symlink was accepted")
+    if read_events(events):
+        errors.append("a command or cleanup ran before rejecting the dangling workdir symlink")
+    if missing.exists():
+        errors.append("dangling symlink target was created")
     return errors
 
 
