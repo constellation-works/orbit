@@ -5,8 +5,11 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WRAPPER="$ROOT/scripts/rustc-compiler-cache.sh"
+if ! NS_REAL_CARGO="$(command -v cargo)"; then
+  printf 'test-compiler-cache: FAIL: cargo is required for the offline lockfile fixture\n' >&2
+  exit 1
+fi
 TMP="$(mktemp -d)"
-NS_REAL_CARGO="$(command -v cargo)"
 NS_REAL_HOME="$HOME"
 NS_REAL_PYTHON="$(command -v python3)"
 export NS_REAL_CARGO NS_REAL_HOME
