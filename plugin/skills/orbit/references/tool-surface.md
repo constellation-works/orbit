@@ -147,7 +147,8 @@ risk rankings. Pass a `path` returned in a ranking row to
 `orbit_codebase_show` to inspect that path's standing in every ranking and
 follow its counts to tasks, regression sites, lock waiters, or coupled paths.
 Both tools use the same selection: `window` (`7d`, `30d`, `90d`, or `all`,
-default `90d`), `min_support` (minimum denominator, default `15`) and `rollup`
+default `90d`), `min_support` (default `15`: minimum denominator for the rate
+rankings, minimum shared-reservation count for change coupling) and `rollup`
 (`file`, parent `dir`, or `crate`, default `file`). `touched` means the task's
 declared footprint (`context_files`, including widened selectors), not the
 landed diff.
@@ -155,12 +156,18 @@ landed diff.
 Analytics returns six path rankings and an `overlap` summary. Each rate row
 includes its numerator and denominator. Rankings use distinct tasks as their
 counts, except lock contention, which counts distinct requesting identities,
-and change coupling, which counts reservations. Rows need a numerator and at
-least `min_support` denominator support, are sorted by rate then numerator
-then path, and analytics returns at most 25 per ranking. `below_support`
-counts rows omitted for low support. `show` reports the path's 1-based rank
-over the full ranking and whether its denominator is below support; a missing
-ranking row is `null`.
+and change coupling, which counts reservations. The rate rankings keep rows
+with a positive numerator and at least `min_support` denominator support, are
+sorted by rate then numerator then path, and analytics returns at most 25 per
+ranking; `blocked` additionally keeps a supported row whose attributed
+numerator is zero when the path has unclassified blocks, ranking at rate zero
+so that bucket stays visible per path. Change coupling instead keeps pairs
+with at least `min_support` reservations naming both paths, regardless of the
+Jaccard `either` denominator, sorted the same way with the shared count
+standing in for the numerator. `below_support` counts rows omitted for low
+support (pairs below shared-count support for coupling). For the rate
+rankings, `show` reports the path's 1-based rank over the full ranking and
+whether its denominator is below support; a missing ranking row is `null`.
 
 The ranking sections mean:
 
@@ -187,7 +194,8 @@ The ranking sections mean:
   ranked by total wait time.
 - `change_coupling`: pairs of paths reserved together, ranked by Jaccard rate
   (`reservations naming both ÷ reservations naming either`). Pair support is
-  the number of reservations naming both. Reservations covering more than
+  the number of reservations naming both, and `min_support` gates that shared
+  count rather than the `either` denominator. Reservations covering more than
   12 files are excluded.
 
 `overlap` lists paths appearing in at least two of the first 25 rows of
