@@ -1,7 +1,7 @@
 ---
 title: "Scope: backlog forecast v2 from drain admission"
 owner: claude
-last_updated: 2026-10-28
+last_updated: 2026-10-29
 last_validated: 2026-10-27
 status: Draft
 stage: building
@@ -28,6 +28,52 @@ Nearby-size fits [ORB-19376] are model version **13**: the size fit centers
 its log-size covariate and detects separation by size threshold instead of
 capping parameter magnitudes, so finite fits at nearby sizes estimate rather
 than collapsing to the fallback prior, with no other forecast change.
+
+Fix-history recovery [ORB-19961] is model version **14**, regression rework
+factor revision **2**. Before it, one global count of fixes without usable
+evidence nulled every regression-adjusted forecast, so a single legacy fix
+with empty selectors made the whole workspace unavailable.
+
+- **Recovery.** A completed fix whose current `context_files` are empty or
+  no longer resolve takes its footprint from durable task history: the
+  `file:` selectors `context_files_widened` recorded up to its durable done
+  event, and declarations a `context_files_pruned` entry dropped. The
+  footprint lives only in the forecast's donor copy; no task is rewritten,
+  and nothing is inferred when neither entry survives. Current selectors
+  that are usable still win.
+- **Classification.** Every fix completed in the lookback is sorted by its
+  `regression_from` links. A link to a target with no record in the
+  workspace (`origin_absent`) or one that never completed
+  (`origin_not_completed`) is not a sample, since the model only draws
+  regressions of completed work; it is counted under `excluded` and a fix
+  with only such links contributes nothing. Every other fix is real rework.
+  It is drawable, or it is a gap: `unmeasured_delivery` (no linked
+  invocation, so no measured cost), `footprint_unrecoverable` (neither
+  current selectors nor history give a footprint) or
+  `origin_completion_missing` (the origin is done but its durable done
+  event is gone, so the detection lag is unknown; counted per link).
+- **Support policy.** A gap counts against the pools its origins would join:
+  the complexity × crew pool of an origin with that complexity and crew, and
+  every workspace pool. An item's rework is supported when it has a risk
+  probability, a nonempty pool and no gap in that pool. A gap outside the
+  pool an item samples no longer withholds its totals. A gap inside it does:
+  adjusted totals stay null with `pre_regression_baseline`. A gap is not
+  dropped from a pool it belongs to, because that would bias the bundle
+  toward the fixes whose evidence survived. No completed fix at all leaves
+  the pool empty and the rework unavailable, never zero.
+- **Response.** `inputs.regression_rework` (and each scenario's
+  `regression_rework.support`) keeps `missing_fix_history`, now the
+  unsupported gap count, and adds `missing_by_reason`,
+  `recovered_footprints` and `excluded`. Each task prediction and stored
+  task adds `regression_history_gaps`, the gaps in its pool.
+  `unavailable.regression_history_missing` is true when a member's pool is
+  empty or holds a gap. The new `unavailable.regression_history_gaps`
+  counts the gaps relevant to the scenario's members by reason.
+  `coverage.regression_history_missing` counts those tasks.
+- **Storage.** Stored model-13 rows stay readable and scored under their
+  own version. The default read serves only a model-14 snapshot, so a
+  fresh model-13 row is recomputed live, under the unchanged hourly write
+  rule.
 
 Stored read path [ORB-19615], with no model version change: the default
 read serves the newest stored forecast instead of recomputing it.
@@ -148,9 +194,9 @@ A read-only, admission-faithful forecast: p50/p90 elapsed time to drain, USD and
 [ORB-18691] (`MODEL_VERSION` 9, `inputs.admission_factors.regression_rework: 1`) adds regression rework:
 
 - **Risk.** One shared `task_riskiness_model` scores the initial cohort. Its probability is consumed unchanged. A missing estimate uses a shrunk, supported joint crew × complexity prior, else the supported workspace base rate (both at the configured risk minimum support). `risk_prior_fallbacks` counts those tasks; `risk_unestimated` counts missing supported priors. The original `riskiness` object stays null where the task API has no estimate. Predictions and stored tasks include it, `regression_probability` and `regression_probability_basis` (`estimate`, `crew_complexity`, `workspace`, `unsupported`), plus bundle sample count and basis.
-- **Bundles.** Completed fixes in the delivery lookback with invocation evidence and usable footprints supply distinct historical donors. Bundles group their `regression_from` links by original task, preserving multiplicity and non-negative original-done-to-filing delays. Origins may precede the delivery lookback. Matching origin complexity/crew bundles are preferred at five observations, else the workspace bundle pool; a nonempty pool below five remains drawable and is counted as thin. No ordinary delivery substitutes for missing fix history. A measured fix without usable invocation/footprint or origin-done evidence makes adjusted totals unavailable instead of silently shrinking its bundle. Known initial fixes suppress their observed copies; shared multi-culprit donors count once per scenario.
+- **Bundles.** Completed fixes in the delivery lookback with invocation evidence and usable footprints supply distinct historical donors. Bundles group their `regression_from` links by original task, preserving multiplicity and non-negative original-done-to-filing delays. Origins may precede the delivery lookback. Matching origin complexity/crew bundles are preferred at five observations, else the workspace bundle pool; a nonempty pool below five remains drawable and is counted as thin. No ordinary delivery substitutes for missing fix history. A measured fix without usable invocation/footprint or origin-done evidence makes adjusted totals unavailable instead of silently shrinking its bundle; from model 14 that applies only to the pools the fix's origins join, after recovery from durable history and with non-sample links excluded (see [Shipped so far](#shipped-so-far)). Known initial fixes suppress their observed copies; shared multi-culprit donors count once per scenario.
 - **Admission.** After an initial task finishes, a Bernoulli draw selects a bundle with its risk probability. Fixes enter backlog after their detection delay, using donor priority/tags, latent locks and attempt scripts through the same admission and gap-fit pass. Conflict rows are frozen once and remapped for generated instances; instances of the same editing donor conflict. Future scheduled fixes keep an otherwise idle queue open. Detections beyond 90 days are counted and excluded from bounded spend. Only initial tasks generate new regression work.
-- **Response.** Both scenarios add `regression_rework` with `available`, `expected_followups`, follow-up count/work-hour/token/USD quantiles, `generation_limit: 1`, expected `detection_outside_horizon` and history support. Initial complexity rows exclude synthetic work; `arrival_work` separates exogenous work. Missing fix metrics propagate null. Unsupported priors or fix evidence null the adjusted scenario totals/probabilities and retain an explicit `pre_regression_baseline`. Coverage adds prior/missing-risk and missing/thin-regression-history counts.
+- **Response.** Both scenarios add `regression_rework` with `available`, `expected_followups`, follow-up count/work-hour/token/USD quantiles, `generation_limit: 1`, expected `detection_outside_horizon` and history support. Initial complexity rows exclude synthetic work; `arrival_work` separates exogenous work. Missing fix metrics propagate null. Unsupported priors or fix evidence null the adjusted scenario totals/probabilities and retain an explicit `pre_regression_baseline`; from model 14 the fix-evidence part is per sampled pool, with reasons. Coverage adds prior/missing-risk and missing/thin-regression-history counts.
 - **Arrivals.** Gross seven-day filing rates remain. `adjusted_per_day` excludes `regression_from` filings (`excluded_regression_filings`). Arrivals sample a completed historical footprint donor by source class at five samples, else the workspace donor pool, including observed no-diff work; its measured delivery and resolved outcome pool supply the attempt script. Missing donor support makes the arrivals estimate unavailable. `arrivals.coverage` retains its delivery/metric counts and adds donor and class-fallback support. `arrival_conflicts` is `historical_footprint_donors`; `arrival_resources` is `donor_profile`.
 - **Storage/scoring.** Model-9 rework-inclusive totals stay `provisional` until their 90-day observation cutoff. Reads combine the newest 60 snapshots with up to 60 mature model-9-or-later snapshots per version. Actual first-generation fixes are matched by `regression_from` to the original cohort, including filings after it first emptied, deduplicated and charged only if absent from that cohort. Spend is bounded at the horizon; a crossing invocation has unknown tokens/USD. Each version reports aggregate rework count/hour/token/USD hit rates. Old versions retain their scoring semantics.
 
@@ -392,6 +438,7 @@ All six implementation tasks carry `backlog-forecast-v2` and depend on this scop
 | [ORB-19361] | Shipped: riskiness estimator 2, a size-based fit on declared files or lines changed with size-band evidence (model 12). |
 | [ORB-19376] | Shipped: riskiness estimator 3 keeps finite fits at nearby sizes (centered covariate, threshold separation check), so they estimate instead of falling back (model 13). |
 | [ORB-18691] | Shipped: risk-driven regression bundles, donor admission/arrivals, expected rework, and 90-day mature aggregate scoring (model 9, factor 1); also depends on [ORB-18690]. |
+| [ORB-19961] | Shipped: legacy fix footprints recovered from durable history, classified fix-history gaps and exclusions, and support scoped to the sampled pool (model 14, regression rework factor 2). |
 
 ## Task References
 
@@ -407,5 +454,6 @@ All six implementation tasks carry `backlog-forecast-v2` and depend on this scop
 - [ORB-18859] — stores retry-inclusive per-task work and spend (model 10).
 - [ORB-19361] — replaces the per-file riskiness estimator with the size-based fit (model 12).
 - [ORB-19615] — serves the default read from the stored snapshot, with `refresh=1` for a live recompute.
+- [ORB-19961] — recovers legacy fix history and scopes regression support to the sampled pool (model 14).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

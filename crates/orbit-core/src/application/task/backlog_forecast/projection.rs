@@ -91,7 +91,7 @@ fn forecast_coverage(context: &ForecastProjection, proposed: bool) -> Value {
         } else if rework.prior_basis[index] != "estimate" {
             bump("risk_prior_fallbacks");
         }
-        if rework.pools[index].is_empty() || rework.missing_fix_history > 0 {
+        if !rework.history_supported(index) {
             bump("regression_history_missing");
         } else if rework.pools[index].len() < model::MIN_CELL_SAMPLES {
             bump("regression_history_thin");

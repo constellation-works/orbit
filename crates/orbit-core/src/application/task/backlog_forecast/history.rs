@@ -12,12 +12,15 @@ use super::assembly::ARRIVAL_DAYS;
 use super::options::{DEFAULT_LOOKBACK_DAYS, MIN_HISTORY_TASKS, Options};
 use super::outcomes::TaskEpisodes;
 use super::persistence::SCORED_FORECASTS;
-use super::{outcomes, scoring};
+use super::{outcomes, rework, scoring};
 
 pub(super) struct LoadedForecastHistory {
     pub(super) tasks: HashMap<String, Task>,
     pub(super) stored: Vec<StoredBacklogForecast>,
     pub(super) done_at: HashMap<String, DateTime<Utc>>,
+    /// Each completed regression fix's footprint as its durable history
+    /// recorded it, for a fix whose current selectors no longer give one.
+    pub(super) recorded_footprints: HashMap<String, Vec<String>>,
     pub(super) task_episodes: HashMap<String, TaskEpisodes>,
     pub(super) history_rows: Vec<orbit_store::contracts::TaskTerminalTransition>,
     pub(super) lookback_start: DateTime<Utc>,
@@ -237,6 +240,28 @@ pub(super) fn load_forecast_history(
             }
         }
     }
+    // Legacy fixes can carry empty or since-changed selectors. Their
+    // completed history (already read above for done) can still name the
+    // footprint delivery recorded; the task record is never rewritten.
+    let mut recorded_footprints: HashMap<String, Vec<String>> = HashMap::new();
+    for task in tasks.values() {
+        if !task
+            .relations
+            .iter()
+            .any(|link| link.relation_type == TaskRelationType::RegressionFrom)
+        {
+            continue;
+        }
+        let Some(done) = done_at.get(task.id.as_str()).copied() else {
+            continue;
+        };
+        if let Some(history) = cached_history(runtime, &mut histories, task.id.as_str()) {
+            let selectors = rework::recorded_fix_footprint(history, done);
+            if !selectors.is_empty() {
+                recorded_footprints.insert(task.id.to_string(), selectors);
+            }
+        }
+    }
     drop(histories);
     let attempted = task_episodes.iter().any(|(_, episodes)| {
         episodes
@@ -248,6 +273,7 @@ pub(super) fn load_forecast_history(
         tasks,
         stored,
         done_at,
+        recorded_footprints,
         task_episodes,
         history_rows,
         lookback_start,

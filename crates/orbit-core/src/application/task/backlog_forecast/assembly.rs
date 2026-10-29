@@ -190,7 +190,13 @@ pub(super) fn assemble_forecast_simulation(
 
     let risk_model = runtime.task_riskiness_model()?;
     let mut rework = rework::RegressionRework {
-        donors: rework::collect_forecast_donors(tasks, history, episodes, waits),
+        donors: rework::collect_forecast_donors(
+            tasks,
+            &loaded.recorded_footprints,
+            history,
+            episodes,
+            waits,
+        ),
         bundles: Vec::new(),
         pools: Vec::new(),
         pool_basis: Vec::new(),
@@ -198,7 +204,9 @@ pub(super) fn assemble_forecast_simulation(
         prior_basis: Vec::new(),
         risks: Vec::new(),
         known_origins: BTreeMap::new(),
-        missing_fix_history: 0,
+        gaps: Vec::new(),
+        pool_gaps: Vec::new(),
+        excluded_links: BTreeMap::new(),
     };
     for task in &queued {
         let risk = risk_model.estimate(task);
@@ -210,20 +218,7 @@ pub(super) fn assemble_forecast_simulation(
         rework.prior_basis.push(basis);
         rework.risks.push(json!(risk));
     }
-    rework.missing_fix_history = tasks
-        .values()
-        .filter(|task| {
-            done_at
-                .get(task.id.as_str())
-                .is_some_and(|at| *at >= lookback_start)
-                && task
-                    .relations
-                    .iter()
-                    .any(|link| link.relation_type == TaskRelationType::RegressionFrom)
-                && !rework.donors.iter().any(|donor| donor.task.id == task.id)
-        })
-        .count();
-    rework.build_regression_bundles(tasks, done_at, &items);
+    rework.build_regression_bundles(tasks, done_at, history, lookback_start, &items);
 
     let (concurrency, concurrency_source) = match options.concurrency {
         Some(requested) => (u64::from(requested), "requested"),

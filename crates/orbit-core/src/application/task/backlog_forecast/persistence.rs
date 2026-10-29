@@ -126,6 +126,7 @@ pub(super) fn persist_forecast(
                     "regression_probability_basis": rework.prior_basis[index],
                     "regression_bundle_samples": rework.pools[index].len(),
                     "regression_bundle_basis": rework.pool_basis[index],
+                    "regression_history_gaps": rework.pool_gaps[index].len(),
                     "cell_samples": resolved.cell_samples,
                     "review_mode": item.review_mode,
                     "review_mode_source": item.review_mode_source,
