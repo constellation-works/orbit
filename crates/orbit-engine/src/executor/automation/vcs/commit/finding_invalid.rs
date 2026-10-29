@@ -91,19 +91,41 @@ impl Verifier for FindingInvalid {
 }
 
 /// Whether the task's report claims this run: it names this run or one in
-/// its retry lineage, or is unreadable, which verification then refuses. A
-/// report an earlier, unrelated run left behind never shadows this run's
-/// no-diff or already-landed evidence.
+/// its retry lineage. An unreadable report claims this run only when its
+/// `run_id` still decodes and names this run or its lineage; a report from
+/// an earlier, unrelated run — or text that names no run — never shadows
+/// this run's no-diff or already-landed evidence. A report that does name
+/// this run still fails verification, and the refusal names the parse error.
 pub(super) fn claims_run<H: RuntimeHost + ?Sized>(
     host: &H,
     task: &Task,
     run_id: &str,
 ) -> Result<bool, OrbitError> {
-    match read_report(host, task) {
-        Ok(Some(report)) => run_in_lineage(host, run_id, &report.run_id),
-        Ok(None) => Ok(false),
-        Err(OrbitError::Execution(_)) => Ok(true),
-        Err(error) => Err(error),
+    let artifact = match host.get_task_artifact(&task.id, ARTIFACT) {
+        Ok(artifact) => artifact,
+        Err(OrbitError::Execution(_)) => return Ok(true),
+        Err(error) => return Err(error),
+    };
+    let Some(artifact) = artifact else {
+        return Ok(false);
+    };
+    match serde_json::from_slice::<FindingInvalidReport>(&artifact.content) {
+        Ok(report) => run_in_lineage(host, run_id, &report.run_id),
+        Err(_) => {
+            let claimed = serde_json::from_slice::<Value>(&artifact.content)
+                .ok()
+                .and_then(|value| {
+                    value
+                        .get("run_id")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                })
+                .unwrap_or_default();
+            if claimed.is_empty() {
+                return Ok(false);
+            }
+            run_in_lineage(host, run_id, &claimed)
+        }
     }
 }
 
