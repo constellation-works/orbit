@@ -46,6 +46,15 @@ def is_digest(v): return isinstance(v, str) and v.startswith("sha256:") and len(
 
 def _ts(v): return isinstance(v, str) and len(v) >= 10 and v[4] == "-" and v[7] == "-"
 
+def _is_iso8601(v):
+    if not isinstance(v, str) or not v.strip():
+        return False
+    try:
+        datetime.fromisoformat(v.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return True
+
 def _validate_human_label_import(label, case_id, case_expected, manifest_snapshot):
     errs = []
     where = f"holdout case {case_id}: label"
@@ -368,6 +377,8 @@ def check_split(ds, manifest, prior_holdout_ids):
     if not isinstance(hid, str) or not hid.strip(): errs.append("manifest holdout_id must be a non-empty string")
     if hid in (prior_holdout_ids or []): errs.append(f"holdout_id {hid} already used/opened; reused holdout IDs are rejected")
     if hid in manifest.get("previously_opened_holdout_ids", []): errs.append(f"holdout_id {hid} listed in previously_opened_holdout_ids")
+    if not _is_iso8601(manifest.get("intake_snapshot_at")):
+        errs.append("manifest intake_snapshot_at must be ISO-8601")
     cases = {c["case_id"]: c for c in ds.get("cases", [])}
     assign = manifest.get("assignments", {})
     seen_split = {}

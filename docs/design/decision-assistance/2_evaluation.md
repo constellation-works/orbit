@@ -81,6 +81,8 @@ A split manifest (`check-split`) assigns each case to `train`, `dev` or
 - the same `family_id` (task family or normalized failure family) or subject
   appears on both sides of the holdout boundary;
 - a `holdout_id` was previously opened/used (reused holdouts are rejected);
+- the manifest `intake_snapshot_at` is missing or not ISO-8601 (the leakage
+  bound needs a snapshot to compare against);
 - any evidence `collected_at` is after the manifest `intake_snapshot_at`
   (no leakage from later outcomes);
 - a holdout case is not `independent_human` labeled;
