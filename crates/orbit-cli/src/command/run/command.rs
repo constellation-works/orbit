@@ -65,18 +65,18 @@ stage counts, and review rebuilds still use repository build-budget slots.
 {usage-heading} {usage}
 
 Workflows:
-  auto        Drain the workspace backlog for a window; --stop ends new admissions
-  ship        Ship backlog or explicitly selected tasks through the gated task pipeline
-  task-pilot  Preflight proposed/backlog tasks and persist validated selectors
-  job         Run an arbitrary job by ID
-  agent       Invoke an agent on the host for exploration or debugging (operator only)
+  auto         Drain the workspace backlog for a window; --stop ends new admissions
+  ship         Ship backlog or explicitly selected tasks through the gated task pipeline
+  task-pilot   Preflight proposed/backlog tasks and persist validated selectors
+  job          Run an arbitrary job by ID
+  agent        Invoke an agent on the host for exploration or debugging (operator only)
 
 Audits:
-  history    Show recent job runs filtered by job, task, state or time
-  show       Show structured state and step summary for a job run
-  logs       Print raw stdout/stderr captured for a job run
-  events     Show audit events recorded for a job run
-  trace      Show audit event parent/child trace for a job run
+  history      Show recent job runs filtered by job, task, state or time
+  show         Show structured state and step summary for a job run
+  logs         Print raw stdout/stderr captured for a job run
+  events       Show audit events recorded for a job run
+  trace        Show audit event parent/child trace for a job run
   settlements  Show failure and release settlements claimed leaves sent this owner
 
 Maintenance:

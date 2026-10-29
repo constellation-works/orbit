@@ -243,6 +243,186 @@ fn help_matches_the_shipped_surface() {
     check_help_goldens(&root, update, &home, &work);
 }
 
+/// Grouped `orbit run` / `orbit task` help must keep every description in one
+/// column with a clear gap, and never stack a description onto its own line in
+/// piped output [ORB-19912]. Piped output is width 0, so this is the wide
+/// alignment boundary; narrow TTY wrapping is validated manually via PTY
+/// captures (see execution summary), not here.
+#[test]
+fn grouped_command_help_stays_aligned_without_stacked_rows() {
+    let temp = tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    let work = temp.path().join("work");
+    fs::create_dir_all(&home).expect("fixture home");
+    fs::create_dir_all(&work).expect("fixture work");
+
+    let run_sections: &[(&str, &[&str])] = &[
+        ("Workflows", &["auto", "ship", "task-pilot", "job", "agent"]),
+        (
+            "Audits",
+            &["history", "show", "logs", "events", "trace", "settlements"],
+        ),
+        (
+            "Maintenance",
+            &["cancel", "concurrency", "extend", "readiness", "profiles"],
+        ),
+    ];
+    let task_sections: &[(&str, &[&str])] = &[
+        (
+            "Tasks",
+            &[
+                "add", "update", "archive", "list", "eligible", "show", "artifact",
+            ],
+        ),
+        (
+            "Health",
+            &[
+                "lint",
+                "flow",
+                "locks",
+                "review-reset",
+                "reconcile-review",
+                "retry-handoff",
+                "recover-claim",
+                "revoke-handoff",
+                "requeue",
+                "recheck-blocked",
+                "settle-merged",
+            ],
+        ),
+        ("Bundles", &["export", "import", "publication", "reindex"]),
+    ];
+
+    for family in ["run", "task"] {
+        let sections = if family == "run" {
+            run_sections
+        } else {
+            task_sections
+        };
+        for flag in ["--help", "-h"] {
+            let help = read_help_with_flag(&[family], flag, &home, &work);
+            check_grouped_sections_aligned(family, flag, &help, sections);
+        }
+    }
+}
+
+fn read_help_with_flag(args: &[&str], flag: &str, home: &Path, work: &Path) -> String {
+    let mut command = cargo_bin_cmd!("orbit");
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    let output = command
+        .current_dir(work)
+        .env("HOME", home)
+        .env("USERPROFILE", home)
+        .env_remove("ORBIT_FORMAT")
+        .env_remove("ORBIT_SKIP_HOST_PREREQUISITES")
+        .args(args)
+        .arg(flag)
+        .output()
+        .expect("run orbit help");
+    assert!(
+        output.status.success(),
+        "`orbit {} {flag}` failed: {}",
+        args.join(" "),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).expect("help is UTF-8")
+}
+
+fn check_grouped_sections_aligned(
+    family: &str,
+    flag: &str,
+    help: &str,
+    sections: &[(&str, &[&str])],
+) {
+    let lines: Vec<&str> = help.lines().collect();
+    let mut template_columns = Vec::new();
+    for (heading, expected) in sections {
+        let want = format!("{heading}:");
+        let start = lines
+            .iter()
+            .position(|line| *line == want)
+            .unwrap_or_else(|| {
+                panic!("`orbit {family} {flag}` missing section `{heading}`");
+            });
+        let end = lines[start + 1..]
+            .iter()
+            .position(|line| {
+                sections
+                    .iter()
+                    .any(|(other, _)| *line == format!("{other}:"))
+                    || *line == "Options:"
+            })
+            .map(|offset| start + 1 + offset)
+            .unwrap_or(lines.len());
+        let mut seen = Vec::new();
+        let mut columns = Vec::new();
+        for line in &lines[start + 1..end] {
+            if line.trim().is_empty() {
+                continue;
+            }
+            assert!(
+                line.starts_with("  "),
+                "`orbit {family} {flag}` `{heading}` row not indented: {line:?}"
+            );
+            let first = line.split_whitespace().next().unwrap_or_else(|| {
+                panic!("`orbit {family} {flag}` `{heading}` empty row");
+            });
+            assert!(
+                expected.contains(&first),
+                "`orbit {family} {flag}` `{heading}` stacked or unknown row: {line:?} \
+                 (descriptions must stay on the command line, not a stacked line)"
+            );
+            seen.push(first);
+            let name_pos = line.find(first).expect("row contains its name");
+            assert_eq!(
+                name_pos, 2,
+                "`orbit {family} {flag}` `{heading}` name not at column 2: {line:?}"
+            );
+            let name_end = name_pos + first.len();
+            let gap = line[name_end..]
+                .find(|c: char| c != ' ')
+                .unwrap_or_else(|| {
+                    panic!("`orbit {family} {flag}` `{heading}` missing description: {line:?}")
+                });
+            assert!(
+                gap >= 2,
+                "`orbit {family} {flag}` `{heading}` needs a clear separator after `{first}`: {line:?}"
+            );
+            columns.push(name_end + gap);
+        }
+        assert_eq!(
+            seen.len(),
+            expected.len(),
+            "`orbit {family} {flag}` `{heading}` missing commands"
+        );
+        for name in *expected {
+            assert!(
+                seen.contains(name),
+                "`orbit {family} {flag}` `{heading}` missing `{name}`"
+            );
+        }
+        let first_column = columns.first().unwrap_or_else(|| {
+            panic!("`orbit {family} {flag}` `{heading}` has no rows");
+        });
+        for column in &columns {
+            assert_eq!(
+                column, first_column,
+                "`orbit {family} {flag}` `{heading}` descriptions misaligned"
+            );
+        }
+        template_columns.push(*first_column);
+    }
+    let first = template_columns.first().expect("template has sections");
+    for column in &template_columns {
+        assert_eq!(
+            column, first,
+            "`orbit {family} {flag}` sections use different description columns"
+        );
+    }
+}
+
 #[test]
 fn update_creates_missing_family_directories_but_validation_stays_strict() {
     let temp = tempdir().expect("tempdir");
