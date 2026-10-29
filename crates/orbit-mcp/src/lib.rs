@@ -78,6 +78,10 @@ pub trait McpHost: Send + Sync + 'static {
         BTreeSet::new()
     }
 
+    /// Execute one canonicalized call and return its finished result. The
+    /// host applies the operation's result policy (such as `orbit.task.list`'s
+    /// default compact rows); the adapter renders the value without per-tool
+    /// shaping of its own.
     fn call_tool(
         &self,
         name: &str,

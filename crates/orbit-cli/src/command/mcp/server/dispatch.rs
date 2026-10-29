@@ -7,6 +7,7 @@ use orbit_cmd::task_owner::WorkspaceIdentity;
 use orbit_common::OrbitError;
 use orbit_core::OrbitRuntime;
 use orbit_core::adapter::command::ToolEntryPoint;
+use orbit_core::application::task::{TaskListResultPolicy, TaskListResultProfile};
 use orbit_mcp::McpHost;
 use orbit_types::tool::{McpToolDefinition, McpToolScope, ToolSessionContext};
 use serde_json::Value;
@@ -109,6 +110,22 @@ impl McpHost for ServerMcpHost {
     }
 
     fn call_tool(
+        &self,
+        name: &str,
+        input: Value,
+        context: ToolSessionContext,
+    ) -> Result<Value, OrbitError> {
+        // Decided before the input moves into the call. The federated mux's
+        // in-process destination reaches Core through this method too.
+        let list_policy =
+            TaskListResultPolicy::for_call(name, &input, TaskListResultProfile::Default);
+        self.call_public_tool(name, input, context)
+            .map(|value| list_policy.finalize(value))
+    }
+}
+
+impl ServerMcpHost {
+    fn call_public_tool(
         &self,
         name: &str,
         input: Value,

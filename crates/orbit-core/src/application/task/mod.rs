@@ -34,6 +34,7 @@ pub(crate) mod legacy_decisions;
 mod lifecycle;
 pub(crate) mod light_delivery;
 mod lint;
+mod list_result;
 mod listing;
 pub(crate) mod metadata;
 mod mutation_proposals;
@@ -119,6 +120,7 @@ pub(crate) use finding_verification::{
 use job_port::CrewPools;
 pub(in crate::application) use job_port::TaskJobPort;
 pub use lint::{TaskLintFinding, TaskLintReport, TaskLintSeverity};
+pub use list_result::{TaskListResultPolicy, TaskListResultProfile};
 pub use listing::{
     TaskCandidateKey, TaskCandidateKeys, TaskCandidates, TaskListFilter, TaskListQuery, TaskPage,
     TaskRow,
