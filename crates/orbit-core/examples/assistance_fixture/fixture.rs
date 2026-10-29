@@ -1,4 +1,7 @@
 //! Manual public-boundary fixtures; all responses and labels are synthetic.
+#[path = "../../src/adapter/decisions/send_error.rs"]
+mod send_error;
+
 use chrono::{DateTime, Duration, Utc};
 use orbit_config::assistance::{AssistancePolicy, AssistanceSettings};
 use orbit_core::adapter::decisions::{
@@ -24,6 +27,22 @@ use std::sync::{
 pub(super) type FixtureResult<T = ()> = Result<T, Box<dyn Error>>;
 pub(super) const CREDENTIAL: &str = "fixture-project-credential-only";
 const SUPPLIED: &str = "fixture-secret\"with\nencoding";
+
+pub(super) fn ambiguous_non_timeout_send_failure_reason() -> AssistanceReason {
+    send_error::decisions_send_failure_reason(send_error::DecisionsSendFailureClass::Other)
+}
+
+pub(super) fn builder_send_failure_reason() -> AssistanceReason {
+    send_error::decisions_send_failure_reason(send_error::DecisionsSendFailureClass::Builder)
+}
+
+pub(super) fn connect_send_failure_reason() -> AssistanceReason {
+    send_error::decisions_send_failure_reason(send_error::DecisionsSendFailureClass::Connect)
+}
+
+pub(super) fn timeout_send_failure_reason() -> AssistanceReason {
+    send_error::decisions_send_failure_reason(send_error::DecisionsSendFailureClass::Timeout)
+}
 
 pub(super) struct FixtureCredential(pub(super) AtomicUsize);
 impl AssistanceCredentialSource for FixtureCredential {
@@ -243,6 +262,15 @@ impl AssistanceFixture {
                 status: 200,
                 body: serde_json::to_vec(&body)?,
             }));
+        Ok(())
+    }
+
+    pub(super) fn fail_send(&self, reason: AssistanceReason) -> FixtureResult {
+        self.transport
+            .replies
+            .lock()
+            .map_err(|_| "reply lock")?
+            .push_back(Err(reason));
         Ok(())
     }
 
