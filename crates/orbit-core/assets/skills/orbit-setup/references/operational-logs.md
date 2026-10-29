@@ -227,10 +227,15 @@ or a pull request, so there is nothing to re-run or rebuild by hand.
 Inspect the hold through these read-only surfaces:
 
 ```bash
-orbit run show <run-id> --json
+orbit run show <run-id> --no-reconcile --json
 orbit task show <task-id>
 orbit run readiness <task-id> --json
 ```
+
+The `--no-reconcile` flag reads stored run records without reconciling stale
+runs or settling orphaned pull claims. The default `orbit run show` command can
+reconcile a stale run, release its task reservations, and settle orphaned pull
+claims, so it is not read-only.
 
 `orbit run show` names the marker (`provider=<name>`, with
 `account=<crew>` for a crew account), the diagnostic code, and whether the
