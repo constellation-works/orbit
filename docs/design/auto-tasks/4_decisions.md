@@ -170,7 +170,9 @@ The scheduler pass was already a stateless, cursor-driven due evaluator — the 
 - [ORB-12950] — routes managed auto-task writes to the host definition root.
 - [ORB-12718] — auto-task definitions are per-user checkout state, not git-versioned records.
 - [ORB-12237] — moves auto-task evaluation into the host clock tick and retires the scheduler routine/job/activity.
-- [ORB-12698] — skips the mint on a quiet branch or an unanswerable precondition.
+- [ORB-12698] — skips minting on a quiet branch only when the precondition
+  conclusively finds no work; an inconclusive precondition still mints and
+  reports its reason.
 - [ORB-10149] — Shipped the auto-task primitive (record, scheduler, CRUD, assets).
 - [ORB-10148] — Added the QA definition and no-diff workflow exemption.
 - ORB-10146 — qa-sweep v2 worker-invoked QA agent pass; set the wall-clock,

@@ -829,7 +829,10 @@ to change; implementation scope and defaults still require approval.
 - [ORB-11333] — implements review timing and content-specific coverage exclusions.
 - [ORB-12118] — exempts `no-diff-expected` tasks from assessed-complexity admission.
 - [ORB-13638] — makes task-pilot freshness inputs configurable.
-- [ORB-14476] — retries a stale claim against its frozen source.
+- [ORB-14476] — releases claims whose frozen source is known to be superseded
+  without retrying that source; the next admission claims them afresh at the
+  current head and recomputes freshness. An unavailable source comparison can
+  still follow ordinary-failure handling.
 - [ORB-15191] — bounds how long multi-slot admission waits for a task pilot to prepare empty-context backlog work.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -542,8 +542,9 @@ encode this repository's branches and gates. Re-init preserves them:
   shipped definition's canonical `code-review` name.
 - ORB-12237 — moved auto-task evaluation into the host clock tick and retired
   the scheduler routine, job and activity.
-- ORB-14909 — settings-table migration when enabling or re-crewing a bundled
-  definition forks the template.
+- ORB-14909 — keeps settings-only enable or crew changes to a managed bundled
+  definition in the settings table without forking its body; body edits and
+  edits to existing forks or user-authored definitions still write a file.
 - ORB-12931 — Added the disabled weekly `run-failure-patterns` default that
   mines unfiled recurring run failures.
 - ORB-14439 — `run-failure-patterns` files proposed fix tasks, reads follower
@@ -616,8 +617,9 @@ encode this repository's branches and gates. Re-init preserves them:
 - ORB-11115 / ORB-11383 — Retired the shipped CI-failure auto-task;
   runner workflows only emit fail-open run/job/commit provenance, while the
   host-owned `ci_failure_sweep` routine performs durable CI-failure filing.
-- ORB-13992 — made after-landing review the `delivery-code-review` definition's
-  own `enabled` flag and removed `operation.review_policy`.
+- ORB-13992 — preserves deprecated, warned `operation.review_policy` as a
+  legacy input: `after-landing` enables an otherwise-unconfigured
+  `delivery-code-review` definition until its flag is explicitly configured.
 - ORB-18948 — corrected the `full-code-review` partition rules after a run
   diverged from what the docs stated.
 - ORB-19455 — corrected the follower-settlement dedupe rule to the three-part
