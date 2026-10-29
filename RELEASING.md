@@ -1,7 +1,7 @@
 ---
 type: context
 summary: "Release checklist: versioning, bumps, tagging, CI, promotion and hotfixes"
-last_validated: 2026-10-27
+last_validated: 2026-10-29
 ---
 
 # Releasing Orbit
@@ -55,7 +55,7 @@ The lists above are the definition. Two records carry it from the task to the re
 - **`breaking-change` tag.** The implementer adds it to a task whose change is breaking, and the reviewer confirms it. A landed task with the tag makes the release a minor bump.
 - **`Breaking:` note.** The task's execution summary has one line starting `Breaking:` with the migration as a phrase, for example `Breaking: orbit run ship-sweep removed → use orbit run auto drains or orbit run ship`. It becomes the task's Breaking Changes bullet.
 
-`scripts/release-breaking-changes.py` reads both for the landed tasks in a range. It also detects mechanical signals: a raised `SUPPORTED_SCHEMA_VERSION` or `SUPPORTED_LAYOUT_VERSION`; a command, flag or possible value gone from the CLI help goldens; a non-additive change in the MCP `tools/list` snapshot (tool or property removed or renamed, type changed, enum value removed, property newly required, or a required or enum constraint relaxed inside a `oneOf` branch); a field added to a `deny_unknown_fields` type in `orbit-types` or `orbit-store`; a new `DEPRECATED_CONFIG_KEYS` entry; or a removed seeded routine, activity or job asset. The bump is **minor** when any landed task carries the tag or any signal fires, otherwise **patch**. A signal on an untagged task is listed as *detected, untagged*.
+`scripts/release-breaking-changes.py` reads both for the landed tasks in a range. It also detects mechanical signals: a raised `SUPPORTED_SCHEMA_VERSION` or `SUPPORTED_LAYOUT_VERSION`; a command, flag or possible value gone from the CLI help goldens; a non-additive change in the MCP `tools/list` snapshot (tool or property removed or renamed, type changed, enum value removed, property newly required, or a required, enum or whole properties-map constraint relaxed inside a surviving `oneOf` branch); a field added to a `deny_unknown_fields` type in `orbit-types` or `orbit-store`; a new `DEPRECATED_CONFIG_KEYS` entry; or a removed seeded routine, activity or job asset. The bump is **minor** when any landed task carries the tag or any signal fires, otherwise **patch**. A signal on an untagged task is listed as *detected, untagged*.
 
 The detector can't see hidden flags, output-shape changes or new validation, so the tag is still needed for those.
 

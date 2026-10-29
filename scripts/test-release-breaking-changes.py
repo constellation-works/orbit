@@ -227,7 +227,9 @@ class FixtureRepo:
 
 class ReleaseBreakingChangesTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        scratch = SCRIPT.parent.parent / ".orbit/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        self.tmp = tempfile.TemporaryDirectory(prefix="release-breaking-", dir=scratch)
         self.addCleanup(self.tmp.cleanup)
         self.repo = FixtureRepo(Path(self.tmp.name) / "repo")
         self.orbit = Path(self.tmp.name) / "orbit"
@@ -609,6 +611,43 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         })
         self.assertEqual(report["bump"], "minor")
         self.assertEqual(report["next_version"], "0.36.0")
+
+    def test_removing_properties_keyword_inside_oneof_decides_minor(self):
+        # Deleting the whole map makes {kind: b} match both branches.
+        # Reverse the alternatives too, so surviving branch identity matters.
+        for surface in ("inputSchema", "outputSchema"):
+            with self.subTest(surface=surface):
+                tools = self.repo.mcp()
+                tools[0][surface] = {"type": "object", "oneOf": [
+                    {"type": "object", "required": ["kind"],
+                     "properties": {"kind": {"enum": ["a"]}}},
+                    {"type": "object", "required": ["kind"],
+                     "properties": {"kind": {"enum": ["b"]}}}]}
+                self.repo.write_mcp(tools)
+                self.repo.commit("chore: prepare properties fixture [ORB-64]")
+                self.repo.git("tag", "-f", "v0.35.0")
+                del tools[0][surface]["oneOf"][0]["properties"]
+                tools[0][surface]["oneOf"].reverse()
+                self.repo.write_mcp(tools)
+                self.repo.commit("fix: remove branch properties [ORB-65]")
+                report = self.report("--offline", "--range", "v0.35.0..HEAD")
+                self.assertEqual(report["bump"], "minor", report)
+                self.assertTrue(any(kind == "mcp-schema" and "properties" in detail
+                                    for _, kind, detail in self.signals(report)), report)
+
+    def test_removing_root_properties_keyword_stays_additive(self):
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"] = {"type": "object", "properties": {
+            "kind": {"enum": ["a"]}}, "required": ["kind"]}
+        self.repo.write_mcp(tools)
+        self.repo.commit("chore: prepare root properties fixture [ORB-64]")
+        self.repo.git("tag", "-f", "v0.35.0")
+        del tools[0]["inputSchema"]["properties"]
+        self.repo.write_mcp(tools)
+        self.repo.commit("fix: relax root properties [ORB-65]")
+        report = self.report("--offline", "--range", "v0.35.0..HEAD")
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
 
     def test_removing_root_enum_constraint_stays_additive(self):
         tools = self.repo.mcp()

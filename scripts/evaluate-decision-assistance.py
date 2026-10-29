@@ -59,16 +59,15 @@ def digest(text): return "sha256:" + hashlib.sha256(text.encode()).hexdigest()
 def crit_ref(index, text): return {"index": index, "text_digest": digest(text)}
 def is_digest(v): return isinstance(v, str) and v.startswith("sha256:") and len(v) == 71 and all(c in "0123456789abcdef" for c in v[7:])
 
-def _ts(v): return isinstance(v, str) and len(v) >= 10 and v[4] == "-" and v[7] == "-"
-
-def _is_iso8601(v):
-    if not isinstance(v, str) or not v.strip():
-        return False
+def _ts(value):
+    """Parse an ISO-8601 instant, or return None for invalid/naive input."""
+    if not isinstance(value, str):
+        return None
     try:
-        datetime.fromisoformat(v.replace("Z", "+00:00"))
+        timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
-        return False
-    return True
+        return None
+    return timestamp if timestamp.tzinfo is not None else None
 
 def _validate_human_label_import(label, case_id, case_expected, manifest_snapshot,
                                dataset_version=None):
@@ -87,7 +86,7 @@ def _validate_human_label_import(label, case_id, case_expected, manifest_snapsho
         if not _ts(label.get(field, "")):
             errs.append(f"{where}.{field} must be ISO-8601")
     if _ts(label.get("intake_snapshot_at", "")) and _ts(manifest_snapshot):
-        if label["intake_snapshot_at"] != manifest_snapshot:
+        if _ts(label["intake_snapshot_at"]) != _ts(manifest_snapshot):
             errs.append(f"{where}.intake_snapshot_at must match manifest intake_snapshot_at")
 
     record = label.get("second_label_or_adjudication")
@@ -201,7 +200,7 @@ def validate_dataset(ds):
             errs.append(f"{w}: synthetic labels must never be marked human_ground_truth")
         validate_packet(c.get("evidence_packet"), errs, w)
         ep = c.get("evidence_packet") or {}
-        if _ts(ep.get("collected_at", "")) and _ts(ds.get("intake_snapshot_at", "")) and ep["collected_at"] > ds["intake_snapshot_at"]:
+        if _ts(ep.get("collected_at", "")) and _ts(ds.get("intake_snapshot_at", "")) and _ts(ep["collected_at"]) > _ts(ds["intake_snapshot_at"]):
             errs.append(f"{w}: evidence collected after intake_snapshot_at")
         # criteria digests must match text
         crits = {cr.get("index"): cr for cr in ep.get("criteria", []) if isinstance(cr, dict)}
@@ -351,11 +350,9 @@ def score(ds, ansdoc):
     return report
 
 def _holdout_timestamp(value):
-    if not isinstance(value, str):
+    timestamp = _ts(value)
+    if timestamp is None:
         raise ValueError("holdout timestamps must be ISO 8601 strings with a timezone")
-    timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    if timestamp.tzinfo is None:
-        raise ValueError("holdout timestamps must include a timezone")
     return timestamp
 
 def _record_holdout_opening(holdout_id, format_version=None):
@@ -409,7 +406,7 @@ def check_split(ds, manifest, prior_holdout_ids):
     if not isinstance(hid, str) or not hid.strip(): errs.append("manifest holdout_id must be a non-empty string")
     if hid in (prior_holdout_ids or []): errs.append(f"holdout_id {hid} already used/opened; reused holdout IDs are rejected")
     if hid in manifest.get("previously_opened_holdout_ids", []): errs.append(f"holdout_id {hid} listed in previously_opened_holdout_ids")
-    if not _is_iso8601(manifest.get("intake_snapshot_at")):
+    if not _ts(manifest.get("intake_snapshot_at")):
         errs.append("manifest intake_snapshot_at must be ISO-8601")
     cases = {c["case_id"]: c for c in ds.get("cases", [])}
     assign = manifest.get("assignments", {})
@@ -435,11 +432,11 @@ def check_split(ds, manifest, prior_holdout_ids):
                 label, cid, c.get("expected"), manifest.get("intake_snapshot_at", ""),
                 ds.get("format_version")))
         ep = c.get("evidence_packet") or {}
-        if _ts(ep.get("collected_at", "")) and _ts(manifest.get("intake_snapshot_at", "")) and ep["collected_at"] > manifest["intake_snapshot_at"]:
+        if _ts(ep.get("collected_at", "")) and _ts(manifest.get("intake_snapshot_at", "")) and _ts(ep["collected_at"]) > _ts(manifest["intake_snapshot_at"]):
             errs.append(f"case {cid}: evidence after intake_snapshot_at")
-    if manifest.get("split_strategy_time"):
-        non = [cases[c]["evidence_packet"]["collected_at"] for c, s in seen_split.items() if s != "holdout" and c in cases]
-        hold = [cases[c]["evidence_packet"]["collected_at"] for c, s in seen_split.items() if s == "holdout" and c in cases]
+    if manifest.get("split_strategy_time") and not errs:
+        non = [_ts(cases[c]["evidence_packet"]["collected_at"]) for c, s in seen_split.items() if s != "holdout" and c in cases]
+        hold = [_ts(cases[c]["evidence_packet"]["collected_at"]) for c, s in seen_split.items() if s == "holdout" and c in cases]
         if non and hold and min(hold) <= max(non): errs.append("time holdout: earliest holdout evidence must be after latest train/dev evidence")
     if not errs:
         try:

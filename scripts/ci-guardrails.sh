@@ -556,6 +556,8 @@ fi
   run_guard "$repo_root/scripts/test-check-nextest-partitions.py"
   run_guard "$repo_root/scripts/test-ci-await-jobs.py"
   run_guard "$repo_root/scripts/test-evaluate-decision-assistance.py"
+  run_guard "$repo_root/scripts/test-audit-panics.py"
+  run_guard "$repo_root/scripts/test-smoke-claude-mcp.py"
   run_guard "$repo_root/scripts/test-ci-repack-nextest.py"
   run_guard "$repo_root/scripts/test-cpu-utilisation.py"
   run_guard "$repo_root/scripts/test-path-leases-listener-sudo.py"
