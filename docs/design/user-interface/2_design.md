@@ -333,8 +333,10 @@ and a simple **Start a window** card. Locks held has By file (default) and
 By task views, remembered for Tasks, and a task-ID filter. Log is the live,
 filterable tail; its tab names the worst level present. The active tab's
 first card (Auto-drain on Drain, Locks held, or the log) starts level with the
-first task block, with the tab bar above that line, and the dock ends with the
-list, so cards and list share top and bottom edges. `alignTasksDock` in
+first task block, with the tab bar above that line. The outer dock ends with
+the list; this bottom alignment applies to the dock, not every card. Auto-drain
+and Locks held keep their natural heights, while the Log panel fills its pane.
+`alignTasksDock` in
 `log-tail.js` measures the list's top and the card's depth inside the dock,
 sets `--tasks-dock-lead` on `#tasks-dock`, and re-levels on a tab switch or
 when the tab bar or anything above the list resizes. The status
