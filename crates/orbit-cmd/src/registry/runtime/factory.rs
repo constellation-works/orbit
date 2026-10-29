@@ -259,6 +259,18 @@ impl RegisteredRuntimeFactory {
         Self::initialize_with_overrides_mode(root_override, workspace_selector, true, true)
     }
 
+    /// Host-scoped inspection uses a registered checkout when one is selected
+    /// by cwd or `--workspace`, otherwise it reads host state from the global
+    /// root. An unregistered cwd must never become a workspace as a side
+    /// effect, and a foreign-generation join must not open the shared unbound
+    /// task partition for it [ORB-19676].
+    pub fn initialize_host_read_only_with_overrides(
+        root_override: Option<&Path>,
+        workspace_selector: Option<&str>,
+    ) -> Result<OrbitRuntime, OrbitError> {
+        Self::initialize_with_overrides_mode(root_override, workspace_selector, true, true)
+    }
+
     fn initialize_with_overrides_mode(
         root_override: Option<&Path>,
         workspace_selector: Option<&str>,

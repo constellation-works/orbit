@@ -44,6 +44,10 @@ pub enum RuntimeNeed {
     ReadOnly,
     /// Inspect host plugins without treating an unregistered cwd as a workspace.
     PluginReadOnly,
+    /// Host-scoped read without treating an unregistered cwd as a workspace
+    /// (workspace listing and inspection). An unregistered checkout reads host
+    /// state from the global root instead of failing or binding the cwd.
+    HostReadOnly,
     Forbidden,
     /// Bind the workspace that owns this task ID rather than the one the cwd
     /// or `--workspace` walk would pick [ORB-10797] [ORB-10961].
