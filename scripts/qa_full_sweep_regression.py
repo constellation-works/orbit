@@ -209,6 +209,7 @@ def self_test():
     retired_cases_orphan_proof_self_test(harness, scratch)
     scratch_cleanup_race_self_test(harness, scratch)
     builtin_refusal_self_test(harness, scratch)
+    builtin_refusal_self_test(harness, scratch, wire=True)
     with tempfile.TemporaryDirectory(prefix="qa-evidence-regression-", dir=scratch) as tmp:
         repo = Path(tmp)
         for directory in ["bin", "scripts", ".orbit/tmp", "browsers"]:
@@ -623,8 +624,8 @@ def self_test():
 
 
 
-def builtin_refusal_self_test(harness, scratch):
-    """Public main must never credit incomplete built-in refusal commands."""
+def builtin_refusal_self_test(harness, scratch, wire=False, cases=None):
+    """Public main rejects incomplete refusals and fabricated wire/index evidence."""
     with tempfile.TemporaryDirectory(prefix="qa-builtin-refusal-", dir=scratch) as tmp:
         repo = Path(tmp)
         for directory in ["bin", "scripts", ".orbit/tmp"]:
@@ -675,8 +676,64 @@ if refusal:
     print("fixture refusal", file=sys.stderr)
     raise SystemExit(0 if mode == "builtin-zero" else 7)
 body = {}
+if args[:2] == ["mcp", "serve"]:
+    [json.loads(line) for line in sys.stdin if line.strip()]  # Consume the request stream.
+    task = {"id": "QAF-1", "title": "QA behavioral fixture", "acceptance_criteria": ["fixture round trip"]}
+    responses = {
+        1: {"protocolVersion": "2025-03-26", "capabilities": {"tools": {}, "resources": {}}},
+        2: {"tools": [{"name": "orbit_task_show"}]},
+        3: {"structuredContent": {"workspaces": [{"name": "qa-primary"}]}},
+        4: {"structuredContent": task},
+        5: {"isError": True, "structuredContent": {"code": "not_found", "message": "Task QAF-1 not found"}},
+    }
+    envelopes = {key: {"jsonrpc": "2.0", "id": key, "result": value} for key, value in responses.items()}
+    case = mode.removeprefix("builtin-wire-")
+    if case == "missing-init":
+        del envelopes[1]
+    elif case in ("init-error", "task-rpc-error", "cross-rpc-refusal"):
+        key = 1 if case == "init-error" else 4 if case == "task-rpc-error" else 5
+        envelopes[key] = {"jsonrpc": "2.0", "id": key, "error": {"code": -32602, "message": "QAF-1 refused"}}
+    elif case == "task-error":
+        responses[4].update(responses[5])
+    elif case == "task-missing":
+        responses[4] = {"content": [{"type": "text", "text": "QAF-1"}]}
+        envelopes[4]["result"] = responses[4]
+    elif case in ("wrong-id", "wrong-title", "wrong-criteria"):
+        task[{"wrong-id": "id", "wrong-title": "title", "wrong-criteria": "acceptance_criteria"}[case]] = "wrong QAF-1"
+    elif case == "bad-version":
+        responses[1]["protocolVersion"] = "1900-01-01"
+    elif case == "missing-capabilities":
+        del responses[1]["capabilities"]
+    elif case == "bad-capabilities":
+        responses[1]["capabilities"] = {"tools": None}
+    elif case == "bad-jsonrpc":
+        envelopes[1]["jsonrpc"] = "1.0"
+    elif case == "task-bad-jsonrpc":
+        envelopes[4]["jsonrpc"] = "1.0"
+    elif case == "duplicate-init":
+        print(json.dumps(envelopes[1]))
+    elif case == "cross-success":
+        responses[5].pop("isError")
+    elif case == "wrong-init-id":
+        envelopes[1]["id"] = 99
+    elif case == "both-result-error":
+        envelopes[1]["error"] = {"code": -32603, "message": "failed"}
+    for value in envelopes.values():
+        print(json.dumps(value))
+    raise SystemExit(0)
+if "search" in args and "reindex" in args:
+    case = mode.removeprefix("builtin-wire-")
+    body = {"chunks": 3, "tasks": 1}
+    if case == "empty-reindex": body = {}
+    elif case == "unrelated-reindex": body = {"unrelated": 1}
+    elif case == "zero-reindex": body = {"chunks": 0, "tasks": 0}
+    elif case == "boolean-reindex": body = {"chunks": True, "tasks": True}
+    elif case == "string-reindex": body = {"chunks": "3", "tasks": "1"}
+    elif case == "empty-stdout": raise SystemExit(0)
+    print(json.dumps(body))
+    raise SystemExit(0)
 if "init" in args and "workspace" not in args:
-    if root.name == "migration-root":
+    if root.name == "migration-root" and not mode.startswith("builtin-wire-"):
         raise SystemExit(1)  # Stop after all shared refusal callers under test.
     root.mkdir(parents=True, exist_ok=True)
     (root / "config.toml").write_text("identity")
@@ -703,6 +760,10 @@ elif "config" in args:
     elif "show" in args:
         body = {"settings": {"machine.id": "hm_fixture", "machine.task_prefix": "QAF",
                              "machine.name": "qa-renamed" if (root / "renamed").exists() else "qa-machine"}}
+elif "search" in args:
+    body = {"id": "QAF-1", "title": "QA behavioral fixture"}
+elif "friction" in args:
+    body = {"description": "qa isolated friction marker"}
 elif "log" in args:
     if "orbit.qa.absent" not in args:
         print(Path(args[args.index("--path") + 1]).read_text().splitlines()[-1])
@@ -713,10 +774,25 @@ print(json.dumps(body))
         orbit.chmod(0o755)
         (repo / "scripts/test-qa-full-sweep.py").write_bytes(harness.read_bytes())
         inventory = json.loads(harness.with_name("qa-full-sweep-inventory.json").read_text())
-        names = {"workspace-boundary", "config-transaction", "machine-identity-transaction"}
+        names = ({"mcp-wire-boundary"} if wire else
+                 {"workspace-boundary", "config-transaction", "machine-identity-transaction"})
         scenarios = [item for item in inventory["scenarios"] if item["id"] in names]
         (repo / "scripts/qa-full-sweep-inventory.json").write_text(json.dumps({"scenarios": scenarios}))
-        for mode in ["complete", "timeout", "lost-result", "unverified-cleanup", "zero"]:
+        if wire:
+            # Keep unrelated built-ins out of the inventory while executing the
+            # real main -> run_builtins -> finalizer -> scenario decision path.
+            search = next(item for item in inventory["scenarios"] if item["id"] == "search-observability-boundary")
+            scenarios.append(search)
+            (repo / "scripts/qa-full-sweep-inventory.json").write_text(json.dumps({"scenarios": scenarios}))
+        modes = (["wire-" + case for case in [
+            "valid", "cross-rpc-refusal", "task-error", "task-rpc-error", "task-missing",
+            "wrong-id", "wrong-title", "wrong-criteria", "missing-init", "init-error",
+            "bad-version", "missing-capabilities", "bad-capabilities", "bad-jsonrpc",
+            "task-bad-jsonrpc", "duplicate-init", "wrong-init-id", "both-result-error",
+            "cross-success", "empty-reindex", "unrelated-reindex", "zero-reindex",
+            "boolean-reindex", "string-reindex", "empty-stdout"]] if wire else
+            ["complete", "timeout", "lost-result", "unverified-cleanup", "zero"])
+        for mode in (modes if cases is None else ["wire-" + case for case in cases]):
             (repo / "mode.json").write_text(json.dumps("builtin-" + mode))
             child = subprocess.run([sys.executable, str(driver), str(harness), str(repo), "--build-candidate"],
                                    cwd=repo, env={**os.environ,
@@ -724,6 +800,20 @@ print(json.dumps(body))
                                    capture_output=True, text=True, timeout=60)
             assert child.returncode == 0, (mode, child.stdout, child.stderr)
             report = json.loads((repo / ".orbit/tmp/report.json").read_text())
+            if wire:
+                case = mode.removeprefix("wire-")
+                reindex_bad = case in {"empty-reindex", "unrelated-reindex", "zero-reindex", "boolean-reindex", "string-reindex", "empty-stdout"}
+                mcp_good = case in {"valid", "cross-rpc-refusal"} or reindex_bad
+                mcp = next(item for item in report["results"] if item["scenario"] == "mcp-wire-boundary")
+                search = next(item for item in report["results"] if item["scenario"] == "search-observability-boundary"
+                              and "reindex" in item.get("command", []))
+                assert (mcp["outcome"] == "PASS") == mcp_good, (case, mcp)
+                assert bool(mcp["assertions"]) == mcp_good, (case, mcp)
+                assert (search["outcome"] == "PASS") != reindex_bad, (case, search)
+                assert bool(search["assertions"]) != reindex_bad, (case, search)
+                assert (report["decision"] == "PASS") == (case in {"valid", "cross-rpc-refusal"}), (case, report)
+                print("builtin-wire: " + case + " passed", flush=True)
+                continue
             refusals = [item for item in report["results"] if "fixture refusal" in item.get("stderr", "")
                         or item.get("exit_code") is None and item["scenario"] in names]
             assert len(refusals) == 6, (mode, report)

@@ -6,6 +6,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WRAPPER="$ROOT/scripts/rustc-compiler-cache.sh"
 TMP="$(mktemp -d)"
+NS_REAL_CARGO="$(command -v cargo)"
+NS_REAL_HOME="$HOME"
+NS_REAL_PYTHON="$(command -v python3)"
+export NS_REAL_CARGO NS_REAL_HOME
 trap 'rm -rf "$TMP"' EXIT
 
 fail() {
@@ -679,7 +683,19 @@ grep -Fq 'host compiler cache is disabled' "$ns_out" \
 # oversized logs. No production test-only switch or private helper is invoked.
 ns_diagnostic_bin="$TMP/ns-diagnostic-bin"
 mkdir -p "$ns_diagnostic_bin"
-printf '#!/usr/bin/env bash\nexit 0\n' > "$ns_diagnostic_bin/cargo"
+ln -s "$NS_REAL_PYTHON" "$ns_diagnostic_bin/python3"
+mkdir -p "$ROOT/.orbit/tmp"
+ns_fixture_root="$(mktemp -d "$ROOT/.orbit/tmp/compiler-cache-ns.XXXXXX")"
+trap 'rm -rf "$TMP" "$ns_fixture_root"' EXIT
+cat > "$ns_diagnostic_bin/cargo" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$1" == generate-lockfile ]]; then
+  # Use real workspace discovery offline; all compilation stays stubbed.
+  HOME="$NS_REAL_HOME" "$NS_REAL_CARGO" generate-lockfile --offline
+else
+  exit 0
+fi
+EOF
 cat > "$ns_diagnostic_bin/bwrap" <<'EOF'
 #!/usr/bin/env python3
 import os
@@ -756,12 +772,12 @@ chmod +x "$ns_diagnostic_bin/bwrap" "$ns_diagnostic_bin/cargo"
 
 assert_ns_diagnostics() {
   local stage="$1" c_status="$2" d_status="$3" e_status="$4"
-  local fixture="$TMP/ns-diagnostics-$stage-$c_status-$d_status"
+  local fixture="$ns_fixture_root/ns-diagnostics-$stage-$c_status-$d_status"
   mkdir -p "$fixture/scratch"
   set +e
   env -i HOME="$ns_home" PATH="$ns_diagnostic_bin:/usr/bin:/bin" \
     TMPDIR="$fixture/scratch" ORBIT_COMPILER_CACHE_BIN="$ns_sccache" \
-    ORBIT_COMPILER_CACHE_REQUIRE_NS=1 NS_DIAGNOSTIC_EVENTS="$fixture/events" \
+    ORBIT_COMPILER_CACHE_REQUIRE_NS=1 NS_REAL_CARGO="$NS_REAL_CARGO" NS_REAL_HOME="$NS_REAL_HOME" NS_DIAGNOSTIC_EVENTS="$fixture/events" \
     NS_FAIL_STAGE="$stage" NS_EXIT_C="$c_status" NS_EXIT_D="$d_status" NS_EXIT_E="$e_status" \
     "$ROOT/scripts/test-compiler-cache-namespaces.sh" >"$fixture/out" 2>"$fixture/err"
   local status=$?
@@ -811,11 +827,44 @@ assert_ns_diagnostics client-side-shared-tcp 37 0 0
 assert_ns_diagnostics client-side-shared-tcp 0 41 0
 assert_ns_diagnostics client-side-shared-tcp 37 41 0
 
+# Model immediate PID/PGID reuse after reaping, without creating/signaling any
+# process. Execute both embedded owners, including the independent watchdog.
+python3 - "$ROOT" <<'PYIDENTITY'
+from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(sys.argv[1]) / "scripts"))
+from compiler_cache_process_regression import group_lifetime_regression
+group_lifetime_regression(Path(sys.argv[1]))
+PYIDENTITY
+
+# Exercise the benchmark's actual namespace caller with checkout-local WORKDIR.
+# Only lockfile generation is real; builds, cache and namespace transport are fixtures.
+cat > "$ns_diagnostic_bin/git" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$1" == archive ]]; then
+  tar -cf - -C "$NS_BENCH_TREE" .
+else
+  printf 'fixture-head\n'
+fi
+EOF
+chmod +x "$ns_diagnostic_bin/git"
+ns_bench="$ns_fixture_root/ns-benchmark"
+mkdir -p "$ns_bench/tree" "$ns_bench/work"
+printf 'fixture\n' > "$ns_bench/tree/README.md"
+env -i HOME="$ns_home" PATH="$ns_diagnostic_bin:/usr/bin:/bin" \
+  NS_REAL_CARGO="$NS_REAL_CARGO" NS_REAL_HOME="$NS_REAL_HOME" NS_BENCH_TREE="$ns_bench/tree" \
+  ORBIT_COMPILER_CACHE_BIN="$ns_sccache" ORBIT_COMPILER_CACHE_REQUIRE_NS=1 \
+  ORBIT_COMPILER_CACHE_BENCH_DIR="$ns_bench/work" NS_DIAGNOSTIC_EVENTS="$ns_bench/events" \
+  "$ROOT/scripts/bench-compiler-cache.sh" >"$ns_bench/out" 2>"$ns_bench/err" \
+  || fail "checkout-local benchmark namespace caller failed: $(tail -c 2000 "$ns_bench/err")"
+grep -Fq 'test-compiler-cache-namespaces: ok' "$ns_bench/out" \
+  || fail "benchmark did not run its namespace fixture"
+
 # Linux namespace supervision must adopt/reap escaped grandchildren. The outer
 # fixture is itself a subreaper so even a broken candidate is fully cleaned up
 # at the independent watchdog deadline; it never leaves a test process behind.
 if [[ "$(uname -s)" == Linux ]]; then
-  python3 - "$ROOT/scripts/test-compiler-cache-namespaces.sh" "$TMP" \
+  python3 - "$ROOT/scripts/test-compiler-cache-namespaces.sh" "$ns_fixture_root" \
     "$ns_home" "$ns_diagnostic_bin" "$ns_sccache" <<'PYTIMEOUT'
 import ctypes
 import os
@@ -843,6 +892,7 @@ for scenario, stage, participants in [
     env = dict(HOME=home, PATH=fixture_bin + ":/usr/bin:/bin",
                TMPDIR=str(fixture / "scratch"), ORBIT_COMPILER_CACHE_BIN=sccache,
                ORBIT_COMPILER_CACHE_REQUIRE_NS="1", NS_SCENARIO=scenario,
+               NS_REAL_CARGO=os.environ["NS_REAL_CARGO"], NS_REAL_HOME=os.environ["NS_REAL_HOME"],
                NS_DIAGNOSTIC_EVENTS=str(fixture / "events"),
                # Cleanup must finish before this longer participant deadline.
                ORBIT_COMPILER_CACHE_NS_WAIT_SECONDS="10" if scenario == "failure-cleanup" else "1")
@@ -851,7 +901,16 @@ for scenario, stage, participants in [
         process = subprocess.Popen([script], env=env, stdout=out, stderr=err,
                                    start_new_session=True)
         try:
-            status = process.wait(timeout=5)
+            # Observe without reaping so finally still owns the group identity.
+            watch_end = start + 5
+            while True:
+                exited = os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+                if exited is not None:
+                    status = exited.si_status if exited.si_code == os.CLD_EXITED else -exited.si_status
+                    break
+                if time.monotonic() >= watch_end:
+                    raise subprocess.TimeoutExpired([script], 5)
+                time.sleep(0.01)
             elapsed = time.monotonic() - start
             output = (fixture / "err").read_text()
             assert status == (0 if scenario == "success" else 1), (scenario, status, output)
@@ -879,19 +938,28 @@ for scenario, stage, participants in [
                 pass
             deadline = time.monotonic() + 3
             while True:
-                children = Path(f"/proc/{os.getpid()}/task/{os.getpid()}/children").read_text().split()
+                children = [int(pid) for pid in Path(f"/proc/{os.getpid()}/task/{os.getpid()}/children").read_text().split()
+                            if int(pid) != process.pid]
                 for pid in children:
                     try:
                         os.kill(int(pid), signal.SIGKILL)
                     except ProcessLookupError:
                         pass
-                try:
-                    while os.waitpid(-1, os.WNOHANG)[0]:
+                for pid in children:
+                    try:
+                        os.waitpid(pid, os.WNOHANG)
+                    except ChildProcessError:
                         pass
-                except ChildProcessError:
+                # The leader's exit reparents its descendants to this fixture.
+                # Observe that exit while the leader stays unreaped, before the
+                # child list is trusted; then reap the leader with no descendants.
+                leader_exited = os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None
+                remaining = Path(f"/proc/{os.getpid()}/task/{os.getpid()}/children").read_text().split()
+                if leader_exited and all(int(pid) == process.pid for pid in remaining):
                     break
                 assert time.monotonic() < deadline, "fixture could not reap its children"
                 time.sleep(0.01)
+            process.wait(timeout=1)
 PYTIMEOUT
 fi
 

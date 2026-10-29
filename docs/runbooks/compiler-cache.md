@@ -308,6 +308,9 @@ add no compilation or waits to a successful live run. The companion
 `scripts/test-compiler-cache.sh` drives deterministic failures through the namespace
 entrypoint with transport fixtures; those checks cover diagnostic bounds and
 cleanup, while the live namespace run remains required for cache isolation.
+The fixtures use real offline Cargo lockfile generation for standalone probe
+workspaces under checkout-local scratch, including the benchmark caller's
+`TMPDIR=WORKDIR` route. Compilation and cache daemons stay simulated there.
 
 Every namespace participant, including warm reuse and the shared-daemon owner,
 has a deadline measured from its launch. Set
@@ -315,7 +318,12 @@ has a deadline measured from its launch. Set
 300-second default. Timeout produces participant status 124; it cannot count
 as the shared-daemon control's expected compilation failure. Termination allows
 one second for SIGTERM, escalates to SIGKILL, and allows one more second to
-reap. Failure cleanup uses the same supervision. On Linux the supervisor adopts
+reap. Failure cleanup uses the same supervision. An owned group anchor ignores
+SIGTERM and stays unreaped through the final group signal, so transport exit
+cannot release the group identity early. The independent Linux fixture watchdog
+observes exit without reaping its leader until its own last group signal.
+Deterministic API models check both identity lifetimes without PID churn or
+signaling unrelated processes. On Linux the supervisor adopts
 and reaps orphaned descendants, including processes that start new sessions;
 status 125 reports failure to reap within the grace. The public-entrypoint
 fixtures exercise TERM-ignoring trees, warm reuse, both shared-daemon modes,
