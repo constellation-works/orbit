@@ -233,6 +233,19 @@ a.operation-chip:hover { border-color: var(--accent); color: var(--accent); }
 .operation-stat-value { color: var(--fg); font-size: 20px; line-height: 1.2; }
 .operation-stat-note { color: var(--fg-dim); font: 10px/1.4 var(--font-sans); overflow-wrap: anywhere; }
 .auto-tasks-scheduler-note { margin: 0 0 12px; }
+.auto-tasks-filter {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 12px;
+}
+.auto-tasks-filter-input {
+  flex: 1 1 220px; min-width: 0; min-height: 32px; padding: 6px 10px;
+  border: 1px solid var(--border); border-radius: 7px; background: var(--bg);
+  color: var(--fg); font: 12.5px var(--font-sans);
+}
+.auto-tasks-filter-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.auto-tasks-filter-status { color: var(--fg-dim); font: 11px/1.4 var(--font-sans); }
+.auto-tasks-group-more {
+  display: flex; justify-content: center; padding: 10px 12px; border-top: 1px solid var(--hair);
+}
 .auto-tasks-scheduler-note.warn { color: var(--priority-medium); }
 .operation-timeline {
   margin-bottom: 12px; padding: 10px 12px 2px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-elev);
