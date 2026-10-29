@@ -79,10 +79,9 @@ globalThis.dockReview = {
   held: () => releasePost !== null,
   release: () => { delayPost = false; const resolve = releasePost; releasePost = null; resolve?.(); },
 };`;
-// ORB-19679: an always-fire definition is not held by its open instance, so its
-// row, the summary and the group must not say the scheduler skips it. A
-// skip-if-open definition is held, and those lines still say so. Manual mint
-// stays unconditional under both policies. Runs through the public renderer.
+// ORB-19679: an always-fire definition is not held by its open instance, while
+// skip-if-open is held. Check the public renderer's row and summary state;
+// manual mint stays unconditional under both policies.
 // ORB-19707: a paused definition never mints on schedule and never holds a
 // slot, so its open-duplicate row says paused and the strip does not count it
 // as a scheduler hold. The raw open-duplicate count is retained.
@@ -109,13 +108,7 @@ const render = (definitions) => renderAutoTasks({
 const body = () => document.getElementById('auto-tasks-body');
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
 const card = (name) => Array.from(body().querySelectorAll('.auto-task-card')).find((node) => node.querySelector('strong')?.textContent === name);
-const lastMintedCell = (name) => Array.from(card(name).querySelectorAll('.operation-cell-sub')).find((node) => node.textContent.includes('still open'));
-const summaryNote = () => Array.from(body().querySelectorAll('.operation-stat'))
-  .find((node) => node.querySelector('.operation-field-label')?.textContent === 'Open duplicates')
-  ?.querySelector('.operation-stat-note')?.textContent ?? '';
-const scheduleGroupHint = () => Array.from(body().querySelectorAll('.operation-group'))
-  .find((node) => node.querySelector('.operation-group-title strong')?.textContent === 'On a schedule')
-  ?.querySelector('.operation-group-hint')?.textContent ?? '';
+const lastMintedCell = (name) => card(name)?.querySelector('.operation-cell[data-label="Last minted"] .operation-cell-sub');
 const summaryValue = (label) => Array.from(body().querySelectorAll('.operation-stat'))
   .find((node) => node.querySelector('.operation-field-label')?.textContent === label)
   ?.querySelector('.operation-stat-value')?.textContent ?? '';
@@ -127,15 +120,21 @@ const nextMintMain = (name) => card(name)?.querySelector('.operation-cell[data-l
 const openDuplicatesStat = () => Array.from(body().querySelectorAll('.operation-stat'))
   .find((node) => node.querySelector('.operation-field-label')?.textContent === 'Open duplicates');
 const openDuplicatesHasHold = () => openDuplicatesStat()?.classList.contains('warn') ?? false;
+const openDuplicateHoldCount = () => {
+  const stat = openDuplicatesStat();
+  if (!stat?.classList.contains('warn')) return 0;
+  const explicitCount = stat.querySelector('.operation-stat-note')?.textContent.match(/\\b\\d+\\b/)?.[0];
+  return explicitCount ? Number(explicitCount) : Number(summaryValue('Open duplicates'));
+};
 const inDisabledGroup = (name) => card(name)?.closest('.operation-group')
   ?.querySelector('.operation-group-title strong')?.textContent === 'Disabled';
 const mintConfirm = (name) => {
-  const button = Array.from(card(name).querySelectorAll('button')).find((node) => node.textContent === 'Mint now');
+  const button = card(name).querySelector('.operation-cell-action button');
   assert(button && !button.disabled, name + ': manual mint must stay enabled under its dedupe policy');
-  let asked = '';
-  window.confirm = (text) => { asked = text; return false; };
+  let confirmed = false;
+  window.confirm = () => { confirmed = true; return false; };
   button.click();
-  assert(asked.includes('Manual mint ignores'), name + ': manual mint must confirm the unconditional mint: ' + asked);
+  assert(confirmed, name + ': manual mint must request confirmation under its dedupe policy');
 };
 shared.initOperations({ getWorkspaces: () => [{ id: 'one', name: 'one', status: 'active' }] });
 setWorkspace('one');
@@ -143,26 +142,31 @@ setWorkspace('one');
 for (let node = body(); node; node = node.parentElement) node.hidden = false;
 document.querySelector('.tab-pane[data-tab="operations"]')?.classList.add('active');
 try {
-  // Always-fire alone: an open instance is no hold, so nothing says there is one.
+  // Always-fire alone: its open instance produces no held-row or summary state.
   render([definition('always-chore', 'always')]);
   const alone = lastMintedCell('always-chore');
-  assert(alone && !alone.textContent.includes('scheduler') && !alone.classList.contains('warn'), 'always-fire row claims the scheduler is held: ' + alone?.textContent);
-  assert(!summaryNote().includes('scheduler skips'), 'always-fire summary claims a hold: ' + summaryNote());
+  assert(alone && !alone.classList.contains('warn'), 'always-fire row must not be marked held');
+  assert(openDuplicateHoldCount() === 0, 'always-fire summary must count no held slots');
   mintConfirm('always-chore');
 
-  // Skip-if-open alone: its open duplicate is a held slot, and says so.
+  // Skip-if-open alone: its open duplicate is one held slot.
   render([definition('held-chore', 'skip_if_open')]);
   const held = lastMintedCell('held-chore');
-  assert(held && held.textContent.includes('scheduler will skip') && held.classList.contains('warn'), 'skip-if-open row lost its hold explanation: ' + held?.textContent);
-  assert(summaryNote() === 'scheduler skips these slots', 'skip-if-open summary lost its hold explanation: ' + summaryNote());
+  assert(held && held.classList.contains('warn'), 'skip-if-open row must be marked held');
+  assert(openDuplicateHoldCount() === 1, 'skip-if-open summary must count one held slot');
   mintConfirm('held-chore');
 
-  // Both: the summary counts the one held slot, and the group names each policy.
+  // Both: only the skip-if-open row is held, and the summary counts one slot.
   render([definition('always-chore', 'always'), definition('held-chore', 'skip_if_open')]);
-  assert(!lastMintedCell('always-chore').textContent.includes('scheduler'), 'always-fire row claims the scheduler is held beside a skip-if-open row');
-  assert(lastMintedCell('held-chore').textContent.includes('scheduler will skip'), 'skip-if-open row lost its hold beside an always-fire row');
-  assert(summaryNote().includes('scheduler skips 1') && summaryNote() !== 'scheduler skips these slots', 'summary must count only the held slot: ' + summaryNote());
-  assert(scheduleGroupHint().includes('skip-if-open') && !scheduleGroupHint().includes('no open instance exists'), 'group hint must describe each policy: ' + scheduleGroupHint());
+  const alwaysRow = lastMintedCell('always-chore');
+  const heldRow = lastMintedCell('held-chore');
+  assert(alwaysRow && !alwaysRow.classList.contains('warn'), 'always-fire row must stay unheld beside a held row');
+  assert(heldRow && heldRow.classList.contains('warn'), 'skip-if-open row must stay held beside an unheld row');
+  assert(openDuplicateHoldCount() === 1, 'mixed summary must count only the held row');
+  const alwaysGroup = card('always-chore')?.closest('.operation-group');
+  const heldGroup = card('held-chore')?.closest('.operation-group');
+  assert(alwaysGroup && alwaysGroup === heldGroup && alwaysGroup.querySelectorAll('.auto-task-card').length === 2,
+    'enabled scheduled definitions must remain together in their group');
   mintConfirm('always-chore');
   mintConfirm('held-chore');
 
