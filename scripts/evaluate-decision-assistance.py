@@ -59,6 +59,10 @@ def digest(text): return "sha256:" + hashlib.sha256(text.encode()).hexdigest()
 def crit_ref(index, text): return {"index": index, "text_digest": digest(text)}
 def is_digest(v): return isinstance(v, str) and v.startswith("sha256:") and len(v) == 71 and all(c in "0123456789abcdef" for c in v[7:])
 
+def _is_valid_case_id(cid):
+    """Case identity must be a non-empty string so it can key maps safely."""
+    return isinstance(cid, str) and bool(cid.strip())
+
 def _ts(value):
     """Parse an ISO-8601 instant, or return None for invalid/naive input."""
     if not isinstance(value, str):
@@ -199,9 +203,13 @@ def validate_dataset(ds):
         if not isinstance(c, dict):
             errs.append("case <unknown>: case must be an object")
             continue
-        w = f"case {c.get('case_id')}"
-        if c.get("case_id") in seen: errs.append(f"{w}: duplicate case_id")
-        seen.add(c.get("case_id"))
+        cid = c.get("case_id")
+        w = f"case {cid}"
+        if not _is_valid_case_id(cid):
+            errs.append(f"{w}: case_id must be a non-empty string")
+        else:
+            if cid in seen: errs.append(f"{w}: duplicate case_id")
+            seen.add(cid)
         if c.get("consumer") not in QUESTION_SETS: errs.append(f"{w}: unknown consumer {c.get('consumer')!r}"); continue
         if not c.get("family_id"): errs.append(f"{w}: family_id required (split leakage key)")
         lab = c.get("label", {})
@@ -251,7 +259,13 @@ def validate_answers(ds, ansdoc):
     errs = []
     if not isinstance(ansdoc, dict) or ansdoc.get("format_version") not in SUPPORTED_FORMATS: return [f"answers format_version must be one of {', '.join(SUPPORTED_FORMATS)}"]
     raw_cases = ds.get("cases", []) if isinstance(ds, dict) else []
-    cases = {c.get("case_id"): c for c in raw_cases if isinstance(c, dict)}
+    cases = {}
+    for c in raw_cases:
+        if not isinstance(c, dict):
+            continue
+        cid = c.get("case_id")
+        if _is_valid_case_id(cid):
+            cases[cid] = c
     raw_answers = ansdoc.get("answers", [])
     if not isinstance(raw_answers, list):
         return errs + ["answers must be a list"]
@@ -260,10 +274,14 @@ def validate_answers(ds, ansdoc):
         if not isinstance(a, dict):
             errs.append("answer <unknown>: answer must be an object")
             continue
-        w = f"answer {a.get('case_id')}"
-        if a.get("case_id") in seen: errs.append(f"{w}: duplicate answer")
-        seen.add(a.get("case_id"))
-        case = cases.get(a.get("case_id"))
+        aid = a.get("case_id")
+        w = f"answer {aid}"
+        if not _is_valid_case_id(aid):
+            errs.append(f"{w}: case_id must be a non-empty string")
+            continue
+        if aid in seen: errs.append(f"{w}: duplicate answer")
+        seen.add(aid)
+        case = cases.get(aid)
         if case is None: errs.append(f"{w}: unknown case_id"); continue
         if not isinstance(case, dict) or case.get("consumer") not in QUESTION_SETS:
             errs.append(f"{w}: unknown consumer for case {a.get('case_id')!r}"); continue
@@ -326,11 +344,26 @@ def score(ds, ansdoc):
     except Exception as error:
         errs = [f"validation failed: {error}"]
     raw_cases = ds.get("cases", []) if isinstance(ds, dict) else []
-    cases = {c.get("case_id"): c for c in raw_cases if isinstance(c, dict)}
+    cases = {}
+    malformed_cases = []
+    for c in raw_cases:
+        if not isinstance(c, dict):
+            continue
+        cid = c.get("case_id")
+        if _is_valid_case_id(cid):
+            cases[cid] = c
+        else:
+            malformed_cases.append(c)
     raw_ans = ansdoc.get("answers", []) if isinstance(ansdoc, dict) else []
     if not isinstance(raw_ans, list):
         raw_ans = []
-    by_id = {a.get("case_id"): a for a in raw_ans if isinstance(a, dict)}
+    by_id = {}
+    for a in raw_ans:
+        if not isinstance(a, dict):
+            continue
+        aid = a.get("case_id")
+        if _is_valid_case_id(aid):
+            by_id[aid] = a
     report_version = ds.get("format_version") if isinstance(ds, dict) and ds.get("format_version") in SUPPORTED_FORMATS else FORMAT
     report = {"format_version": report_version, "dataset_id": ds.get("dataset_id") if isinstance(ds, dict) else None, "validation_errors": errs,
               "questions": {}, "totals": {}}
@@ -388,6 +421,11 @@ def score(ds, ansdoc):
                 if isinstance(expected, dict) and expected.get("value") is True:
                     pred_stats.setdefault(question, [0, 0, 0, 0])[2] += 1
 
+    for malformed in malformed_cases:
+        total += 1
+        invalid += 1
+        abstained += 1
+        record_abstained_expected_labels(malformed)
     for cid, case in cases.items():
         total += 1
         a = by_id.get(cid)
@@ -531,7 +569,13 @@ def check_split(ds, manifest, prior_holdout_ids):
     if not _ts(manifest.get("intake_snapshot_at")):
         errs.append("manifest intake_snapshot_at must be ISO-8601")
     raw_cases = ds.get("cases", []) if isinstance(ds, dict) else []
-    cases = {c.get("case_id"): c for c in raw_cases if isinstance(c, dict)}
+    cases = {}
+    for c in raw_cases:
+        if not isinstance(c, dict):
+            continue
+        cid = c.get("case_id")
+        if _is_valid_case_id(cid):
+            cases[cid] = c
     assign = manifest.get("assignments", {})
     if not isinstance(assign, dict):
         return errs + ["manifest assignments must be an object"]
@@ -695,7 +739,10 @@ def main(argv=None):
         try:
             return emit(score(ds, ans))
         except Exception as error:
-            fallback = validate_dataset(ds) if isinstance(ds, dict) else [f"validation failed: {error}"]
+            try:
+                fallback = validate_dataset(ds) if isinstance(ds, dict) else [f"validation failed: {error}"]
+            except Exception as fallback_error:
+                fallback = [f"validation failed: {fallback_error}"]
             try:
                 fallback += validate_answers(ds, ans) if isinstance(ans, dict) else [f"validation failed: {error}"]
             except Exception:

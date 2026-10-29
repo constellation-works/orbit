@@ -690,6 +690,46 @@ class EvalTests(unittest.TestCase):
         self.assertFalse(json.loads(r.stdout)["ok"])
         self.assertIn("collected_at", r.stdout)
 
+    def test_malformed_case_id_rejected_structured(self):
+        # ORB-19837: unhashable case identity (array/object) must not traceback.
+        control = self._score(self.ds, self.ans)
+        self.assertEqual(control["validation_errors"], [])
+        self.assertGreater(control["totals"]["cases"], 0)
+        # Dataset records with array/object case_id are rejected, not a traceback.
+        for index, bad in enumerate(([], {})):
+            with self.subTest(document="dataset", case_id=repr(bad)):
+                ds = self._load(self.ds)
+                ds["cases"][0]["case_id"] = bad
+                ds_path = self._dump(f"malformed-case-id-dataset-{index}.json", ds)
+                r = self._run("validate", "--dataset", str(ds_path), "--answers", str(self.ans))
+                self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                self.assertNotIn("Traceback", r.stderr)
+                self.assertFalse(json.loads(r.stdout)["ok"])
+                self.assertIn("case_id", r.stdout)
+                rep = self._score(ds_path, self.ans)
+                self.assertNotIn("Traceback", r.stderr)
+                self.assertTrue(rep["validation_errors"], rep)
+                self.assertTrue(any("case_id" in e for e in rep["validation_errors"]), rep)
+                self.assertEqual(rep["totals"]["cases"], control["totals"]["cases"])
+                self.assertEqual(rep["totals"]["answered"], control["totals"]["answered"] - 1)
+                self.assertEqual(rep["totals"]["abstained"], control["totals"]["abstained"] + 1)
+        # Answer records with array/object case_id are rejected, not a traceback.
+        for index, bad in enumerate(([], {})):
+            with self.subTest(document="answers", case_id=repr(bad)):
+                ans = self._load(self.ans)
+                ans["answers"][0]["case_id"] = bad
+                ans_path = self._dump(f"malformed-case-id-answers-{index}.json", ans)
+                r = self._run("validate", "--dataset", str(self.ds), "--answers", str(ans_path))
+                self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                self.assertNotIn("Traceback", r.stderr)
+                self.assertFalse(json.loads(r.stdout)["ok"])
+                self.assertIn("case_id", r.stdout)
+                rep = self._score(self.ds, ans_path)
+                self.assertTrue(rep["validation_errors"], rep)
+                self.assertTrue(any("case_id" in e for e in rep["validation_errors"]), rep)
+                self.assertEqual(rep["totals"]["cases"], control["totals"]["cases"])
+                self.assertEqual(rep["totals"]["answered"], control["totals"]["answered"] - 1)
+
     def test_criterion_refs_checked_against_packet(self):
         import hashlib
         ds = self._load(self.ds)
