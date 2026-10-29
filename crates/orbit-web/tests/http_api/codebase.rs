@@ -27,6 +27,105 @@ pub(super) use fixtures::{
 
 const WS: &str = "workspace=ws_http_fixture";
 
+// File sets shared by the nearby-size riskiness scenarios: ten tasks of ten
+// files and ten of eleven, so the estimator's two-size fits stay comparable.
+const NEAR_TEN: [&str; 10] = [
+    "src/near00.rs",
+    "src/near01.rs",
+    "src/near02.rs",
+    "src/near03.rs",
+    "src/near04.rs",
+    "src/near05.rs",
+    "src/near06.rs",
+    "src/near07.rs",
+    "src/near08.rs",
+    "src/near09.rs",
+];
+const NEAR_ELEVEN: [&str; 11] = [
+    "src/near00.rs",
+    "src/near01.rs",
+    "src/near02.rs",
+    "src/near03.rs",
+    "src/near04.rs",
+    "src/near05.rs",
+    "src/near06.rs",
+    "src/near07.rs",
+    "src/near08.rs",
+    "src/near09.rs",
+    "src/near10.rs",
+];
+
+/// Record a landed-delivery row per task id, keeping each row's commit
+/// distinct from `base_seq`; the line count is the diff-lines basis input.
+fn land_rows(fixture: &Fixture, ids: &[String], base_seq: usize, lines: u64) {
+    for (index, id) in ids.iter().enumerate() {
+        landed_row(fixture, id, base_seq + index, lines);
+    }
+}
+
+/// Read one task list row's `riskiness` object through the public API.
+/// Callers keep their own assertions, so each case name stays on failures.
+fn task_riskiness(server: &super::support::Server, id: &str) -> Value {
+    let rows = json_ok(server.get(&format!("/api/tasks?{WS}&limit=100")));
+    rows["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == id)
+        .map(|row| row["riskiness"].clone())
+        .unwrap()
+}
+
+/// Assert a fitted probability within 1e-6; the `{value}` context names the case.
+fn assert_risk_probability(value: &Value, expected: f64) {
+    let actual = value["probability"].as_f64().unwrap();
+    assert!((actual - expected).abs() < 1e-6, "{expected}: {value}");
+}
+
+/// Block a task on a failed workflow run, the shape the `blocked` ranking
+/// classifies by its error code.
+fn block_on_run_failure(fixture: &Fixture, task: &str, run: &str, code: &str, error: &str) {
+    transition_and_return(
+        fixture,
+        task,
+        "workflow_run_failed",
+        Some(format!(
+            "workflow run failed: job=task_pr_pipeline, run_id={run}, error_code={code}, error={error}"
+        )),
+        TaskStatus::Blocked,
+    );
+}
+
+/// Note a PR-merge completion on a done task: the merge note is the landing
+/// evidence the related view reads.
+fn note_pr_completion(
+    fixture: &Fixture,
+    task: &str,
+    now: DateTime<Utc>,
+    event: &str,
+    note: String,
+) {
+    append_event(
+        fixture,
+        task,
+        now,
+        event,
+        Some(note),
+        Some(TaskStatus::Done),
+    );
+}
+
+/// Record a run followed by a review rejection, the `rejected` ranking's
+/// exercised shape.
+fn reject_after_run(fixture: &Fixture, task: &str, now: DateTime<Utc>) {
+    for (event, status) in [
+        ("started", TaskStatus::InProgress),
+        ("review_rejected", TaskStatus::Rejected),
+    ] {
+        append_event(fixture, task, now, event, None, Some(status));
+    }
+}
+
 // Every analytics scenario gets its own authority-scrubbed child and fixture.
 // Derive the exact libtest name here so selectors cannot drift from isolation.
 macro_rules! analytics_test {
@@ -272,7 +371,13 @@ analytics_test!(
 
         // Blocked: auth infrastructure, unclassified, and a run failure.
         let auth = add(&fixture, "auth block", &["src/blocked.rs"], vec![]);
-        transition_and_return(&fixture, &auth, "workflow_run_failed", Some("workflow run failed: job=task_pr_pipeline, run_id=jrun-auth, error_code=provider_unavailable, error=OAuth token expired".into()), TaskStatus::Blocked);
+        block_on_run_failure(
+            &fixture,
+            &auth,
+            "jrun-auth",
+            "provider_unavailable",
+            "OAuth token expired",
+        );
         let unknown = add(&fixture, "unrecorded block", &["src/blocked.rs"], vec![]);
         transition_and_return(
             &fixture,
@@ -282,7 +387,7 @@ analytics_test!(
             TaskStatus::Blocked,
         );
         let failed = add(&fixture, "run block", &["src/blocked.rs"], vec![]);
-        transition_and_return(&fixture, &failed, "workflow_run_failed", Some("workflow run failed: job=task_pr_pipeline, run_id=jrun-fail, error_code=-, error=tests failed".into()), TaskStatus::Blocked);
+        block_on_run_failure(&fixture, &failed, "jrun-fail", "-", "tests failed");
 
         // Rejected: one after a run, one at proposal, one live task with a run.
         let ran = add_with_status(
@@ -292,12 +397,7 @@ analytics_test!(
             vec![],
             TaskStatus::Rejected,
         );
-        for (event, status) in [
-            ("started", TaskStatus::InProgress),
-            ("review_rejected", TaskStatus::Rejected),
-        ] {
-            append_event(&fixture, &ran, now, event, None, Some(status));
-        }
+        reject_after_run(&fixture, &ran, now);
         add_with_status(
             &fixture,
             "rejected at proposal",
@@ -450,14 +550,12 @@ analytics_test!(codebase_block_causes_require_failure_evidence, |fixture| {
     for (index, error) in work_failures.iter().enumerate() {
         let path = format!("src/work_{index}.rs");
         let task = add(&fixture, error, &[&path], vec![]);
-        transition_and_return(
+        block_on_run_failure(
             &fixture,
             &task,
-            "workflow_run_failed",
-            Some(format!(
-                "workflow run failed: job=task_pr_pipeline, run_id=jrun-work-{index}, error_code=execution_failed, error={error}"
-            )),
-            TaskStatus::Blocked,
+            &format!("jrun-work-{index}"),
+            "execution_failed",
+            error,
         );
     }
     let infra_failures = INFRA_FAILURES;
@@ -465,33 +563,22 @@ analytics_test!(codebase_block_causes_require_failure_evidence, |fixture| {
     for (index, (cause, code, error)) in infra_failures.iter().enumerate() {
         let path = format!("src/infra_{index}.rs");
         let task = add(&fixture, error, &[&path], vec![]);
+        block_on_run_failure(&fixture, &task, &format!("jrun-infra-{index}"), code, error);
+        *expected_causes.entry(*cause).or_insert(0_u64) += 1;
+    }
+    for (title, path, event) in [
+        ("manual block", "src/manual.rs", "status_changed"),
+        ("unknown block", "src/unknown.rs", "dependency_blocked"),
+    ] {
+        let task = add(&fixture, title, &[path], vec![]);
         transition_and_return(
             &fixture,
             &task,
-            "workflow_run_failed",
-            Some(format!(
-                "workflow run failed: job=task_pr_pipeline, run_id=jrun-infra-{index}, error_code={code}, error={error}"
-            )),
+            event,
+            Some("needs investigation of sandbox authentication module".into()),
             TaskStatus::Blocked,
         );
-        *expected_causes.entry(*cause).or_insert(0_u64) += 1;
     }
-    let manual = add(&fixture, "manual block", &["src/manual.rs"], vec![]);
-    transition_and_return(
-        &fixture,
-        &manual,
-        "status_changed",
-        Some("needs investigation of sandbox authentication module".into()),
-        TaskStatus::Blocked,
-    );
-    let unknown = add(&fixture, "unknown block", &["src/unknown.rs"], vec![]);
-    transition_and_return(
-        &fixture,
-        &unknown,
-        "dependency_blocked",
-        Some("needs investigation of sandbox authentication module".into()),
-        TaskStatus::Blocked,
-    );
     let server = fixture.server(false);
     let response = analytics(&server, "window=all&min_support=1");
     let blocked = &response["blocked"];
@@ -959,12 +1046,7 @@ analytics_test!(
             vec![],
             TaskStatus::Rejected,
         );
-        for (event, status) in [
-            ("started", TaskStatus::InProgress),
-            ("review_rejected", TaskStatus::Rejected),
-        ] {
-            append_event(&fixture, &rejected, now, event, None, Some(status));
-        }
+        reject_after_run(&fixture, &rejected, now);
         let mut all = vec![
             landed.clone(),
             blocked.clone(),
@@ -1109,7 +1191,7 @@ analytics_test!(
         );
         widen(&fixture, &regression, shared, true);
         let failed = add(&fixture, "run block", &[shared], vec![]);
-        transition_and_return(&fixture, &failed, "workflow_run_failed", Some("workflow run failed: job=task_pr_pipeline, run_id=jrun-fail, error_code=-, error=tests failed".into()), TaskStatus::Blocked);
+        block_on_run_failure(&fixture, &failed, "jrun-fail", "-", "tests failed");
 
         let server = fixture.server(false);
         let mut api = analytics(&server, "window=30d&min_support=1");
@@ -1992,15 +2074,14 @@ analytics_test!(
         };
         let completed = done("completed by its pull request", &[]);
         let completed_commit = commit_files(&repo, &completed, &["CHANGELOG.md", "Cargo.toml"]);
-        append_event(
+        note_pr_completion(
             &fixture,
             &completed,
             now,
             "status_changed",
-            Some(format!(
+            format!(
                 "completed by run jrun-1; delivered by pull request #41 merged as {completed_commit}"
-            )),
-            Some(TaskStatus::Done),
+            ),
         );
         let settled = done("settled from its pull request", &[]);
         let settled_commit = commit_files(
@@ -2008,28 +2089,26 @@ analytics_test!(
             &settled,
             &["CHANGELOG.md", "Cargo.toml", "server.json"],
         );
-        append_event(
+        note_pr_completion(
             &fixture,
             &settled,
             now,
             EXTERNAL_MERGE_SETTLED_EVENT,
-            Some(format!(
+            format!(
                 "settled from pull request #42, merged into agent-main as {settled_commit} outside Orbit"
-            )),
-            Some(TaskStatus::Done),
+            ),
         );
         let abbreviated = done("abbreviated commit", &[]);
         let short = commit_files(&repo, &abbreviated, &["CHANGELOG.md", "Cargo.toml"]);
-        append_event(
+        note_pr_completion(
             &fixture,
             &abbreviated,
             now,
             "status_changed",
-            Some(format!(
+            format!(
                 "completed; delivered by pull request #43 merged as {}",
                 &short[..12]
-            )),
-            Some(TaskStatus::Done),
+            ),
         );
         done("finished by hand", &[]);
         done("survey", &["no-diff-expected"]);
@@ -2244,40 +2323,21 @@ analytics_test!(
             );
         }
         // Every done task but small[5] has a landed row.
-        for (index, id) in small.iter().enumerate().take(5) {
-            landed_row(&fixture, id, index, 10);
-        }
-        for (index, id) in large.iter().enumerate() {
-            landed_row(&fixture, id, 10 + index, 100);
-        }
+        land_rows(&fixture, &small[..5], 0, 10);
+        land_rows(&fixture, &large, 10, 100);
         let backlog_wide = add(&fixture, "touches four files", &wide, vec![]);
         let unfootprinted = add(&fixture, "no footprint", &[], vec![]);
-
-        let riskiness = |server: &super::support::Server, id: &str| {
-            let rows = json_ok(server.get(&format!("/api/tasks?{WS}&limit=100")));
-            rows["items"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|row| row["id"] == id)
-                .map(|row| row["riskiness"].clone())
-                .unwrap()
-        };
-        let close = |value: &Value, expected: f64| {
-            let actual = value["probability"].as_f64().unwrap();
-            assert!((actual - expected).abs() < 1e-6, "{expected}: {value}");
-        };
 
         // Declared basis: 12 done tasks, sizes 1 (1 of 6 regressed) and 4
         // (3 of 6). Two sizes fit each group's rate exactly.
         let server = fixture.server(false);
-        let risky = riskiness(&server, &backlog_wide);
+        let risky = task_riskiness(&server, &backlog_wide);
         assert_eq!(risky["estimator_version"], 3);
         assert_eq!(risky["state"], "estimated", "{risky}");
         assert_eq!(risky["basis"], "declared_files");
         assert_eq!(risky["basis_fallback"], Value::Null);
         assert_eq!(risky["size"], 4);
-        close(&risky, 0.5);
+        assert_risk_probability(&risky, 0.5);
         assert_eq!(risky["size_band"]["tasks"], 6);
         assert_eq!(risky["size_band"]["regressed"], 3);
         assert_eq!(risky["fit"]["observations"], 12);
@@ -2292,21 +2352,21 @@ analytics_test!(
 
         // Diff basis: the 11 landed rows, 10 lines (1 of 5 regressed) and
         // 100 lines (3 of 6).
-        let landed = riskiness(&server, &large[0]);
+        let landed = task_riskiness(&server, &large[0]);
         assert_eq!(landed["basis"], "diff_lines", "{landed}");
         assert_eq!(landed["size"], 100);
-        close(&landed, 0.5);
+        assert_risk_probability(&landed, 0.5);
         assert_eq!(landed["fit"]["observations"], 11);
         assert_eq!(landed["size_band"]["tasks"], 6);
-        let unresolved = riskiness(&server, &small[5]);
+        let unresolved = task_riskiness(&server, &small[5]);
         assert_eq!(unresolved["basis"], "declared_files", "{unresolved}");
         assert_eq!(unresolved["basis_fallback"], "no_resolvable_diff");
         assert_eq!(unresolved["size"], 1);
-        close(&unresolved, 1.0 / 6.0);
+        assert_risk_probability(&unresolved, 1.0 / 6.0);
         assert_eq!(unresolved["size_band"]["tasks"], 12);
         assert_eq!(unresolved["size_band"]["regressed"], 4);
 
-        let none = riskiness(&server, &unfootprinted);
+        let none = task_riskiness(&server, &unfootprinted);
         assert_eq!(none["state"], "no_footprint");
         assert_eq!(none["probability"], Value::Null);
         assert_eq!(none["basis"], Value::Null);
@@ -2326,14 +2386,14 @@ analytics_test!(
         fs::write(&config, text).unwrap();
         let server = fixture.server(false);
         for id in [&backlog_wide, &large[0]] {
-            let thin = riskiness(&server, id);
+            let thin = task_riskiness(&server, id);
             assert_eq!(thin["state"], "insufficient_history", "{thin}");
             assert_eq!(thin["probability"], Value::Null);
             assert_eq!(thin["basis"], "declared_files");
             assert_eq!(thin["size_band"], Value::Null);
         }
         assert_eq!(
-            riskiness(&server, &large[0])["basis_fallback"],
+            task_riskiness(&server, &large[0])["basis_fallback"],
             "diff_history_insufficient"
         );
     }
@@ -2346,36 +2406,15 @@ analytics_test!(
 analytics_test!(
     task_riskiness_keeps_finite_fit_for_nearby_sizes,
     |fixture| {
-        const TEN: [&str; 10] = [
-            "src/near00.rs",
-            "src/near01.rs",
-            "src/near02.rs",
-            "src/near03.rs",
-            "src/near04.rs",
-            "src/near05.rs",
-            "src/near06.rs",
-            "src/near07.rs",
-            "src/near08.rs",
-            "src/near09.rs",
-        ];
-        const ELEVEN: [&str; 11] = [
-            "src/near00.rs",
-            "src/near01.rs",
-            "src/near02.rs",
-            "src/near03.rs",
-            "src/near04.rs",
-            "src/near05.rs",
-            "src/near06.rs",
-            "src/near07.rs",
-            "src/near08.rs",
-            "src/near09.rs",
-            "src/near10.rs",
-        ];
         let mut small = Vec::new();
         let mut large = Vec::new();
         for index in 0..10 {
-            small.push(done(&fixture, &format!("nearby small {index}"), &TEN));
-            large.push(done(&fixture, &format!("nearby large {index}"), &ELEVEN));
+            small.push(done(&fixture, &format!("nearby small {index}"), &NEAR_TEN));
+            large.push(done(
+                &fixture,
+                &format!("nearby large {index}"),
+                &NEAR_ELEVEN,
+            ));
         }
         add(
             &fixture,
@@ -2393,37 +2432,18 @@ analytics_test!(
         }
         // The declared fit sees sizes 10 and 11; the diff fit sees landed
         // rows of 10 and 11 lines on the same tasks.
-        for (index, id) in small.iter().enumerate() {
-            landed_row(&fixture, id, index, 10);
-        }
-        for (index, id) in large.iter().enumerate() {
-            landed_row(&fixture, id, 100 + index, 11);
-        }
-        let probe_ten = add(&fixture, "probe ten files", &TEN, vec![]);
-        let probe_eleven = add(&fixture, "probe eleven files", &ELEVEN, vec![]);
-
-        let riskiness = |server: &super::support::Server, id: &str| {
-            let rows = json_ok(server.get(&format!("/api/tasks?{WS}&limit=100")));
-            rows["items"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|row| row["id"] == id)
-                .map(|row| row["riskiness"].clone())
-                .unwrap()
-        };
-        let close = |value: &Value, expected: f64| {
-            let actual = value["probability"].as_f64().unwrap();
-            assert!((actual - expected).abs() < 1e-6, "{expected}: {value}");
-        };
+        land_rows(&fixture, &small, 0, 10);
+        land_rows(&fixture, &large, 100, 11);
+        let probe_ten = add(&fixture, "probe ten files", &NEAR_TEN, vec![]);
+        let probe_eleven = add(&fixture, "probe eleven files", &NEAR_ELEVEN, vec![]);
 
         let server = fixture.server(false);
-        let ten = riskiness(&server, &probe_ten);
+        let ten = task_riskiness(&server, &probe_ten);
         assert_eq!(ten["state"], "estimated", "{ten}");
         assert_eq!(ten["estimator_version"], 3);
         assert_eq!(ten["basis"], "declared_files");
         assert_eq!(ten["size"], 10);
-        close(&ten, 0.1);
+        assert_risk_probability(&ten, 0.1);
         assert_eq!(ten["size_band"]["tasks"], 20);
         assert_eq!(ten["size_band"]["regressed"], 6);
         assert_eq!(ten["fit"]["observations"], 20);
@@ -2435,18 +2455,18 @@ analytics_test!(
         let intercept = ten["fit"]["intercept"].as_f64().unwrap();
         assert!((intercept + 54.16640098666374).abs() < 1e-6, "{ten}");
 
-        let eleven = riskiness(&server, &probe_eleven);
+        let eleven = task_riskiness(&server, &probe_eleven);
         assert_eq!(eleven["state"], "estimated", "{eleven}");
         assert_eq!(eleven["basis"], "declared_files");
         assert_eq!(eleven["size"], 11);
-        close(&eleven, 0.5);
+        assert_risk_probability(&eleven, 0.5);
         assert_eq!(eleven["size_band"]["tasks"], 10);
         assert_eq!(eleven["size_band"]["regressed"], 5);
 
-        let landed = riskiness(&server, &small[1]);
+        let landed = task_riskiness(&server, &small[1]);
         assert_eq!(landed["basis"], "diff_lines", "{landed}");
         assert_eq!(landed["size"], 10);
-        close(&landed, 0.1);
+        assert_risk_probability(&landed, 0.1);
         assert_eq!(landed["fit"]["observations"], 20);
         assert_eq!(landed["fit"]["regressed"], 6);
         assert_eq!(landed["size_band"]["tasks"], 20);
@@ -2459,36 +2479,15 @@ analytics_test!(
 analytics_test!(
     task_riskiness_reports_no_estimate_when_sizes_separate_outcomes,
     |fixture| {
-        const TEN: [&str; 10] = [
-            "src/near00.rs",
-            "src/near01.rs",
-            "src/near02.rs",
-            "src/near03.rs",
-            "src/near04.rs",
-            "src/near05.rs",
-            "src/near06.rs",
-            "src/near07.rs",
-            "src/near08.rs",
-            "src/near09.rs",
-        ];
-        const ELEVEN: [&str; 11] = [
-            "src/near00.rs",
-            "src/near01.rs",
-            "src/near02.rs",
-            "src/near03.rs",
-            "src/near04.rs",
-            "src/near05.rs",
-            "src/near06.rs",
-            "src/near07.rs",
-            "src/near08.rs",
-            "src/near09.rs",
-            "src/near10.rs",
-        ];
         let mut unregressed = Vec::new();
         let mut large = Vec::new();
         for index in 0..10 {
-            unregressed.push(done(&fixture, &format!("split small {index}"), &TEN));
-            large.push(done(&fixture, &format!("split large {index}"), &ELEVEN));
+            unregressed.push(done(&fixture, &format!("split small {index}"), &NEAR_TEN));
+            large.push(done(
+                &fixture,
+                &format!("split large {index}"),
+                &NEAR_ELEVEN,
+            ));
         }
         assert_eq!(unregressed.len(), 10);
         for (index, target) in large.iter().enumerate() {
@@ -2499,17 +2498,10 @@ analytics_test!(
                 regression_from(target),
             );
         }
-        let probe = add(&fixture, "probe ten files", &TEN, vec![]);
+        let probe = add(&fixture, "probe ten files", &NEAR_TEN, vec![]);
 
         let server = fixture.server(false);
-        let rows = json_ok(server.get(&format!("/api/tasks?{WS}&limit=100")));
-        let risky = rows["items"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|row| row["id"] == probe)
-            .map(|row| row["riskiness"].clone())
-            .unwrap();
+        let risky = task_riskiness(&server, &probe);
         assert_eq!(risky["estimator_version"], 3);
         assert_eq!(risky["state"], "insufficient_history", "{risky}");
         assert_eq!(risky["probability"], Value::Null);
