@@ -414,6 +414,15 @@ try {
   assert.equal(await body.locator('.agents-term-context').count(), implementerCard().terms.length);
   assert.equal(await body.locator('[data-term="weighted_landed"] .agents-term-context').textContent(), '22 actual · 19.1 expected');
   await body.locator('#agents-detail').screenshot({ path: path.join(evidence, 'agents-implementers-detail-dark-1440.png'), animations: 'disabled' });
+  assert.equal(await body.locator('.agents-cost-note').count(), 0, 'complete cost coverage needs no unavailable-cost explanation');
+  await body.locator('.agents-row', { hasText: 'unpriced' }).locator('button').click();
+  await page.waitForFunction(() => document.querySelector('#agents-detail h3')?.textContent === 'unpriced');
+  assert.match(await body.locator('.agents-cost-note').textContent(), /Cost per landed task is unavailable because 2 counted attempts have no run and 4 counted attempts have no priced cost/);
+  assert.match(await body.locator('.agents-cost-note').textContent(), /Cost coverage: 18 measured of 24 counted attempts/);
+  assert.match(await body.locator('.agents-stats').textContent(), /Cost coverage \(counted attempts\)18 measured · 4 unpriced · 2 missing run of 24 counted attempts/);
+  await body.locator('#agents-detail').screenshot({ path: path.join(evidence, 'agents-implementers-cost-unavailable-dark-1440.png'), animations: 'disabled' });
+  await body.locator('.agents-row', { hasText: 'sol' }).first().locator('button').click();
+  await page.waitForFunction(() => document.querySelector('#agents-detail h3')?.textContent === 'sol');
   for (const tier of ['low', 'medium', 'hard', 'xhard']) {
     await page.locator('#agents-tier').selectOption(tier);
     const ranked = await body.locator('.agents-row .agents-model').allTextContents();
@@ -469,6 +478,12 @@ try {
   await shot('agents-implementers-dark-375');
   await body.locator('#agents-detail').scrollIntoViewIfNeeded();
   await shot('agents-implementers-detail-dark-375');
+  await body.locator('.agents-row', { hasText: 'unpriced' }).locator('button').click();
+  await page.waitForFunction(() => document.querySelector('#agents-detail h3')?.textContent === 'unpriced');
+  assert.match(await body.locator('.agents-cost-note').textContent(), /Cost coverage: 18 measured of 24 counted attempts/);
+  await body.locator('#agents-detail').scrollIntoViewIfNeeded();
+  await shot('agents-implementers-cost-unavailable-dark-375');
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   assert.equal(await body.locator('.agents-term-context').count(), implementerCard().terms.length);
   implementersTails.push(await disclosureTail());
   await body.locator('.agents-how').evaluate(node => node.scrollIntoView({ block: 'end' }));

@@ -39,6 +39,19 @@ click(selectButton('costly'));
 assert.deepEqual(takeAll(), [], 'selecting another row does not request agent detail');
 await settle();
 assert.equal(part('detail').querySelector('h3').textContent, 'costly');
+assert.equal(part('detail').querySelector('.agents-cost-note'), null, 'complete cost coverage needs no unavailable-cost explanation');
+assert.match(part('detail').textContent, /Cost coverage \(counted attempts\)24 measured · 0 unpriced · 0 missing run of 24 counted attempts/);
+click(selectButton('unpriced'));
+await settle();
+assert.equal(part('detail').querySelector('h3').textContent, 'unpriced');
+assert.match(part('detail').querySelector('.agents-cost-note').textContent, /Cost per landed task is unavailable because 2 counted attempts have no run and 4 counted attempts have no priced cost/);
+assert.match(part('detail').querySelector('.agents-cost-note').textContent, /Cost coverage: 18 measured of 24 counted attempts/);
+assert.match(part('detail').querySelector('.agents-cost-note').textContent, /not averaged over priced attempts alone/);
+assert.match(part('detail').textContent, /Cost coverage denominator \(counted attempts\)24/);
+click(selectButton('small-sample'));
+await settle();
+assert.equal(part('detail').querySelector('.agents-cost-note'), null, 'a valid zero cost is displayed, not explained as unavailable');
+assert.match(part('detail').textContent, /Cost per landed task \(USD\)0/);
 
 // --- Agent profile radar: percentile scale, reviewed gaps, contributions ---
 const radarVertex = (term) => part('detail').querySelectorAll('g').find(node => node.dataset.term === term);

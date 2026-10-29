@@ -286,6 +286,38 @@ function statText(value) {
   return String(value ?? "—");
 }
 
+function statValue(row, key) {
+  const entry = (Array.isArray(row.stats) ? row.stats : []).find((each) => each.key === key);
+  return entry ? entry.value : undefined;
+}
+
+// Why an implementer's cost per landed task is unavailable, from its cost
+// coverage over counted attempts. Complete coverage with a priced cost, or
+// a row whose payload carries no cost stat, needs no note: the coverage
+// stats beside it already show the sample. A valid zero cost is a number,
+// so it never reaches this note.
+function costUnavailableNote(row) {
+  if (role !== "implementers") return null;
+  const cost = statValue(row, "cost_per_weighted_landed");
+  if (cost !== null) return null; // priced (including valid zero), or not reported
+  const total = statValue(row, "cost_coverage_attempts");
+  const measured = statValue(row, "cost_measured_attempts");
+  const unpriced = statValue(row, "cost_unpriced_attempts");
+  const missing = statValue(row, "cost_missing_run_attempts");
+  if (![total, measured, unpriced, missing].every((value) => typeof value === "number")) {
+    return "Cost per landed task is unavailable: cost coverage is not reported for this row, so priced and unpriced work cannot be told apart. It is shown only when every counted attempt is priced.";
+  }
+  const reasons = [];
+  if (missing > 0) reasons.push(`${plural(missing, "counted attempt")} ${missing === 1 ? "has" : "have"} no run`);
+  if (unpriced > 0) reasons.push(`${plural(unpriced, "counted attempt")} ${unpriced === 1 ? "has" : "have"} no priced cost`);
+  const landed = row.counts && row.counts.weighted_landed;
+  if (!reasons.length && !(typeof landed === "number" && landed > 0)) reasons.push("there is no landed task to divide by");
+  if (!reasons.length) reasons.push("not every counted attempt is priced");
+  return `Cost per landed task is unavailable because ${reasons.join(" and ")}. `
+    + `Cost coverage: ${measured} measured of ${total} counted attempts. `
+    + "The complete-cohort average is shown only when every counted attempt is priced; it is not averaged over priced attempts alone.";
+}
+
 // A term weight exactly as configured: 0.25 must not read as 0.3.
 function weight(value) {
   if (typeof value !== "number" || !Number.isFinite(value)) return "—";
@@ -801,6 +833,7 @@ function detailNode(rankedRow) {
   }
   if (row.runs_without_model) stat("Runs with no model", String(row.runs_without_model));
   if (row.provisional != null) stat("Provisional", String(row.provisional));
+  const costNote = costUnavailableNote(row);
 
   const children = [
     el("header", { class: "agents-detail-head" }, [
@@ -820,6 +853,7 @@ function detailNode(rankedRow) {
     breakdown,
     el("h4", { text: tierView ? "Shown, not scored · all tiers" : "Shown, not scored" }),
     stats,
+    ...(costNote ? [el("p", { class: "agents-detail-note agents-cost-note", text: costNote })] : []),
   ];
   const node = el("aside", { class: "agents-detail", "aria-label": `Detail for ${row.crew} · ${row.model}` }, children);
   node.id = "agents-detail";

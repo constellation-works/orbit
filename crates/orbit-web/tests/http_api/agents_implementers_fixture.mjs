@@ -6,10 +6,21 @@ export const implementerTerms = [
   ['reviewer_repairs', 'Reviewer repairs', -0.5, 'problem'],
   ['crew_rework', 'Crew-caused rework', -1, 'problem'],
 ].map(([key, label, weight, group]) => ({ key, label, weight, group, definition: label }));
+const costCoverage = (measured, unpriced, missing) => {
+  const total = measured + unpriced + missing;
+  return [
+    { key: 'cost_coverage', label: 'Cost coverage (counted attempts)', value: `${measured} measured · ${unpriced} unpriced · ${missing} missing run of ${total} counted attempts` },
+    { key: 'cost_coverage_attempts', label: 'Cost coverage denominator (counted attempts)', value: total },
+    { key: 'cost_measured_attempts', label: 'Cost measured attempts', value: measured },
+    { key: 'cost_unpriced_attempts', label: 'Cost unpriced attempts', value: unpriced },
+    { key: 'cost_missing_run_attempts', label: 'Cost missing-run attempts', value: missing },
+  ];
+};
 const row = (crew, model, rank, landed, cost) => {
   const units = rank == null ? 2 : 24;
   const small = rank == null;
   const counts = { weighted_landed: landed, first_pass_accepts: small ? 1 : 16, review_rejects: small ? 1 : rank === 1 ? 4 : 3, reviewer_repairs: small ? 0 : 2, crew_rework: small ? 0 : 1, escaped_regressions: small ? 0 : 1 };
+  const coverage = crew === 'unpriced' ? costCoverage(18, 4, 2) : costCoverage(units, 0, 0);
   return {
     crew, model, rank, units, score_base: 100, score: 0, raw: 0, below_support: rank == null,
     runs_without_model: 0, provisional: null, counts,
@@ -19,6 +30,7 @@ const row = (crew, model, rank, landed, cost) => {
       { key: 'regression_residual', label: 'Regression residual (actual − expected)', value: 0 },
       { key: 'diff_economy', label: 'Diff economy (× fleet median)', value: crew === 'unpriced' ? null : 2 },
       { key: 'cost_per_weighted_landed', label: 'Cost per landed task (USD)', value: cost },
+      ...coverage,
       { key: 'median_run_seconds', label: 'Median completed run (seconds)', value: 540 },
       { key: 'tasks_by_tier', label: 'Tasks by tier', value: `medium: ${units}` },
     ],
@@ -58,6 +70,7 @@ const radarRow = (crew, model, rank, counts, reviewedUnits) => {
       { key: 'regression_residual', label: 'Regression residual (actual − expected)', value: 0 },
       { key: 'diff_economy', label: 'Diff economy (× fleet median)', value: crew === 'unpriced' ? null : 2 },
       { key: 'cost_per_weighted_landed', label: 'Cost per landed task (USD)', value: 5 },
+      ...costCoverage(units, 0, 0),
       { key: 'median_run_seconds', label: 'Median completed run (seconds)', value: 540 },
       { key: 'tasks_by_tier', label: 'Tasks by tier', value: `medium: ${units}` },
     ],

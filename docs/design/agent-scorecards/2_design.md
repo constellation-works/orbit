@@ -217,7 +217,7 @@ A role's **unit** decides window membership (§5). Problems count whenever they 
 
 ### 4.5 Cost is shown, never scored
 
-Dollar cost, tokens and wall time are never terms. Every role shows them under **Shown, not scored**. Implementers previously plotted score against cost in a role panel; that panel was removed as a product decision, so cost now appears only under **Shown, not scored**. See [Cost is shown, never scored](./4_decisions.md#cost-is-shown-never-scored).
+Dollar cost, tokens and wall time are never terms. Every role shows them under **Shown, not scored**. Implementers previously plotted score against cost in a role panel; that panel was removed as a product decision, so cost now appears only under **Shown, not scored**. See [Cost is shown, never scored](./4_decisions.md#cost-is-shown-never-scored). An unavailable implementer cost still reports its counted-attempt coverage there (§5.2), so a null is never read as zero spend or as mostly priced work.
 
 Today's per-8-active-hours rate toggle is dropped: active hours mean something only for orchestrators. Orchestrators show active hours under **Shown, not scored**.
 
@@ -366,15 +366,33 @@ Each row's `stats` includes:
   summed over landed deliveries per task within the scan horizon. No new store
   format or backfill is introduced.
 
-Other unscored context: cost per landed task, median completed run duration,
-and tasks by tier. Cost sums the workspace's recorded invocations for the row's
-delivery runs (including delivery review and repair activities), counting each
-run once, using provider-reported cost when present and derived pricing
-otherwise, from the same telemetry as `/cost`. It divides by this row's landed
-task count. Missing run telemetry, an unpriced invocation, a truncated cost
-scan, or no landed credit returns null, never zero. These are recorded costs as
-of the scan, not a final bill. Pulled work without local cost records remains
-unpriced.
+Other unscored context: cost per landed task, cost coverage, median completed
+run duration, and tasks by tier. Cost sums the workspace's recorded invocations
+for the row's delivery runs (including delivery review and repair activities),
+counting each distinct run once, using provider-reported cost when present and
+derived pricing otherwise, from the same telemetry as `/cost`. It divides by
+this row's landed task count. Missing run telemetry, an unpriced invocation, a
+truncated cost scan, or no landed credit returns null, never zero — a valid
+zero spend returns zero. The complete-cohort average is strict: it is never
+averaged over priced attempts alone. These are recorded costs as of the scan,
+not a final bill. Pulled work without local cost records remains unpriced.
+
+Cost coverage makes that null readable. Every row also carries, beside the
+cost stat, `cost_coverage` (a summary string) and the counted-attempt counts
+`cost_coverage_attempts` (the named denominator), `cost_measured_attempts`,
+`cost_unpriced_attempts` and `cost_missing_run_attempts`. The population is
+every counted attempt behind the cost calculation — an attempt started in
+the window, not admitted as `no-diff-expected`, whose crew and model match
+the row — counted per attempt, not per distinct run: a run shared by two
+attempts covers both, and the counts sum to the denominator. An attempt is
+measured when its run has a priced cost (zero included), unpriced when it
+has a run with no priced cost, and missing-run when it has no run at all.
+Coverage is display-only: it enters no tally, denominator or score, so
+scores and ranks are unchanged by it or by pricing. The detail column shows
+the coverage stats under **Shown, not scored** and, while the cost is null,
+explains why — how many counted attempts have no run or no priced cost,
+measured of the denominator — instead of leaving an unexplained dash.
+Complete coverage still shows the existing cost per landed task.
 
 Implementers have no role panel. The score-against-cost plot and per-tier
 review table remain removed; the ranking, detail column and disclosure are the
