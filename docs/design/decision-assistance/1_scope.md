@@ -258,7 +258,8 @@ off stops new calls; late results cannot mutate workflow state.
 Proposed host-owned configuration selects enabled workspaces, per-use-case mode
 (`off`, `shadow`, `advisory`), adapter/model, credential reference, request/queue
 budgets and retention. Defaults are off. Exact key names and command syntax are
-deferred to implementation review; no runnable configuration is advertised here.
+documented in [the configuration reference](../../CONFIG.md); this scope
+document describes the design boundary.
 Shadow mode persists results for comparison without inserting suggestions into
 the normal author or investigator view. Advisory mode displays evaluated results.
 
