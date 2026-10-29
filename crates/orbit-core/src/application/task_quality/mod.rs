@@ -18,6 +18,37 @@ pub use ledger::{
 use super::assistance::AssistanceService;
 use crate::OrbitRuntime;
 
+/// Drop a restored snapshot's stale admission receipt so the owner tick can
+/// mint a fresh attempt. The snapshot keeps its content-derived identity — and
+/// with it its completed results, annotations and dismissal identities — while
+/// the old work ID (whose assistance slot moved on to superseding content)
+/// must never be mistaken for current coverage.
+fn refresh_restored_snapshot(
+    service: &AssistanceService,
+    snapshot: &mut ledger::TaskQualitySnapshot,
+) -> Result<(), OrbitError> {
+    let Some(work) = snapshot.work_id.clone() else {
+        return Ok(());
+    };
+    let stale = match service.assistance_assessment(&work, &snapshot.source_digest)? {
+        None => true,
+        Some(record) => {
+            !record.current
+                || record
+                    .result
+                    .as_ref()
+                    .is_some_and(|r| r.disposition == AssistanceDisposition::Stale)
+        }
+    };
+    if stale {
+        snapshot.work_id = None;
+        snapshot.admission_started = false;
+        snapshot.coverage_gap = None;
+        snapshot.collected_at = Utc::now();
+    }
+    Ok(())
+}
+
 // Always acquire the task's shared lock before its private consumer lock.
 // This fences terminal transitions/semantic edits during local admission or
 // feedback, while permitting claimed tasks to be assessed without task writes.
@@ -83,9 +114,6 @@ impl OrbitRuntime {
                     .map_err(ledger::quality_json_error)?,
                 );
                 let mut history = ledger::read_quality_history(&path)?;
-                if history.current_id.as_ref() == Some(&snapshot_id) {
-                    return Ok(());
-                }
                 if !history.snapshots.iter().any(|s| s.id == snapshot_id) {
                     history.snapshots.push(TaskQualitySnapshot {
                         id: snapshot_id.clone(),
@@ -101,6 +129,15 @@ impl OrbitRuntime {
                     if history.snapshots.len() > 32 {
                         history.snapshots.remove(0);
                     }
+                } else if let Some(snapshot) =
+                    history.snapshots.iter_mut().find(|s| s.id == snapshot_id)
+                {
+                    // Restoring prior semantic content reuses its snapshot (and
+                    // its annotation/dismissal identities), but the assistance
+                    // slot moved on when the superseding content was admitted.
+                    // Refresh the stale receipt so the owner tick mints a
+                    // fresh attempt instead of waiting on superseded work.
+                    refresh_restored_snapshot(service, snapshot)?;
                 }
                 history.current_id = Some(snapshot_id);
                 ledger::write_quality_history(&path, &history)
@@ -300,6 +337,11 @@ impl OrbitRuntime {
                     {
                         return Ok(());
                     }
+                    // A restored snapshot reuses its identity but not its
+                    // stale receipt: revalidate before skipping admission, or
+                    // the tick would wait on work whose slot already moved to
+                    // superseding content.
+                    refresh_restored_snapshot(service, snapshot)?;
                     if snapshot.work_id.is_some()
                         || snapshot.coverage_gap == Some(AssistanceReason::InvalidRequest)
                     {

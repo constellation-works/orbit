@@ -146,6 +146,7 @@ mod task_external_merge;
 mod task_lint_paths;
 mod task_pilot;
 mod task_pr_closure;
+mod task_quality_restoration;
 mod task_update;
 mod upgrade_pending_requeue;
 mod upgrade_resume;
