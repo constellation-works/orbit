@@ -19,6 +19,7 @@ pub(crate) mod admission;
 pub mod agents;
 pub mod audit_event;
 pub mod auto_tasks;
+pub mod change_watch;
 pub mod codebase;
 pub mod config;
 pub mod contracts;

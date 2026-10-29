@@ -321,6 +321,22 @@ pub trait TaskStoreBackend: Send + Sync {
     ) -> Result<BTreeMap<OrbitId, TaskStatus>, OrbitError> {
         self.task_status_index()
     }
+    /// Every task of this workspace with its status and last update, for a
+    /// change watcher to compare between reads. An informational snapshot
+    /// with no coordination, recovery or index repair. Backends with a
+    /// generated index override this; the default answers from
+    /// [`Self::list_tasks`].
+    fn task_change_stamps(&self) -> Result<Vec<crate::contracts::TaskChangeStamp>, OrbitError> {
+        Ok(self
+            .list_tasks()?
+            .into_iter()
+            .map(|task| crate::contracts::TaskChangeStamp {
+                id: task.id,
+                status: task.status,
+                updated_at: task.updated_at,
+            })
+            .collect())
+    }
     /// Which of `task_ids` carry `tag`, in any workspace on the host. Backends
     /// with a host-wide registry override this; the default answers from
     /// [`Self::list_tasks`].

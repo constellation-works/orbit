@@ -458,17 +458,35 @@ export async function fetchHostResourcePayload() {
 let sequence = 0;
 let lastPayload = null;
 let receivedAt = 0;
+// When the change stream last pushed the selected host's sample.
+let pushedAt = 0;
+// The stream sends a sample every 5 s; without one for this long the chips
+// read for themselves again.
+const PUSHED_SAMPLE_TTL_MS = 12_000;
+
+function showHostResources(payload) {
+  lastPayload = payload;
+  receivedAt = Date.now();
+  renderHostResources(payload);
+  renderProviderUsage(payload);
+  for (const listener of listeners) listener(payload);
+}
+
+/// A sample the change stream pushed for the selected host: the same body as
+/// `/host/resources`. It supersedes any read in flight, and while samples keep
+/// arriving the chips make no reads of their own.
+export function applyPushedHostResources(payload) {
+  if (!payload || typeof payload !== 'object') return;
+  sequence += 1;
+  pushedAt = Date.now();
+  showHostResources(payload);
+}
+
 export async function fetchAndRenderHostResources() {
   const current = ++sequence;
   try {
     const payload = await fetchHostResourcePayload();
-    if (current === sequence) {
-      lastPayload = payload;
-      receivedAt = Date.now();
-      renderHostResources(payload);
-      renderProviderUsage(payload);
-      for (const listener of listeners) listener(payload);
-    }
+    if (current === sequence) showHostResources(payload);
   } catch (error) {
     if (current === sequence) {
       lastPayload = null;
@@ -485,6 +503,7 @@ export async function fetchAndRenderHostResources() {
 /// the previous host is dropped with it.
 export function resetHostResources() {
   sequence += 1;
+  pushedAt = 0;
   selectedRead = null;
   ioReported = false;
   lastPayload = null;
@@ -497,6 +516,7 @@ export function initHostResources() {
   let pending = false;
   setInterval(async () => {
     if (document.hidden || pending || isHostUnavailable()) return;
+    if (Date.now() - pushedAt < PUSHED_SAMPLE_TTL_MS) return;
     pending = true;
     try { await fetchAndRenderHostResources(); }
     catch (error) { console.error(error); }

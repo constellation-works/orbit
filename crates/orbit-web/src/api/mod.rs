@@ -16,6 +16,7 @@ mod denials;
 mod diagnostics;
 mod distributed;
 mod doctor;
+mod events;
 mod forward;
 mod frictions;
 mod helpers;

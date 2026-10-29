@@ -101,6 +101,32 @@ impl RuntimeKernel {
     }
 }
 
+impl RuntimeKernel {
+    /// One sorted key per active task reservation in this workspace, naming
+    /// its id, files and expiry, for a change watcher to compare between
+    /// reads. Observational like [`Self::task_locks_snapshot`]: no expiry,
+    /// recovery or audit write.
+    pub fn active_task_reservation_keys(&self) -> Result<Vec<String>, OrbitError> {
+        let workspace_id = workspace_task_reservation_id(self)?;
+        let mut keys = self
+            .stores()
+            .task_reservations()
+            .inspect_active_task_reservations(&workspace_orbit_dir(self), workspace_id.as_deref())?
+            .into_iter()
+            .map(|reservation| {
+                format!(
+                    "{}|{}|{}",
+                    reservation.reservation_id,
+                    reservation.expires_at,
+                    reservation.files.join(",")
+                )
+            })
+            .collect::<Vec<_>>();
+        keys.sort();
+        Ok(keys)
+    }
+}
+
 pub(super) fn lock_listing_json(
     locked_surfaces: &[(TaskEnvelopeV2, Vec<String>)],
     reservations: &[ActiveTaskReservation],

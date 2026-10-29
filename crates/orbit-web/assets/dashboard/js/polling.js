@@ -7,12 +7,18 @@
 // phase and baseline-red holds, which raise a browser notification only after
 // the operator has opted in. A visible tab never notifies and keeps its plain
 // title, so nothing changes while the operator is looking.
+//
+// While the change stream (change-stream.js) covers the open view, its panels
+// refetch on change notices, so the visible tab's timer drops to a slow
+// safety-net poll for anything a notice missed; a reconnect or resync asks
+// for one refresh at once.
 
 import { fetchJson, getHostRevision, getWorkspace, getWorkspaceRevision, isAggregateView } from './common.js';
 
 const REFRESH_INTERVAL_MS = 30_000;
 const MAX_REFRESH_INTERVAL_MS = 5 * 60_000;
 const BACKGROUND_INTERVAL_MS = 60_000;
+const SAFETY_NET_INTERVAL_MS = 3 * 60_000;
 const NOTIFY_STORAGE_KEY = "orbit.dashboard.notify";
 const HOLD_REASON = "baseline_red_hold";
 const DRAINING_PHASES = new Set(["draining", "winding_down"]);
@@ -185,12 +191,34 @@ function acknowledgeBackground() {
   }
 }
 
+// Whether the change stream keeps the open view current; set by the app.
+let streamCovers = () => false;
+// The started poll's controls, for the change stream's hooks below.
+let poller = null;
+
+/// Name what tells the poll that change notices keep the open view current.
+export function setStreamCoverage(covers) {
+  streamCovers = typeof covers === "function" ? covers : () => false;
+}
+
+/// Re-time the pending refresh after the open view or the stream's state
+/// changed, so a view the stream stops covering polls at its normal cadence.
+export function reschedulePolling() {
+  poller?.reschedule();
+}
+
+/// Refresh the visible tab now, as after a reconnect or resync.
+export function refreshDashboardNow() {
+  poller?.refreshNow();
+}
+
 // A one-shot timer avoids overlapping refreshes: the next poll is scheduled
 // only after the current refresh or background read settles. Hiding swaps the
 // pending refresh for an immediate background read and its 60 s cadence;
 // becoming visible starts exactly one refresh and resumes the normal cadence.
 export function startDashboardPolling(refresh) {
   let timer = null;
+  let timerRefreshes = false;
   let interval = REFRESH_INTERVAL_MS;
 
   const clearScheduled = () => {
@@ -198,6 +226,7 @@ export function startDashboardPolling(refresh) {
       clearTimeout(timer);
       timer = null;
     }
+    timerRefreshes = false;
   };
 
   const schedule = (fn, delay) => {
@@ -209,15 +238,20 @@ export function startDashboardPolling(refresh) {
   };
 
   const scheduleRefresh = () => {
-    if (!document.hidden) schedule(runRefresh, interval);
+    if (document.hidden) return;
+    schedule(runRefresh, streamCovers() ? Math.max(interval, SAFETY_NET_INTERVAL_MS) : interval);
+    timerRefreshes = timer !== null;
   };
 
   const scheduleBackground = () => {
-    if (document.hidden) schedule(runBackground, BACKGROUND_INTERVAL_MS);
+    if (!document.hidden) return;
+    schedule(runBackground, BACKGROUND_INTERVAL_MS);
+    timerRefreshes = false;
   };
 
   const runRefresh = () => {
     timer = null;
+    timerRefreshes = false;
     if (document.hidden) return;
     Promise.resolve(refresh())
       .then((succeeded) => {
@@ -249,6 +283,21 @@ export function startDashboardPolling(refresh) {
     syncNotifyButton();
     runRefresh();
   });
+
+  poller = {
+    // Only a pending refresh is re-timed; one in flight schedules its
+    // successor with the coverage current when it settles.
+    reschedule: () => {
+      if (!timerRefreshes) return;
+      clearScheduled();
+      scheduleRefresh();
+    },
+    refreshNow: () => {
+      if (document.hidden) return;
+      clearScheduled();
+      runRefresh();
+    },
+  };
 
   if (document.hidden) runBackground();
   else runRefresh();

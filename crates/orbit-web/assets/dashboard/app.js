@@ -30,7 +30,9 @@ import { taskState } from './js/task-shared.js';
 import { primeTaskDetail, taskDetailSnapshot } from './js/task-data.js';
 import { primeTaskRuns, taskRunsTabActive } from './js/task-detail.js';
 import { fetchAndRenderConfig, getConfigSubtab, initConfig, setConfigSubtab } from './js/config.js';
-import { fetchAndRenderHostResources, initHostResources } from './js/host-resources.js';
+import { applyPushedHostResources, fetchAndRenderHostResources, initHostResources } from './js/host-resources.js';
+import { changeStreamLive, onChange, onChangeStreamLive, startChangeStream } from './js/change-stream.js';
+import { refreshDashboardNow, reschedulePolling, setStreamCoverage } from './js/polling.js';
 import { fetchAndRenderPlugins } from './js/plugins.js';
 import { fetchAndRenderLeaseLandings, fetchAndRenderLeases } from './js/leases.js';
 import { checkHostConnection, chooseHost, hostLevelFailure, initHostSwitcher, showHostFailure } from './js/host-switch.js';
@@ -235,7 +237,7 @@ function routerContext() {
   return {
     // getters/setters for router-owned state (kept in app.js per extraction contract)
     getTab: () => activeTab,
-    setTab: (v) => { activeTab = v; },
+    setTab: (v) => { activeTab = v; reschedulePolling(); },
     getJobsSubtab: () => activeJobsSubtab,
     setJobsSubtab: (v) => { activeJobsSubtab = v; },
     getDiagSubtab: () => activeDiagSubtab,
@@ -1371,6 +1373,21 @@ function locksPanelShown() {
   return panel.getClientRects().length > 0;
 }
 
+// The open backlog or proposed task whose full readiness entry the drain
+// read adds beside the workspace list.
+function drainDetailTaskId() {
+  const selectedTask = activeTab === "tasks" && !isAggregateView() && !taskState.pinnedExternalTask
+    ? lastTasks.find((task) => task.id === taskState.selectedTaskId)
+    : null;
+  return ["proposed", "backlog"].includes(selectedTask?.status) ? selectedTask.id : null;
+}
+
+// In progress and Blocked rows show their locked-file counts, and the dock
+// beside the list holds the Locks held panel; read locks while either shows.
+function taskLocksShown() {
+  return activeStatuses.has("in-progress") || activeStatuses.has("blocked") || locksPanelShown();
+}
+
 function activeRefreshJobs({ poll = false, explicit = false } = {}) {
   // ORB-00039: in the aggregate "All workspaces" view there is no concrete
   // workspace to scope per-workspace endpoints to, so skip every per-workspace
@@ -1411,18 +1428,11 @@ function activeRefreshJobs({ poll = false, explicit = false } = {}) {
   const activeRunsRequest = fetchJson(activeRunsPath);
   add("Jobs in flight", fetchJobsInFlight(activeRunsRequest));
   // Keep the chrome indicator current on every page.
-  const selectedTask = activeTab === "tasks" && !aggregate && !taskState.pinnedExternalTask
-    ? lastTasks.find((task) => task.id === taskState.selectedTaskId)
-    : null;
-  const detailTaskId = ["proposed", "backlog"].includes(selectedTask?.status) ? selectedTask.id : null;
-  add("Drain", fetchAndRenderAutoDrainPane({ detailTaskId, forecast: slowReads }));
+  add("Drain", fetchAndRenderAutoDrainPane({ detailTaskId: drainDetailTaskId(), forecast: slowReads }));
 
   if (activeTab === "tasks") {
     add("Tasks", fetchAndRenderTasks({ includeCrews: slowReads }));
-    // In progress and Blocked rows show their locked-file counts, and the dock
-    // beside the list holds the Locks held panel; read locks while either shows.
-    const runRowsShown = activeStatuses.has("in-progress") || activeStatuses.has("blocked");
-    if (!aggregate && !document.hidden && (runRowsShown || locksPanelShown())) add("Locked files", fetchAndRenderTaskLocks());
+    if (!aggregate && !document.hidden && taskLocksShown()) add("Locked files", fetchAndRenderTaskLocks());
     // When each running task's run started, for the In progress rows' elapsed
     // time. Only while that group can show.
     if (includeRunningRuns) add("Running runs", fetchRunningRuns(activeRunsRequest));
@@ -1618,6 +1628,43 @@ function fetchAndRenderTaskLocks() {
   return requestPanel("locks-body", "locks", () => fetchJson("/api/tasks/locks"), renderLocksPanel, "locks-count").catch(error => {
     if (visit.isCurrent()) setTaskLocks(null);
     throw error;
+  });
+}
+
+// Change notices [change-stream.js]. While the stream is live the Tasks page
+// polls only on its safety net: each panel below refetches on the notice kinds
+// it shows, quietly, as a poll would. Other pages keep their 30 s poll; the
+// in-flight count, drain chip and host chips follow notices on every page.
+function wireChangeStream() {
+  setStreamCoverage(() => activeTab === "tasks" && !isAggregateView() && changeStreamLive());
+  onChangeStreamLive(() => reschedulePolling());
+  onChange(["resync", "reconnect"], () => refreshDashboardNow());
+  onChange(["host.resources"], (notices) => applyPushedHostResources(notices[notices.length - 1].resources));
+  const quietly = (label, start) => {
+    void Promise.resolve(runPanelPoll(true, start)).catch(error => console.error(`${label} refresh failed`, error));
+  };
+  // A task notice redraws the list only when that task is on it or would be;
+  // keyed rendering then replaces only the changed row.
+  onChange(["task"], (notices) => {
+    if (activeTab !== "tasks" || isAggregateView() || document.hidden) return;
+    const shown = notices.some(({ id, status }) => !status || activeStatuses.has(status)
+      || id === taskState.selectedTaskId || lastTasks.some((task) => task.id === id));
+    if (shown) quietly("Tasks", () => fetchAndRenderTasks({ includeCrews: false }));
+  });
+  onChange(["locks"], () => {
+    if (activeTab !== "tasks" || isAggregateView() || document.hidden || !taskLocksShown()) return;
+    quietly("Locked files", fetchAndRenderTaskLocks);
+  });
+  onChange(["run"], () => {
+    if (isAggregateView() || document.hidden) return;
+    const includeRunningRuns = activeTab === "tasks" && activeStatuses.has("in-progress");
+    const request = fetchJson(`/api/job-runs?state=active&limit=1${includeRunningRuns ? "&include_running=true" : ""}`);
+    quietly("Jobs in flight", () => fetchJobsInFlight(request));
+    if (includeRunningRuns) quietly("Running runs", () => fetchRunningRuns(request));
+  });
+  onChange(["run", "drain"], () => {
+    if (isAggregateView() || document.hidden) return;
+    quietly("Drain", () => fetchAndRenderAutoDrainPane({ detailTaskId: drainDetailTaskId(), forecast: false }));
   });
 }
 
@@ -2003,6 +2050,7 @@ function wireClockControls() {
 $("refresh-btn").addEventListener("click", () => refreshDashboard({ explicit: true }));
 wireClockControls();
 initHostResources();
+wireChangeStream();
 wireReliabilityWindowSelector();
 wireWindowSelector("tools-window-selector", { windows: TOOLS_WINDOWS });
 wireDoctorPanel();
@@ -2047,6 +2095,9 @@ workspacesWanted = true;
 await ensureHostScope();
 persistScopeToUrl();
 syncWindowSelectors();
+// Opened once the scope is resolved, so a workspace named in the URL does not
+// open a stream that its logical ID then replaces.
+startChangeStream();
 // Warm the shared fleet snapshot alongside the router's first poll so a slow
 // host cannot delay the selected view. Both reuse the same in-flight read;
 // warmup paints the indicator when the snapshot arrives.

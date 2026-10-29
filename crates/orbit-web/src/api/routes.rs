@@ -4,12 +4,13 @@ use axum::routing::{get, post, put};
 
 use super::*;
 
-/// Tell long-lived streaming handlers (currently `/api/log/stream`) to close
-/// cooperatively. Called once from [`crate::serve::shutdown_signal`] so the bounded
+/// Tell long-lived streaming handlers (`/api/log/stream`, `/api/events/stream`
+/// and lease notice streams) to close cooperatively. Called once from [`crate::serve::shutdown_signal`] so the bounded
 /// graceful-drain deadline in `crate::serve::run_server` rarely has to be relied on
 /// (ORB-11246).
 pub(crate) fn request_shutdown() {
     log::request_shutdown();
+    events::request_shutdown();
     lease_notices::request_shutdown();
 }
 
@@ -177,6 +178,9 @@ pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state
         .route("/audit", get(audit::list_audit))
         .route("/log", get(log::get_log))
         .route("/log/stream", get(log::stream_log))
+        // Workspace change notices over SSE, so the dashboard refetches only
+        // what changed instead of polling every panel.
+        .route("/events/stream", get(events::stream_events))
         .route("/audit/summary", get(audit::audit_summary))
         .route("/audit/incidents", get(incidents::list_failure_incidents))
         .route(
