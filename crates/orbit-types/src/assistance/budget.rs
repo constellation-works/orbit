@@ -2,7 +2,7 @@ use super::{AssistanceReason, assistance_identifier};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct AssistanceLimits {
     pub concurrency: u32,
     pub queue_capacity: u32,
@@ -56,7 +56,7 @@ impl AssistanceLimits {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct AssistanceBudget {
     /// Host-owned allocation identity; reservations survive retention/restarts.
     pub epoch: String,
