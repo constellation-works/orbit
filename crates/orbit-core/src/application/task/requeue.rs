@@ -26,6 +26,9 @@
 //! Two callers share [`OrbitRuntime::write_candidate_requeue`]: the operator
 //! command (`orbit task requeue`, `orbit.task.requeue`) and the cleared-infra
 //! requeue of a transient infrastructure block (`transient_infra`).
+//! Plain attributed blocked/review-to-backlog updates authenticate through
+//! the same publication contract and append preservation atomically with
+//! their status change.
 //!
 //! A run that published its own pull request through its pipeline steps and
 //! then escalated has no handoff receipt: its failure handoff kept that pull
@@ -658,12 +661,13 @@ impl OrbitRuntime {
             .is_none_or(|origin| held.machine_id.as_deref() == Some(origin.machine_id.as_str())))
     }
 
-    /// Authenticate a plain blocked-to-backlog status update without a
+    /// Authenticate a plain blocked/review-to-backlog status update without a
     /// discard, exactly as an operator requeue does. Returns the
     /// publication-preservation record to append with the status change
     /// (`None` when the same record is already on file or nothing was
-    /// published). A refusal leaves the task blocked with nothing written.
-    pub(crate) fn authenticate_blocked_to_backlog(
+    /// published). A refusal leaves the task in its current status with
+    /// nothing written.
+    pub(crate) fn authenticate_published_backlog_return(
         &self,
         task: &Task,
     ) -> Result<Option<TaskHistoryEntry>, OrbitError> {

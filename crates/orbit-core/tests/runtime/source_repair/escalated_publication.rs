@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex};
 /// A forge reporting the fixture's PR 17 with the required checks a case
 /// sets.
 #[derive(Clone)]
-struct ChecksForge(Arc<Mutex<PullRequestBlockers>>);
+pub(super) struct ChecksForge(Arc<Mutex<PullRequestBlockers>>);
 
 impl TaskPrForge for ChecksForge {
     fn open_pull_requests(
@@ -45,7 +45,7 @@ impl TaskPrForge for ChecksForge {
 }
 
 impl ChecksForge {
-    fn set(&self, head_sha: &str, failed: &[&str], pending: &[&str], passed: &[&str]) {
+    pub(super) fn set(&self, head_sha: &str, failed: &[&str], pending: &[&str], passed: &[&str]) {
         let names = |names: &[&str]| names.iter().map(|name| name.to_string()).collect();
         let mut blockers = self.0.lock().unwrap();
         blockers.head_sha = head_sha.into();
@@ -70,7 +70,7 @@ type ChecksCase<'a> = (
 type AnswerCase<'a> = (&'a str, &'a dyn Fn(&mut Value));
 
 /// Install a forge whose required checks all passed on the recorded head.
-fn green_forge(f: &mut Fixture) -> ChecksForge {
+pub(super) fn green_forge(f: &mut Fixture) -> ChecksForge {
     let forge = ChecksForge(Arc::new(Mutex::new(PullRequestBlockers {
         pull: ForgePullRequest {
             number: 17,

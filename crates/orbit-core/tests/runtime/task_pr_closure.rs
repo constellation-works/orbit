@@ -676,14 +676,33 @@ fn a_requeue_while_the_tasks_run_is_live_closes_nothing() {
         )
         .expect("bind the run");
 
-    // A live run requires an explicit operator override; its PRs still stay open.
-    fx.runtime
+    // Force does not authenticate an unbound publication. Refuse atomically,
+    // then exercise the live-PR closure guard through the explicit discard.
+    let operator = fx
+        .runtime
         .clone()
-        .with_actor(orbit_core::ActorIdentity::human("human:operator"))
+        .with_actor(orbit_core::ActorIdentity::human("human:operator"));
+    let before = fx.runtime.get_task(&task_id).unwrap();
+    let history = fx.runtime.get_task_history(&task_id).unwrap();
+    operator
         .force_update_task_with_identity(
             &task_id,
             orbit_core::application::task::TaskUpdateParams {
                 status: Some(TaskStatus::Backlog),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .expect_err("force cannot bypass publication authentication");
+    assert_eq!(fx.runtime.get_task(&task_id).unwrap(), before);
+    assert_eq!(fx.runtime.get_task_history(&task_id).unwrap(), history);
+    operator
+        .force_update_task_with_identity(
+            &task_id,
+            orbit_core::application::task::TaskUpdateParams {
+                status: Some(TaskStatus::Backlog),
+                discard_candidate: true,
                 ..Default::default()
             },
             None,
@@ -758,14 +777,33 @@ fn a_requeue_while_a_resumed_retry_is_live_closes_nothing() {
         "resume leaves the task bound to the terminal source"
     );
 
-    // A live run requires an explicit operator override; its PRs still stay open.
-    fx.runtime
+    // Force does not authenticate an unbound publication. Refuse atomically,
+    // then exercise the live-PR closure guard through the explicit discard.
+    let operator = fx
+        .runtime
         .clone()
-        .with_actor(orbit_core::ActorIdentity::human("human:operator"))
+        .with_actor(orbit_core::ActorIdentity::human("human:operator"));
+    let before = fx.runtime.get_task(&task_id).unwrap();
+    let history = fx.runtime.get_task_history(&task_id).unwrap();
+    operator
         .force_update_task_with_identity(
             &task_id,
             orbit_core::application::task::TaskUpdateParams {
                 status: Some(TaskStatus::Backlog),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .expect_err("force cannot bypass publication authentication");
+    assert_eq!(fx.runtime.get_task(&task_id).unwrap(), before);
+    assert_eq!(fx.runtime.get_task_history(&task_id).unwrap(), history);
+    operator
+        .force_update_task_with_identity(
+            &task_id,
+            orbit_core::application::task::TaskUpdateParams {
+                status: Some(TaskStatus::Backlog),
+                discard_candidate: true,
                 ..Default::default()
             },
             None,

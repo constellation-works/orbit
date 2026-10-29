@@ -756,7 +756,7 @@ fn a_requeue_without_a_receipt_refuses_an_unbound_pull_request() {
 
 /// A plain status update through the public task-update tool, as an
 /// operator or agent would move a blocked task back to backlog.
-fn plain_backlog(f: &Fixture, discard: bool) -> Result<(), orbit_core::OrbitError> {
+pub(super) fn plain_backlog(f: &Fixture, discard: bool) -> Result<(), orbit_core::OrbitError> {
     if discard {
         // The tool host carries `discard_candidate` as a CLI-style option;
         // the human surface below is the same shared core operation.
