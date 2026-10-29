@@ -694,6 +694,10 @@ function navigateToRunImpl(ctx, runId, workspaceId = null) {
   setActiveTabImpl(ctx, `runs/${encodeURIComponent(runId)}`);
 }
 
+// The address the router last routed, kept at module scope so recordRoutedHref
+// can move it when the dock rewrites the hash without the router.
+let routedHref = null;
+
 function initTabsImpl(ctx) {
   // A late count on any preceding entry shifts the selection, even when the
   // destination itself keeps its width. Observe entries as well as the row so
@@ -802,7 +806,6 @@ function initTabsImpl(ctx) {
   // An entry made by pushState (a task link that changes workspace) fires no
   // hashchange, so popstate routes too; the address that was just routed is not
   // routed twice. common.js restores the scope on popstate first.
-  let routedHref = null;
   const routeFromLocation = () => {
     if (window.location.href === routedHref) return;
     routedHref = window.location.href;
@@ -837,6 +840,13 @@ export function navigateToRun(runId, workspaceId = null) {
 export function initTabs() {
   const ctx = getCtx();
   return initTabsImpl(ctx);
+}
+
+/// Record the address a dock replaceState just wrote as routed. Without it the
+/// router's last-routed address still names the list URL the rewrite replaced,
+/// so a later hash navigation to that URL is skipped as already routed (ORB-19783).
+export function recordRoutedHref() {
+  routedHref = window.location.href;
 }
 
 /// The canonical hash of the Health or Analytics view on screen, for a scope
