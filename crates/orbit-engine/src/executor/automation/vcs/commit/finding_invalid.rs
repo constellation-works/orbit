@@ -196,6 +196,9 @@ fn verify_citation(workspace: &Path, head: &str, location: &str) -> Result<(), O
             "evidence location {location:?} names a path absent at the tested HEAD"
         )));
     }
+    if git_output_raw(workspace, &["cat-file", "-t", &object])?.trim() != "blob" {
+        return Err(malformed());
+    }
     if git_output_raw(workspace, &["show", &object])?
         .lines()
         .count()

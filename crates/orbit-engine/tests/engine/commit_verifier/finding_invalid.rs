@@ -40,6 +40,31 @@ fn verified_report_rejects_the_finding_and_lands_nothing() {
     assert_eq!(rejected[0].evidence[0].location, "README.md:1");
 }
 
+fn directory_citation_records_nothing() {
+    let temp = tempdir().expect("create tempdir");
+    init_git_repo(temp.path());
+    std::fs::create_dir_all(temp.path().join("nested")).expect("create nested directory");
+    std::fs::write(temp.path().join("nested/README.md"), "nested file\n")
+        .expect("write nested file");
+    git_output(temp.path(), &["add", "nested/README.md"]);
+    git_output(temp.path(), &["commit", "-m", "add nested file"]);
+    let head = git_head(temp.path());
+    let host = VerifierHost::new(temp.path(), fixture_task());
+    host.set_artifacts(
+        TASK_ID,
+        vec![artifact("finding-invalid.json", report(&head, "nested:1"))],
+    );
+
+    let error = action(&host, &commit_input(temp.path(), &head))
+        .expect_err("a directory citation must not verify");
+    assert!(
+        error.to_string().contains("finding_invalid_unverified"),
+        "directory citation must be refused, got: {error}"
+    );
+    assert!(host.rejected_findings.lock().unwrap().is_empty());
+    assert_eq!(git_head(temp.path()), head);
+}
+
 fn valid_no_diff(head: &str) -> (Value, Value) {
     let report = json!({
         "schema_version": 1,
@@ -182,6 +207,10 @@ fn finding_invalid_contracts() {
             (
                 "verified_report_rejects_the_finding_and_lands_nothing",
                 verified_report_rejects_the_finding_and_lands_nothing,
+            ),
+            (
+                "directory_citation_records_nothing",
+                directory_citation_records_nothing,
             ),
             (
                 "unverifiable_or_claimed_reports_record_nothing",
