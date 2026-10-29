@@ -1,8 +1,8 @@
 ---
 title: Federated MCP — Design
 owner: grok
-last_updated: 2026-10-12
-last_validated: 2026-10-27
+last_updated: 2026-10-29
+last_validated: 2026-10-29
 status: Draft
 feature: federated-mcp
 doc_role: design
@@ -167,7 +167,10 @@ v1 local stdio, direct SSH stdio, and `orbit mcp listen` stay as specified in mc
 - [ORB-11015] — fail-closed routing of host-qualified selectors
 - [ORB-11016] — registered the federated serve path and aligned current docs
 - [ORB-11017] — federated workspace param is the host-qualified selector
+- [ORB-11023] — routed delivery gets its own budget; a lost answer after
+  dispatch is `outcome_unknown`
 - [ORB-11044] — implicit local membership: local workspaces listed and routed without SSH
+- [ORB-12564] — `--operator` propagates into every destination the client opens
 - [ORB-14448] — host file and `orbit host` commands (specified in host-registry)
 - [ORB-14449] — task-prefix routing and `--host` (host-registry)
 

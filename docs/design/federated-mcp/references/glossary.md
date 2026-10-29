@@ -1,6 +1,7 @@
 ---
 type: design
 summary: "Glossary: Federated MCP"
+last_updated: 2026-10-29
 last_validated: 2026-10-29
 title: Glossary — Federated MCP
 owner: grok
@@ -42,3 +43,10 @@ Vocabulary for the federated MCP mux. Standard industry terms (proxy, mux, TTL) 
 | **Tool class** | Assignment by behavior: coordination-store writes are `control_plane`; runs/logs/scheduler tools are `execute`; discovery/list tools are unclassified and not subject to `capability_refused`. Not a per-tool registry field. [specs/federated-workspace-mcp.md](../specs/federated-workspace-mcp.md) |
 | **Tool-not-on-this-host** | The destination is identified but does not advertise the tool. Distinct from `unknown_selector`. [specs/federated-workspace-mcp.md](../specs/federated-workspace-mcp.md) |
 | **Unclassified tool** | Discovery/list tool. Not subject to `capability_refused`. [specs/federated-workspace-mcp.md](../specs/federated-workspace-mcp.md) |
+
+## Task References
+
+- [ORB-12564] — removed destination-side caller authorization: an SSH login is
+  ownership, so retired terms stay retired
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
