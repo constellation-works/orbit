@@ -79,7 +79,7 @@ function autoTaskFilterBar(payload, total, matched, visible) {
   input.placeholder = "Filter definitions by name…";
   input.addEventListener("input", () => {
     autoTaskFilterQuery = input.value;
-    renderAutoTasks(payload, { restoreFilterFocus: true });
+    renderAutoTasks(payload);
   });
   const status = el("span", {
     class: "auto-tasks-filter-status",
@@ -95,7 +95,13 @@ function autoTaskFilterBar(payload, total, matched, visible) {
     clear.type = "button";
     clear.addEventListener("click", () => {
       autoTaskFilterQuery = "";
-      renderAutoTasks(payload, { restoreFilterFocus: true });
+      renderAutoTasks(payload);
+      const nextInput = $("auto-tasks-filter-input");
+      if (nextInput) {
+        nextInput.focus({ preventScroll: true });
+        const end = nextInput.value.length;
+        try { nextInput.setSelectionRange(end, end); } catch { /* search inputs may not support selection */ }
+      }
     });
     children.push(clear);
   }
@@ -388,13 +394,27 @@ function openDuplicateNote(duplicates, held, enabledOpen) {
   return held === duplicates ? "scheduler skips these slots" : `scheduler skips ${held} of these slots`;
 }
 
-export function renderAutoTasks(payload, { force = false, restoreFilterFocus = false } = {}) {
+export function renderAutoTasks(payload, { force = false } = {}) {
   noteCronZone(payload);
   operationsState.lastAutoTasks = payload;
   const body = $("auto-tasks-body");
   if (!body) return;
   // An open schedule editor holds a draft: leave the rows alone until it closes.
   if (!force && editingIn("auto-task") && body.querySelector(".schedule-editor")) return;
+  const currentFilter = $("auto-tasks-filter-input");
+  const preserveFilterFocus = currentFilter && document.activeElement === currentFilter;
+  let filterSelection = null;
+  if (preserveFilterFocus) {
+    try {
+      if (currentFilter.selectionStart !== null && currentFilter.selectionEnd !== null) {
+        filterSelection = {
+          start: currentFilter.selectionStart,
+          end: currentFilter.selectionEnd,
+          direction: currentFilter.selectionDirection,
+        };
+      }
+    } catch { /* search inputs may not support selection */ }
+  }
   body.textContent = "";
   const workspace = selectedWorkspace();
   const readable = Boolean(workspace) && !workspaceSelectionReason();
@@ -484,12 +504,16 @@ export function renderAutoTasks(payload, { force = false, restoreFilterFocus = f
   const enabledCount = definitions.filter(autoTaskOn).length;
   if (count) count.textContent = readable ? `${enabledCount} enabled of ${definitions.length} · ${workspace.name}` : "read-only";
   setRailSubtabCount("rail-count-ops-auto-tasks", readable && definitions.length ? `${enabledCount}/${definitions.length}` : "");
-  if (restoreFilterFocus) {
+  if (preserveFilterFocus) {
     const input = $("auto-tasks-filter-input");
     if (input) {
-      input.focus();
-      const end = input.value.length;
-      try { input.setSelectionRange(end, end); } catch { /* search inputs may not support selection */ }
+      input.focus({ preventScroll: true });
+      if (filterSelection) {
+        const length = input.value.length;
+        const start = Math.min(filterSelection.start, length);
+        const end = Math.min(filterSelection.end, length);
+        try { input.setSelectionRange(start, end, filterSelection.direction); } catch { /* search inputs may not support selection */ }
+      }
     }
   }
 }
