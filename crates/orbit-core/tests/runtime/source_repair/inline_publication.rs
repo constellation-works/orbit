@@ -616,7 +616,14 @@ fn inline_repair_rechecks_policy_and_stopped_lineage_before_source_effects() {
         .to_string()
     };
     let original_retry = retry.clone();
-    retry.duration_ms = Some(42);
+    retry.duration_ms = match original_retry.duration_ms {
+        Some(_) => None,
+        None => Some(42),
+    };
+    assert_ne!(
+        retry, original_retry,
+        "host proof mutation must change the record"
+    );
     save_run(&f, &retry);
     let error = refuse_adoption(&f);
     assert!(error.contains("newer execution changed"), "{error}");
