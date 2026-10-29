@@ -1135,8 +1135,11 @@ Below the header:
 - **Cumulative primary metric** draws each arm's cumulative mean over
   settled tasks by assignment bucket; **By complexity** tables the
   primary metric's difference within each complexity, with both arms'
-  counts; **Crew mix** shows the implementing crew per arm, which balances
-  only in expectation because the crew draw is independent of the arm.
+  counts; **Crew mix** shows each arm's implementing crews. Tasks without
+  an explicit crew draw from the arm's configured pool: its overlay pool
+  when set, otherwise the ordinary pool. Different pools can produce
+  different mixes by design; within a pool, weighted draws balance only
+  in expectation.
 - **Timeline** lists every event in order — created, edited, cloned,
   started, paused, resumed, reweighted, arm retired, concluded,
   abandoned — with its time, segment, actor, reason, and, for a

@@ -864,7 +864,7 @@ function crewCard(readout, color) {
     ]);
   });
   return card("Crew mix", [
-    el("p", { class: "mx-blurb", text: "Implementing crew per arm. The crew draw is independent of the arm, so the mix balances only in expectation." }),
+    el("p", { class: "mx-blurb", text: "Tasks without an explicit crew draw from the arm's configured pool: its overlay pool when set, otherwise the ordinary pool. Different pools can produce different mixes by design; within a pool, weighted draws balance only in expectation." }),
     el("div", { class: "ex-crew-rows" }, rows),
   ], { className: "mx-narrow" });
 }
