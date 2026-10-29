@@ -3,8 +3,9 @@
 mod fixture;
 use chrono::Duration;
 use fixture::{
-    AssistanceFixture, CREDENTIAL, FixtureResult, ambiguous_non_timeout_send_failure_reason,
-    builder_send_failure_reason, connect_send_failure_reason, timeout_send_failure_reason,
+    AssistanceFixture, CREDENTIAL, FixtureResult, SUPPLIED,
+    ambiguous_non_timeout_send_failure_reason, builder_send_failure_reason,
+    connect_send_failure_reason, timeout_send_failure_reason,
 };
 use orbit_common::OrbitError;
 use orbit_core::adapter::decisions::AssistanceHttpResponse;
@@ -884,7 +885,8 @@ fn fixture_budgets(root: &Path, schema: &Value) -> FixtureResult {
     let mut overflow_request = f.request("expire")?;
     overflow_request.source_digest = assistance::assistance_digest(b"overflow");
     assert_eq!(
-        f.service.enqueue_assistance(overflow_request, &[])?,
+        f.service
+            .enqueue_assistance(overflow_request, &[SUPPLIED.into()])?,
         AssistanceAdmission::QueueFull
     );
     assert_eq!(
@@ -894,7 +896,9 @@ fn fixture_budgets(root: &Path, schema: &Value) -> FixtureResult {
     );
     let mut after_overflow = f.request("expire")?;
     after_overflow.source_digest = assistance::assistance_digest(b"after-overflow");
-    let later_admission = f.service.enqueue_assistance(after_overflow, &[])?;
+    let later_admission = f
+        .service
+        .enqueue_assistance(after_overflow, &[SUPPLIED.into()])?;
     let AssistanceAdmission::Enqueued(later_id) = later_admission else {
         return Err(format!("admission after QueueFull was {later_admission:?}").into());
     };
