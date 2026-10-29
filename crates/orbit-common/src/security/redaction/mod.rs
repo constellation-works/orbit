@@ -22,6 +22,9 @@
 mod env;
 mod error;
 mod pattern;
+mod values;
+
+pub use values::redact_secret_values_json;
 
 pub use env::{
     is_sensitive_env_name, redact_sensitive_env_bytes, redact_sensitive_env_json,

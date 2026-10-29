@@ -76,6 +76,8 @@
 //! - `seed` — rendering and writing a fresh default `config.toml`.
 
 mod aliases;
+/// Host-only bounded decision-assistance configuration.
+pub mod assistance;
 mod crew_performance;
 mod crew_pools;
 mod experiment_keys;

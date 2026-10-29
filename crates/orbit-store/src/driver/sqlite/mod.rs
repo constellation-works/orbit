@@ -1,4 +1,5 @@
 pub(crate) mod admission_load_store;
+mod assistance;
 pub(crate) mod audit_event_store;
 pub(crate) mod backlog_forecast_store;
 pub(crate) mod codebase_facts_store;

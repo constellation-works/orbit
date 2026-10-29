@@ -1,11 +1,11 @@
 ---
 title: "Scope: bounded decision assistance"
 owner: codex
-last_updated: 2026-10-28
-last_validated: 2026-10-28
+last_updated: 2026-10-29
+last_validated: 2026-10-29
 status: Draft
-stage: designing
-next: "Review ORB-19718, then scope failure categorization and task-quality evaluation."
+stage: building
+next: "Implement opt-in consumer collectors; coordinate independent labels and separately authorized live evaluation before advisory activation."
 feature: decision-assistance
 doc_role: scope
 type: design
@@ -15,7 +15,10 @@ tags: [decision-assistance]
 
 # Scope: bounded decision assistance
 
-Status: proposed design; no implementation, configuration keys or automatic actions described here ship yet.
+Status: the offline evaluation contract and optional generic service are implemented.
+Consumer collectors, live evaluation and advisory activation remain pending.
+The [service contract](specs/service.md) documents the host-only configuration,
+durable ledger and public application boundary. Defaults remain off.
 
 Bearing: builds on [activities and jobs](../activity-job/2_design.md),
 [auto-tasks](../auto-tasks/2_design.md), the shipped
@@ -297,9 +300,11 @@ fields are implementation contracts still to be designed.
    labeled examples, without using later outcomes as evidence available at intake?
 2. What false-positive burden and minimum useful coverage justify author-visible
    quality flags? Select targets from the baseline before the held-out evaluation.
-3. Can existing durable work and artifact facilities provide a compact assessment
-   history, or is a dedicated versioned record needed? Resolve retention, query and
-   mixed-version compatibility before adding storage or public fields.
+3. Resolved for the generic service: use an independent additive v72 ledger.
+   Automation checkpoints own workflow coverage, review ledgers own reviewer
+   authority, and invocation rows cannot atomically claim work or reserve charges.
+   The [service contract](specs/service.md) records retention, queries and mixed-version
+   compatibility; collectors still own atomic event publication/reconciliation.
 4. Should failure judgments assess representative occurrences independently before
    class aggregation when a normalized signature contains several causes? Evaluate
    class purity first; never infer that one sample describes every occurrence.
@@ -327,5 +332,7 @@ fields are implementation contracts still to be designed.
 ## Task References
 
 - ORB-19718 — author this design and open its review PR; no implementation authorized.
+- ORB-19720 — offline evaluation contract and protocol.
+- ORB-19721 — optional generic service and synthetic public-boundary fixtures.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

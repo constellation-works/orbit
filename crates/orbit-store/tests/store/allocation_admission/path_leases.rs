@@ -260,6 +260,7 @@ fn pre_lease_reservations_read_back_as_exclusive_task_reservations() {
     let database = root.path().join("state.sqlite");
     drop(Store::open(&database).unwrap());
     let connection = rusqlite::Connection::open(&database).unwrap();
+    crate::support::drop_decision_assistance_tables(&connection).unwrap();
     connection
         .execute_batch(
             "DROP INDEX idx_task_reservations_kind_release;

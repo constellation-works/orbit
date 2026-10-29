@@ -11,6 +11,7 @@ fn historical_task_deliveries_remain_visible_after_upgrade_and_rebinding() {
     let path = dir.path().join("orbit.db");
     drop(Store::open(&path).expect("fixture schema"));
     let conn = Connection::open(&path).expect("database");
+    crate::support::drop_decision_assistance_tables(&conn).unwrap();
     conn.execute_batch(
         "DELETE FROM schema_meta WHERE key LIKE 'migration.v%' AND key >= 'migration.v0059';
         DROP TABLE landed_diff_stats;

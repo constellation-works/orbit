@@ -260,7 +260,9 @@ pub const LEASE_LISTENER_KEY_PREFIX: &str = "lease.listener.";
 /// variables into that crew's agents, the lease intake peer user and the
 /// lease listener's settings.
 pub fn is_global_only_key(key: &str) -> bool {
-    key == GLOBAL_ONLY_KEY_PREFIX.trim_end_matches('.')
+    key == "assistance"
+        || key.starts_with("assistance.")
+        || key == GLOBAL_ONLY_KEY_PREFIX.trim_end_matches('.')
         || key.starts_with(GLOBAL_ONLY_KEY_PREFIX)
         || key == LEASE_INTAKE_PEER_USER_KEY
         || key == LEASE_LISTENER_KEY_PREFIX.trim_end_matches('.')

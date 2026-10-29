@@ -24,6 +24,7 @@ fn migration_freeze_isolated(test: &str) -> bool {
 }
 
 fn rewind(conn: &Connection, version: u32) {
+    crate::support::drop_decision_assistance_tables(conn).unwrap();
     conn.execute(
         "DELETE FROM schema_meta WHERE key LIKE 'migration.v%' AND key >= ?1",
         [format!("migration.v{version:04}")],
@@ -100,7 +101,9 @@ fn defensive_recreation_survives_a_ledger_with_missing_tables() {
 
 #[test]
 fn actor_backfills_stamp_the_map_and_preserve_roles_and_current_rows() {
-    if !migration_freeze_isolated("actor_backfills_stamp_the_map_and_preserve_roles_and_current_rows") {
+    if !migration_freeze_isolated(
+        "actor_backfills_stamp_the_map_and_preserve_roles_and_current_rows",
+    ) {
         return;
     }
     let labels = [
@@ -219,7 +222,8 @@ fn forecast_attribution_migrates_legacy_rows_and_reopens_idempotently() {
          ) VALUES ('ws_old', 'drain-old', '2026-10-17T00:00:00.000000Z', 'shadow',
                    '[{\"offset_minutes\":5,\"cpu_cores\":2.0,\"memory_bytes\":4096}]',
                    '[]', '[]', '[]');",
-    ).unwrap();
+    )
+    .unwrap();
     drop(conn);
     let since = "2026-10-16T00:00:00Z".parse().unwrap();
     for _ in 0..2 {

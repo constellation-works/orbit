@@ -144,6 +144,14 @@ pub fn invocation_store_from_store(store: Store) -> Arc<dyn InvocationStoreBacke
     Arc::new(store)
 }
 
+/// Optional assistance ledger over the already-opened host store. Composition
+/// retains generation admission and schema compatibility on the original open.
+pub fn assistance_store_from_store(
+    store: Store,
+) -> Arc<dyn crate::contracts::assistance::AssistanceStoreBackend> {
+    Arc::new(store)
+}
+
 pub fn v2_audit_store(
     database: &std::path::Path,
 ) -> Result<Arc<dyn V2AuditStoreBackend>, orbit_common::OrbitError> {

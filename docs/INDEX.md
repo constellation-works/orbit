@@ -113,11 +113,12 @@ Where each feature in `docs/design/` stands, from the `stage` and `next` fields 
 entry doc. Stages run idea, designing, building, shipped, with parked for work on hold.
 Live task progress is in Orbit; this board records what the feature lead last set.
 
-### Building (8)
+### Building (9)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
 | [Backlog Forecast](./design/backlog-forecast/1_scope.md) | Review residual phases, shadow resource-fit counterfactuals, follower capacity and richer calibration remain open after the six v2 factors. | claude |
+| [Decision Assistance](./design/decision-assistance/1_scope.md) | Implement opt-in consumer collectors; coordinate independent labels and separately authorized live evaluation before advisory activation. | codex |
 | [Distributed Drain](./design/distributed-drain/1_overview.md) | Implement admission receipt compaction and accounting (ORB-19424). | claude |
 | [Experiments](./design/experiments/1_scope.md) | Raise a concluded-or-due experiment through the human decision channel (open; decision requests are task-bound today) | claude |
 | [Explore Brief](./design/explore-brief/1_scope.md) | Finish the remaining trial prerequisites before starting the three-arm trial | claude |
@@ -126,14 +127,13 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Path Leases](./design/path-leases/1_overview.md) | Land native TLS and the listener's full rate limits (ORB-18413, ORB-18421) | claude |
 | [Web Terminal](./design/web-terminal/1_scope.md) | Phase 2: ORB-18489 PTY sessions and local terminal routes; phase 1 landed | claude |
 
-### Designing (7)
+### Designing (6)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
 | [Cloud Dispatch](./design/cloud-dispatch/1_scope.md) | Run the phase 0 manual cloud-session spike, then file phase 1 (no task yet) | claude |
 | [Condition Triggers](./design/condition-triggers/1_scope.md) | Review this scope; then file phase 1 (CEL schema, load-time checking, automation explain) | claude |
 | [Conflict Budget](./design/conflict-budget/1_scope.md) | Settle the open questions (sum vs max, where weights live), then file phase 1 | claude |
-| [Decision Assistance](./design/decision-assistance/1_scope.md) | Review ORB-19718, then scope failure categorization and task-quality evaluation. | codex |
 | [Script Steps](./design/script-steps/1_scope.md) | Review this scope; then file phase 1 (script manifests, `target: script:` parsing, the grant store and `orbit script grant`, with nothing executing yet) | claude |
 | [Symbol Risk Index](./design/symbol-risk-index/1_scope.md) | Daniel reviews this scope and 2_design.md; implementation tasks are filed after acceptance | claude |
 | [Visual Review](./design/visual-review/1_scope.md) | Daniel accepts or amends this design; implementation tasks are filed after acceptance | claude |

@@ -319,6 +319,7 @@ fn resolve_operation_layers(
 /// `reject_workspace_*` checks below and reads the same key definitions, so a
 /// seeded file always passes them.
 pub(crate) fn strip_workspace_refused_keys(document: &mut toml_edit::DocumentMut) {
+    document.remove("assistance");
     document.remove(GLOBAL_ONLY_KEY_PREFIX.trim_end_matches('.'));
     if let Some(crews) = document
         .get_mut("crews")
@@ -416,6 +417,9 @@ pub(crate) fn reject_workspace_machine_table(
     document: &toml::Value,
     path: &Path,
 ) -> Result<(), OrbitError> {
+    if document.get("assistance").is_some() {
+        return Err(OrbitError::InvalidInput("[assistance] is host-only: remove it from the workspace config.toml; only the global config.toml may grant outbound evidence, credentials and budgets".into()));
+    }
     let table = GLOBAL_ONLY_KEY_PREFIX.trim_end_matches('.');
     if value_at_path(document, table).is_none() {
         return Ok(());
