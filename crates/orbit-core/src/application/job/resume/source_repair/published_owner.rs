@@ -237,32 +237,40 @@ impl OrbitRuntime {
     /// per source run, so the same record already on record binds the
     /// publication and nothing is appended (`None`). A different record for
     /// that run would be a second one, which admission refuses, so it is
-    /// refused here before anything is written.
+    /// refused here before anything is written. Read the whole preservation
+    /// history: an identical first record cannot hide a duplicate, malformed
+    /// or untrusted record that the next admission would refuse.
     pub(crate) fn preservation_to_append(
         &self,
         task: &Task,
         entry: TaskHistoryEntry,
     ) -> Result<Option<TaskHistoryEntry>, OrbitError> {
         let record = parse_preserved(&entry)?;
+        let mut matching = None;
         for existing in self
             .get_task_history(&task.id)?
             .iter()
             .filter(|e| e.event == PRESERVED)
         {
+            if existing.by != "system" {
+                return Err(refuse("untrusted publication preservation"));
+            }
             let existing = parse_preserved(existing)?;
             if existing.source_run_id != record.source_run_id {
                 continue;
             }
-            return if existing == record {
-                Ok(None)
-            } else {
-                Err(refuse(format!(
-                    "a different publication of run `{}` is already preserved on the task",
-                    record.source_run_id
-                )))
-            };
+            if matching.replace(existing).is_some() {
+                return Err(refuse("published candidate lacks a unique requeue binding"));
+            }
         }
-        Ok(Some(entry))
+        match matching {
+            Some(existing) if existing == record => Ok(None),
+            Some(_) => Err(refuse(format!(
+                "a different publication of run `{}` is already preserved on the task",
+                record.source_run_id
+            ))),
+            None => Ok(Some(entry)),
+        }
     }
 
     /// Whether `task`, last delivered by an owner PR run, has a pull request

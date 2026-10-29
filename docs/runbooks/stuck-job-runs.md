@@ -5,7 +5,7 @@ tags: [operations, jobs, runs, recovery, debugging]
 paths: ["crates/orbit-core/src/application/job/**", "crates/orbit-cli/src/command/run/**", "crates/orbit-runtime/src/audit/run/trail.rs"]
 related_features: [activity-job, auditability]
 related_artifacts: [ORB-10070, ORB-10496, ORB-10801, ORB-17179, ORB-18166]
-last_validated: 2026-10-28
+last_validated: 2026-10-29
 ---
 
 # Recover Stuck Job Runs
@@ -780,14 +780,17 @@ orbit task requeue <task-id> --reason '<why this candidate can continue>'
 
 The MCP equivalent is `orbit.task.requeue` with `id`, `reason` and optional
 `discard_candidate`; it needs operator authority and is unavailable inside a
-managed run. Every return from `blocked` to `backlog` is authenticated the
-same way: a plain `orbit task update --status backlog` (and the same move
-through MCP, HTTP or the dashboard) applies the requeue publication
-pre-flight in the shared core operation before writing. A publication a
+managed run. An operator or agent return from `blocked` or `review` to
+`backlog` is authenticated the same way: a plain
+`orbit task update --status backlog` (and the same move through MCP, HTTP or
+the dashboard) applies the requeue publication preflight in the shared core
+operation before writing. A publication a
 requeue would refuse (a specification changed after publication, or a pull
 request or preserved candidate no handoff receipt binds) refuses the plain
 update with the same message and discard/explicit-source-repair guidance,
-and the task stays `blocked` with nothing written. A publication a requeue
+and the task keeps its current status with nothing written to the task,
+history or publication. Starting a fresh shipment does not bypass this
+authentication. A publication a requeue
 would accept is returned to `backlog` with the same `requeued` decision and
 publication-preservation record a requeue writes, so its next run resumes
 it; with no publication on record the task simply returns to `backlog`. A
@@ -873,7 +876,10 @@ Once every required check has passed on the recorded head, requeue the task:
 orbit task requeue <task-id> --reason '<why the published head can land>'
 ```
 
-A plain `orbit task update <task-id> --status backlog` applies the same check.
+A plain `orbit task update <task-id> --status backlog` from `blocked` or
+`review` applies the same check. A review task with failed, pending or stale
+required checks stays in review; returning it to backlog cannot authorize
+repair or renew an expired completion deadline.
 The requeue resumes the pull request only when all of these hold, and
 otherwise refuses with nothing written:
 

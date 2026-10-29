@@ -220,13 +220,13 @@ impl OrbitRuntime {
         let crew_redraw_history = validated.crew_redraw_history;
         let granted_tools_change = validated.granted_tools_change;
         params = validated.params;
-        // A plain blocked-to-backlog move on an attributed surface applies
+        // A plain blocked/review-to-backlog move on an attributed surface applies
         // the same publication authentication as `orbit task requeue`:
         // refuse before writing what the next run would refuse, and record
         // the preservation a requeue would record for what it accepts.
         // Internal machinery and a discard keep their own contracts.
         let backlog_preservation = if requested_status == Some(TaskStatus::Backlog)
-            && task.status == TaskStatus::Blocked
+            && matches!(task.status, TaskStatus::Blocked | TaskStatus::Review)
             && matches!(
                 status_authority,
                 StatusAuthority::Lifecycle | StatusAuthority::Forced
@@ -270,7 +270,7 @@ impl OrbitRuntime {
             if let Some(complexity) = params.complexity {
                 preview.complexity = Some(complexity);
             }
-            self.authenticate_blocked_to_backlog(&preview)?
+            self.authenticate_published_backlog_return(&preview)?
         } else {
             None
         };
