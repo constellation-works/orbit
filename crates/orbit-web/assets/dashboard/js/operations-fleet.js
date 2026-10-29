@@ -1,11 +1,6 @@
 import { FLEET_CACHE_MS, fetchFleetDrains, fleetDrainLabel, peekFleetDrains, replaceFleetDrains } from './fleet-drains.js';
 import { setDrainReadiness } from './drain-waits.js';
 import { $, operationsState } from './operations-shared.js';
-import { changeStreamLive } from './change-stream.js';
-
-// While the change stream is live, the selected workspace's drain changes
-// arrive as notices, so the fleet-wide read slows to the stream's safety net.
-const FLEET_STREAMED_MS = 3 * 60_000;
 
 let fleetOperationsCallbacks = null;
 
@@ -54,11 +49,9 @@ let fleetRefreshStarted = false;
 
 // One read after hosts are known, then again on the fleet cadence. This is
 // not a panel-poll job: a view's 30s refresh must not fan out to every host.
-let fleetReadAt = 0;
 
 export function startFleetIndicatorRefresh() {
   const refresh = () => {
-    fleetReadAt = Date.now();
     return fetchFleetDrains({ force: true, onPartial: payload => paintFleetSurfaces(payload) }).then(payload => {
       const seen = peekFleetDrains();
       if (seen && seen.payload === payload) paintFleetSurfaces(payload);
@@ -66,7 +59,7 @@ export function startFleetIndicatorRefresh() {
   };
   const arm = () => {
     const timer = setTimeout(() => {
-      if (document.hidden || (changeStreamLive() && Date.now() - fleetReadAt < FLEET_STREAMED_MS)) {
+      if (document.hidden) {
         arm();
         return;
       }
@@ -89,7 +82,6 @@ export function startFleetIndicatorRefresh() {
     paintFleetSurfaces(seen.payload);
     return Promise.resolve(seen.payload);
   }
-  fleetReadAt = Date.now();
   return fetchFleetDrains({ onPartial: payload => paintFleetSurfaces(payload) }).then(payload => {
     paintFleetSurfaces(payload);
     return payload;
