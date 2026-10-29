@@ -2,8 +2,9 @@
 //!
 //! Without a `fields` projection the list handler builds full task records, which
 //! carry long text (description, plan, execution summary, acceptance criteria).
-//! The CLI (`orbit tool run`) and the MCP adapter both narrow that to
-//! [`MINIMAL_TASK_FIELDS`] so one tool name has one default result shape.
+//! Core's `orbit.task.list` result policy narrows that to
+//! [`MINIMAL_TASK_FIELDS`] for `orbit tool run` and MCP, so one tool name has
+//! one default result shape.
 
 use serde_json::{Map, Value};
 

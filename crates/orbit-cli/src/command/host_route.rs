@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use orbit_cmd::hosts::{self, HostWorkspaceRoute, TaskIdRoute};
 use orbit_common::governance::authorization::{CallerCapabilities, CallerEnvelope};
 use orbit_common::governance::task::TaskVerb;
-use orbit_core::application::task::TaskArtifactRead;
+use orbit_core::application::task::{TaskArtifactRead, TaskListResultPolicy};
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_mcp::McpSessionAuthority;
 use orbit_mcp::federated::{MachineQualifiedSelector, is_id_routed_tool};
@@ -287,7 +287,7 @@ enum Render {
         full: bool,
         fields: Vec<String>,
         bare_field: bool,
-        input_projection: bool,
+        list_policy: TaskListResultPolicy,
     },
 }
 
@@ -310,8 +310,11 @@ fn routed_call(cli: &Cli, holder: &HostEntry) -> Result<RoutedCall, OrbitError> 
                     &args.fields,
                 )?;
                 let bare_field = super::tool::answers_with_bare_field(&args.name, &input)?;
-                let input_projection =
-                    super::tool::tool_input_requests_task_list_projection(&input);
+                let list_policy = TaskListResultPolicy::for_call(
+                    &args.name,
+                    &input,
+                    super::tool::task_list_result_profile(args.full, &args.fields),
+                );
                 Ok(RoutedCall {
                     name: args.name.clone(),
                     input,
@@ -319,7 +322,7 @@ fn routed_call(cli: &Cli, holder: &HostEntry) -> Result<RoutedCall, OrbitError> 
                         full: args.full,
                         fields: args.fields.clone(),
                         bare_field,
-                        input_projection,
+                        list_policy,
                     },
                 })
             }
@@ -546,15 +549,15 @@ fn render(name: &str, render: Render, value: Value, holder: &HostEntry) -> Comma
             full,
             fields,
             bare_field,
-            input_projection,
+            list_policy,
         } => {
             let shaped = super::tool::shape_tool_output(
                 name,
                 value,
+                &list_policy,
                 full,
                 &fields,
                 bare_field,
-                input_projection,
             )?;
             Ok(Payload::document(shaped).into())
         }
