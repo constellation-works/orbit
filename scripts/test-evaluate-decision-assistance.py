@@ -101,6 +101,30 @@ class EvalTests(unittest.TestCase):
         self.assertEqual(rep["totals"]["cost_usd"]["status"], "unknown"); self.assertIsNone(rep["totals"]["cost_usd"]["total"])
         self.assertEqual(rep["totals"]["latency_ms"]["status"], "unknown")
 
+    def test_uncertain_answer_usage_is_in_totals(self):
+        ans = self._load(self.ans)
+        uncertain = next(a for a in ans["answers"] if a["disposition"] == "suggested")
+        uncertain["disposition"] = "uncertain"
+        uncertain["cost_usd"] = 9.0
+        expected_cost = sum(a["cost_usd"] for a in ans["answers"] if isinstance(a.get("cost_usd"), (int, float)))
+        expected_latency = sum(a["latency_ms"] for a in ans["answers"] if isinstance(a.get("latency_ms"), (int, float)))
+        expected_input_tokens = sum(a["usage"]["input_tokens"] for a in ans["answers"]
+                                    if isinstance(a.get("usage"), dict) and isinstance(a["usage"].get("input_tokens"), int))
+        expected_output_tokens = sum(a["usage"]["output_tokens"] for a in ans["answers"]
+                                     if isinstance(a.get("usage"), dict) and isinstance(a["usage"].get("output_tokens"), int))
+
+        rep = self._score(self.ds, self._dump("uncertain-usage.json", ans))
+        self.assertAlmostEqual(expected_cost, 9.008)
+        self.assertAlmostEqual(rep["totals"]["cost_usd"]["total"], expected_cost)
+        self.assertEqual(rep["totals"]["cost_usd"]["n"], 9)
+        self.assertEqual(rep["totals"]["latency_ms"]["total"], expected_latency)
+        self.assertEqual(rep["totals"]["input_tokens"]["total"], expected_input_tokens)
+        self.assertEqual(rep["totals"]["output_tokens"]["total"], expected_output_tokens)
+
+        uncertain.pop("cost_usd")
+        missing_cost = self._score(self.ds, self._dump("uncertain-missing-cost.json", ans))
+        self.assertEqual(missing_cost["totals"]["cost_usd"]["status"], "unknown")
+
     def _manifest(self, ds, **over):
         m = {"format_version": "decision-assistance-eval/1", "holdout_id": "holdout-1",
              "intake_snapshot_at": ds["intake_snapshot_at"], "assignments": {c["case_id"]: "train" for c in ds["cases"]}}
