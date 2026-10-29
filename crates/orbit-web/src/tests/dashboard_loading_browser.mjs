@@ -1,4 +1,4 @@
-// Usage: node dashboard_loading_browser.mjs /path/to/playwright/index.mjs /evidence/directory [--run-detail|--locks-only|--auth-exclusions|--task-lookup|--clock|--review-repairs]
+// Usage: node dashboard_loading_browser.mjs /path/to/playwright/index.mjs /evidence/directory [--run-detail|--locks-only|--auth-exclusions|--task-lookup|--clock|--review-repairs|--elapsed]
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import http from 'node:http';
 import fs from 'node:fs';
@@ -21,6 +21,52 @@ const locksOnly = process.argv[4] === '--locks-only';
 const authExclusionsOnly = process.argv[4] === '--auth-exclusions';
 const repairsOnly = process.argv[4] === '--review-repairs';
 const clockOnly = process.argv[4] === '--clock';
+const elapsedOnly = process.argv[4] === '--elapsed';
+const elapsedScenario = `
+const reads = [];
+const task = {
+  id: 'ELAPSED-1', title: 'Elapsed clock fixture', status: 'in-progress', priority: 'medium',
+  crew: 'opus', job_run_id: 'jrun-elapsed-fixture',
+};
+const response = payload => new Response(JSON.stringify(payload), { status: 200 });
+class QuietEventSource {
+  constructor(url) {
+    this.url = url;
+    this.readyState = 0;
+    queueMicrotask(() => { this.readyState = 1; this.onopen?.(); });
+  }
+  close() { this.readyState = 2; }
+}
+globalThis.EventSource = QuietEventSource;
+globalThis.fetch = async input => {
+  const url = new URL(input, location.href);
+  reads.push(url.pathname + url.search);
+  let payload = [];
+  if (url.pathname === '/api/workspaces') payload = [{ id: 'one', name: 'one', status: 'active', is_default: true }];
+  else if (url.pathname === '/api/tasks') payload = { items: [task], total: 1, limit: 50, truncated: false };
+  else if (url.pathname === '/api/crews') payload = { default_crew: 'opus', crews: [{ name: 'opus' }] };
+  else if (url.pathname === '/api/job-runs' && url.searchParams.get('state') === 'active') payload = {
+    items: [], total: 0,
+    running_items: [{ run_id: task.job_run_id, started_at: '2026-10-29T00:28:30.000Z' }],
+  };
+  else if (url.pathname === '/api/tasks/locks') payload = { total_locked: 0, by_task: [] };
+  else if (url.pathname === '/api/workflows/auto/readiness') payload = { capacity: {}, tasks: [] };
+  else if (url.pathname === '/api/routines') payload = { routines: [], clock: {} };
+  else if (url.pathname === '/api/fleet/drains') payload = { items: [] };
+  else if (url.pathname === '/api/audit/summary') payload = {};
+  return response(payload);
+};
+await import('/app.js');
+const { changeStreamLive } = await import('/js/change-stream.js');
+globalThis.elapsedFixtureState = () => {
+  const relevantReads = reads.filter(read => {
+    const url = new URL(read, location.href);
+    return url.pathname === '/api/tasks'
+      || (url.pathname === '/api/job-runs' && url.searchParams.get('state') === 'active');
+  });
+  return { live: changeStreamLive(), relevantReads };
+};
+`;
 const locksOnlyScenario = `
 const tasks = Array.from({ length: 20 }, (_, index) => ({
   id: 'BASE-' + index, title: 'Base task ' + index, status: 'in-progress', priority: 'medium',
@@ -66,6 +112,87 @@ async function assertAccentFocusRing(control) {
   if (!focused.active || !focused.focusVisible || focused.outlineWidth !== '2px'
     || focused.outlineStyle !== 'solid' || focused.outlineColor !== 'rgb(122, 167, 255)') {
     throw new Error(`Keyboard control must show a 2px accent focus ring: ${JSON.stringify(focused)}`);
+  }
+}
+
+async function assertElapsedTaskClock(browser, origin, evidence) {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  const failures = [];
+  page.on('pageerror', error => failures.push(error.message));
+  try {
+    await page.clock.install({ time: new Date('2026-10-29T00:30:00.000Z') });
+    await page.goto(`${origin}/?workspace=one#tasks`);
+    await page.addScriptTag({ type: 'module', url: '/test.mjs' });
+    await page.clock.fastForward(1);
+    await page.waitForFunction(() => globalThis.elapsedFixtureState?.().live
+      && document.querySelector('#tasks-body [data-key="task-ELAPSED-1"] .run-cell .run-sub')?.textContent === '1m');
+
+    const rowSelector = '#tasks-body [data-key="task-ELAPSED-1"]';
+    const initial = await page.evaluate(() => ({ time: Date.now(), ...globalThis.elapsedFixtureState() }));
+    const editor = page.locator(`${rowSelector} .task-crew-select`);
+    await editor.focus();
+    await page.clock.fastForward(30_100);
+    await page.waitForFunction(() => document.querySelector('#tasks-body [data-key="task-ELAPSED-1"] .run-cell .run-sub')?.textContent === '2m');
+    const afterMinute = await page.evaluate(() => ({
+      time: Date.now(),
+      elapsed: document.querySelector('#tasks-body [data-key="task-ELAPSED-1"] .run-cell .run-sub')?.textContent,
+      rowKey: document.querySelector('#tasks-body [data-key="task-ELAPSED-1"]')?.dataset.key,
+      editorFocused: document.activeElement === document.querySelector('#tasks-body [data-key="task-ELAPSED-1"] .task-crew-select'),
+      ...globalThis.elapsedFixtureState(),
+    }));
+    if (afterMinute.elapsed !== '2m' || afterMinute.rowKey !== 'task-ELAPSED-1' || !afterMinute.editorFocused) {
+      throw new Error(`Elapsed repaint lost the task row or crew editor focus: ${JSON.stringify(afterMinute)}`);
+    }
+    if (afterMinute.relevantReads.length !== initial.relevantReads.length
+      || afterMinute.time - initial.time >= 180_000) {
+      throw new Error(`Elapsed repaint read APIs or missed the quiet-stream window: ${JSON.stringify({ initial, afterMinute })}`);
+    }
+    await page.screenshot({ path: path.join(evidence, 'tasks-dark-1280.png') });
+
+    await page.evaluate(() => {
+      Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await page.clock.fastForward(120_000);
+    const hidden = await page.evaluate(() => ({
+      elapsed: document.querySelector('#tasks-body [data-key="task-ELAPSED-1"] .run-cell .run-sub')?.textContent,
+      ...globalThis.elapsedFixtureState(),
+    }));
+    if (hidden.live || hidden.elapsed !== '2m' || hidden.relevantReads.length !== initial.relevantReads.length) {
+      throw new Error(`Hidden Tasks page continued its elapsed repaint: ${JSON.stringify(hidden)}`);
+    }
+
+    await page.evaluate(() => {
+      Object.defineProperty(document, 'hidden', { configurable: true, value: false });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await page.clock.fastForward(1);
+    await page.waitForFunction(() => globalThis.elapsedFixtureState?.().live);
+    await page.waitForFunction(() => document.querySelector('#tasks-body [data-key="task-ELAPSED-1"] .run-cell .run-sub')?.textContent === '4m');
+    const resumed = await page.evaluate(() => ({
+      elapsed: document.querySelector('#tasks-body [data-key="task-ELAPSED-1"] .run-cell .run-sub')?.textContent,
+      editorFocused: document.activeElement === document.querySelector('#tasks-body [data-key="task-ELAPSED-1"] .task-crew-select'),
+      ...globalThis.elapsedFixtureState(),
+    }));
+    if (resumed.elapsed !== '4m' || !resumed.editorFocused) {
+      throw new Error(`Resumed Tasks page did not repaint cached elapsed time in place: ${JSON.stringify(resumed)}`);
+    }
+    await page.setViewportSize({ width: 375, height: 812 });
+    await page.screenshot({ path: path.join(evidence, 'tasks-dark-375.png') });
+    if (failures.length) throw new Error(failures.join('\n'));
+    fs.writeFileSync(path.join(evidence, 'elapsed-clock-result.json'), JSON.stringify({
+      passed: true,
+      stream: 'connected EventSource; no notices sent',
+      initial_elapsed: '1m',
+      after_minute: afterMinute.elapsed,
+      hidden_elapsed: hidden.elapsed,
+      resumed_elapsed: resumed.elapsed,
+      relevant_api_reads: initial.relevantReads.length,
+      focused_editor_preserved: afterMinute.editorFocused && resumed.editorFocused,
+      time_to_first_update_ms: afterMinute.time - initial.time,
+    }, null, 2));
+  } finally {
+    await page.close();
   }
 }
 
@@ -1521,7 +1648,8 @@ async function assertSkipLinkAndFocusRings(page) {
 
 const server = http.createServer((req, res) => {
   const name = new URL(req.url, 'http://fixture').pathname;
-  const testScenario = (locksOnly || authExclusionsOnly || repairsOnly) ? Buffer.from(locksOnlyScenario) : fs.readFileSync(scenarios);
+  const testScenario = elapsedOnly ? Buffer.from(elapsedScenario)
+    : (locksOnly || authExclusionsOnly || repairsOnly) ? Buffer.from(locksOnlyScenario) : fs.readFileSync(scenarios);
   const served = name === '/test.mjs' ? { data: testScenario, type: 'text/javascript' } : dashboardFile(name);
   if (!served) { res.writeHead(404); res.end(); return; }
   let data = served.data;
@@ -1533,7 +1661,10 @@ await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 let browser;
 try {
   browser = await chromium.launch({ headless: true });
-  if (repairsOnly) {
+  if (elapsedOnly) {
+    await assertElapsedTaskClock(browser, `http://127.0.0.1:${server.address().port}`, evidence);
+    console.log('Quiet-stream elapsed labels, cached repaint, focus preservation and hidden-tab coalescing passed.');
+  } else if (repairsOnly) {
     await runNavigationRepairs(browser, `http://127.0.0.1:${server.address().port}`);
   } else if (process.argv[4] === '--pilot-admission') {
     await assertPilotAdmission(browser, `http://127.0.0.1:${server.address().port}`, evidence);
