@@ -288,6 +288,10 @@ impl TaskStoreBackend for TaskV2Store {
         self.in_boundary(|| TaskV2Store::task_status_index_for(self, workspace_id, targets))
     }
 
+    fn task_change_stamps(&self) -> Result<Vec<crate::contracts::TaskChangeStamp>, OrbitError> {
+        TaskV2Store::task_change_stamps(self)
+    }
+
     fn task_ids_with_tag(
         &self,
         tag: &str,

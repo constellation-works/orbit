@@ -42,6 +42,12 @@ impl TaskV2Store {
         self.registry.task_ids_with_tag(tag, task_ids)
     }
 
+    pub(crate) fn task_change_stamps(
+        &self,
+    ) -> Result<Vec<crate::contracts::TaskChangeStamp>, OrbitError> {
+        self.registry.task_change_stamps(&self.workspace_id)
+    }
+
     pub(crate) fn task_completion_by_complexity(
         &self,
     ) -> Result<Vec<TaskCompletionByComplexity>, OrbitError> {

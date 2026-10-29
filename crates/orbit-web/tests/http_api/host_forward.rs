@@ -527,6 +527,32 @@ fn reads_through_the_forward_match_the_remote_dashboard() {
             await_event(&mut stream, "appended-on-b");
             drop(stream);
 
+            // The change stream is SSE too: B's notices cross the forward
+            // uncompressed, including a write made outside B's dashboard.
+            let events = a_server
+                .request("GET", &format!("/api/on/hostb/events/stream{WS}"))
+                .header("accept-encoding", "gzip")
+                .timeout(Duration::from_secs(60))
+                .send()
+                .unwrap();
+            assert_eq!(events.status(), 200);
+            assert_eq!(events.headers()["content-type"], "text/event-stream");
+            assert!(events.headers().get("content-encoding").is_none());
+            let mut events = BufReader::new(events);
+            await_event(&mut events, r#""kind":"drain""#);
+            b.runtime
+                .update_task_as_human(
+                    &task,
+                    TaskUpdateParams {
+                        status: Some(TaskStatus::InProgress),
+                        ..Default::default()
+                    },
+                    "test operator".into(),
+                )
+                .unwrap();
+            await_event(&mut events, &format!(r#""id":"{task}""#));
+            drop(events);
+
             let local = json_ok(a_server.get(&format!("/api/tasks{WS}")));
             assert_ne!(
                 local,

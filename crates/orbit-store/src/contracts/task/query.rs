@@ -178,6 +178,15 @@ pub struct TaskCandidateKey {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// One task's change stamp: what a change watcher compares between two reads
+/// to tell which tasks changed, without reading any envelope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskChangeStamp {
+    pub id: String,
+    pub status: TaskStatus,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
 /// One fully validated bundle, retaining sidecars from that same read.
 #[derive(Debug)]
 pub struct TaskRow {

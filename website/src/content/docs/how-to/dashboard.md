@@ -247,11 +247,19 @@ currently lock, by file or by task. **Log** is a live `orbit.log` tail you can
 filter to **all**, **err**, **deny**, or **warn**. Opening a task replaces the
 dock with its detail; below 1000px the task list fills the width.
 
-While Tasks is open and the browser tab is visible, the task list, the run
-times of tasks in progress, the locks and the drain state refresh about every
-30 seconds. A refresh that brings nothing new leaves the list as it is, and a
-changed task redraws only its own row, so the scroll position, the open task
-and keyboard focus stay put. Crew choices, the Health counts on the rail and
+While the browser tab is visible, the dashboard keeps a live change stream
+open to the selected workspace. When a task, run, lock or drain changes,
+whether from the dashboard, the CLI, an agent or a drain, the panels that show
+it update within a few seconds, and nothing else is read again. With the
+stream connected, Tasks makes no other periodic requests apart from a full
+refresh every three minutes as a safety net. The host chips also update from
+the stream. If the stream cannot connect, for example because the host runs an
+older Orbit, the task list, the run times of tasks in progress, the locks and
+the drain state refresh about every 30 seconds instead. After a dropped
+connection the dashboard picks up the changes it missed, or refreshes in full
+when it cannot tell what it missed. A change that brings nothing new leaves the
+list as it is, and a changed task redraws only its own row, so the scroll
+position, the open task and keyboard focus stay put. Crew choices, the Health counts on the rail and
 the drain forecast refresh when you open Tasks, when you click **Refresh**, and
 otherwise every five minutes.
 

@@ -4,6 +4,7 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::JobRunQuery;
 use orbit_types::task::{TaskStatus, unmet_task_dependencies_with_index};
+use orbit_types::workflow::{JobRun, PipelineState};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
@@ -27,8 +28,8 @@ use crate::runtime::host_signal::HOST_SHUTDOWN_SCHEDULED;
 use super::approvals::readiness_approvals;
 use super::classify::{DEFAULT_CANDIDATE_POOL, candidate_pool_limit};
 use super::drains::{
-    DRAIN_JOB_NAME, LEAF_JOB_NAME, drain_ceiling, live_pull_drain, read_live_leaf_runs,
-    shared_leaf_occupancy, workspace_drains,
+    ActiveDrain, DRAIN_JOB_NAME, LEAF_JOB_NAME, drain_ceiling, live_pull_drain,
+    read_live_leaf_runs, shared_leaf_occupancy, workspace_drains,
 };
 
 const MAX_READINESS_LIMIT: usize = 500;
@@ -64,74 +65,18 @@ pub fn explain_workspace_auto_readiness(
     // drain still wins when both are live.
     let (active_drain, queued_drains) = workspace_drains(runtime)?;
     let pull_drain = live_pull_drain(runtime)?;
-    let recent_drain = if active_drain.is_none() {
-        runtime
-            .stores()
-            .jobs()
-            .list_job_runs_filtered(&JobRunQuery {
-                job_id: Some(DRAIN_JOB_NAME.to_string()),
-                terminal_only: true,
-                limit: Some(1),
-                include_steps: false,
-                ..JobRunQuery::default()
-            })?
-            .into_iter()
-            .next()
-    } else {
-        None
-    };
+    let DrainProgress {
+        recent_drain,
+        status_state,
+        ends_at,
+        admitted_workers,
+        running_admitted_workers,
+        phase: drain_phase,
+    } = drain_progress(runtime, active_drain.as_ref())?;
     let status_run_id = active_drain
         .as_ref()
         .map(|drain| drain.run_id.as_str())
         .or_else(|| recent_drain.as_ref().map(|run| run.run_id.as_str()));
-    let status_state = status_run_id
-        .map(|run_id| runtime.stores().jobs().read_run_state(run_id))
-        .transpose()?
-        .flatten();
-    // The open-window checkpoint is the actual server-stamped deadline, not
-    // the submission time plus a browser's chosen duration, unless an
-    // operator has since extended it [ORB-15383].
-    let ends_at = status_state
-        .as_ref()
-        .and_then(drain_deadline)
-        .map(|deadline| deadline.to_rfc3339_opts(SecondsFormat::Secs, true));
-    let (admitted_workers, running_admitted_workers) = if let Some(state) = &status_state {
-        let mut running = 0;
-        let workers = state
-            .child_dispatches
-            .iter()
-            .filter(|dispatch| dispatch.job_name == LEAF_JOB_NAME);
-        let mut admitted = 0;
-        for dispatch in workers {
-            admitted += 1;
-            if runtime
-                .stores()
-                .jobs()
-                .get_job_run(&dispatch.child_run_id)?
-                .is_some_and(|child| !child.state.is_terminal())
-            {
-                running += 1;
-            }
-        }
-        (admitted, running)
-    } else {
-        (0, 0)
-    };
-    let window_open = ends_at
-        .as_deref()
-        .and_then(|deadline| DateTime::parse_from_rfc3339(deadline).ok())
-        .is_none_or(|deadline| deadline > Utc::now());
-    let drain_phase = if active_drain
-        .as_ref()
-        .is_some_and(|drain| !drain.admissions_stopped())
-        && window_open
-    {
-        "draining"
-    } else if running_admitted_workers > 0 {
-        "winding_down"
-    } else {
-        "idle"
-    };
     let (max_active_leaf_runs, limit_source) = match max_active_leaf_runs {
         Some(requested) => (u64::from(requested), "requested"),
         None => drain_ceiling(active_drain.as_ref(), pull_drain.as_ref()),
@@ -893,6 +838,96 @@ pub fn explain_workspace_auto_readiness(
     Ok(payload)
 }
 
+/// The status drain's progress: the most recent finished drain when no local
+/// drain is live, the status drain's pipeline state, its window deadline and
+/// workers, and the phase readiness reports. Readiness and the dashboard's
+/// change stream read the phase from here, so they never disagree.
+pub(super) struct DrainProgress {
+    pub(super) recent_drain: Option<JobRun>,
+    pub(super) status_state: Option<PipelineState>,
+    pub(super) ends_at: Option<String>,
+    pub(super) admitted_workers: usize,
+    pub(super) running_admitted_workers: usize,
+    pub(super) phase: &'static str,
+}
+
+pub(super) fn drain_progress(
+    runtime: &OrbitRuntime,
+    active_drain: Option<&ActiveDrain>,
+) -> Result<DrainProgress, OrbitError> {
+    let recent_drain = if active_drain.is_none() {
+        runtime
+            .stores()
+            .jobs()
+            .list_job_runs_filtered(&JobRunQuery {
+                job_id: Some(DRAIN_JOB_NAME.to_string()),
+                terminal_only: true,
+                limit: Some(1),
+                include_steps: false,
+                ..JobRunQuery::default()
+            })?
+            .into_iter()
+            .next()
+    } else {
+        None
+    };
+    let status_run_id = active_drain
+        .map(|drain| drain.run_id.as_str())
+        .or_else(|| recent_drain.as_ref().map(|run| run.run_id.as_str()));
+    let status_state = status_run_id
+        .map(|run_id| runtime.stores().jobs().read_run_state(run_id))
+        .transpose()?
+        .flatten();
+    // The open-window checkpoint is the actual server-stamped deadline, not
+    // the submission time plus a browser's chosen duration, unless an
+    // operator has since extended it [ORB-15383].
+    let ends_at = status_state
+        .as_ref()
+        .and_then(drain_deadline)
+        .map(|deadline| deadline.to_rfc3339_opts(SecondsFormat::Secs, true));
+    let (admitted_workers, running_admitted_workers) = if let Some(state) = &status_state {
+        let mut running = 0;
+        let workers = state
+            .child_dispatches
+            .iter()
+            .filter(|dispatch| dispatch.job_name == LEAF_JOB_NAME);
+        let mut admitted = 0;
+        for dispatch in workers {
+            admitted += 1;
+            if runtime
+                .stores()
+                .jobs()
+                .get_job_run(&dispatch.child_run_id)?
+                .is_some_and(|child| !child.state.is_terminal())
+            {
+                running += 1;
+            }
+        }
+        (admitted, running)
+    } else {
+        (0, 0)
+    };
+    let window_open = ends_at
+        .as_deref()
+        .and_then(|deadline| DateTime::parse_from_rfc3339(deadline).ok())
+        .is_none_or(|deadline| deadline > Utc::now());
+    let phase = if active_drain.is_some_and(|drain| !drain.admissions_stopped()) && window_open {
+        "draining"
+    } else if running_admitted_workers > 0 {
+        "winding_down"
+    } else {
+        "idle"
+    };
+    Ok(DrainProgress {
+        recent_drain,
+        status_state,
+        ends_at,
+        admitted_workers,
+        running_admitted_workers,
+        phase,
+    })
+}
+
 impl OrbitRuntime {
     /// Read-only projection of the current auto-drain admission snapshot.
     pub fn workspace_auto_readiness(
@@ -912,5 +947,12 @@ impl OrbitRuntime {
         snapshot["replica"] = json!(self.replica_owner_machine().is_some());
         snapshot["validation_env_warning"] = json!(self.readiness_validation_env_warning());
         Ok(snapshot)
+    }
+
+    /// The workspace's drain phase as readiness reports it (`draining`,
+    /// `winding_down` or `idle`), without the rest of the readiness snapshot.
+    pub fn workspace_drain_phase(&self) -> Result<&'static str, OrbitError> {
+        let (active_drain, _) = workspace_drains(self)?;
+        Ok(drain_progress(self, active_drain.as_ref())?.phase)
     }
 }
