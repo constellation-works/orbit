@@ -1117,6 +1117,76 @@ The original successful execution, performance observations, receipts and
 retained checkout stay intact. No replacement PR, synthetic failure or
 cancellation, checkpoint edits, or release/install action is involved.
 
+## A source-repair reservation stranded before run admission
+
+Before submitting source repair, author the task's real execution plan through
+normal task updates. A blocked or review task cannot enter `in-progress` with
+an empty plan or the unauthored-plan placeholder. Source repair now preflights
+these lifecycle prerequisites before reserving an attempt, charging the repair
+budget, changing task state or submitting a worker. Lifecycle guards remain in
+force.
+
+An older binary may already have persisted `source_repair_reserved` before
+refusing that transition. An ordinary submit cannot reuse its old consent after
+the plan changes, and a new key cannot spend another attempt on the same head.
+On the owning host, an authenticated operator can reconcile this **unbound**
+reservation explicitly:
+
+1. Preserve the original request, reservation and receipts. Correct only the
+   missing or placeholder plan through a legitimate task update. Leave the
+   original publishing run, stopped successors, PR and branch untouched.
+2. Inspect the original publishing run again with `source_repair.action: inspect`.
+   Review its fresh `binding`, `review`, `policy_digest`, immutable `reservations`
+   and `reservation_digests` (a map from original request key to payload digest).
+3. Submit `action: reconcile` through the same operator `orbit.workflow.run.resume`
+   route. Supply the **original** request key, its `reservation_digest`, the fresh
+   binding, and the original diagnosis, unmet-acceptance evidence and policy
+   digest. This is a new authorization of the corrected plan, not a retry of old
+   consent. For successful or kept inline publications, both rework fields remain
+   mandatory.
+
+```json
+{
+  "id": "<original-publishing-run>",
+  "source_repair": {
+    "action": "reconcile",
+    "task_id": "<task>",
+    "request_key": "<original-key>",
+    "reservation_digest": "<reservation_digests[original-key] from inspect>",
+    "binding": "<fresh binding object from inspect>",
+    "policy_digest": "<unchanged current digest from inspect>",
+    "diagnosis": "<original diagnosis>",
+    "unmet_acceptance": "<original unmet-acceptance evidence>"
+  }
+}
+```
+
+Replace the binding placeholder with the returned object. The host accepts
+only correction of an empty or placeholder plan: every other meaning field,
+original source/head/PR/lease, complete stopped lineage, policy, authenticated
+actor and provenance must still match. A reservation without its original full
+policy digest cannot establish unchanged policy and refuses reconciliation.
+A valid earlier plan cannot be replaced
+through this operation. Changed or uncertain evidence refuses without starting
+work or altering the reservation.
+
+The append-only `source_repair_reconciled` event retains both the immutable
+original reservation and the fresh authorization. It keeps the original key,
+payload, history and budget charge; original completion deadlines and receipts
+are untouched. The run uses the fresh binding and freshly captured review
+admission, stays `completion: review` with `auto_fix: false`, and owes current
+native validation, review and hosted checks. It reuses the same PR.
+
+After a lost reply, replay the **identical reconciliation payload**, even if
+inspection is no longer available because the admitted worker rebound the task.
+Concurrent requests and interrupted worker-start replies resolve the same run;
+they never launch another worker or add another reservation or charge. Missing,
+contradictory, ambiguous or truncated run-link evidence refuses safely. If the
+original reservation already admitted a run, replay its original submit payload
+instead; reconciliation does not restart a stopped attempt. No raw store or
+receipt edits, plan rollback, candidate discard, replacement PR, merge or deploy
+is part of this recovery.
+
 ## A cancelled published source repair
 
 A transient completion-observation failure can requeue an owner-local task
