@@ -1239,10 +1239,13 @@ The CLI equivalents are `orbit clock status`, `orbit clock pause`,
 Definitions live in `.orbit/auto_tasks/` and are checked on every scheduler clock
 tick, so pausing the clock pauses scheduled mints. Rows are grouped **On a
 schedule**, **On delivery** (minted after landed deliveries), and
-**Disabled**. The stats strip counts definitions with an open duplicate. A
-definition set to **skip if open** skips its due slot while its duplicate is
-still open, and its row says so. A definition set to **always fire** mints
-again when due even while its duplicate is open, and its row says that instead.
+**Disabled**. The stats strip counts definitions with an open duplicate. While
+the definition is enabled, a definition set to **skip if open** skips its due
+slot while its duplicate is still open, and its row says so; a definition set
+to **always fire** mints again when due even while its duplicate is open, and
+its row says that instead. A disabled definition never mints on schedule: its
+open-duplicate row says the prior task is still open and paused, and the strip
+does not count it as a scheduler hold.
 
 - The switch writes the definition's `enabled` field after a confirmation. A
   disabled definition is skipped, not deleted.

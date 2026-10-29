@@ -144,10 +144,12 @@ function autoTaskOn(definition) {
   return definition.effective_enabled ?? Boolean(definition.enabled);
 }
 
-// Only a skip-if-open definition is held by its open instance: the scheduler
-// skips the due slot. An always-fire definition mints again when due.
+// A held slot is an enabled skip-if-open definition whose open instance makes
+// the scheduler skip the due slot. Disabled definitions never hold: the
+// scheduler returns disabled before due/dedupe checks, and an always-fire
+// definition mints again only while enabled.
 function heldByOpenInstance(definition) {
-  return Boolean(definition.open_duplicate) && definition.dedupe !== "always";
+  return Boolean(definition.open_duplicate) && definition.dedupe !== "always" && autoTaskOn(definition);
 }
 
 function autoTaskToggleButton(payload, definition) {
@@ -296,7 +298,7 @@ function autoTaskRow(payload, definition, workspaceId) {
         definition.last_minted_task_status ? statusPill(definition.last_minted_task_status) : null,
       ].filter(Boolean)),
       el("span", { class: `operation-cell-sub${held ? " warn" : ""}`, text: definition.open_duplicate
-        ? (held ? "still open · scheduler will skip" : "still open · next due slot mints another")
+        ? (held ? "still open · scheduler will skip" : on ? "still open · next due slot mints another" : "still open · paused, no scheduled mint")
         : [mintSource, relativeTime(definition.last_evaluation?.last_fired_at)].filter(Boolean).join(" · "),
       title: definition.last_evaluation?.last_fired_at ? time(definition.last_evaluation.last_fired_at) : "" }),
     ]
@@ -378,10 +380,11 @@ export function syncAutoTaskSchedulerNote() {
   note.append(link, el("span", { text: ` (${cronText(scheduler.cron)}).` }));
 }
 
-// The stats strip counts every open duplicate; only skip-if-open ones are held.
-function openDuplicateNote(duplicates, held) {
+// The stats strip counts every open duplicate; only enabled skip-if-open ones
+// are held. Paused definitions never mint on schedule.
+function openDuplicateNote(duplicates, held, enabledOpen) {
   if (!duplicates) return null;
-  if (!held) return "always-fire definitions mint again when due";
+  if (!held) return enabledOpen ? "always-fire definitions mint again when due" : "paused · no scheduled mint";
   return held === duplicates ? "scheduler skips these slots" : `scheduler skips ${held} of these slots`;
 }
 
@@ -411,6 +414,7 @@ export function renderAutoTasks(payload, { force = false, restoreFilterFocus = f
     const enabled = definitions.filter(autoTaskOn);
     const duplicates = definitions.filter((definition) => definition.open_duplicate).length;
     const held = definitions.filter(heldByOpenInstance).length;
+    const enabledOpen = definitions.filter((definition) => definition.open_duplicate && autoTaskOn(definition)).length;
     const nextMint = enabled
       .map((definition) => definition.next_evaluation?.state === "scheduled" ? new Date(definition.next_evaluation.at || NaN).getTime() : NaN)
       .filter(Number.isFinite)
@@ -419,7 +423,7 @@ export function renderAutoTasks(payload, { force = false, restoreFilterFocus = f
       operationStat("", "Definitions", definitions.length),
       operationStat("active", "Enabled", enabled.length),
       operationStat("accent", "Next mint", nextMint ? relativeTime(nextMint) : "—", nextMint ? clockHm(nextMint) : "no scheduled definition"),
-      operationStat(held ? "warn" : "", "Open duplicates", duplicates, openDuplicateNote(duplicates, held)),
+      operationStat(held ? "warn" : "", "Open duplicates", duplicates, openDuplicateNote(duplicates, held, enabledOpen)),
     ]));
     const schedulerNote = el("p", { class: "operation-control-note auto-tasks-scheduler-note" });
     schedulerNote.id = "auto-tasks-scheduler-note";

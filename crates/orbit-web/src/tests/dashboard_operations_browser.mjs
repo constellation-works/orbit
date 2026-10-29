@@ -83,20 +83,23 @@ globalThis.dockReview = {
 // row, the summary and the group must not say the scheduler skips it. A
 // skip-if-open definition is held, and those lines still say so. Manual mint
 // stays unconditional under both policies. Runs through the public renderer.
+// ORB-19707: a paused definition never mints on schedule and never holds a
+// slot, so its open-duplicate row says paused and the strip does not count it
+// as a scheduler hold. The raw open-duplicate count is retained.
 const autoTaskPolicyHarness = `
 const { setWorkspace } = await import('/js/common.js');
 const shared = await import('/js/operations-shared.js');
 const { renderAutoTasks } = await import('/js/operations-auto-tasks.js');
 const allowed = { authorized: true, reason: null };
 const capabilities = { auto_task_toggle: allowed, auto_task_mint: allowed, auto_task_schedule: allowed };
-const definition = (name, dedupe) => ({
-  name, enabled: true, effective_enabled: true, dedupe,
+const definition = (name, dedupe, enabled = true) => ({
+  name, enabled, effective_enabled: enabled, dedupe,
   template: { title: name, crew: 'fixture', priority: 'medium', status: 'backlog' },
   template_summary: name, schedule: { cron: '0 9 * * *' }, schedule_summary: 'daily at 09:00',
   may_create_open_duplicate: true, open_duplicate: true,
   last_minted_task_id: 'ORB-2', last_minted_task_status: 'in_progress',
   last_evaluation: { kind: 'fired', last_task_id: 'ORB-1', last_fired_at: '2026-10-28T09:00:00Z' },
-  next_evaluation: { state: 'scheduled', at: '2026-10-29T09:00:00Z' },
+  next_evaluation: enabled ? { state: 'scheduled', at: '2026-10-29T09:00:00Z' } : { state: 'disabled' },
 });
 const render = (definitions) => renderAutoTasks({
   cron_zone: { name: 'America/Los_Angeles', offset_seconds: -25200 }, capabilities,
@@ -113,6 +116,12 @@ const summaryNote = () => Array.from(body().querySelectorAll('.operation-stat'))
 const scheduleGroupHint = () => Array.from(body().querySelectorAll('.operation-group'))
   .find((node) => node.querySelector('.operation-group-title strong')?.textContent === 'On a schedule')
   ?.querySelector('.operation-group-hint')?.textContent ?? '';
+const summaryValue = (label) => Array.from(body().querySelectorAll('.operation-stat'))
+  .find((node) => node.querySelector('.operation-field-label')?.textContent === label)
+  ?.querySelector('.operation-stat-value')?.textContent ?? '';
+const disabledGroupCount = () => Array.from(body().querySelectorAll('.operation-group'))
+  .find((node) => node.querySelector('.operation-group-title strong')?.textContent === 'Disabled')
+  ?.querySelector('.operation-group-count')?.textContent ?? '';
 const mintConfirm = (name) => {
   const button = Array.from(card(name).querySelectorAll('button')).find((node) => node.textContent === 'Mint now');
   assert(button && !button.disabled, name + ': manual mint must stay enabled under its dedupe policy');
@@ -149,6 +158,52 @@ try {
   assert(scheduleGroupHint().includes('skip-if-open') && !scheduleGroupHint().includes('no open instance exists'), 'group hint must describe each policy: ' + scheduleGroupHint());
   mintConfirm('always-chore');
   mintConfirm('held-chore');
+
+  // ORB-19707 disabled always-fire alone: paused, no mint promise, raw count kept.
+  render([definition('paused-always', 'always', false)]);
+  const pausedAlone = lastMintedCell('paused-always');
+  assert(pausedAlone && pausedAlone.textContent.includes('still open'), 'disabled always-fire row lost its open duplicate: ' + pausedAlone?.textContent);
+  assert(!pausedAlone.textContent.includes('next due slot mints another'), 'disabled always-fire promises another mint: ' + pausedAlone?.textContent);
+  assert(!pausedAlone.textContent.includes('scheduler'), 'disabled always-fire claims a scheduler hold: ' + pausedAlone?.textContent);
+  assert(pausedAlone.textContent.includes('paused') && pausedAlone.textContent.includes('no scheduled mint'), 'disabled always-fire row must say paused with no scheduled mint: ' + pausedAlone?.textContent);
+  assert(!pausedAlone.classList.contains('warn'), 'disabled always-fire row must not warn: ' + pausedAlone?.textContent);
+  assert(card('paused-always').classList.contains('disabled'), 'disabled always-fire row must sit in Disabled');
+  assert(disabledGroupCount() === '1', 'Disabled group must count the paused definition: ' + disabledGroupCount());
+  assert(summaryValue('Open duplicates') === '1', 'raw duplicate count must stay 1 while paused: ' + summaryValue('Open duplicates'));
+  assert(summaryValue('Enabled') === '0', 'paused strip must show Enabled 0: ' + summaryValue('Enabled'));
+  assert(summaryValue('Next mint') === '—', 'paused strip must show Next mint —: ' + summaryValue('Next mint'));
+  assert(summaryNote() === 'paused · no scheduled mint', 'paused summary must not promise a mint: ' + summaryNote());
+  mintConfirm('paused-always');
+
+  // Disabled skip-if-open alone: also paused, never a held slot.
+  render([definition('paused-held', 'skip_if_open', false)]);
+  const pausedHeldAlone = lastMintedCell('paused-held');
+  assert(pausedHeldAlone && pausedHeldAlone.textContent.includes('still open'), 'disabled skip-if-open row lost its open duplicate: ' + pausedHeldAlone?.textContent);
+  assert(!pausedHeldAlone.textContent.includes('scheduler will skip'), 'disabled skip-if-open claims an active hold: ' + pausedHeldAlone?.textContent);
+  assert(pausedHeldAlone.textContent.includes('paused') && pausedHeldAlone.textContent.includes('no scheduled mint'), 'disabled skip-if-open row must say paused: ' + pausedHeldAlone?.textContent);
+  assert(!pausedHeldAlone.classList.contains('warn'), 'disabled skip-if-open row must not warn: ' + pausedHeldAlone?.textContent);
+  assert(summaryValue('Open duplicates') === '1', 'raw duplicate count must stay 1 while paused: ' + summaryValue('Open duplicates'));
+  assert(summaryNote() === 'paused · no scheduled mint', 'paused skip summary must not claim a hold: ' + summaryNote());
+  mintConfirm('paused-held');
+
+  // Mixed enabled always-fire plus disabled skip-if-open: the paused row is not a hold.
+  render([definition('always-chore', 'always', true), definition('paused-held', 'skip_if_open', false)]);
+  assert(lastMintedCell('always-chore').textContent.includes('next due slot mints another'), 'enabled always-fire row lost its mint line beside a paused row: ' + lastMintedCell('always-chore')?.textContent);
+  assert(lastMintedCell('paused-held').textContent.includes('paused'), 'paused row lost its paused line beside an enabled row: ' + lastMintedCell('paused-held')?.textContent);
+  assert(!lastMintedCell('paused-held').textContent.includes('scheduler'), 'paused row claims a hold beside an enabled row: ' + lastMintedCell('paused-held')?.textContent);
+  assert(summaryValue('Open duplicates') === '2', 'mixed strip must retain both open duplicates: ' + summaryValue('Open duplicates'));
+  assert(summaryNote() === 'always-fire definitions mint again when due', 'mixed strip must not count the paused row as a hold: ' + summaryNote());
+  mintConfirm('always-chore');
+  mintConfirm('paused-held');
+
+  // Mixed enabled held plus disabled always-fire: one active hold of two open duplicates.
+  render([definition('held-chore', 'skip_if_open', true), definition('paused-always', 'always', false)]);
+  assert(lastMintedCell('held-chore').textContent.includes('scheduler will skip'), 'enabled held row lost its hold beside a paused row: ' + lastMintedCell('held-chore')?.textContent);
+  assert(lastMintedCell('paused-always').textContent.includes('paused'), 'paused row lost its paused line beside a held row: ' + lastMintedCell('paused-always')?.textContent);
+  assert(summaryValue('Open duplicates') === '2', 'mixed strip must retain both open duplicates: ' + summaryValue('Open duplicates'));
+  assert(summaryNote() === 'scheduler skips 1 of these slots', 'mixed strip must count only the enabled hold: ' + summaryNote());
+  mintConfirm('held-chore');
+  mintConfirm('paused-always');
   globalThis.autoTaskPolicyTestsPassed = true;
 } catch (error) {
   globalThis.autoTaskPolicyError = String(error && error.message ? error.message : error);
