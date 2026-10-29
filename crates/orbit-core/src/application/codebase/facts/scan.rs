@@ -324,34 +324,54 @@ pub(in crate::application::codebase) fn scan(
     })
 }
 
-/// The facts the regression-risk marks read, and nothing else: every task's
-/// footprint and incoming `regression_from` links, with history read only
-/// for a done task that may have become done since `since`. A task updated
-/// before then became done before then too, so its update time stands in.
+/// How `scan_regressions` treats a per-task history read failure for a done
+/// task that may have become done since `since`.
+///
+/// `Strict` propagates the read error so the caller fails closed (prompt
+/// marks become unavailable). `ExcludeUnreadable` warns and yields
+/// `done_at: None`, so the unreadable task is excluded from the window
+/// without substituting `updated_at` or an empty history. Global metadata
+/// and protocol errors still fail under either policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::application::codebase) enum HistoryCompleteness {
+    Strict,
+    ExcludeUnreadable,
+}
+
+/// The facts the regression-risk marks and the riskiness model read, and
+/// nothing else: every task's footprint and incoming `regression_from`
+/// links, with history read only for a done task that may have become done
+/// since `since`. A task updated before then became done before then too, so
+/// its update time stands in.
 pub(in crate::application::codebase) fn scan_regressions(
     runtime: &OrbitRuntime,
     since: DateTime<Utc>,
+    completeness: HistoryCompleteness,
 ) -> Result<CodebaseFacts, OrbitError> {
     let computed_at = Utc::now();
     let tasks = runtime.list_task_metadata()?;
     let pending_links = pending_links(&tasks);
-    let mut facts: Vec<TaskFacts> = tasks
-        .iter()
-        .map(|task| {
-            let done_at = (task.status == TaskStatus::Done).then(|| {
-                if task.updated_at < since {
-                    return task.updated_at;
-                }
-                let id = task.id.to_string();
-                let history = runtime.get_task_history(&id).unwrap_or_else(|error| {
-                    tracing::warn!(task_id = %id, %error, "regression risk: task history unreadable");
-                    Vec::new()
-                });
-                entered(&history, TaskStatus::Done).unwrap_or(task.updated_at)
-            });
-            TaskFacts::from_envelope(task, done_at)
-        })
-        .collect();
+    let mut facts: Vec<TaskFacts> = Vec::with_capacity(tasks.len());
+    for task in &tasks {
+        let done_at = if task.status != TaskStatus::Done {
+            None
+        } else if task.updated_at < since {
+            Some(task.updated_at)
+        } else {
+            // A failed history read cannot certify a time-window count.
+            match runtime.get_task_history(&task.id) {
+                Ok(history) => Some(entered(&history, TaskStatus::Done).unwrap_or(task.updated_at)),
+                Err(error) => match completeness {
+                    HistoryCompleteness::Strict => return Err(error),
+                    HistoryCompleteness::ExcludeUnreadable => {
+                        tracing::warn!(task_id = %task.id, %error, "riskiness: task history unreadable; excluding task from window");
+                        None
+                    }
+                },
+            }
+        };
+        facts.push(TaskFacts::from_envelope(task, done_at));
+    }
     attach_regressions(&mut facts, pending_links);
     Ok(CodebaseFacts {
         computed_at,

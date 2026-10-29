@@ -221,11 +221,11 @@ impl OrbitRuntime {
     /// instead of a bundle read. Use it for aggregates that read status,
     /// attribution, tags, priority, type or timestamps; anything that renders
     /// or forwards a task body still needs [`Self::list_tasks`] or
-    /// [`Self::get_task`]. A worker invocation reads through its owner, which
-    /// only serves whole tasks, so it falls back to the full listing.
+    /// [`Self::get_task`]. Worker invocations collect complete bounded bodyless
+    /// pages through their authenticated owner; any failed page fails the read.
     pub fn list_task_metadata(&self) -> Result<Vec<Task>, OrbitError> {
         if self.worker_invocation().is_some() {
-            return self.list_tasks();
+            return super::metadata::collect_owner_metadata(self, None);
         }
 
         if !self.coordination_task_reads_visible() {
@@ -236,17 +236,13 @@ impl OrbitRuntime {
 
     /// [`Self::list_task_metadata`] for the listed `ids` only: one keyed read
     /// per id, so the cost follows the ids asked for, not the workspace. A
-    /// worker invocation falls back to the full listing, as it does there.
+    /// worker invocation pages bounded ID selections through its owner.
     pub fn list_task_metadata_for_ids(
         &self,
         ids: &BTreeSet<String>,
     ) -> Result<Vec<Task>, OrbitError> {
         if self.worker_invocation().is_some() {
-            return Ok(self
-                .list_tasks()?
-                .into_iter()
-                .filter(|task| ids.contains(&task.id))
-                .collect());
+            return super::metadata::collect_owner_metadata(self, Some(ids));
         }
 
         if !self.coordination_task_reads_visible() {

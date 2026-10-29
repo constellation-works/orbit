@@ -292,6 +292,12 @@ impl TaskStoreBackend for TaskV2Store {
         TaskV2Store::task_change_stamps(self)
     }
 
+    fn task_metadata_scan_stamps(
+        &self,
+    ) -> Result<Vec<crate::contracts::TaskChangeStamp>, OrbitError> {
+        TaskV2Store::task_change_stamps(self)
+    }
+
     fn task_ids_with_tag(
         &self,
         tag: &str,

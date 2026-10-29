@@ -158,6 +158,10 @@ pub(crate) fn execute(
                 serde_json::to_value(tasks)
             }
             "tasks" => serde_json::to_value(runtime.list_tasks()?),
+            "task_metadata" => {
+                return crate::application::task::metadata::owner_metadata_page(runtime, input)
+                    .map(Some);
+            }
             "status_index" => serde_json::to_value(runtime.task_status_index()?),
             "completion_by_complexity" => serde_json::to_value(
                 runtime
