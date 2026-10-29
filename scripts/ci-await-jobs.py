@@ -15,8 +15,11 @@ success fails the wait at once. API errors are retried until the timeout.
 Single-page listings use ETag conditional requests at three-second intervals.
 Authenticated 304 responses do not consume GitHub's primary rate limit.
 Without an ETag, on API errors, with fewer than 100 primary requests left,
-or when pagination is needed, --poll-seconds (default 15) remains the interval.
-The server's X-Poll-Interval and Retry-After minimums also apply.
+or when pagination is needed, --poll-seconds (default 15) is the fallback
+interval. The server's X-Poll-Interval, Retry-After and, once the primary quota
+is exhausted, X-RateLimit-Reset minimums raise it. A 403 or 429 without
+Retry-After sets a 60-second minimum for single-page and paginated listings
+alike.
 
 --timeout-seconds is one absolute budget for the whole wait. Each `gh api`
 listing runs under the remaining budget, and the poll sleep is clipped to it. A
