@@ -182,11 +182,17 @@ impl OrbitRuntime {
                             stale_ids.push(snapshot.id.clone());
                             continue;
                         };
+                        // Queue age settles still-queued work as an explicit gap.
+                        // That row stays readable, but it is not current coverage.
+                        let queue_expired = record
+                            .result
+                            .as_ref()
+                            .is_some_and(|result| result.reason == AssistanceReason::QueueExpired);
                         if !record.current
-                            || record
-                                .result
-                                .as_ref()
-                                .is_some_and(|r| r.disposition == AssistanceDisposition::Stale)
+                            || queue_expired
+                            || record.result.as_ref().is_some_and(|result| {
+                                result.disposition == AssistanceDisposition::Stale
+                            })
                         {
                             stale_ids.push(snapshot.id.clone());
                         }

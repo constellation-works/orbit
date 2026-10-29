@@ -5,7 +5,8 @@
 //! a fresh bounded pending attempt, and repeated ticks must not leave the
 //! subject permanently without current coverage. Superseded history and
 //! dismissal identities stay attached to their original snapshots. Expiry of
-//! unchanged content must retain its original receipt and coverage gap.
+//! unchanged content must retain its original receipt. Queued expiry is a
+//! coverage gap; a completed result stays current until retention.
 
 use std::sync::{
     Arc, Mutex,
@@ -335,8 +336,9 @@ fn unchanged_completed_and_queued_expiry_stays_a_gap() {
             })
             .unwrap()
     });
-    // One tick admits both subjects and processes only one, exercising expiry
-    // of both a completed assessment and still-queued work.
+    // One tick admits both subjects and processes only one. Queue age makes
+    // still-queued work a coverage gap. A completed result stays current until
+    // retention. Neither case may mint a replacement receipt.
     f.tick();
     assert_eq!(f.calls(), 1);
     let store =
@@ -369,18 +371,38 @@ fn unchanged_completed_and_queued_expiry_stays_a_gap() {
     // packets would still be within queue age, so accidental refreshes would
     // enqueue new logical work rather than merely fail timestamp validation.
     *f.clock.lock().unwrap() = Some(expires_at);
-    for (id, _, _) in &admitted {
-        assert!(f.history(id).current_id.is_none());
+    for (id, original, record) in &admitted {
+        let history = f.history(id);
+        if record.result.is_some() {
+            assert_eq!(
+                history.current_id.as_deref(),
+                Some(original.id.as_str()),
+                "a completed result stays current until retention"
+            );
+        } else {
+            assert!(
+                history.current_id.is_none(),
+                "queued expiry is a coverage gap"
+            );
+        }
     }
 
     for _ in 0..3 {
         f.tick();
-        for (id, original, _) in &admitted {
+        for (id, original, record) in &admitted {
             let history = f.history(id);
-            assert!(
-                history.current_id.is_none(),
-                "expiry remains a coverage gap"
-            );
+            if record.result.is_some() {
+                assert_eq!(
+                    history.current_id.as_deref(),
+                    Some(original.id.as_str()),
+                    "a completed result stays current through queue age"
+                );
+            } else {
+                assert!(
+                    history.current_id.is_none(),
+                    "queued expiry remains a coverage gap"
+                );
+            }
             assert_eq!(history.snapshots.len(), 1);
             let snapshot = &history.snapshots[0];
             assert_eq!(snapshot.id, original.id);
