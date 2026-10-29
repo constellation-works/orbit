@@ -3,8 +3,9 @@
 mod fixture;
 use chrono::Duration;
 use fixture::{
-    AssistanceFixture, CREDENTIAL, FixtureResult, ambiguous_non_timeout_send_failure_reason,
-    builder_send_failure_reason, connect_send_failure_reason, timeout_send_failure_reason,
+    AssistanceFixture, CREDENTIAL, FixtureResult, SUPPLIED,
+    ambiguous_non_timeout_send_failure_reason, builder_send_failure_reason,
+    connect_send_failure_reason, timeout_send_failure_reason,
 };
 use orbit_common::OrbitError;
 use orbit_core::adapter::decisions::AssistanceHttpResponse;
@@ -879,11 +880,28 @@ fn fixture_budgets(root: &Path, schema: &Value) -> FixtureResult {
         .map_err(|_| "settings lock")?
         .limits
         .queue_capacity = 1;
+    let pending_before_displaced_snapshot = pending_assistance_work(&f)?;
     let id = f.enqueue(f.request("expire")?)?;
+    let mut overflow_request = f.request("expire")?;
+    overflow_request.source_digest = assistance::assistance_digest(b"overflow");
     assert_eq!(
-        f.service.enqueue_assistance(f.request("overflow")?, &[])?,
+        f.service
+            .enqueue_assistance(overflow_request, &[SUPPLIED.into()])?,
         AssistanceAdmission::QueueFull
     );
+    assert_eq!(
+        pending_assistance_work(&f)?,
+        pending_before_displaced_snapshot,
+        "QueueFull left displaced work consuming pending capacity"
+    );
+    let mut after_overflow = f.request("expire")?;
+    after_overflow.source_digest = assistance::assistance_digest(b"after-overflow");
+    let later_admission = f
+        .service
+        .enqueue_assistance(after_overflow, &[SUPPLIED.into()])?;
+    let AssistanceAdmission::Enqueued(later_id) = later_admission else {
+        return Err(format!("admission after QueueFull was {later_admission:?}").into());
+    };
     assert_eq!(
         f.store
             .assistance_accounting("synthetic-only/1")?
@@ -893,10 +911,31 @@ fn fixture_budgets(root: &Path, schema: &Value) -> FixtureResult {
     f.advance(301)?;
     f.store.assistance_maintain(f.now()?)?;
     assert_eq!(
-        f.record(&id)?.result.ok_or("missing expired gap")?.reason,
+        f.record(&id)?
+            .result
+            .ok_or("missing superseded gap")?
+            .reason,
+        AssistanceReason::Superseded
+    );
+    assert_eq!(
+        f.record(&later_id)?
+            .result
+            .ok_or("missing expired gap")?
+            .reason,
         AssistanceReason::QueueExpired
     );
     Ok(())
+}
+
+fn pending_assistance_work(f: &AssistanceFixture) -> Result<u32, OrbitError> {
+    f.store.with_read_connection(|conn| {
+        conn.query_row(
+            "SELECT COALESCE(SUM(state!='done'),0) FROM assistance_work",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|_| OrbitError::Store("fixture pending count".into()))
+    })
 }
 
 fn fixture_config_and_compatibility(root: &Path) -> FixtureResult {
@@ -917,7 +956,7 @@ fn fixture_config_and_compatibility(root: &Path) -> FixtureResult {
     assert!(config.set_value("assistance", "{}").is_err());
     let path = root.join("compat.db");
     let store = Store::open(&path)?;
-    // Reconstruct exactly the v71 prefix: v72 adds only independent tables.
+    // Reconstruct exactly the v71 prefix: v72 and v73 add independent tables.
     // Keep the old connection open across the real Store::open migration.
     {
         let connection = store.connection();
@@ -929,8 +968,8 @@ fn fixture_config_and_compatibility(root: &Path) -> FixtureResult {
         )?;
         let mut compat: Value = serde_json::from_str(&compat)?;
         compat["version"] = json!(71);
-        conn.execute_batch("DROP TABLE assistance_slots; DROP TABLE assistance_attempts; DROP TABLE assistance_work; DROP TABLE assistance_budgets;
-            DELETE FROM schema_meta WHERE key='migration.v0072'; CREATE TABLE old_writer_fixture(value TEXT);")?;
+        conn.execute_batch("DROP TABLE worker_resource_limits; DROP TABLE assistance_slots; DROP TABLE assistance_attempts; DROP TABLE assistance_work; DROP TABLE assistance_budgets;
+            DELETE FROM schema_meta WHERE key='migration.v0073'; DELETE FROM schema_meta WHERE key='migration.v0072'; CREATE TABLE old_writer_fixture(value TEXT);")?;
         conn.execute(
             "UPDATE schema_meta SET value=?1 WHERE key='migration.compat'",
             [compat.to_string()],
@@ -938,7 +977,7 @@ fn fixture_config_and_compatibility(root: &Path) -> FixtureResult {
     }
     assert_eq!(store.schema_version()?, 71);
     let upgraded = Store::open(&path)?;
-    assert_eq!(upgraded.schema_version()?, 72);
+    assert_eq!(upgraded.schema_version()?, 73);
     let connection = store.connection();
     let conn = connection.lock().map_err(|_| "connection lock")?;
     let database = orbit_store::maintenance::migration::LedgeredDatabase {
@@ -948,7 +987,7 @@ fn fixture_config_and_compatibility(root: &Path) -> FixtureResult {
         stamp: None,
     };
     let compatible =
-        orbit_store::maintenance::migration::evaluate_newer_database(&conn, &database, 72, 71)?;
+        orbit_store::maintenance::migration::evaluate_newer_database(&conn, &database, 73, 71)?;
     assert!(compatible.writable);
     conn.execute_batch("INSERT INTO old_writer_fixture VALUES ('compatible');")?;
     assert_eq!(

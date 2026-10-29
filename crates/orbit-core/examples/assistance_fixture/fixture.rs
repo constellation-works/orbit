@@ -26,7 +26,7 @@ use std::sync::{
 };
 pub(super) type FixtureResult<T = ()> = Result<T, Box<dyn Error>>;
 pub(super) const CREDENTIAL: &str = "fixture-project-credential-only";
-const SUPPLIED: &str = "fixture-secret\"with\nencoding";
+pub(super) const SUPPLIED: &str = "fixture-secret\"with\nencoding";
 
 pub(super) fn ambiguous_non_timeout_send_failure_reason() -> AssistanceReason {
     send_error::decisions_send_failure_reason(send_error::DecisionsSendFailureClass::Other)
