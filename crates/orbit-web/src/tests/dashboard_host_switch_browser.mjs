@@ -70,7 +70,7 @@ const redundantConfig = {
   config_set: { authorized: true },
   sections: [{ token: 'workflow', keys: ['workflow.base_branch', 'pr.draft'].map((key) => ({
     key, label: key, value: 'same', value_type: 'string', state: 'set', settable: true,
-    source: { layer: 'workspace' }, equals: { built_in: true },
+    source: { layer: 'workspace' }, fallback: { layer: 'global', value: 'same', state: 'set' },
   })).concat([{ key: 'workflow.resource_throttle.enabled', label: 'Enabled', value: true, value_type: 'bool', state: 'set', settable: true, source: { layer: 'global' } }]) }],
   crews: [{ name: 'fixture', provider: 'codex', model: 'fixture', source: 'workspace' }],
   crew_fields: ['model'],
