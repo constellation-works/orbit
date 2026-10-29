@@ -132,6 +132,10 @@ def make_fixture(root, script, name, *, archive_fail=False, allow_rm=False):
     )
     env.pop("ORBIT_BUILD_BUDGET_BENCH_RESULT", None)
     env.pop("ORBIT_BUILD_BUDGET_BENCH_OWNER", None)
+    env.pop("ORBIT_BUILD_BUDGET_DIR", None)
+    env.pop("ORBIT_CARGO_JOBS", None)
+    env.pop("ORBIT_BUILD_SLOTS", None)
+    env.pop("ORBIT_BUILD_BUDGET_HELD", None)
     return case, work, events, env
 
 
