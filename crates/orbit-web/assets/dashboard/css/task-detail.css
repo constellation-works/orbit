@@ -642,10 +642,13 @@
   color: var(--fg-strong);
   font-weight: 600;
   /* The current stage wraps instead of ellipsizing, so it stays readable
-     at 375px where every other segment is cut. */
+     at 375px where every other segment is cut. The word itself must break
+     inside its equal-width cell, otherwise its painted range overflows the
+     4px gap into the next segment. */
   white-space: normal;
-  overflow: visible;
+  overflow: hidden;
   text-overflow: clip;
+  overflow-wrap: anywhere;
 }
 .task-stage.ended .task-stage-step.current .task-stage-bar { background: var(--state-failed); }
 .task-stage.ended[data-run-state="cancelled"] .task-stage-step.current .task-stage-bar { background: var(--state-cancelled); }
