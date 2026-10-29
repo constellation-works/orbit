@@ -829,6 +829,8 @@ assert_ns_diagnostics client-side-shared-tcp 37 41 0
 
 # Model immediate PID/PGID reuse after reaping, without creating/signaling any
 # process. Execute both embedded owners, including the independent watchdog.
+# Failed anchor forks and preexec startup also exercise cleanup while the
+# transport leader alone reserves its process group.
 python3 - "$ROOT" <<'PYIDENTITY'
 from pathlib import Path
 import sys

@@ -5,9 +5,12 @@ created or signaled; a reap immediately makes the numeric group a foreign owner.
 The public compiler-cache test entrypoint invokes these regression fixtures.
 """
 
+from contextlib import redirect_stderr
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+import errno
+import io
 import os
 import signal
 import subprocess
@@ -15,7 +18,8 @@ import sys
 import tempfile
 
 
-def group_lifetime_regression(root, namespace_source=None, watchdog_source=None):
+def group_lifetime_regression(root, namespace_source=None, watchdog_source=None,
+                              anchor_failures=("eagain", "preexec")):
     namespace = (namespace_source or root / "scripts/test-compiler-cache-namespaces.sh").read_text()
     watchdog = (watchdog_source or root / "scripts/test-compiler-cache.sh").read_text()
     programs = [
@@ -23,10 +27,17 @@ def group_lifetime_regression(root, namespace_source=None, watchdog_source=None)
         ("watchdog", watchdog.split("<<'PYTIMEOUT'\n", 1)[1].split("\nPYTIMEOUT", 1)[0]),
     ]
     for name, program in programs:
-        for delayed in (False, True):
+        cases = [(delayed, None) for delayed in (False, True)]
+        if name == "supervisor":
+            cases += [(delayed, failure) for failure in anchor_failures
+                      for delayed in (False, True)]
+        for delayed, anchor_failure in cases:
             with tempfile.TemporaryDirectory(prefix="group-lifetime-", dir=root / ".orbit/tmp") as tmp:
-                state = dict(reserved=True, child=True, killed=False, clock=0, signals=0, reaped=0)
+                state = dict(reserved=True, child=True, killed=False, clock=0, signals=0,
+                             reaped=0, child_reaped=False)
                 processes = []
+                errors = io.StringIO()
+                exited = False
                 real_path = Path
 
                 read_text = Path.read_text
@@ -45,12 +56,17 @@ def group_lifetime_regression(root, namespace_source=None, watchdog_source=None)
                     def __init__(self, argv, **kwargs):
                         self.anchor = "stdin" in kwargs
                         if self.anchor:
+                            if anchor_failure == "eagain":
+                                raise OSError(errno.EAGAIN, "fixture anchor fork unavailable")
+                            if anchor_failure == "preexec":
+                                raise subprocess.SubprocessError("Exception occurred in preexec_fn.")
                             self.pid = 103
                         else:
                             assert not processes or not state["reserved"], "previous leader was not reaped"
                             # A delayed watchdog's adopted descendants are listed only after its leader exits.
                             state.update(reserved=True, child=True, killed=False, pending=False,
-                                         listed=name != "watchdog" or not delayed, exited=not delayed)
+                                         listed=name != "watchdog" or not delayed, exited=not delayed,
+                                         child_reaped=False)
                         self.code = 0
                         if name == "watchdog":
                             env = kwargs["env"]
@@ -79,6 +95,8 @@ def group_lifetime_regression(root, namespace_source=None, watchdog_source=None)
                         return self.returncode
 
                     def wait(self, **kwargs):
+                        if anchor_failure:
+                            assert state["killed"], "unanchored leader reaped before the final group signal"
                         if self.anchor or len(processes) == 1 or name == "watchdog":
                             state["reserved"] = False
                         if self.returncode is None:
@@ -117,12 +135,14 @@ def group_lifetime_regression(root, namespace_source=None, watchdog_source=None)
 
                 def kill(pid, sig):
                     assert pid in (101, 102)
-                    if sig == signal.SIGKILL:
+                    if pid == 102 and sig == signal.SIGKILL:
                         state["child"] = False
 
                 def waitpid(pid, options):
                     assert pid != -1, "generic reap can release the leader before the last signal"
                     assert pid == 102, "leader must be reaped only after group cleanup"
+                    if not state["child"]:
+                        state["child_reaped"] = True
                     return (102, 0) if not state["child"] else (0, 0)
 
                 argv = ([name, "1", "transport"] if name == "supervisor" else
@@ -136,13 +156,22 @@ def group_lifetime_regression(root, namespace_source=None, watchdog_source=None)
                         patch("ctypes.CDLL", return_value=SimpleNamespace(prctl=lambda *_: 0)), \
                         patch("time.monotonic", monotonic), patch("time.sleep", model_sleep), \
                         patch.dict(os.environ, {"NS_REAL_CARGO": "cargo", "NS_REAL_HOME": "home"}), \
-                        patch.object(sys, "platform", "linux"), patch.object(sys, "argv", argv):
+                        patch.object(sys, "platform", "linux"), patch.object(sys, "argv", argv), \
+                        redirect_stderr(errors):
                     try:
                         exec(compile(program, name, "exec"), {})
                     except SystemExit as error:
-                        assert name == "supervisor" and error.code == (124 if delayed else 0), error
+                        exited = True
+                        expected = 125 if anchor_failure else (124 if delayed else 0)
+                        assert name == "supervisor" and error.code == expected, error
                     except subprocess.TimeoutExpired:
                         assert name == "watchdog" and delayed
+                    except (OSError, subprocess.SubprocessError) as error:
+                        raise AssertionError(f"{anchor_failure}: startup failure escaped cleanup: {state}") from error
+                if anchor_failure:
+                    assert exited, "anchor startup failure did not exit nonzero"
+                    diagnostic = "fixture anchor fork unavailable" if anchor_failure == "eagain" else "preexec_fn"
+                    assert diagnostic in errors.getvalue(), "anchor startup failure was not reported"
                 assert state["signals"] > 0 and state["reaped"] == len(processes)
-                assert not state["reserved"] and not state["child"], state
-                print(f"group-lifetime: {name} delayed={delayed} passed")
+                assert not state["reserved"] and not state["child"] and state["child_reaped"], state
+                print(f"group-lifetime: {name} delayed={delayed} anchor_failure={anchor_failure} passed")
