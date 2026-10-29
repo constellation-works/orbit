@@ -990,6 +990,13 @@ fn assert_f64(value: &Value, expected: f64) {
     assert_eq!(got.to_bits(), expected.to_bits(), "{got} != {expected}");
 }
 
+fn assert_fraction(value: &Value, expected: f64) {
+    let got = value
+        .as_f64()
+        .unwrap_or_else(|| panic!("expected fraction {expected}, got {value}"));
+    assert!((got - expected).abs() < 1e-12, "{got} != {expected}");
+}
+
 fn assert_scored(cell: &Value, n: u64, turns: (f64, f64), bytes: (f64, f64), thin: bool) {
     assert_eq!(cell["n"].as_u64(), Some(n), "{cell}");
     assert_eq!(cell["thin"].as_bool(), Some(thin), "{cell}");
@@ -1008,6 +1015,37 @@ fn assert_scored(cell: &Value, n: u64, turns: (f64, f64), bytes: (f64, f64), thi
 
 fn assert_excluded(cell: &Value, no_edit: u64, no_invocation: u64) {
     assert_eq!(cell["excluded_no_edit"].as_u64(), Some(no_edit), "{cell}");
+    assert_eq!(
+        cell["excluded_no_invocation"].as_u64(),
+        Some(no_invocation),
+        "{cell}"
+    );
+}
+
+fn assert_coverage_categories(
+    cell: &Value,
+    empty_trace: u64,
+    no_detectable_edit: u64,
+    no_invocation: u64,
+) {
+    let measured = cell["n"].as_u64().expect("measured task count");
+    let tasks = measured + empty_trace + no_detectable_edit + no_invocation;
+    assert_eq!(
+        cell["excluded_empty_trace"].as_u64(),
+        Some(empty_trace),
+        "{cell}"
+    );
+    assert_eq!(
+        cell["excluded_no_detectable_edit"].as_u64(),
+        Some(no_detectable_edit),
+        "{cell}"
+    );
+    assert_eq!(cell["tasks"].as_u64(), Some(tasks), "{cell}");
+    assert_eq!(
+        cell["excluded_no_edit"].as_u64(),
+        Some(empty_trace + no_detectable_edit),
+        "{cell}"
+    );
     assert_eq!(
         cell["excluded_no_invocation"].as_u64(),
         Some(no_invocation),
@@ -1215,6 +1253,17 @@ fn turns_to_edit_scores_the_first_implement_invocation_and_excludes_shells() {
             assert_eq!(body["min_tasks"], 3);
             assert_eq!(body["truncated"], false);
             assert_eq!(body["excluded_other_provider"], 0);
+            assert_eq!(
+                body["coverage"]["tasks"].as_u64(),
+                Some(12),
+                "all coverage categories reconcile to the done task cohort"
+            );
+            assert_eq!(body["coverage"]["measured"], 7);
+            assert_eq!(body["coverage"]["empty_trace"], 1);
+            assert_eq!(body["coverage"]["no_detectable_edit"], 3);
+            assert_eq!(body["coverage"]["no_invocation"], 1);
+            assert_fraction(&body["coverage"]["trace_rate"], 10.0 / 11.0);
+            assert_fraction(&body["coverage"]["measured_rate"], 7.0 / 12.0);
             let names: Vec<_> = body["series"]
                 .as_array()
                 .unwrap()
@@ -1233,9 +1282,11 @@ fn turns_to_edit_scores_the_first_implement_invocation_and_excludes_shells() {
             );
 
             let medium = series(&body, "medium", "all");
-            // A 2/150, D 0/0, H 3/300, I 3/300. B, C, E and J have no edit. L has no invocation.
+            // A 2/150, D 0/0, H 3/300, I 3/300. C has an empty trace;
+            // B, E and J have populated traces without a recognized editor. L has no invocation.
             assert_scored(&medium["total"], 4, (2.0, 2.5), (187.5, 225.0), false);
             assert_excluded(&medium["total"], 4, 1);
+            assert_coverage_categories(&medium["total"], 1, 3, 1);
             let scored: Vec<_> = medium["points"]
                 .as_array()
                 .unwrap()
@@ -1261,21 +1312,30 @@ fn turns_to_edit_scores_the_first_implement_invocation_and_excludes_shells() {
                 body["available_tags"],
                 json!([{ "tag": "explore-brief", "tasks": 2 }])
             );
-            assert_eq!(
-                body["available_providers"],
-                json!([
-                    { "provider": "claude", "tasks": 8 },
-                    { "provider": "codex", "tasks": 3 },
-                ])
-            );
+            let providers = body["available_providers"].as_array().unwrap();
+            assert_eq!(providers[0]["provider"], "claude");
+            assert_eq!(providers[0]["tasks"], 8);
+            assert_eq!(providers[0]["coverage"]["measured"], 6);
+            assert_eq!(providers[0]["coverage"]["empty_trace"], 1);
+            assert_eq!(providers[0]["coverage"]["no_detectable_edit"], 1);
+            assert_fraction(&providers[0]["coverage"]["trace_rate"], 7.0 / 8.0);
+            assert_fraction(&providers[0]["coverage"]["measured_rate"], 6.0 / 8.0);
+            assert_eq!(providers[1]["provider"], "codex");
+            assert_eq!(providers[1]["tasks"], 3);
+            assert_eq!(providers[1]["coverage"]["measured"], 1);
+            assert_eq!(providers[1]["coverage"]["no_detectable_edit"], 2);
+            assert_fraction(&providers[1]["coverage"]["trace_rate"], 1.0);
+            assert_fraction(&providers[1]["coverage"]["measured_rate"], 1.0 / 3.0);
 
             let tagged = turns_body(&server, "since=24h&tags=explore-brief");
             let with = series(&tagged, "medium", "with");
             assert_scored(&with["total"], 1, (2.0, 2.0), (150.0, 150.0), true);
             assert_excluded(&with["total"], 1, 0);
+            assert_coverage_categories(&with["total"], 0, 1, 0);
             let without = series(&tagged, "medium", "without");
             assert_scored(&without["total"], 3, (2.0, 3.0), (200.0, 300.0), false);
             assert_excluded(&without["total"], 3, 1);
+            assert_coverage_categories(&without["total"], 1, 2, 1);
             assert!(
                 tagged["series"]
                     .as_array()
@@ -1310,6 +1370,18 @@ fn turns_to_edit_scores_the_first_implement_invocation_and_excludes_shells() {
                 true,
             );
             assert_eq!(claude["available_providers"], body["available_providers"]);
+            assert_eq!(claude["coverage"]["tasks"], 9);
+            assert_eq!(claude["coverage"]["measured"], 6);
+            assert_eq!(claude["coverage"]["empty_trace"], 1);
+            assert_eq!(claude["coverage"]["no_detectable_edit"], 1);
+            assert_eq!(claude["coverage"]["no_invocation"], 1);
+
+            let low_only = turns_body(&server, "since=24h&complexity=low");
+            assert_eq!(low_only["coverage"]["tasks"], 2);
+            assert_eq!(low_only["coverage"]["measured"], 2);
+            assert_eq!(low_only["coverage"]["empty_trace"], 0);
+            assert_eq!(low_only["coverage"]["no_detectable_edit"], 0);
+            assert_eq!(low_only["coverage"]["no_invocation"], 0);
 
             let closed = turns_body(&server, "since=24h&outcome=all");
             assert_scored(
@@ -1330,6 +1402,13 @@ fn turns_to_edit_scores_the_first_implement_invocation_and_excludes_shells() {
                 false,
             );
             assert_excluded(&series(&nobody, "medium", "all")["total"], 0, 1);
+            assert_eq!(nobody["coverage"]["tasks"], 1);
+            assert_eq!(
+                nobody["coverage"]["tasks"].as_u64().unwrap()
+                    + nobody["excluded_other_provider"].as_u64().unwrap(),
+                12,
+                "provider exclusion plus the retained no-invocation category reconciles"
+            );
 
             for query in [
                 "since=24h&outcome=later",

@@ -102,7 +102,44 @@ function seriesLabel(series) {
 }
 
 function excluded(cell) {
-  return (cell.excluded_no_edit || 0) + (cell.excluded_no_invocation || 0);
+  return (cell.excluded_empty_trace || 0)
+    + (cell.excluded_no_detectable_edit ?? cell.excluded_no_edit ?? 0)
+    + (cell.excluded_no_invocation || 0);
+}
+
+function coverageCategories(cell) {
+  return cell.excluded_empty_trace != null && cell.excluded_no_detectable_edit != null;
+}
+
+function excludedDescription(cell) {
+  if (!coverageCategories(cell)) {
+    return `${cell.excluded_no_edit || 0} with no detectable edit (trace category unavailable), ${cell.excluded_no_invocation || 0} with no implement invocation`;
+  }
+  return `${cell.excluded_empty_trace} with an empty or unavailable tool trace, ${cell.excluded_no_detectable_edit} with a populated trace but no recognized editor, ${cell.excluded_no_invocation || 0} with no implement invocation`;
+}
+
+function percent(rate) {
+  return rate == null || !Number.isFinite(Number(rate)) ? "—" : `${Math.round(Number(rate) * 100)}%`;
+}
+
+function coverageNote(payload) {
+  const coverage = payload.coverage;
+  if (!coverage) return "Trace coverage categories are unavailable from this host.";
+  return `First-edit coverage: ${coverage.measured} of ${coverage.tasks} tasks measured; ${coverage.empty_trace} had an empty or unavailable tool trace, ${coverage.no_detectable_edit} had a populated trace without a recognized editor, and ${coverage.no_invocation} had no implement invocation.`;
+}
+
+function providerCoverageNote(payload) {
+  const providers = payload.available_providers || [];
+  if (!providers.length) return "No provider-linked implement invocations in this window.";
+  if (!providers.every((entry) => entry.coverage)) return "Provider trace coverage is unavailable from this host.";
+  return `Provider coverage (measured / first-invocation tasks; trace rate): ${providers.map((entry) => {
+    const coverage = entry.coverage;
+    const measured = `${coverage.measured}/${coverage.tasks} measured (${percent(coverage.measured_rate)})`;
+    if (coverage.tasks > 0 && coverage.measured === 0 && coverage.empty_trace === coverage.tasks) {
+      return `${entry.provider}: no tool telemetry (${measured}; 0% trace coverage; ${coverage.empty_trace} empty traces)`;
+    }
+    return `${entry.provider}: ${measured}; ${percent(coverage.trace_rate)} trace coverage, ${coverage.empty_trace} empty traces and ${coverage.no_detectable_edit} populated without a recognized editor`;
+  }).join(" · ")}.`;
 }
 
 /// A 1–2–5 axis from zero past `max`, in about four steps.
@@ -123,7 +160,12 @@ export function turnsTools({ segGroup, windowKey, payload, rerender, onChange })
   const providers = (payload && payload.available_providers) || [];
   const provider = el("select", { class: "mx-select", "aria-label": "Provider" }, [
     option("", "All providers", !filters.provider),
-    ...providers.map((entry) => option(entry.provider, `${entry.provider} (${entry.tasks})`, entry.provider === filters.provider)),
+    ...providers.map((entry) => {
+      const summary = entry.coverage
+        ? `${entry.coverage.measured}/${entry.tasks} measured · ${percent(entry.coverage.measured_rate)}`
+        : `${entry.tasks} tasks`;
+      return option(entry.provider, `${entry.provider} (${summary})`, entry.provider === filters.provider);
+    }),
     filters.provider && !providers.some((entry) => entry.provider === filters.provider) ? option(filters.provider, filters.provider, true) : null,
   ]);
   provider.addEventListener("change", () => apply({ provider: provider.value }));
@@ -166,7 +208,7 @@ function option(value, text, selected) {
 
 /// The trend model metrics.js draws: cards, chart, table, or an empty state.
 export function turnsModel(payload, { windowKey, shown, bucketTitle, bucketWidthLabel }) {
-  const blurb = "Tool calls before the first file edit in a task's first implement invocation, by complexity. Result bytes sum what those calls returned. An invocation with no detectable edit is left out, not scored as zero.";
+  const blurb = "Tool calls before the first recognized editor call in a task's first implement invocation, by complexity. Result bytes sum what those calls returned. Empty traces and populated traces without a recognized editor are left out, never scored as zero.";
   if (!payload) return { blurb, cards: [], empty: { title: "Loading turns to first edit…", detail: "", noWiden: true } };
   if (payload.unavailable) return { blurb, cards: [], empty: { title: "Turns to first edit unavailable", detail: payload.unavailable, noWiden: true } };
 
@@ -190,21 +232,24 @@ export function turnsModel(payload, { windowKey, shown, bucketTitle, bucketWidth
     tag: "",
     on: isShown(entry.key),
     value: entry.total.n ? format(entry.total[meanKey]) : "—",
-    sub: entry.total.n ? `median ${format(entry.total[medianKey])}` : "no tasks",
-    foot: `${tasks(entry.total.n)}${excluded(entry.total) ? ` · ${excluded(entry.total)} excluded` : ""}`,
+    sub: entry.total.n ? `median ${format(entry.total[medianKey])}` : "no measured first edits",
+    foot: coverageCategories(entry.total)
+      ? `${tasks(entry.total.n)} measured · ${entry.total.excluded_empty_trace} empty traces · ${entry.total.excluded_no_detectable_edit} populated without an editor · ${entry.total.excluded_no_invocation || 0} without an invocation`
+      : `${tasks(entry.total.n)} measured · ${excludedDescription(entry.total)}`,
   }));
 
   if (!total.n) {
     const left = excluded(total);
     const other = payload.excluded_other_provider || 0;
     const parts = [];
-    if (left) parts.push(`${tasks(left)} excluded: ${total.excluded_no_edit || 0} with no detectable edit, ${total.excluded_no_invocation || 0} with no implement invocation`);
+    if (left) parts.push(`${tasks(left)} outside the measured sample: ${excludedDescription(total)}`);
     if (other) parts.push(`${tasks(other)} on another provider`);
+    parts.push(coverageNote(payload), providerCoverageNote(payload));
     return {
       blurb,
       cards,
       empty: {
-        title: `No ${payload.outcome === "done" ? "done" : "closed"} tasks with a detectable edit in the last ${windowKey === "all" ? "recorded history" : windowKey}`,
+        title: `No measured first edits for ${payload.outcome === "done" ? "done" : "closed"} tasks in the last ${windowKey === "all" ? "recorded history" : windowKey}`,
         detail: parts.join(". "),
       },
     };
@@ -226,7 +271,7 @@ export function turnsModel(payload, { windowKey, shown, bucketTitle, bucketWidth
   ];
   if (payload.tags.length) notes.push(`with tag = carries ${payload.tags.join(" or ")} now (current tags, not tags at the time); dashed = without`);
   if (payload.provider) notes.push(`provider ${payload.provider}; ${tasks(payload.excluded_other_provider || 0)} whose first implement invocation ran on another provider`);
-  if (excluded(total)) notes.push(`excluded: ${total.excluded_no_edit || 0} with no detectable edit, ${total.excluded_no_invocation || 0} with no implement invocation`);
+  notes.push(coverageNote(payload), providerCoverageNote(payload));
   if (payload.truncated) notes.push("older implement invocations were left out of this read");
 
   return {
@@ -261,9 +306,9 @@ export function turnsModel(payload, { windowKey, shown, bucketTitle, bucketWidth
             value: `turns ${fmtTurns(point.mean_turns)} / ${fmtTurns(point.median_turns)} · bytes ${fmtBytes(point.mean_result_bytes)} / ${fmtBytes(point.median_result_bytes)}`,
           });
         }
-        if (!tip.rows.length) tip.empty = "No task with a detectable edit closed in this bucket.";
+        if (!tip.rows.length) tip.empty = "No measured first edit for tasks closed in this bucket.";
         if (tip.rows.some((row) => row.low)) tip.warn = `Amber counts: fewer than ${minTasks} tasks.`;
-        if (left) tip.extra = `${tasks(left)} excluded (no detectable edit, or no implement invocation)`;
+        if (left) tip.extra = `${tasks(left)} outside the measured sample; see coverage notes for empty traces and unrecognized editors`;
         return tip;
       },
     },
