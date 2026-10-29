@@ -3,11 +3,11 @@
 //! earlier time.
 //!
 //! Each entry carries the full previous and new tag lists as a typed
-//! [`TaskDecision::TagsChanged`], so the tags before the first recorded
-//! change are that change's `previous` list and no creation snapshot is
-//! needed. A task whose history holds no change has always carried its
-//! current tags. Tag edits made before writes recorded them cannot be
-//! reconstructed; replay then reads the current tags for every time.
+//! [`TaskDecision::TagsChanged`], so replay before the first recorded
+//! change uses that change's `previous` list. At or after a recorded
+//! change, replay uses the newest recorded list; when history has no
+//! `tags_changed` entry, it falls back to the task's current tags. Tag
+//! edits made before writes recorded them cannot otherwise be reconstructed.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
