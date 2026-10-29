@@ -2,15 +2,22 @@
 """Offline evaluation contracts and scoring for bounded decision assistance.
 
 Stdlib only, no network. See docs/design/decision-assistance/2_evaluation.md.
-Formats are versioned (`decision-assistance-eval/1`); synthetic labels are
-never human ground truth (label.provenance distinguishes them).
+Formats are versioned (`decision-assistance-eval/1` frozen legacy,
+`decision-assistance-eval/2` current for human holdout eligibility);
+synthetic labels are never human ground truth (label.provenance
+distinguishes them). V1 second-label holdouts without a recorded first
+value are legacy/unverified and never eligible; v2 records the first
+value so rewriting `expected` cannot hide disagreement.
 """
 import argparse, hashlib, json, math, os, sys
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-FORMAT = "decision-assistance-eval/1"
+FORMAT_V1 = "decision-assistance-eval/1"
+FORMAT_V2 = "decision-assistance-eval/2"
+FORMAT = FORMAT_V1
+SUPPORTED_FORMATS = (FORMAT_V1, FORMAT_V2)
 HOLDOUT_RECORDS = Path(".decision-assistance-eval") / "holdouts"
 DISPOSITIONS = ["suggested", "uncertain", "refused", "unavailable", "invalid", "stale"]
 FAILURE_CATEGORIES = ["product_defect", "misclassified_hold", "provider", "upstream_quality",
@@ -32,11 +39,20 @@ QUESTION_SETS = {
             ("scope_clarification", "True only if unrelated deliverables lack a common outcome. Coherent cross-component work is not flagged.")]}},
 }
 PROVENANCES = ["synthetic", "independent_human"]
-HUMAN_LABEL_IMPORT_FIELDS = (
+HUMAN_LABEL_IMPORT_FIELDS_V1 = (
     "labeler_id",
     "labeler_role",
     "labeled_at",
     "intake_snapshot_at",
+    "second_label_or_adjudication",
+)
+HUMAN_LABEL_IMPORT_FIELDS = HUMAN_LABEL_IMPORT_FIELDS_V1
+HUMAN_LABEL_IMPORT_FIELDS_V2 = (
+    "labeler_id",
+    "labeler_role",
+    "labeled_at",
+    "intake_snapshot_at",
+    "value",
     "second_label_or_adjudication",
 )
 
@@ -55,10 +71,13 @@ def _is_iso8601(v):
         return False
     return True
 
-def _validate_human_label_import(label, case_id, case_expected, manifest_snapshot):
+def _validate_human_label_import(label, case_id, case_expected, manifest_snapshot,
+                               dataset_version=None):
     errs = []
     where = f"holdout case {case_id}: label"
-    missing = [field for field in HUMAN_LABEL_IMPORT_FIELDS if field not in label]
+    is_v2 = dataset_version == FORMAT_V2
+    required = HUMAN_LABEL_IMPORT_FIELDS_V2 if is_v2 else HUMAN_LABEL_IMPORT_FIELDS_V1
+    missing = [field for field in required if field not in label]
     if missing:
         errs.append(f"{where} missing required import field(s): {', '.join(missing)}")
 
@@ -90,6 +109,15 @@ def _validate_human_label_import(label, case_id, case_expected, manifest_snapsho
             errs.append(f"{record_where}.labeled_at must be ISO-8601")
         if "value" not in record:
             errs.append(f"{record_where}.value is required")
+        elif not is_v2:
+            errs.append(f"{record_where} is a legacy v1 second label without a recorded first value; "
+                        f"independent agreement cannot be verified from expected and it is not proven "
+                        f"independent human ground truth; re-author as {FORMAT_V2} with recorded "
+                        f"first/second values")
+        elif "value" not in label:
+            errs.append(f"{where}.value is required to verify independent agreement")
+        elif record["value"] != label["value"]:
+            errs.append(f"{record_where} disagrees with the first label; an adjudication record is required")
         elif record["value"] != case_expected:
             errs.append(f"{record_where} disagrees with the accepted label; an adjudication record is required")
     elif kind == "adjudication":
@@ -116,6 +144,9 @@ def _validate_human_label_import(label, case_id, case_expected, manifest_snapsho
                     errs.append(f"{original_where}.labeled_at must be ISO-8601")
                 if "value" not in original:
                     errs.append(f"{original_where}.value is required")
+                elif (is_v2 and "value" in label and original.get("labeler_id") == label.get("labeler_id")
+                      and original["value"] != label["value"]):
+                    errs.append(f"{original_where}.value must match the imported first label value")
                 if isinstance(original.get("labeler_id"), str):
                     original_ids.append(original["labeler_id"])
             if len(original_ids) == 2 and len(set(original_ids)) != 2:
@@ -156,7 +187,7 @@ def validate_answer_value(qdef, ans, errs, where):
 
 def validate_dataset(ds):
     errs = []
-    if not isinstance(ds, dict) or ds.get("format_version") != FORMAT: return [f"format_version must be {FORMAT}"]
+    if not isinstance(ds, dict) or ds.get("format_version") not in SUPPORTED_FORMATS: return [f"format_version must be one of {', '.join(SUPPORTED_FORMATS)}"]
     if not _ts(ds.get("intake_snapshot_at", "")): errs.append("intake_snapshot_at must be ISO-8601")
     seen = set()
     for c in ds.get("cases", []):
@@ -190,7 +221,7 @@ def validate_dataset(ds):
 
 def validate_answers(ds, ansdoc):
     errs = []
-    if not isinstance(ansdoc, dict) or ansdoc.get("format_version") != FORMAT: return [f"answers format_version must be {FORMAT}"]
+    if not isinstance(ansdoc, dict) or ansdoc.get("format_version") not in SUPPORTED_FORMATS: return [f"answers format_version must be one of {', '.join(SUPPORTED_FORMATS)}"]
     cases = {c["case_id"]: c for c in ds.get("cases", [])}
     seen = set()
     for a in ansdoc.get("answers", []):
@@ -223,7 +254,8 @@ def score(ds, ansdoc):
     errs = validate_dataset(ds) + validate_answers(ds, ansdoc)
     cases = {c["case_id"]: c for c in ds.get("cases", [])}
     by_id = {a.get("case_id"): a for a in ansdoc.get("answers", [])}
-    report = {"format_version": FORMAT, "dataset_id": ds.get("dataset_id"), "validation_errors": errs,
+    report_version = ds.get("format_version") if ds.get("format_version") in SUPPORTED_FORMATS else FORMAT
+    report = {"format_version": report_version, "dataset_id": ds.get("dataset_id"), "validation_errors": errs,
               "questions": {}, "totals": {}}
     total = answered = abstained = invalid = refused = 0
     lat, costs, in_tok, out_tok = [], [], [], []
@@ -262,7 +294,7 @@ def score(ds, ansdoc):
     for cid, case in cases.items():
         total += 1
         a = by_id.get(cid)
-        if a is None or a.get("disposition") not in DISPOSITIONS or (validate_answers(ds, {"format_version": FORMAT, "answers": [a]})):
+        if a is None or a.get("disposition") not in DISPOSITIONS or (validate_answers(ds, {"format_version": report_version, "answers": [a]})):
             invalid += 1
             abstained += 1
             record_abstained_expected_failure(case)
@@ -327,7 +359,7 @@ def _holdout_timestamp(value):
         raise ValueError("holdout timestamps must include a timezone")
     return timestamp
 
-def _record_holdout_opening(holdout_id):
+def _record_holdout_opening(holdout_id, format_version=None):
     HOLDOUT_RECORDS.mkdir(parents=True, exist_ok=True)
     # Exclusive creation arbitrates concurrent checks without overwriting history.
     path = HOLDOUT_RECORDS / (hashlib.sha256(holdout_id.encode()).hexdigest() + ".json")
@@ -335,8 +367,9 @@ def _record_holdout_opening(holdout_id):
         record = path.open("x", encoding="utf-8")
     except FileExistsError:
         return False
+    version = format_version if format_version in SUPPORTED_FORMATS else FORMAT_V1
     with record:
-        json.dump({"format_version": FORMAT, "holdout_id": holdout_id,
+        json.dump({"format_version": version, "holdout_id": holdout_id,
                    "opened_at": datetime.now(timezone.utc).isoformat()}, record)
         record.write("\n")
         record.flush()
@@ -353,7 +386,7 @@ def _target_recorded_opening(doc):
         if path.suffix != ".json":
             continue
         record = load(path)
-        if not isinstance(record, dict) or record.get("format_version") != FORMAT:
+        if not isinstance(record, dict) or record.get("format_version") not in SUPPORTED_FORMATS:
             raise ValueError(f"invalid holdout record {path}")
         hid = record.get("holdout_id")
         if not isinstance(hid, str) or not hid.strip():
@@ -372,7 +405,7 @@ def _target_recorded_opening(doc):
 
 def check_split(ds, manifest, prior_holdout_ids):
     errs = validate_dataset(ds)
-    if manifest.get("format_version") != FORMAT: errs.append(f"manifest format_version must be {FORMAT}")
+    if manifest.get("format_version") not in SUPPORTED_FORMATS: errs.append(f"manifest format_version must be one of {', '.join(SUPPORTED_FORMATS)}")
     hid = manifest.get("holdout_id")
     if not isinstance(hid, str) or not hid.strip(): errs.append("manifest holdout_id must be a non-empty string")
     if hid in (prior_holdout_ids or []): errs.append(f"holdout_id {hid} already used/opened; reused holdout IDs are rejected")
@@ -400,7 +433,8 @@ def check_split(ds, manifest, prior_holdout_ids):
             errs.append(f"holdout case {cid}: label.provenance must be independent_human, got {label.get('provenance')!r} (synthetic is not human ground truth)")
         elif split == "holdout":
             errs.extend(_validate_human_label_import(
-                label, cid, c.get("expected"), manifest.get("intake_snapshot_at", "")))
+                label, cid, c.get("expected"), manifest.get("intake_snapshot_at", ""),
+                ds.get("format_version")))
         ep = c.get("evidence_packet") or {}
         if _ts(ep.get("collected_at", "")) and _ts(manifest.get("intake_snapshot_at", "")) and ep["collected_at"] > manifest["intake_snapshot_at"]:
             errs.append(f"case {cid}: evidence after intake_snapshot_at")
@@ -410,7 +444,7 @@ def check_split(ds, manifest, prior_holdout_ids):
         if non and hold and min(hold) <= max(non): errs.append("time holdout: earliest holdout evidence must be after latest train/dev evidence")
     if not errs:
         try:
-            if not _record_holdout_opening(hid):
+            if not _record_holdout_opening(hid, manifest.get("format_version")):
                 errs.append(f"holdout_id {hid} already used/opened; reused holdout IDs are rejected")
         except OSError as error:
             errs.append(f"cannot record holdout access: {error}")
@@ -418,7 +452,7 @@ def check_split(ds, manifest, prior_holdout_ids):
 
 def check_targets(doc, holdout_opened_at):
     errs = []
-    if doc.get("format_version") != FORMAT: errs.append(f"targets format_version must be {FORMAT}")
+    if doc.get("format_version") not in SUPPORTED_FORMATS: errs.append(f"targets format_version must be one of {', '.join(SUPPORTED_FORMATS)}")
     if not _ts(doc.get("registered_at", "")): errs.append("targets registered_at required")
     try:
         recorded_opening = _target_recorded_opening(doc)
@@ -450,7 +484,8 @@ def _case(cid, consumer, family, subject, collected, refs, excerpts, expected, c
             "label": {"provenance": "synthetic", "human_ground_truth": False,
                       "note": "synthetic expected label authored for offline seed; not human ground truth"}}
 
-def seed_dataset():
+def seed_dataset(format_version=None):
+    version = format_version if format_version in SUPPORTED_FORMATS else FORMAT_V1
     F = lambda v: {"failure_category": {"value": v}}
     P = lambda **kw: {q: {"value": kw.get(q, False)} for q in TASK_PREDICATES}
     crit_bad = ["Ship it", "Code should be clean."]
@@ -469,16 +504,17 @@ def seed_dataset():
               {**P(outcome_unclear=True), "criterion_not_observable": {"value": True, "criterion_refs": [crit_ref(1, crit_bad[1])]}},
               criteria=crit_bad),
     ]
-    return {"format_version": FORMAT, "dataset_id": "synthetic-seed/1", "intake_snapshot_at": "2026-02-01T00:00:00Z",
+    return {"format_version": version, "dataset_id": "synthetic-seed/1", "intake_snapshot_at": "2026-02-01T00:00:00Z",
             "label_provenance": "synthetic", "cases": cases}
 
-def seed_answers():
-    ds = seed_dataset(); out = []
+def seed_answers(format_version=None):
+    version = format_version if format_version in SUPPORTED_FORMATS else FORMAT_V1
+    ds = seed_dataset(version); out = []
     for c in ds["cases"]:
         ans = {q: dict(v) for q, v in c["expected"].items()}
         out.append({"case_id": c["case_id"], "disposition": "suggested", "answers": ans,
                     "usage": {"input_tokens": 100, "output_tokens": 10}, "latency_ms": 50, "cost_usd": 0.001, "pricing_version": "seed"})
-    return {"format_version": FORMAT, "answers": out}
+    return {"format_version": version, "answers": out}
 
 def load(p): return json.loads(Path(p).read_text())
 def emit(obj, code=0): print(json.dumps(obj, indent=2, sort_keys=True)); return code
@@ -487,15 +523,21 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="Offline decision-assistance evaluation (no external calls).")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("schema"); s = sub.add_parser("seed"); s.add_argument("--answers", action="store_true")
+    s.add_argument("--format-version", default=FORMAT_V1, choices=list(SUPPORTED_FORMATS))
     for name in ("validate", "score"):
         p = sub.add_parser(name); p.add_argument("--dataset", required=True); p.add_argument("--answers")
     p = sub.add_parser("check-split"); p.add_argument("--dataset", required=True); p.add_argument("--manifest", required=True); p.add_argument("--prior-holdout-ids", default="")
     p = sub.add_parser("check-targets"); p.add_argument("--targets", required=True); p.add_argument("--holdout-opened-at")
     a = ap.parse_args(argv)
     if a.cmd == "schema":
-        return emit({"format_version": FORMAT, "question_sets": QUESTION_SETS, "dispositions": DISPOSITIONS,
-                     "label_provenances": PROVENANCES, "criterion_ref": {"index": "int", "text_digest": "sha256:<64 hex of criterion text>"}})
-    if a.cmd == "seed": return emit(seed_answers() if a.answers else seed_dataset())
+        return emit({"format_version": FORMAT_V1, "supported_format_versions": list(SUPPORTED_FORMATS),
+                     "question_sets": QUESTION_SETS, "dispositions": DISPOSITIONS,
+                     "label_provenances": PROVENANCES,
+                     "human_label_import_fields": {"v1_legacy": list(HUMAN_LABEL_IMPORT_FIELDS_V1),
+                                                   "v2": list(HUMAN_LABEL_IMPORT_FIELDS_V2)},
+                     "human_holdout_eligibility": f"v1 second labels are legacy/unverified; v2 ({FORMAT_V2}) with a recorded first value is required",
+                     "criterion_ref": {"index": "int", "text_digest": "sha256:<64 hex of criterion text>"}})
+    if a.cmd == "seed": return emit(seed_answers(a.format_version) if a.answers else seed_dataset(a.format_version))
     if a.cmd in ("validate", "score"):
         ds = load(a.dataset); errs = validate_dataset(ds)
         ans = load(a.answers) if a.answers else None

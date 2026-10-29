@@ -18,7 +18,18 @@ calls, or advisory display. Implementation:
 `scripts/evaluate-decision-assistance.py` (contract + scoring),
 `scripts/test-evaluate-decision-assistance.py` (public CLI verification).
 
-## Frozen contracts (version `decision-assistance-eval/1`)
+## Frozen contracts (versions `decision-assistance-eval/1` and `/2`)
+
+Version `decision-assistance-eval/1` is frozen legacy, preserved for
+reading/replay (`validate`, `score`), synthetic labels, `train`/`dev`
+splits, `check-targets` and adjudicated holdouts. Version
+`decision-assistance-eval/2` is current for human holdout eligibility: it
+adds the first labeler's recorded `value` to the import so rewriting
+`expected` cannot hide first/second disagreement. `validate`, `score`,
+`check-split` and `check-targets` accept both versions; `schema` keeps
+`format_version` at `/1` for evidence-envelope compatibility and lists
+both under `supported_format_versions`, and `seed` defaults to `/1` with
+an opt-in `--format-version` for `/2` synthetic fixtures.
 
 - **Consumers/questions.** `failure_categorization`: one choice question
   `failure_category` over `product_defect`, `misclassified_hold`, `provider`,
@@ -54,24 +65,44 @@ calls, or advisory display. Implementation:
   human ground truth in any report or readout.
 - Human import is permitted only for data the operator confirms may be used:
   bounded evidence available at intake, redacted at the external boundary, no
-  credentials, attachments or ambient environment data. A holdout label must
-  include these import fields, which `check-split` enforces:
-  `labeler_id`, `labeler_role`, `labeled_at`, `intake_snapshot_at`, and
-  `second_label_or_adjudication`.
-- `second_label_or_adjudication` is an object whose `kind` is
-  `second_independent_label` or `adjudication`. A second-label record retains
-  its `labeler_id`, `labeler_role`, `labeled_at` and `value`; its labeler must
-  differ from the first. Two independent labelers label each human case blind
-  to model output and to each other. When they disagree, the record must be an
-  adjudication with `adjudicator_id`, `adjudicator_role`, `adjudicated_at`,
-  both `original_labels` (each retaining labeler identity, role, timestamp and
-  value) and a `rationale_category`; the adjudicator must be a third person.
-  The adjudicator sees both original labels and the evidence available at
-  intake, not later outcomes.
+  credentials, attachments or ambient environment data.
+- V1 import (frozen, `HUMAN_LABEL_IMPORT_FIELDS_V1`) requires `labeler_id`,
+  `labeler_role`, `labeled_at`, `intake_snapshot_at` and
+  `second_label_or_adjudication`. A v1 `second_independent_label` has no
+  recorded first value, so independent agreement cannot be verified from
+  `expected`: it is legacy/unverified, never proven independent human ground
+  truth, and `check-split` rejects it for holdout eligibility with a
+  re-authoring error. V1 `adjudication` records remain eligible when they
+  retain both `original_labels`, a third adjudicator and a matching accepted
+  value, because the disagreement is explicitly recorded.
+- V2 import (current, `HUMAN_LABEL_IMPORT_FIELDS_V2`) adds the first
+  labeler's recorded `value`. `check-split` enforces it only on `/2`
+  datasets. A v2 `second_independent_label` retains its `labeler_id`,
+  `labeler_role`, `labeled_at` and `value`; its labeler must differ from the
+  first, its `value` must match the imported first `value`, and changing
+  `expected` cannot make disagreeing labels agree. Two independent labelers
+  label each human case blind to model output and to each other. When they
+  disagree, the record must be an adjudication with `adjudicator_id`,
+  `adjudicator_role`, `adjudicated_at`, both `original_labels` (each
+  retaining labeler identity, role, timestamp and value) and a
+  `rationale_category`; the first original's value must match the imported
+  first `value`, and the adjudicator must be a third person. The adjudicator
+  sees both original labels and the evidence available at intake, not later
+  outcomes.
   The adjudicated `value` is the accepted label. Unresolvable
   cases are labeled `insufficient_evidence` or excluded with a recorded
   reason — never force-labeled. Author dismissals of advisory flags are
   feedback, not ground truth, until independently re-labeled this way.
+- Migration v1 → v2 (supported re-authoring path). For each v1
+  second-label holdout case: retrieve the first labeler's independently
+  recorded value from the original labeling records, add it as
+  `label.value`, keep the recorded second `value`, set the dataset and
+  manifest `format_version` to `decision-assistance-eval/2`, and re-run
+  `check-split` with a fresh `holdout_id`. If the original first value is
+  unavailable it cannot be reconstructed: never infer it from `expected`
+  (which may have been overwritten to the second value), never grandfather
+  the v1 record as ground truth. Re-label blind or exclude the case;
+  `check-split` fails safely until the v2 record verifies.
 
 ## Splitting: family and time holdouts
 

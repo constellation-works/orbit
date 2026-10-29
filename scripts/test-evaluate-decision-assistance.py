@@ -230,6 +230,7 @@ class EvalTests(unittest.TestCase):
         self.assertEqual(r.returncode, 2); self.assertIn("family_id", r.stdout)
 
     def test_holdout_requires_independent_human_import_fields(self):
+        v2 = "decision-assistance-eval/2"
         ds = self._load(self.ds)
         case = next(c for c in ds["cases"] if c["case_id"] == "seed-fail-provider")
         case["label"] = {"provenance": "independent_human"}
@@ -242,6 +243,46 @@ class EvalTests(unittest.TestCase):
         for field in ("labeler_id", "labeler_role", "labeled_at", "intake_snapshot_at",
                       "second_label_or_adjudication"):
             self.assertTrue(any(field in error for error in errors), errors)
+        missing = [e for e in errors if "missing required import field" in e]
+        self.assertTrue(missing and all(", value" not in e and "value," not in e for e in missing), errors)
+
+        v2_bare_ds = self._load(self.ds)
+        v2_bare_ds["format_version"] = v2
+        v2_bare_case = next(c for c in v2_bare_ds["cases"] if c["case_id"] == "seed-fail-provider")
+        v2_bare_case["label"] = {"provenance": "independent_human"}
+        v2_bare_manifest = self._manifest(v2_bare_ds, format_version=v2, holdout_id="holdout-bare-v2")
+        v2_bare_manifest["assignments"][v2_bare_case["case_id"]] = "holdout"
+        r = self._run("check-split", "--dataset", str(self._dump("bare-human-v2-ds.json", v2_bare_ds)),
+                "--manifest", str(self._dump("bare-human-v2-manifest.json", v2_bare_manifest)))
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        errors = json.loads(r.stdout)["errors"]
+        for field in ("labeler_id", "labeler_role", "labeled_at", "intake_snapshot_at",
+                      "value", "second_label_or_adjudication"):
+            self.assertTrue(any(field in error for error in errors), errors)
+
+        legacy_ds = self._load(self.ds)
+        legacy_case = next(c for c in legacy_ds["cases"] if c["case_id"] == "seed-fail-provider")
+        legacy_case["label"] = {
+            "provenance": "independent_human",
+            "labeler_id": "labeler-1",
+            "labeler_role": "incident investigator",
+            "labeled_at": "2026-01-10T00:00:00Z",
+            "intake_snapshot_at": legacy_ds["intake_snapshot_at"],
+            "second_label_or_adjudication": {
+                "kind": "second_independent_label",
+                "labeler_id": "labeler-2",
+                "labeler_role": "incident investigator",
+                "labeled_at": "2026-01-12T00:00:00Z",
+                "value": legacy_case["expected"],
+            },
+        }
+        legacy_manifest = self._manifest(legacy_ds, holdout_id="holdout-legacy-v1")
+        legacy_manifest["assignments"][legacy_case["case_id"]] = "holdout"
+        r = self._run("check-split", "--dataset", str(self._dump("legacy-v1-ds.json", legacy_ds)),
+                "--manifest", str(self._dump("legacy-v1-manifest.json", legacy_manifest)))
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        errors = json.loads(r.stdout)["errors"]
+        self.assertTrue(any("legacy v1 second label" in error for error in errors), errors)
 
         valid_records = [
             {
@@ -266,9 +307,28 @@ class EvalTests(unittest.TestCase):
                 "value": case["expected"],
             },
         ]
+        v1_adjudication = valid_records[1]
+        v1_adj_ds = self._load(self.ds)
+        v1_adj_case = next(c for c in v1_adj_ds["cases"] if c["case_id"] == "seed-fail-provider")
+        v1_adj_case["label"] = {
+            "provenance": "independent_human",
+            "labeler_id": "labeler-1",
+            "labeler_role": "incident investigator",
+            "labeled_at": "2026-01-10T00:00:00Z",
+            "intake_snapshot_at": v1_adj_ds["intake_snapshot_at"],
+            "second_label_or_adjudication": v1_adjudication,
+        }
+        v1_adj_manifest = self._manifest(v1_adj_ds, holdout_id="holdout-human-v1-adj")
+        v1_adj_manifest["assignments"][v1_adj_case["case_id"]] = "holdout"
+        r = self._run("check-split", "--dataset",
+                str(self._dump("valid-human-v1-adj-ds.json", v1_adj_ds)),
+                "--manifest", str(self._dump("valid-human-v1-adj-manifest.json", v1_adj_manifest)))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
         for index, record in enumerate(valid_records):
             with self.subTest(kind=record["kind"]):
                 valid_ds = self._load(self.ds)
+                valid_ds["format_version"] = v2
                 valid_case = next(c for c in valid_ds["cases"] if c["case_id"] == "seed-fail-provider")
                 valid_case["label"] = {
                     "provenance": "independent_human",
@@ -276,14 +336,47 @@ class EvalTests(unittest.TestCase):
                     "labeler_role": "incident investigator",
                     "labeled_at": "2026-01-10T00:00:00Z",
                     "intake_snapshot_at": valid_ds["intake_snapshot_at"],
+                    "value": valid_case["expected"],
                     "second_label_or_adjudication": record,
                 }
-                valid_manifest = self._manifest(valid_ds, holdout_id=f"holdout-human-{index}")
+                valid_manifest = self._manifest(valid_ds, format_version=v2, holdout_id=f"holdout-human-{index}")
                 valid_manifest["assignments"][valid_case["case_id"]] = "holdout"
                 r = self._run("check-split", "--dataset",
                         str(self._dump(f"valid-human-ds-{index}.json", valid_ds)),
                         "--manifest", str(self._dump(f"valid-human-manifest-{index}.json", valid_manifest)))
                 self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_holdout_rejects_second_label_disagreement_after_expected_is_rewritten(self):
+        v2 = "decision-assistance-eval/2"
+        ds = self._load(self.ds)
+        ds["format_version"] = v2
+        case = next(c for c in ds["cases"] if c["case_id"] == "seed-fail-provider")
+        first_label = {"failure_category": {"value": "provider"}}
+        second_label = {"failure_category": {"value": "product_defect"}}
+        case["label"] = {
+            "provenance": "independent_human",
+            "labeler_id": "labeler-1",
+            "labeler_role": "incident investigator",
+            "labeled_at": "2026-01-10T00:00:00Z",
+            "intake_snapshot_at": ds["intake_snapshot_at"],
+            "value": first_label,
+            "second_label_or_adjudication": {
+                "kind": "second_independent_label",
+                "labeler_id": "labeler-2",
+                "labeler_role": "incident investigator",
+                "labeled_at": "2026-01-12T00:00:00Z",
+                "value": second_label,
+            },
+        }
+        case["expected"] = second_label
+        manifest = self._manifest(ds, format_version=v2)
+        manifest["assignments"][case["case_id"]] = "holdout"
+        r = self._run("check-split", "--dataset",
+                str(self._dump("disagreeing-human-ds.json", ds)),
+                "--manifest", str(self._dump("disagreeing-human-manifest.json", manifest)))
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        errors = json.loads(r.stdout)["errors"]
+        self.assertTrue(any("disagrees with the first label" in error for error in errors), errors)
 
     def test_default_split_rejects_previously_accepted_holdout(self):
         manifest = self._dump("manifest.json", self._manifest(self._load(self.ds)))
