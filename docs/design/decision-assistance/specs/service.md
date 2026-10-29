@@ -128,9 +128,12 @@ counts every active claim in the host store, across workspaces and workers.
 Queue age, total retained record count, input size/depth, request/response bytes,
 timeout, delayed retries and maximum attempts are bounded. Queue overflow
 increments a durable coverage-gap counter and invalidates the old slot; the
-caller receives `QueueFull`, never an assessed result. Expired work records an
-unavailable queue-age gap. Maintenance runs on admission/claim and is also
-exposed explicitly for an owner maintenance loop, including while disabled.
+caller receives `QueueFull`, never an assessed result. When the rejected
+snapshot shares a slot with queued work, that displaced record becomes
+`Superseded` in the same transaction, freeing pending capacity immediately.
+Expired work records an unavailable queue-age gap. Maintenance runs on
+admission/claim and is also exposed explicitly for an owner maintenance loop,
+including while disabled.
 
 Before each attempted request the ledger reserves the entire configured input
 token ceiling and its uncached-price charge bound against the host allocation.

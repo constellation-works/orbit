@@ -40,6 +40,11 @@ pub(super) fn assistance_insert_work(
         )
         .map_err(sqlite_store_error)?;
         // A rejected newer snapshot must invalidate the old suggestion too.
+        conn.execute(
+            "UPDATE assistance_work SET state='done', result_json=?2 WHERE slot=?1 AND state='queued'",
+            params![work.slot, assistance_json(&orbit_types::assistance::AssistanceResult::assistance_gap(AssistanceReason::Superseded))?],
+        )
+        .map_err(sqlite_store_error)?;
         conn.execute("DELETE FROM assistance_slots WHERE slot=?1", [&work.slot])
             .map_err(sqlite_store_error)?;
         return Ok(AssistanceAdmission::QueueFull);
