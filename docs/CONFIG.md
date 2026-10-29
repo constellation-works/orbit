@@ -2280,7 +2280,8 @@ Each `[[review.host_evidence]]` rule has `kind` (`codeql` or `host_sandbox_test`
   source checkout and the workspace-owned `isolated-source-v1` execution promise. The trusted
   invocation must exclude ambient imports, shell hooks, configuration and executable search, and
   re-establish the actual producer bytes after the last candidate operation; this workspace uses
-  an absolute isolated interpreter, a cleared environment and a git byte check before launch.
+  an absolute isolated interpreter, a cleared environment and a raw git byte check before launch
+  with clean filters and replacement-object indirection disabled.
   Runner/OS and filesystem integrity remain prerequisites; this is no attestation against a
   compromised runner. Changed/legacy/spoofed sources, an overwritten helper or records grant no
   dependency-only authority. `ci_check_rerun_reserved` consumes the shared once-per-head budget

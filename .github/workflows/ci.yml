@@ -566,7 +566,7 @@ jobs:
 
               def verified_output(*args):
                   completed = subprocess.run(
-                      ["/usr/bin/git", *args],
+                      ["/usr/bin/git", "--no-replace-objects", *args],
                       capture_output=True, text=True, timeout=10, check=False)
                   if completed.returncode != 0:
                       raise SystemExit(
@@ -575,7 +575,9 @@ jobs:
 
               if verified_output("rev-parse", "HEAD") != expected_base:
                   raise SystemExit("producer source differs from its trusted base")
-              if verified_output("hash-object", producer) != verified_output(
+              # Compare executable bytes, not local clean-filter output;
+              # replacement refs must not redirect the expected source tree.
+              if verified_output("hash-object", "--no-filters", producer) != verified_output(
                       "rev-parse", f"HEAD:{producer}"):
                   raise SystemExit("producer helper differs from its trusted source")
               sys.argv = [producer, "--job", "Test build"]

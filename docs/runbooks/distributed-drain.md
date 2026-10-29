@@ -1806,7 +1806,8 @@ one. From then on:
   alone. Inspect the actual invocation and its executable regressions when adopting
   it. This workspace uses an absolute isolated Python step shell, a cleared
   allowlisted environment, fixed system tool paths, fresh gh configuration and a
-  `/usr/bin/git` byte check against the isolated base checkout before launch.
+  raw `/usr/bin/git` byte check against the isolated base checkout before launch,
+  with clean filters and replacement-object indirection disabled.
   It executes the producer in a complete separate event-base checkout. An overwritten
   helper fails closed without evidence. The v1
   `orbit-dependency-evidence:` record binds the
