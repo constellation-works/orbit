@@ -86,14 +86,23 @@ impl VerifiedNoDiff {
     /// Evidence that the complete scope already landed, including a selectors
     /// assessment that retained an operator's creation grant.
     pub(super) fn from_landed_evidence(assessment: &Value) -> Self {
-        let evidence = assessment
-            .get("evidence")
-            .and_then(Value::as_str)
-            .or_else(|| assessment["already_landed"]["evidence"].as_str())
-            .unwrap_or_default()
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ");
+        fn normalized(raw: Option<&str>) -> String {
+            raw.unwrap_or_default()
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+        }
+        // Top-level `evidence` is optional for a selectors assessment: when
+        // it is absent, blank, or whitespace-only, the nested landed
+        // finding carries the covering proof.
+        let top = normalized(assessment.get("evidence").and_then(Value::as_str));
+        let nested = normalized(
+            assessment
+                .get("already_landed")
+                .and_then(|landed| landed.get("evidence"))
+                .and_then(Value::as_str),
+        );
+        let evidence = if top.is_empty() { nested } else { top };
         let mut texts = Vec::new();
         for field in ["evidence", "assessment_rationale", "already_landed"] {
             if let Some(value) = assessment.get(field) {

@@ -157,6 +157,109 @@ fn apply_creation_landed(
     )
 }
 
+fn apply_creation_landed_split(
+    workspace: &Workspace,
+    prepared: &Value,
+    task: &Task,
+    top: Option<&str>,
+    nested: &str,
+) -> Value {
+    let mut assessment = json!({
+        "task_id": task.id, "context_files_after": task.context_files,
+        "disposition": "selectors", "already_landed": {"evidence": nested},
+        "recommended_crew": "fixture", "recommended_complexity": "low",
+        "confidence": "high", "assessment_rationale": "All requested scope is delivered.",
+        "validation_approach": "Check covering commits and retained authority.",
+        "evidence_gaps": [], "reassessment_triggers": [], "blocked_by": [],
+        "adr_conflicts": [], "utility_warnings": [], "surface_warnings": [],
+        "duplicate_of": null,
+    });
+    if let Some(evidence) = top {
+        assessment["evidence"] = json!(evidence);
+    }
+    workspace.action(
+        "apply_task_pilot_results",
+        json!({
+            "workspace_path": workspace.repo, "prepared": prepared,
+            "results": [{"partition_index": 0, "task_ids": [task.id], "tasks": [assessment]}],
+        }),
+    )
+}
+
+fn complete_landed_setup() -> (Workspace, Task, Value, String) {
+    let workspace = Workspace::new();
+    let task = workspace.scoped_task(
+        "delivered creation",
+        &[EXISTING, NEW_MODULE, NEW_TEST],
+        true,
+    );
+    let readme = workspace.git(&["rev-parse", "HEAD"]).trim().to_string();
+    workspace.commit("src/recovery_decision.rs", "pub fn delivered() {}\n");
+    let module = workspace.git(&["rev-parse", "HEAD"]).trim().to_string();
+    workspace.commit("tests/step_recovery.rs", "// delivered test\n");
+    let test = workspace.git(&["rev-parse", "HEAD"]).trim().to_string();
+    let complete = workspace.prepare(&[&task.id]);
+    let evidence = format!("Delivered by {readme}, {module}, and {test}.");
+    (workspace, task, complete, evidence)
+}
+
+fn creation_landed_uses_nested_evidence_when_top_level_is_blank() {
+    // A blank optional top-level `evidence` must not hide complete pinned
+    // covering proof in `already_landed.evidence` (ORB-19803).
+    for top in [None, Some(""), Some("   "), Some("\n \t ")] {
+        let (workspace, task, complete, evidence) = complete_landed_setup();
+        let applied = apply_creation_landed_split(&workspace, &complete, &task, top, &evidence);
+        assert_eq!(
+            outcome(&applied)["outcome"],
+            "applied",
+            "{top:?}: {applied}"
+        );
+        assert_eq!(applied["tasks"][0]["disposition"], "selectors", "{applied}");
+        assert_eq!(
+            applied["tasks"][0]["already_landed"]["operator_reconciliation_required"],
+            json!(true),
+            "{applied}"
+        );
+        let normalized = evidence.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert_eq!(
+            applied["tasks"][0]["already_landed"]["evidence"],
+            json!(normalized),
+            "{applied}"
+        );
+        assert_eq!(
+            workspace.runtime.get_task(&task.id).unwrap().context_files,
+            task.context_files,
+            "{applied}"
+        );
+    }
+
+    // Genuinely missing evidence and insufficient covering proof stay refused.
+    let (workspace, task, complete, evidence) = complete_landed_setup();
+    for (top, nested) in [
+        (None, ""),
+        (Some(""), ""),
+        (Some("   "), "   "),
+        (None, "No covering commit cited."),
+    ] {
+        let applied = apply_creation_landed_split(&workspace, &complete, &task, top, nested);
+        assert_eq!(
+            outcome(&applied)["outcome"],
+            "invalid",
+            "{top:?} / {nested:?}: {applied}"
+        );
+        assert_eq!(workspace.runtime.get_task(&task.id).unwrap(), task);
+    }
+    let partial = {
+        let readme = workspace.git(&["rev-parse", "HEAD~2"]).trim().to_string();
+        let module = workspace.git(&["rev-parse", "HEAD~1"]).trim().to_string();
+        format!("Only creation scope: {readme} and {module}.")
+    };
+    let _ = evidence;
+    let applied = apply_creation_landed_split(&workspace, &complete, &task, Some(""), &partial);
+    assert_eq!(outcome(&applied)["outcome"], "invalid", "{applied}");
+    assert_eq!(workspace.runtime.get_task(&task.id).unwrap(), task);
+}
+
 fn creation_landed_requires_present_targets_and_complete_pinned_covering_proof() {
     let workspace = Workspace::new();
     let task = workspace.scoped_task(
@@ -549,6 +652,7 @@ fn benign_comment_and_artifact_writes_preserve_preparation() {
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     declared_creation_targets_survive_prepare_apply_restart_and_replay_scenarios,
+    creation_landed_uses_nested_evidence_when_top_level_is_blank,
     creation_landed_requires_present_targets_and_complete_pinned_covering_proof,
     declared_creation_targets_survive_prepare_apply_restart_and_replay,
     undeclared_missing_selectors_stay_refused,
