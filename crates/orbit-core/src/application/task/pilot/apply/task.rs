@@ -20,6 +20,7 @@ use super::super::attachment_budget::{
 };
 use super::super::drain_promotion;
 use super::super::explore_brief::{BriefScope, decide_explore_brief, take_explore_brief};
+use super::super::no_diff::VerifiedNoDiff;
 use super::super::persist::{
     ApplyTaskOutcome, apply_task, operation_was_applied, record_applied_assessment,
     source_superseded, stale_task, superseded_task, task_operation_id, task_outcome,
@@ -95,7 +96,7 @@ pub(super) fn settle_task(
     // the assessment is validated, fingerprinted or audited.
     let mut assessment = assessment.clone();
     let brief = take_explore_brief(&mut assessment);
-    let scope = scope(context, task_id, &assessment, snapshot)?;
+    let scope = scope(context, task_id, &mut assessment, snapshot)?;
     let authorized_creation = scope.authorized_creation.clone();
     let assessed = assess(context, task_id, &assessment, snapshot, scope)?;
     // Decided only once the assessment itself is valid, so an invalid brief
@@ -141,25 +142,25 @@ pub(super) fn settle_task(
 fn scope(
     context: &ApplyContext<'_>,
     task_id: &str,
-    assessment: &Value,
+    assessment: &mut Value,
     snapshot: &PreparedTaskSnapshot,
 ) -> Settled<Scope> {
     let action = context.action;
-    let disposition =
-        required_string(assessment, "disposition", action).map_err(refused(task_id, "invalid"))?;
+    let mut disposition = required_string(assessment, "disposition", action)
+        .map_err(refused(task_id, "invalid"))?
+        .to_string();
     let proposed_after = required_string_array(assessment, "context_files_after", action)
         .map_err(refused(task_id, "invalid"))?;
     // The grant is read from the task, never from the prepared payload or the
     // agent's result. The write boundary refuses a grant that moved since
     // preparation, after its replay receipt check, so a retried apply still
     // settles as already applied.
-    let creation = match context
-        .runtime
-        .get_task(task_id)
-        .and_then(|task| context.runtime.context_creation_state(&task))
-    {
+    let (current, creation) = match context.runtime.get_task(task_id).and_then(|task| {
+        let creation = context.runtime.context_creation_state(&task)?;
+        Ok((Some(task), creation))
+    }) {
         Ok(creation) => creation,
-        Err(OrbitError::NotFound { .. }) => ContextCreationState::Absent,
+        Err(OrbitError::NotFound { .. }) => (None, ContextCreationState::Absent),
         Err(error) => {
             return Err(task_outcome(
                 task_id,
@@ -171,10 +172,10 @@ fn scope(
         }
     };
     let authorized_creation = creation.selectors();
-    let selectors = validate_after_selectors(
+    let mut selectors = validate_after_selectors(
         action,
         task_id,
-        disposition,
+        &disposition,
         assessment,
         &proposed_after,
         context.workspace_root,
@@ -182,6 +183,29 @@ fn scope(
         authorized_creation,
     )
     .map_err(refused(task_id, "invalid"))?;
+    if !authorized_creation.is_empty()
+        && (disposition == "verified_no_diff"
+            || (disposition == "selectors"
+                && assessment
+                    .get("already_landed")
+                    .is_some_and(|value| !value.is_null())))
+    {
+        let task = current.as_ref().ok_or_else(|| {
+            task_outcome(
+                task_id,
+                "invalid",
+                Some("creation task no longer exists".into()),
+            )
+        })?;
+        selectors.values = landed_creation_scope(
+            context,
+            task,
+            assessment,
+            &selectors.values,
+            authorized_creation,
+        )?;
+        disposition = "selectors".into();
+    }
     if !authorized_creation.is_empty() && disposition != "selectors" {
         return Err(task_outcome(
             task_id,
@@ -252,6 +276,81 @@ fn scope(
         reauthorization,
         authorized_creation: authorized_creation.to_vec(),
     })
+}
+
+/// A no-change finding cannot revoke a creation grant. Prove the complete
+/// retained scope at the inspection revision, then preserve it as an existing
+/// already-landed hold for an operator to reconcile.
+fn landed_creation_scope(
+    context: &ApplyContext<'_>,
+    task: &Task,
+    assessment: &mut Value,
+    proposed_after: &[String],
+    authorized_creation: &[String],
+) -> Settled<Vec<String>> {
+    if let Some(finding) = assessment
+        .get("already_landed")
+        .filter(|value| !value.is_null())
+    {
+        required_string(finding, "evidence", context.action)
+            .map_err(refused(task.id.as_str(), "invalid"))?;
+    }
+    let invalid = refused(task.id.as_str(), "invalid");
+    let source = context.source.ok_or_else(|| {
+        task_outcome(
+            task.id.as_str(),
+            "invalid",
+            Some("already-landed creation work requires a pinned source revision".into()),
+        )
+    })?;
+    let mut paths = task.context_files.clone();
+    for selector in proposed_after.iter().chain(authorized_creation) {
+        if !paths.contains(selector) {
+            paths.push(selector.clone());
+        }
+    }
+    // No missing-target exception: a grant authorizes future creation, but
+    // does not establish that the target already exists at this revision.
+    let selectors = validate_after_selectors(
+        context.action,
+        task.id.as_str(),
+        "selectors",
+        assessment,
+        &paths,
+        context.workspace_root,
+        Some(source),
+        &[],
+    )
+    .map_err(invalid)?;
+    let finding = VerifiedNoDiff::from_landed_evidence(assessment);
+    if finding.evidence.is_empty() {
+        return Err(task_outcome(
+            task.id.as_str(),
+            "invalid",
+            Some("already-landed creation work requires evidence".into()),
+        ));
+    }
+    let covering = finding
+        .creation_covering_proof(
+            context.runtime,
+            task,
+            &selectors.values,
+            &source.source_revision,
+        )
+        .map_err(refused(task.id.as_str(), "invalid"))?;
+    let mut already_landed = assessment
+        .get("already_landed")
+        .filter(|value| !value.is_null())
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    already_landed["evidence"] = json!(finding.evidence);
+    already_landed["covering_commits"] = json!(covering);
+    already_landed["source_revision"] = json!(source.source_revision);
+    already_landed["operator_reconciliation_required"] = json!(true);
+    assessment["already_landed"] = already_landed;
+    assessment["disposition"] = json!("selectors");
+    assessment["context_files_after"] = json!(selectors.values);
+    Ok(selectors.values)
 }
 
 fn assess(

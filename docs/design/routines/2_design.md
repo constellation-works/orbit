@@ -535,6 +535,23 @@ Without that proof (no commit cited, an unknown SHA, none on the base branch, or
 commits unrelated to the finding) the task stays proposed with that reason. The routine is a scheduling surface only: an
 operator-triggered run of the job behaves identically to a scheduled fire.
 
+An operator-authorized creation grant is retained even when the requested work has
+landed. For a creation task, apply accepts a `verified_no_diff` finding only when
+every retained target exists with the expected kind at the pinned inspection
+revision, every citation resolves, and eligible covering commits on the base branch
+and at or before that revision collectively touch every creation target and every
+remaining scope selector. Culprit commits and unrelated changes do not count. A
+`selectors` assessment carrying `already_landed` must meet the same proof. Apply
+records the finding as `selectors` with an `already_landed` operator-reconciliation
+hold, the evidence, covering commits and pinned revision. It preserves the full
+scope, creation authorization and history. Neither drain approval nor state
+automation promotes the held task, and automatic no-diff closure never archives a
+task holding creation authorization, even when automation filed it. A person
+reconciles the existing delivery or explicitly overrides the finding through the
+supported admission decision. Missing targets or insufficient proof refuse the
+landed finding; ordinary outstanding creation work still follows normal preparation
+and approval.
+
 Every task-pilot run, not only a sweep's, may also judge a review-filed bug wrong: a
 `finding_invalid` result with `path:line` evidence at the pinned revision is never promoted
 (drain approval holds it as `finding_invalid`), and after the pilot write apply records a

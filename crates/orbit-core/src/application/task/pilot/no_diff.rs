@@ -10,6 +10,9 @@
 //! A task Orbit automation filed (a CI-sweep or delivery-review finding, or
 //! any `auto-task:` task) is archived once the cited commits pass the proof
 //! in [`VerifiedNoDiff::covering_proof`]. Any other task waits for a person.
+//! A task retaining operator creation authorization always waits for operator
+//! reconciliation; apply preserves proven landed creation work as an
+//! `already_landed` hold with its selectors and grant intact.
 //!
 //! The pilot schema has no commit list, so citations are read from the
 //! assessment's own text (`evidence`, `assessment_rationale`, and
@@ -77,9 +80,16 @@ impl VerifiedNoDiff {
         if assessment.get("disposition").and_then(Value::as_str) != Some(VERIFIED_NO_DIFF) {
             return None;
         }
+        Some(Self::from_landed_evidence(assessment))
+    }
+
+    /// Evidence that the complete scope already landed, including a selectors
+    /// assessment that retained an operator's creation grant.
+    pub(super) fn from_landed_evidence(assessment: &Value) -> Self {
         let evidence = assessment
             .get("evidence")
             .and_then(Value::as_str)
+            .or_else(|| assessment["already_landed"]["evidence"].as_str())
             .unwrap_or_default()
             .split_whitespace()
             .collect::<Vec<_>>()
@@ -90,11 +100,11 @@ impl VerifiedNoDiff {
                 collect_strings(value, &mut texts);
             }
         }
-        Some(Self {
+        Self {
             evidence,
             cited_commits: commit_citations(texts),
             context_files_before: Vec::new(),
-        })
+        }
     }
 
     /// One line for a hold's `detail`: the evidence, then what it cites.
@@ -135,6 +145,30 @@ impl VerifiedNoDiff {
         runtime: &OrbitRuntime,
         task: &Task,
     ) -> Result<Vec<String>, String> {
+        let mut paths = task.context_files.clone();
+        paths.extend(self.context_files_before.iter().cloned());
+        self.covering_proof_for(runtime, task, &paths, None)
+    }
+
+    /// Creation intent needs every retained scope path covered at the pinned
+    /// revision, rather than a later base commit touching just one task path.
+    pub(super) fn creation_covering_proof(
+        &self,
+        runtime: &OrbitRuntime,
+        task: &Task,
+        paths: &[String],
+        pinned_revision: &str,
+    ) -> Result<Vec<String>, String> {
+        self.covering_proof_for(runtime, task, paths, Some(pinned_revision))
+    }
+
+    fn covering_proof_for(
+        &self,
+        runtime: &OrbitRuntime,
+        task: &Task,
+        paths: &[String],
+        pinned_revision: Option<&str>,
+    ) -> Result<Vec<String>, String> {
         if self.cited_commits.is_empty() {
             return Err("the assessment cites no commit".into());
         }
@@ -161,9 +195,10 @@ impl VerifiedNoDiff {
         let on_base = cited
             .into_iter()
             .filter(|(_, full)| {
-                base_refs
-                    .iter()
-                    .any(|reference| is_ancestor(source, full, reference))
+                pinned_revision.is_none_or(|revision| is_ancestor(source, full, revision))
+                    && base_refs
+                        .iter()
+                        .any(|reference| is_ancestor(source, full, reference))
             })
             .collect::<Vec<_>>();
         if on_base.is_empty() {
@@ -171,8 +206,6 @@ impl VerifiedNoDiff {
         }
 
         let named = named_commits(runtime, source, task);
-        let mut paths = task.context_files.clone();
-        paths.extend(self.context_files_before.iter().cloned());
         if named.is_empty() && paths.is_empty() {
             return Err(
                 "the finding names no commit and no path to relate a cited commit to".into(),
@@ -185,9 +218,8 @@ impl VerifiedNoDiff {
                     && named
                         .iter()
                         .all(|culprit| is_ancestor(source, culprit, full))
-                    && (paths.is_empty() || touches_paths(source, full, &paths))
+                    && (paths.is_empty() || touches_paths(source, full, paths))
             })
-            .map(|(sha, _)| sha.clone())
             .collect::<Vec<_>>();
         if covering.is_empty() {
             return Err(format!(
@@ -195,7 +227,20 @@ impl VerifiedNoDiff {
                  the commits the finding names do not count"
             ));
         }
-        Ok(covering)
+        if pinned_revision.is_some() {
+            for path in paths {
+                if !covering
+                    .iter()
+                    .any(|(_, full)| touches_paths(source, full, std::slice::from_ref(path)))
+                {
+                    return Err(format!(
+                        "no cited covering commit at the pinned revision changes {path}; \
+                         creation and remaining scope must all be covered"
+                    ));
+                }
+            }
+        }
+        Ok(covering.into_iter().map(|(sha, _)| sha.clone()).collect())
     }
 }
 
@@ -303,6 +348,8 @@ impl OrbitRuntime {
                 };
                 closure = Some(if !auto_minted(&task.tags) {
                     held(finding, "not filed by Orbit automation; a person decides")
+                } else if !self.context_creation_state(&task)?.selectors().is_empty() {
+                    held(finding, "operator-authorized creation targets require operator reconciliation")
                 } else if task.tags.iter().any(|tag| tag == NO_AUTO_APPROVE_TAG) {
                     held(finding, "tagged no-auto-approve; a person decides")
                 } else {
