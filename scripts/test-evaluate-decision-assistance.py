@@ -591,6 +591,24 @@ class EvalTests(unittest.TestCase):
                             for q in ["failure_category", "outcome_unclear", "criterion_not_observable",
                                       "requirements_conflict", "scope_clarification"]]}
 
+    def test_target_min_samples_must_be_a_positive_integer(self):
+        targets = self._targets()
+        targets["targets"][0]["min_samples"] = 1
+        accepted = self._run("check-targets", "--targets", str(self._dump("positive-sample-targets.json", targets)))
+        self.assertEqual(accepted.returncode, 0, accepted.stdout + accepted.stderr)
+        self.assertTrue(json.loads(accepted.stdout)["ok"])
+
+        for value in (0, -1, 1.5, "1", True, False):
+            with self.subTest(min_samples=value):
+                invalid_targets = self._targets()
+                invalid_targets["targets"][0]["min_samples"] = value
+                result = self._run("check-targets", "--targets",
+                                   str(self._dump(f"invalid-sample-{type(value).__name__}.json", invalid_targets)))
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                report = json.loads(result.stdout)
+                self.assertFalse(report["ok"])
+                self.assertTrue(any("min_samples must be positive int" in error for error in report["errors"]))
+
     def test_targets_before_holdout_only(self):
         t = self._targets()
         p = self._dump("t.json", t)
