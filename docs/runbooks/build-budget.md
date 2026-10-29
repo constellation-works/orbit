@@ -213,6 +213,17 @@ Run a bounded comparison with private targets outside the checkout:
 scripts/bench-build-budget.sh
 ```
 
+The default run claims a unique workdir under `/tmp`. To choose one, set
+`ORBIT_BUILD_BUDGET_BENCH_DIR` to a path whose parent already exists and whose
+final directory does not. The script creates that directory atomically and
+refuses an existing directory or symlink, including an empty directory. Each
+run needs a fresh workdir. `ORBIT_BUILD_BUDGET_BENCH_RESULT` may name a new
+result file directly inside that workdir; a relative value is treated as a
+filename inside it. Existing result paths and paths outside the workdir are
+refused. The script removes its owned `trees`, `targets`, and `locks`
+directories on exit, and leaves the result, measurement logs, timing files,
+and ownership marker in the workdir.
+
 The default workload starts four cold `cargo check -p orbit-types --offline` commands.
 Both arms are capped at two Cargo jobs for safe measurement; the current arm admits all
 four at once, while the budgeted arm admits two. The output records wall time, summed user
