@@ -811,4 +811,50 @@ class EvalTests(unittest.TestCase):
         self.assertEqual(self._run("check-targets", "--targets", str(p), "--holdout-opened-at", "2026-02-01T00:00:00Z").returncode, 0)
         self.assertEqual(self._run("check-targets", "--targets", str(p), "--holdout-opened-at", "2026-01-01T00:00:00Z").returncode, 2)
 
+    def _assert_structured_refusal(self, result):
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertEqual(result.stderr, "", "a refusal reaches stdout only; no traceback or diagnostic on stderr")
+        report = json.loads(result.stdout)
+        self.assertFalse(report["ok"])
+        self.assertTrue(report["errors"])
+        self.assertTrue(all(isinstance(error, str) and error for error in report["errors"]), report["errors"])
+        return report["errors"]
+
+    def test_malformed_target_documents_refuse_naming_the_field(self):
+        valid = self._targets()
+        cases = [
+            ("top-level array", [], "targets"),
+            ("top-level string", "failure_category", "targets"),
+            ("baseline array", {**valid, "baseline": []}, "baseline"),
+            ("baseline null", {**valid, "baseline": None}, "baseline"),
+            ("targets null", {**valid, "targets": None}, "targets"),
+            ("targets string", {**valid, "targets": "failure_category"}, "targets"),
+            ("targets object", {**valid, "targets": {"failure_category": valid["targets"][0]}}, "targets"),
+            ("row null", {**valid, "targets": [None, *valid["targets"][1:]]}, "targets[0]"),
+            ("row string", {**valid, "targets": ["failure_category", *valid["targets"][1:]]}, "targets[0]"),
+            ("row array", {**valid, "targets": [["failure_category"], *valid["targets"][1:]]}, "targets[0]"),
+            ("question array", {**valid, "targets": [{**valid["targets"][0], "question": ["failure_category"]}, *valid["targets"][1:]]}, "targets[0]"),
+        ]
+        for index, (label, doc, field) in enumerate(cases):
+            with self.subTest(case=label):
+                result = self._run("check-targets", "--targets", str(self._dump(f"malformed-target-{index}.json", doc)))
+                errors = self._assert_structured_refusal(result)
+                self.assertTrue(any(field in error for error in errors), errors)
+
+    def test_unreadable_or_invalid_target_json_refuses_without_traceback(self):
+        payloads = {
+            "invalid JSON": b"{",
+            "empty file": b"",
+            "non-UTF-8 bytes": b"\xff\xfe\x00",
+            "deeply nested JSON": b"[" * 1000000 + b"]" * 1000000,
+        }
+        for label, payload in payloads.items():
+            with self.subTest(case=label):
+                path = self.root / f"unreadable-{label.replace(' ', '-')}.json"
+                path.write_bytes(payload)
+                self._assert_structured_refusal(self._run("check-targets", "--targets", str(path)))
+        for label, path in (("missing file", self.root / "missing-targets.json"), ("directory", self.root)):
+            with self.subTest(case=label):
+                self._assert_structured_refusal(self._run("check-targets", "--targets", str(path)))
+
 if __name__ == "__main__": unittest.main()

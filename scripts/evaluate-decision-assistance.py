@@ -630,6 +630,7 @@ def check_split(ds, manifest, prior_holdout_ids):
     return errs
 
 def check_targets(doc, holdout_opened_at):
+    if not isinstance(doc, dict): return ["targets document must be a JSON object"]
     errs = []
     if doc.get("format_version") not in SUPPORTED_FORMATS: errs.append(f"targets format_version must be one of {', '.join(SUPPORTED_FORMATS)}")
     if not _ts(doc.get("registered_at", "")): errs.append("targets registered_at required")
@@ -642,11 +643,19 @@ def check_targets(doc, holdout_opened_at):
             errs.append("targets must be registered before holdout access (registered_at >= holdout_opened_at)")
     except (OSError, ValueError) as error:
         errs.append(f"cannot verify holdout access: {error}")
-    if not doc.get("baseline", {}).get("name"): errs.append("targets baseline.name required (baseline comparison)")
+    baseline = doc.get("baseline", {})
+    if not isinstance(baseline, dict): errs.append("targets baseline must be a JSON object")
+    elif not baseline.get("name"): errs.append("targets baseline.name required (baseline comparison)")
+    rows = doc.get("targets", [])
+    if not isinstance(rows, list): return errs + ["targets must be a list of per-question target objects"]
+    for index, t in enumerate(rows):
+        if not isinstance(t, dict): errs.append(f"targets[{index}] must be a JSON object")
+        elif not isinstance(t.get("question"), str): errs.append(f"targets[{index}].question must be a string")
+    targets = [t for t in rows if isinstance(t, dict)]
     want = {"failure_category"} | set(TASK_PREDICATES)
-    got = {t.get("question") for t in doc.get("targets", [])}
+    got = {t.get("question") for t in targets if isinstance(t.get("question"), str)}
     for q in sorted(want - got): errs.append(f"missing per-question target for {q}")
-    for t in doc.get("targets", []):
+    for t in targets:
         if type(t.get("min_samples")) is not int or t["min_samples"] <= 0: errs.append(f"target {t.get('question')}: min_samples must be positive int")
         for k in ("min_precision", "min_recall"):
             if k in t and (isinstance(t[k], bool) or not isinstance(t[k], (int, float)) or not 0 <= t[k] <= 1): errs.append(f"target {t.get('question')}: {k} must be in [0,1]")
@@ -759,7 +768,13 @@ def main(argv=None):
             errs = [f"validation failed: {error}"]
         return emit({"ok": not errs, "errors": errs}, 0 if not errs else 2)
     if a.cmd == "check-targets":
-        errs = check_targets(load(a.targets), a.holdout_opened_at)
+        # Deeply nested JSON raises RecursionError, which is not a ValueError.
+        try:
+            doc = load(a.targets)
+        except (OSError, ValueError, RecursionError) as error:
+            errs = [f"cannot load targets file {a.targets}: {error}"]
+        else:
+            errs = check_targets(doc, a.holdout_opened_at)
         return emit({"ok": not errs, "errors": errs}, 0 if not errs else 2)
     return 2
 

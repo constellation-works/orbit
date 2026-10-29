@@ -147,7 +147,10 @@ assistance) and holds one target entry per question with `min_precision`,
 
 `check-targets` enforces that every question has an entry, that `min_samples`
 is a positive integer, that `min_precision`/`min_recall` lie in `[0,1]` when
-present, and that `baseline.name` is non-empty. It reads the recorded opening
+present, and that `baseline.name` is non-empty. A target file that is unreadable,
+is not valid JSON, or has the wrong shape (a non-object document or `baseline`, or
+a `targets` value that is not an array of objects with string `question` fields)
+exits 2 with the same `{ok, errors}` report and no traceback. It reads the recorded opening
 time automatically and rejects `registered_at` at or after holdout access.
 Opening and registration times are compared as ISO 8601 instants with explicit
 timezones. A target file can name its `holdout_id`; before that ID has been
