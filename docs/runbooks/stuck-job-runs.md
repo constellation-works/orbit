@@ -867,8 +867,8 @@ steps and then fail completion, for example on a required check that later
 passes on a rerun. Its failure handoff keeps that pull request open and
 unmerged (`review_completion_failure` or `landing_review_failure`), and when
 final recovery escalates the task stays `blocked` with no `[BLOCKED]` pull
-request. Explicit source repair refuses this run and names requeue: there is
-no failure-handoff publication to repair.
+request. Requeue can carry a green candidate; explicit source repair can
+authorize repairs to that same publication under fresh operator policy.
 
 Once every required check has passed on the recorded head, requeue the task:
 
@@ -901,7 +901,8 @@ final-recovery requeue writes, and the answer's `resumes.source` is
 request without re-implementing (`resumed_carried`), then validates, reviews,
 pushes and lands it afresh. The stopped run's worktree does not have to exist.
 
-When checks fail or have not finished, requeue again once they pass. A pull
+When checks are still running, requeue once they pass. When the candidate
+needs source changes, use the explicit repair protocol below. A pull
 request that already merged is settled with `orbit task settle-merged
 <task-id>`; a closed one, a moved head or a changed specification leaves
 `--discard-candidate` as the exit. A run whose receipt was written before the
@@ -910,6 +911,75 @@ receipt named its run and specification is refused the same way.
 Do not resume such a run with `orbit job resume`. Its checkpoints reuse the
 stopped run's worktree, and a resume whose recorded worktree no longer exists
 is refused before the task or the lineage changes.
+
+### Repair a kept inline publication after completion expired
+
+Use `orbit.workflow.run.resume` with `source_repair` on the owning host when
+the run published through its own host steps but its candidate needs repair.
+This works with red hosted checks and an expired completion budget. It grants
+one new repair attempt on the original branch and PR; it neither renews the
+old completion deadline nor resumes the old completion authority.
+
+Select the **original publishing run** explicitly, even when the task now names
+a later failed attempt with no publication. Use `orbit.workflow.run.list` and
+the original run's checkpoints and failure receipt to identify it; do not pick
+the newest run merely because it is the current binding. Stop all delivery
+attempts first. Inspect with:
+
+```json
+{
+  "id": "<original-publishing-run>",
+  "source_repair": {"action": "inspect", "task_id": "<task>"}
+}
+```
+
+Inspection requires a conclusively stopped owner-local single-task publisher
+with settled final recovery and a kept-publication receipt naming that run,
+task and unchanged task specification. The receipt is scope and preservation
+evidence, not a publication or validation certificate. Original successful host
+commit, preparation, synchronization, review corrections, push and PR
+checkpoints must authenticate the exact candidate. The retained branch,
+origin repository, remote lease and current open, unmerged PR must agree on
+branch and head, with automatic merge disabled. Missing, contradictory or
+ambiguous evidence refuses before any source effect; no replacement PR is
+created. A dirty retained checkout also needs explicit reconciliation.
+
+The returned `binding.superseded` names the task binding being acknowledged
+and digests the complete stopped delivery lineage within the 64-run inspection
+window. Every intervening replacement must meet the cancelled/empty failed
+successor contract below. Completion-only checkpoint retries must trace back
+to the original publisher, preserve its exact publication prefix, deadlines
+and recovery receipts, and have no repair or mutation provenance, source-work
+step or dirty shared checkout. A held retry is acceptable only after its worker
+has conclusively stopped. Active, foreign, claimed, missing, changed or
+candidate-producing members refuse; none is silently skipped to find an older
+usable publication. A change to a member invalidates the inspected binding.
+
+Review `binding`, `review` and `policy_digest`, then submit the exact objects
+using the existing [bounded rework payload](#explicit-rework-of-a-successful-unmerged-publication)
+with this original run's `id`, a fresh `request_key`, a concrete `diagnosis`
+and `unmet_acceptance` evidence naming the failed check and published head.
+Keep the task specification unchanged; changed scope requires separate
+reconciliation. The operator testimony authorizes the repair; inspection does
+not certify the diagnosis or waive hosted checks.
+
+The append-only reservation captures current validation/review policy and
+operator provenance before admission. The new run has `completion: review`
+and `auto_fix: false`, inherits no successful checkpoints, and must implement,
+validate and undergo configured review afresh. Publication remains lease
+checked and reuses the original PR. The lineage and current policy are checked
+again before source effects. Replay the identical key and payload after an
+unknown reply; a divergent payload or another key on that reserved head refuses.
+Original failure evidence, receipts, deadlines and retained candidates stay
+intact. This repair grants no completion, merge or automatic-fix authority.
+
+The operational case remains ORB-19689 / PR #6851. After deploying this change
+to its owner, an operator still needs to verify the stopped lineage, inspect
+the original publishing run ending `0437-c18`, review the exact current PR head
+and submit the repair with fresh policy and the red help-entrypoint evidence.
+Then observe the same-PR repair's native validation, configured review and
+hosted checks; make any subsequent landing decision separately. The offline
+fixtures require no live owner credentials and do not perform that recovery.
 
 ### A task blocked on transient infrastructure
 
@@ -1127,8 +1197,8 @@ alone provides no validation. Inspection checks the original PR, branch and
 remote lease; submission requires fresh validation and configured review and
 grants no merge approval. Source receipts stay unchanged. Completion-preservation
 receipts are a distinct contract and cannot substitute for blocked-publication
-evidence; a direct final-recovery requeue suppresses the terminal hook. Such a
-run is requeued instead, as
+evidence; a direct final-recovery requeue suppresses the terminal hook. A kept
+inline publication uses green requeue or fresh explicit repair, as
 [An escalated run that published its own pull request](#an-escalated-run-that-published-its-own-pull-request)
 describes.
 

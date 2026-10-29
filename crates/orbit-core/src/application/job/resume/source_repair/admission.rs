@@ -174,7 +174,7 @@ impl OrbitRuntime {
             .read_run_state(&binding.source_run_id)?
             .ok_or_else(|| refuse("source checkpoints disappeared"))?;
         let definition = self.source_repair_definition(&source)?;
-        if source.state == JobRunState::Success
+        if super::inline_publication::requires_fresh_rework_authority(&source, &state)
             && (record
                 .unmet_acceptance
                 .as_deref()
@@ -189,11 +189,19 @@ impl OrbitRuntime {
                     ))
         {
             return Err(refuse(
-                "successful publication requires unchanged explicit rework authority and current policy",
+                "publication requires unchanged explicit rework authority and current policy",
             ));
         }
         let prefix = "source, task, scope or reservation changed before source application";
-        if !self.source_successor_unchanged(binding)? {
+        if source.state == JobRunState::Failed
+            && super::inline_publication::kept_inline_publication(&state)
+            && binding.superseded.is_none()
+        {
+            return Err(refuse(
+                "kept inline publication requires its complete stopped lineage",
+            ));
+        }
+        if !self.source_successor_unchanged(binding, run_id)? {
             return Err(refuse(format!("{prefix}: newer execution changed")));
         }
         if !self.source_owner_unchanged(&source, binding)? {
@@ -280,7 +288,8 @@ impl OrbitRuntime {
                 self.install_review_admission("task_pr_pipeline", &mut fresh, None, false)?;
                 Ok(
                     json!({"binding":binding, "review":fresh[orbit_types::workflow::REVIEW_ADMISSION_KEY],
-                    "policy_digest":if source.state == JobRunState::Success {
+                    "policy_digest":if super::inline_publication::requires_fresh_rework_authority(
+                        &source, &self.read_run_state(&source_id)?.ok_or_else(|| refuse("source checkpoints missing"))?) {
                         Some(self.source_rework_policy(&actor, &authority.provenance.to_string())?)
                     } else { None },
                     "reservations":history(self, &request.task_id)?}),
@@ -442,18 +451,21 @@ impl OrbitRuntime {
         if let Some(hold) = self.schedule_hold(&task)? {
             return Err(hold.refusal(&task.id));
         }
-        if source.state == JobRunState::Success {
+        let source_state = self
+            .read_run_state(source_id)?
+            .ok_or_else(|| refuse("source checkpoints missing"))?;
+        if super::inline_publication::requires_fresh_rework_authority(&source, &source_state) {
             if request.unmet_acceptance.is_none()
                 || request.policy_digest.as_deref()
                     != Some(self.source_rework_policy(actor, provenance)?.as_str())
             {
                 return Err(refuse(
-                    "successful publication requires unmet_acceptance evidence and the inspected current policy_digest",
+                    "publication requires unmet_acceptance evidence and the inspected current policy_digest",
                 ));
             }
         } else if request.unmet_acceptance.is_some() || request.policy_digest.is_some() {
             return Err(refuse(
-                "successful-publication rework fields do not authorize another source state",
+                "publication rework fields do not authorize this source state",
             ));
         }
         let admission = match prior {
@@ -660,8 +672,14 @@ impl OrbitRuntime {
                 "a resumed source's task must remain bound to its original checkpoint owner",
             ));
         }
-        let superseded = if resumed_owner.is_none() && task.job_run_id.as_deref() != Some(source_id)
-        {
+        let state = self
+            .read_run_state(source_id)?
+            .ok_or_else(|| refuse("source checkpoints missing"))?;
+        let inline = source.state == JobRunState::Failed
+            && super::inline_publication::kept_inline_publication(&state);
+        let superseded = if inline {
+            Some(self.observe_inline_repair_lineage(&source, &task, None)?)
+        } else if resumed_owner.is_none() && task.job_run_id.as_deref() != Some(source_id) {
             Some(self.observe_source_successor(&source, &task)?)
         } else {
             None

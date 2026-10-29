@@ -43,13 +43,21 @@ impl OrbitRuntime {
         let definition = self.source_repair_definition(&source)?;
         let job = &definition;
         let checkpoint = |id: &str, action: &str| authenticated_checkpoint(job, &state, id, action);
+        let inline = explicit
+            && source.state == JobRunState::Failed
+            && inline_publication::kept_inline_publication(&state);
         if explicit
             && state.failure_activity_checkpoint.is_some()
             && source.state == JobRunState::Failed
         {
-            return self.observe_handoff_publication(source, task, state, definition);
+            if inline {
+                inline_publication::authenticate_kept_inline_receipt(&source, &task, &state, job)?;
+            } else {
+                return self.observe_handoff_publication(source, task, state, definition);
+            }
         }
         if !escalation_requeue
+            && !inline
             && source.state == JobRunState::Failed
             && matches!(
                 self.recorded_final_recovery(task_id, source_id)?,
@@ -255,6 +263,20 @@ impl OrbitRuntime {
             prior.repository != binding.2.repository || prior.remote_url != binding.2.remote_url
         }) {
             return Err(refuse("checkpoint PR repository identity disagrees"));
+        }
+        if inline {
+            let receipt = &state
+                .failure_activity_checkpoint
+                .as_ref()
+                .ok_or_else(|| refuse("kept publication receipt missing"))?
+                .output;
+            if field(receipt, "pr_number")? != binding.2.pull_request
+                || field(receipt, "pr_url")? != binding.2.pull_request_url
+            {
+                return Err(refuse(
+                    "kept publication receipt contradicts original PR proof",
+                ));
+            }
         }
         Ok(binding)
     }

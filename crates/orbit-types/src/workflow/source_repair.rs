@@ -30,7 +30,9 @@ pub struct SourceRepairBinding {
     pub head_sha: String,
     pub base_sha: String,
     pub base_branch: String,
-    /// A stopped replacement attempt explicitly retained by this recovery.
+    /// The inspected task binding and its complete stopped execution chain.
+    /// For kept inline publications this includes completion-only retries;
+    /// the binding can still name the publisher when no replacement set it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub superseded: Option<SourceRepairSuccessor>,
     /// The original run whose worktree checkpoints a generic-resume source
@@ -49,12 +51,12 @@ pub struct SourceRepairOwner {
     pub digest: String,
 }
 
-/// Exact newer binding acknowledged when recovering an older publication.
+/// Task binding and stopped execution evidence acknowledged by source repair.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SourceRepairSuccessor {
     pub run_id: String,
-    /// Digest of the entire stopped execution and its checkpoints.
+    /// Digest of the complete stopped execution chain and its checkpoints.
     pub digest: String,
 }
 
@@ -66,11 +68,13 @@ pub struct SourceRepairAdmission {
     pub binding: SourceRepairBinding,
     /// Explicit remaining source work and observed failure identities.
     pub diagnosis: String,
-    /// Operator evidence that the successful publication did not meet acceptance.
+    /// Operator evidence that the successful or kept inline publication did
+    /// not meet acceptance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unmet_acceptance: Option<String>,
     /// Current execution policy and operator identity observed before submission.
-    /// Required for successful-publication rework; absent on older repairs.
+    /// Required for successful or kept inline publication rework; absent on
+    /// older repairs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy_digest: Option<String>,
     pub authorized_by: String,
