@@ -281,11 +281,13 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
         )
     };
     // [ORB-19680] Prompt-size price tiers key on each request's own prompt,
-    // which the totals above cannot show.
+    // which the totals above cannot show. Codex identifies its rollout from
+    // thread.started, which can live in the redacted retained prefix after
+    // truncation; answer projection above stays on protocol_bytes().
     let trace = trace.map(|mut trace| {
         trace.long_prompt_requests = provider_long_prompt_requests(
             &provider,
-            stdout.protocol_bytes(),
+            stdout.bytes(),
             !stdout.truncated(),
             usage_context.codex_home.as_deref(),
             trace.provider_model.as_deref().or(model.as_deref()),

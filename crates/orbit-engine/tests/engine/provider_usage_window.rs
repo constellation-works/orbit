@@ -15,17 +15,21 @@
 //!   envelope set to Orbit's, and the window utilizations set to 0.91 and
 //!   0.42.
 
+use std::ffi::OsString;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use chrono::{DateTime, Local, Utc};
+use orbit_common::model::pricing::derive_cost_usd;
 use orbit_engine::{
     DispatchError, DispatchOutcome, ResolvedCliExecutor, RuntimeHost, V2DispatchInput,
     dispatch_v2_activity,
 };
 use orbit_store::contracts::ProviderLimitStoreBackend;
-use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource, TokenUsage};
+use orbit_types::telemetry::{
+    InvocationTrace, ProviderLimitObservation, ProviderLimitSource, TokenUsage,
+};
 use orbit_types::workflow::activity_job::{ActivityV2Spec, Provider};
 use serde_json::{Value, json};
 
@@ -134,6 +138,26 @@ fn dispatch_with_prelude_and_launcher(
     .unwrap();
     let limits = host.store.provider_limits().unwrap();
     (outcome, limits)
+}
+
+/// Set the supervisor's output limit only inside the isolated fixture process.
+fn with_capture_limit<T>(limit: usize, operation: impl FnOnce() -> T) -> T {
+    const CAPTURE_LIMIT_ENV: &str = "ORBIT_CLI_RUNNER_OUTPUT_CAPTURE_LIMIT_BYTES";
+
+    struct RestoreCaptureLimit(Option<OsString>);
+    impl Drop for RestoreCaptureLimit {
+        fn drop(&mut self) {
+            match self.0.take() {
+                Some(previous) => unsafe { std::env::set_var(CAPTURE_LIMIT_ENV, previous) },
+                None => unsafe { std::env::remove_var(CAPTURE_LIMIT_ENV) },
+            }
+        }
+    }
+
+    let previous = std::env::var_os(CAPTURE_LIMIT_ENV);
+    unsafe { std::env::set_var(CAPTURE_LIMIT_ENV, limit.to_string()) };
+    let _restore = RestoreCaptureLimit(previous);
+    operation()
 }
 
 fn antigravity_records_native_quota_and_unavailable_readings_are_advisory() {
@@ -327,6 +351,193 @@ fn rollout_without_rate_limits() -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn codex_long_prompt_fixture() -> (String, String, TokenUsage) {
+    let usage = TokenUsage {
+        input: 300_000,
+        cache_read: 280_000,
+        cache_create: 0,
+        cache_create_1h: 0,
+        output: 900,
+    };
+    let provider_usage = json!({
+        "input_tokens": usage.input,
+        "cached_input_tokens": usage.cache_read,
+        "output_tokens": usage.output,
+    });
+    let stdout = [
+        json!({"type":"thread.started", "thread_id":CODEX_THREAD}),
+        json!({"type":"turn.started"}),
+        json!({
+            "type":"item.completed",
+            "item":{
+                "id":"tool_1",
+                "type":"command_execution",
+                "aggregated_output":"ordinary tool output ".repeat(512),
+                "exit_code":0,
+                "status":"completed"
+            }
+        }),
+        json!({
+            "type":"item.completed",
+            "item":{"id":"answer_1", "type":"agent_message", "text":super::provider_capacity::SUCCESS_ENVELOPE}
+        }),
+        json!({"type":"turn.completed", "usage":provider_usage.clone()}),
+    ]
+    .into_iter()
+    .map(|frame| frame.to_string())
+    .collect::<Vec<_>>()
+    .join("\n");
+    let rollout = json!({
+        "timestamp":"2026-10-29T01:18:19.662Z",
+        "ordinal":13,
+        "type":"event_msg",
+        "payload":{
+            "type":"token_count",
+            "info":{
+                "total_token_usage":provider_usage.clone(),
+                "last_token_usage":provider_usage
+            }
+        }
+    })
+    .to_string();
+    (stdout, rollout, usage)
+}
+
+fn codex_prompt_tier_cost(trace: &InvocationTrace) -> Option<f64> {
+    let at = "2026-10-30T00:00:00Z".parse().unwrap();
+    derive_cost_usd(
+        "gpt-6.1-sol",
+        at,
+        &trace.usage,
+        trace.long_prompt_requests.as_deref(),
+    )
+}
+
+fn invocation_trace(outcome: &DispatchOutcome) -> &InvocationTrace {
+    &outcome
+        .invocation
+        .as_ref()
+        .expect("dispatch records invocation telemetry")
+        .trace
+}
+
+fn codex_long_prompt_telemetry_survives_truncated_stdout() {
+    const SMALL_CAPTURE_LIMIT: usize = 2_048;
+    let (stdout, rollout, expected_usage) = codex_long_prompt_fixture();
+    assert!(stdout.len() > SMALL_CAPTURE_LIMIT);
+    let home = codex_home(CODEX_THREAD, Some(&rollout));
+
+    let (untruncated, _) = with_capture_limit(stdout.len() + 1_024, || {
+        dispatch(
+            "codex",
+            Provider::Codex,
+            &stdout,
+            &[("CODEX_HOME", home.path())],
+        )
+    });
+    let untruncated_trace = invocation_trace(&untruncated);
+    assert_eq!(
+        untruncated_trace.long_prompt_requests,
+        Some(vec![expected_usage.clone()])
+    );
+
+    let (truncated, _) = with_capture_limit(SMALL_CAPTURE_LIMIT, || {
+        dispatch(
+            "codex",
+            Provider::Codex,
+            &stdout,
+            &[("CODEX_HOME", home.path())],
+        )
+    });
+    assert!(truncated.success, "{:?}", truncated.message);
+    let truncated_trace = invocation_trace(&truncated);
+    assert_eq!(
+        truncated_trace.long_prompt_requests,
+        Some(vec![expected_usage])
+    );
+    assert_eq!(
+        truncated.output["final_message"],
+        json!(super::provider_capacity::SUCCESS_ENVELOPE),
+        "assistant response projection stays on the protocol tail"
+    );
+    let untruncated_cost = codex_prompt_tier_cost(untruncated_trace).unwrap();
+    let truncated_cost = codex_prompt_tier_cost(truncated_trace).unwrap();
+    assert!((truncated_cost - 0.1495).abs() < 1e-12);
+    assert_eq!(truncated_cost, untruncated_cost);
+
+    let without_thread = stdout.split_once('\n').unwrap().1.to_string();
+    let (missing_thread, _) = with_capture_limit(SMALL_CAPTURE_LIMIT, || {
+        dispatch(
+            "codex",
+            Provider::Codex,
+            &without_thread,
+            &[("CODEX_HOME", home.path())],
+        )
+    });
+    assert!(
+        invocation_trace(&missing_thread)
+            .long_prompt_requests
+            .is_none()
+    );
+
+    let mut ambiguous_frames: Vec<_> = stdout.lines().map(str::to_string).collect();
+    ambiguous_frames.insert(
+        1,
+        json!({
+            "type":"thread.started",
+            "thread_id":"01a11e3d-0000-7000-8000-000000000000"
+        })
+        .to_string(),
+    );
+    let ambiguous_stdout = ambiguous_frames.join("\n");
+    let (ambiguous_thread, _) = with_capture_limit(SMALL_CAPTURE_LIMIT, || {
+        dispatch(
+            "codex",
+            Provider::Codex,
+            &ambiguous_stdout,
+            &[("CODEX_HOME", home.path())],
+        )
+    });
+    assert!(
+        invocation_trace(&ambiguous_thread)
+            .long_prompt_requests
+            .is_none()
+    );
+
+    let missing_rollout = codex_home(CODEX_THREAD, None);
+    let (unreadable, _) = with_capture_limit(SMALL_CAPTURE_LIMIT, || {
+        dispatch(
+            "codex",
+            Provider::Codex,
+            &stdout,
+            &[("CODEX_HOME", missing_rollout.path())],
+        )
+    });
+    assert!(invocation_trace(&unreadable).long_prompt_requests.is_none());
+
+    let mut claude_frames: Vec<_> = CLAUDE_STREAM.lines().map(str::to_string).collect();
+    let result = claude_frames.pop().unwrap();
+    claude_frames.push(
+        json!({
+            "type":"tool_result",
+            "content":"ordinary tool output ".repeat(2_048)
+        })
+        .to_string(),
+    );
+    claude_frames.push(result);
+    let claude_stdout = claude_frames.join("\n");
+    const CLAUDE_CAPTURE_LIMIT: usize = 16_384;
+    assert!(claude_stdout.len() > CLAUDE_CAPTURE_LIMIT);
+    let (truncated_claude, _) = with_capture_limit(CLAUDE_CAPTURE_LIMIT, || {
+        dispatch("claude", Provider::Claude, &claude_stdout, &[])
+    });
+    assert!(
+        invocation_trace(&truncated_claude)
+            .long_prompt_requests
+            .is_none()
+    );
 }
 
 fn a_codex_run_records_the_window_its_own_rollout_reports() {
@@ -652,6 +863,10 @@ fn usage_window_contracts_1() {
             (
                 "a_codex_run_records_the_window_its_own_rollout_reports",
                 a_codex_run_records_the_window_its_own_rollout_reports,
+            ),
+            (
+                "codex_long_prompt_telemetry_survives_truncated_stdout",
+                codex_long_prompt_telemetry_survives_truncated_stdout,
             ),
             (
                 "a_claude_stream_records_both_windows_and_projects_as_its_result_alone",
