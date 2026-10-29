@@ -594,6 +594,15 @@ function rankingNode(ranking) {
   // Rank, crew and score lead the table; the evidence columns after them scroll.
   const wrap = el("div", { class: "agents-table-wrap", role: "region", "aria-label": `${ROLE_LABELS[role]} ranking` }, [table]);
   wrap.tabIndex = 0;
+  wrap.addEventListener("keydown", (event) => {
+    if (event.target !== wrap || (event.key !== "ArrowLeft" && event.key !== "ArrowRight")) return;
+    const step = Math.max(40, Math.floor(wrap.clientWidth * 0.8));
+    const maximum = wrap.scrollWidth - wrap.clientWidth;
+    const next = Math.max(0, Math.min(maximum, wrap.scrollLeft + (event.key === "ArrowRight" ? step : -step)));
+    if (next === wrap.scrollLeft) return;
+    wrap.scrollLeft = next;
+    event.preventDefault();
+  });
   const node = el("section", { class: "agents-ranking", "aria-label": "Ranking" }, [wrap]);
   node.dataset.key = "ranking";
   node.dataset.hash = JSON.stringify([role, ranking, scorecard.terms, selectedKey, implementerTier]);

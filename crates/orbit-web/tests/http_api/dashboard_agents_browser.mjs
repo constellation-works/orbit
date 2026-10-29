@@ -7,8 +7,10 @@
 // reserve (16px at 1440, 12px at 375), the Reviewers provisional
 // banner, `accepts often` tag, unjudged row and verdict-outcome bars, the Pilots
 // tier-calibration matrices, the empty state, and the 375px layout (ranking
-// scrolling in its own box, detail stacked below, 44px touch targets).
-// Screenshots of each role tab (and the Implementers ranking) at 1440 and 375 go to the evidence directory.
+// scrolling in its own box, detail stacked below, 44px touch targets). The
+// Implementers regression measures document and active-pane overflow with a
+// selected radar at 1440, 1166 and 375, including after control changes.
+// Screenshots of each role tab (and the Implementers ranking) go to evidence.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -201,6 +203,66 @@ try {
       cue: getComputedStyle(wrap).backgroundImage.includes('radial-gradient'),
       pageOverflow: document.documentElement.scrollWidth > window.innerWidth,
     };
+  });
+
+  const viewportMetrics = () => page.evaluate(() => {
+    const rect = node => {
+      const box = node.getBoundingClientRect();
+      return { left: box.left, right: box.right, top: box.top, bottom: box.bottom, width: box.width };
+    };
+    const pane = document.querySelector('.tab-pane.active');
+    const panel = document.querySelector('#agents-panel');
+    const detail = document.querySelector('.agents-detail');
+    const radar = document.querySelector('.agents-radar');
+    const profile = radar?.querySelector('table.visually-hidden');
+    const wrap = document.querySelector('.agents-table-wrap');
+    const table = wrap?.querySelector('.agents-table');
+    const paneBox = rect(pane);
+    const panelBox = rect(panel);
+    const detailBox = rect(detail);
+    const radarBox = rect(radar);
+    return {
+      viewport: window.innerWidth,
+      document: { clientWidth: document.documentElement.clientWidth, scrollWidth: document.documentElement.scrollWidth },
+      pane: { ...paneBox, clientWidth: pane.clientWidth, scrollWidth: pane.scrollWidth },
+      panel: panelBox,
+      detail: detailBox,
+      radar: radarBox,
+      radarOverflow: getComputedStyle(radar).overflow,
+      profileTable: profile ? { ...rect(profile), rows: profile.tBodies[0]?.rows.length ?? 0, caption: profile.caption?.textContent } : null,
+      ranking: {
+        ...rect(wrap), clientWidth: wrap.clientWidth, scrollWidth: wrap.scrollWidth,
+        overflowX: getComputedStyle(wrap).overflowX, tabIndex: wrap.tabIndex,
+        columnCount: table?.tHead?.rows[0]?.cells.length ?? 0,
+      },
+      paneContained: panelBox.left >= paneBox.left - 1 && panelBox.right <= paneBox.right + 1,
+      detailContained: radarBox.left >= detailBox.left - 1 && radarBox.right <= detailBox.right + 1,
+    };
+  });
+  const implementersOverflow = [];
+  const measureImplementersWidths = async (state, capture = false) => {
+    for (const width of [1440, 1166, 375]) {
+      await page.setViewportSize({ width, height: width === 375 ? 812 : 1100 });
+      await page.waitForTimeout(40);
+      await body.locator('#agents-detail').scrollIntoViewIfNeeded();
+      const metrics = await viewportMetrics();
+      implementersOverflow.push({ state, ...metrics });
+      if (capture) await shot(`agents-implementers-${process.env.AGENTS_EVIDENCE_LABEL || 'after'}-dark-${width}`);
+    }
+    await page.setViewportSize({ width: 1440, height: 1100 });
+  };
+  const rankingReachability = () => page.evaluate(() => {
+    const wrap = document.querySelector('.agents-table-wrap');
+    const original = wrap.scrollLeft;
+    const box = wrap.getBoundingClientRect();
+    const headers = [...wrap.querySelectorAll('thead th')];
+    const reachable = headers.map(header => {
+      wrap.scrollLeft = Math.min(wrap.scrollWidth - wrap.clientWidth, Math.max(0, header.offsetLeft));
+      const rect = header.getBoundingClientRect();
+      return { label: header.textContent.trim(), inside: rect.left >= box.left - 0.5 && rect.right <= box.right + 0.5 };
+    });
+    wrap.scrollLeft = original;
+    return { clientWidth: wrap.clientWidth, scrollWidth: wrap.scrollWidth, tabIndex: wrap.tabIndex, reachable };
   });
 
   // Space between the disclosure's border box and the body's padding edge.
@@ -413,6 +475,70 @@ try {
   for (const label of ['Escaped regressions', 'Regression residual', 'Diff economy']) assert.ok((await body.locator('.agents-stats').textContent()).includes(label));
   assert.equal(await body.locator('.agents-term-context').count(), implementerCard().terms.length);
   assert.equal(await body.locator('[data-term="weighted_landed"] .agents-term-context').textContent(), '22 actual · 19.1 expected');
+
+  // Reproduce the reported 30d view with a selected detail/radar. Keep the
+  // base screenshots and the measurements from every viewport and control
+  // state so a document-only overflow check cannot hide a pane regression.
+  await page.locator('#agents-window-selector [data-window="30d"]').click();
+  await page.waitForFunction(() => /in 30d/.test(document.getElementById('agents-meta').textContent));
+  await body.locator('.agents-row', { hasText: /sol[\s\S]*model-b/ }).locator('.agents-row-select').click();
+  await page.waitForFunction(() => document.querySelector('#agents-detail h3')?.textContent === 'sol');
+  const profileTable = body.locator('.agents-radar table.visually-hidden');
+  assert.equal(await profileTable.count(), 1, 'the accessible profile table remains in the rendered detail');
+  assert.equal(await profileTable.locator('tbody tr').count(), implementerCard().terms.length, 'the profile table exposes every scorecard axis');
+  assert.match(await profileTable.locator('caption').textContent(), /^Agent profile: sol/);
+  assert.equal(await page.getByRole('table', { name: /Agent profile: sol/ }).count(), 1, 'assistive technology can discover the profile table by its caption');
+  await measureImplementersWidths('selected-30d', true);
+  await body.locator('.agents-row', { hasText: /peer[\s\S]*model-c/ }).locator('.agents-row-select').click();
+  await page.waitForFunction(() => document.querySelector('#agents-detail h3')?.textContent === 'peer');
+  await measureImplementersWidths('row-change');
+  for (const tier of ['low', 'hard']) {
+    await page.locator('#agents-tier').selectOption(tier);
+    await measureImplementersWidths(`tier-${tier}`);
+  }
+  await page.locator('#agents-tier').selectOption('');
+  await page.locator('#agents-window-selector [data-window="7d"]').click();
+  await page.waitForFunction(() => /in 7d/.test(document.getElementById('agents-meta').textContent));
+  await measureImplementersWidths('window-7d');
+  await page.locator('#agents-window-selector [data-window="30d"]').click();
+  await page.waitForFunction(() => /in 30d/.test(document.getElementById('agents-meta').textContent));
+  await measureImplementersWidths('window-30d');
+  await page.locator('#refresh-btn').click();
+  await page.waitForTimeout(150);
+  await measureImplementersWidths('refresh');
+  await body.locator('.agents-row', { hasText: /sol[\s\S]*model-b/ }).locator('.agents-row-select').click();
+  await page.waitForFunction(() => document.querySelector('#agents-detail h3')?.textContent === 'sol');
+  const overflowEvidence = {
+    views: implementersOverflow,
+    ranking: await rankingReachability(),
+  };
+  fs.writeFileSync(path.join(evidence, 'implementers-overflow.json'), JSON.stringify(overflowEvidence, null, 2));
+  const overflowFailures = implementersOverflow.filter(view =>
+    view.document.scrollWidth > view.document.clientWidth + 1
+      || view.pane.scrollWidth > view.pane.clientWidth + 1
+      || !view.paneContained || !view.detailContained
+      || !view.profileTable || view.profileTable.rows !== implementerCard().terms.length
+      || view.ranking.overflowX !== 'auto' || view.ranking.tabIndex !== 0,
+  );
+  assert.deepEqual(overflowFailures, [], `document, Analytics pane and panel fit while the accessible profile table and bounded ranking remain usable: ${JSON.stringify(overflowFailures)}`);
+  await page.setViewportSize({ width: 1166, height: 1100 });
+  const rankingAt1166 = await rankingReachability();
+  const rankingWrap = page.locator('.agents-table-wrap');
+  await rankingWrap.focus();
+  await page.keyboard.press('ArrowRight');
+  const keyboardScrollLeft = await rankingWrap.evaluate(node => node.scrollLeft);
+  assert.ok(rankingAt1166.scrollWidth > rankingAt1166.clientWidth, `the wide ranking scrolls within its wrapper at 1166px: ${JSON.stringify(rankingAt1166)}`);
+  assert.ok(keyboardScrollLeft > 0, `the focused ranking wrapper responds to horizontal keyboard scrolling: ${keyboardScrollLeft}`);
+  assert.ok(rankingAt1166.tabIndex === 0 && rankingAt1166.reachable.length > 1 && rankingAt1166.reachable.every(header => header.inside),
+    `every ranking column can be reached within its focusable wrapper: ${JSON.stringify(rankingAt1166)}`);
+  await page.setViewportSize({ width: 1440, height: 1100 });
+  assert.ok(overflowEvidence.ranking.reachable.length > 1 && overflowEvidence.ranking.reachable.every(header => header.inside),
+    `every ranking column can be reached within its focusable wrapper: ${JSON.stringify(overflowEvidence.ranking)}`);
+  const radarVertex = body.locator('.agents-radar-vertex').first();
+  await radarVertex.focus();
+  assert.equal(await radarVertex.evaluate(node => document.activeElement === node), true, 'a radar vertex remains keyboard-focusable inside its clipped section');
+  assert.equal(await body.locator('#agents-radar-tooltip').textContent(), await radarVertex.getAttribute('aria-label'), 'keyboard focus still discloses the radar vertex evidence');
+
   await body.locator('#agents-detail').screenshot({ path: path.join(evidence, 'agents-implementers-detail-dark-1440.png'), animations: 'disabled' });
   assert.equal(await body.locator('.agents-cost-note').count(), 0, 'complete cost coverage needs no unavailable-cost explanation');
   await body.locator('.agents-row', { hasText: 'unpriced' }).locator('button').click();
@@ -654,6 +780,26 @@ try {
   await page.evaluate(() => document.querySelector('.agents-row-unjudged').scrollIntoView({ block: 'center' }));
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, 'the unjudged row fits 375px');
   await shot('agents-reviewers-unjudged-dark-375');
+  const roleContainment = [];
+  for (const role of ['orchestrators', 'implementers', 'reviewers', 'pilots']) {
+    await page.locator(`#agents-roles [data-view="${role}"]`).click();
+    await body.locator('.agents-row').first().waitFor();
+    await body.locator('.agents-row-select').first().click();
+    await page.waitForFunction(() => document.querySelector('.agents-radar table.visually-hidden'));
+    for (const width of [1440, 375]) {
+      await page.setViewportSize({ width, height: width === 375 ? 812 : 1100 });
+      await page.waitForTimeout(50);
+      roleContainment.push({ role, ...(await viewportMetrics()) });
+    }
+  }
+  fs.writeFileSync(path.join(evidence, 'agents-role-containment.json'), JSON.stringify(roleContainment, null, 2));
+  const roleOverflow = roleContainment.filter(view =>
+    view.document.scrollWidth > view.document.clientWidth + 1
+      || view.pane.scrollWidth > view.pane.clientWidth + 1
+      || !view.paneContained || !view.detailContained,
+  );
+  assert.deepEqual(roleOverflow, [], `all four Agents role views contain their detail radar at desktop and phone widths: ${JSON.stringify(roleOverflow)}`);
+  await page.setViewportSize({ width: 1440, height: 1100 });
   assert.deepEqual(errors, []);
   assert.equal(requests.some(entry => entry.includes('/detail')), false, 'the dashboard never requests agent detail');
   fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ ok: true, results }, null, 2));
