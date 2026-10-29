@@ -1662,8 +1662,17 @@ function wireChangeStream() {
     quietly("Jobs in flight", () => fetchJobsInFlight(request));
     if (includeRunningRuns) quietly("Running runs", () => fetchRunningRuns(request));
   });
-  onChange(["run", "drain"], () => {
+  // Readiness depends on tasks and locks as well as runs and drain phase:
+  // removing a dependency or finishing a filtered-out dependency leaves run
+  // state and drain phase unchanged, so the task/lock notice is the only
+  // invalidation. Refresh it on those notices too, in the same batch, with
+  // the same scoped read (detail task, no forecast) as the run/drain path.
+  // Task/lock notices only feed the visible Tasks view; run/drain notices
+  // feed the chip and readiness on every page.
+  onChange(["task", "locks", "run", "drain"], (notices) => {
     if (isAggregateView() || document.hidden) return;
+    const hasRunDrain = notices.some((notice) => notice.kind === "run" || notice.kind === "drain");
+    if (!hasRunDrain && activeTab !== "tasks") return;
     quietly("Drain", () => fetchAndRenderAutoDrainPane({ detailTaskId: drainDetailTaskId(), forecast: false }));
   });
 }
