@@ -179,16 +179,26 @@ def validate_answer_value(qdef, ans, errs, where):
         pr = ans["probability"]
         if not isinstance(pr, (int, float)) or isinstance(pr, bool) or not math.isfinite(pr) or not 0 <= pr <= 1:
             errs.append(f"{where}: probability must be finite in [0,1]")
-    for r in ans.get("criterion_refs", []):
-        if not isinstance(r, dict) or not isinstance(r.get("index"), int) or not is_digest(r.get("text_digest", "")):
-            errs.append(f"{where}: criterion_refs entries need integer index and sha256 text_digest")
+    refs = ans.get("criterion_refs", [])
+    if "criterion_refs" in ans and not isinstance(refs, list):
+        errs.append(f"{where}: criterion_refs must be a list")
+    else:
+        for r in refs:
+            if not isinstance(r, dict) or not isinstance(r.get("index"), int) or not is_digest(r.get("text_digest", "")):
+                errs.append(f"{where}: criterion_refs entries need integer index and sha256 text_digest")
 
 def validate_dataset(ds):
     errs = []
     if not isinstance(ds, dict) or ds.get("format_version") not in SUPPORTED_FORMATS: return [f"format_version must be one of {', '.join(SUPPORTED_FORMATS)}"]
     if not _ts(ds.get("intake_snapshot_at", "")): errs.append("intake_snapshot_at must be ISO-8601")
+    cases_list = ds.get("cases", [])
+    if not isinstance(cases_list, list):
+        return errs + ["cases must be a list"]
     seen = set()
-    for c in ds.get("cases", []):
+    for c in cases_list:
+        if not isinstance(c, dict):
+            errs.append("case <unknown>: case must be an object")
+            continue
         w = f"case {c.get('case_id')}"
         if c.get("case_id") in seen: errs.append(f"{w}: duplicate case_id")
         seen.add(c.get("case_id"))
@@ -199,11 +209,16 @@ def validate_dataset(ds):
         if lab.get("provenance") == "synthetic" and lab.get("human_ground_truth"):
             errs.append(f"{w}: synthetic labels must never be marked human_ground_truth")
         validate_packet(c.get("evidence_packet"), errs, w)
-        ep = c.get("evidence_packet") or {}
+        raw_ep = c.get("evidence_packet")
+        ep = raw_ep if isinstance(raw_ep, dict) else {}
         if _ts(ep.get("collected_at", "")) and _ts(ds.get("intake_snapshot_at", "")) and _ts(ep["collected_at"]) > _ts(ds["intake_snapshot_at"]):
             errs.append(f"{w}: evidence collected after intake_snapshot_at")
         # criteria digests must match text
-        crits = {cr.get("index"): cr for cr in ep.get("criteria", []) if isinstance(cr, dict)}
+        raw_criteria = ep.get("criteria", [])
+        criteria_list = raw_criteria if isinstance(raw_criteria, list) else []
+        if "criteria" in ep and not isinstance(raw_criteria, list):
+            errs.append(f"{w}: evidence_packet.criteria must be a list")
+        crits = {cr.get("index"): cr for cr in criteria_list if isinstance(cr, dict)}
         for idx, cr in crits.items():
             if "text" in cr and cr.get("text_digest") != digest(cr["text"]): errs.append(f"{w}: criterion {idx} text_digest mismatch")
         exp = c.get("expected")
@@ -212,24 +227,39 @@ def validate_dataset(ds):
         if set(exp) != set(want): errs.append(f"{w}: expected must contain exactly {sorted(want)}")
         for q, a in exp.items():
             if q in want: validate_answer_value(want[q], a, errs, f"{w}.{q}")
-            for r in (a or {}).get("criterion_refs", []) if isinstance(a, dict) else []:
-                if isinstance(r, dict) and r.get("index") in crits and r.get("text_digest") != crits[r["index"]].get("text_digest"):
-                    errs.append(f"{w}.{q}: criterion_ref digest does not match packet criterion")
+            refs = a.get("criterion_refs", []) if isinstance(a, dict) else []
+            if isinstance(refs, list):
+                for r in refs:
+                    if isinstance(r, dict) and r.get("index") in crits and r.get("text_digest") != crits[r["index"]].get("text_digest"):
+                        errs.append(f"{w}.{q}: criterion_ref digest does not match packet criterion")
     return errs
 
 def validate_answers(ds, ansdoc):
     errs = []
     if not isinstance(ansdoc, dict) or ansdoc.get("format_version") not in SUPPORTED_FORMATS: return [f"answers format_version must be one of {', '.join(SUPPORTED_FORMATS)}"]
-    cases = {c["case_id"]: c for c in ds.get("cases", [])}
+    raw_cases = ds.get("cases", []) if isinstance(ds, dict) else []
+    cases = {c.get("case_id"): c for c in raw_cases if isinstance(c, dict)}
+    raw_answers = ansdoc.get("answers", [])
+    if not isinstance(raw_answers, list):
+        return errs + ["answers must be a list"]
     seen = set()
-    for a in ansdoc.get("answers", []):
+    for a in raw_answers:
+        if not isinstance(a, dict):
+            errs.append("answer <unknown>: answer must be an object")
+            continue
         w = f"answer {a.get('case_id')}"
         if a.get("case_id") in seen: errs.append(f"{w}: duplicate answer")
         seen.add(a.get("case_id"))
         case = cases.get(a.get("case_id"))
         if case is None: errs.append(f"{w}: unknown case_id"); continue
+        if not isinstance(case, dict) or case.get("consumer") not in QUESTION_SETS:
+            errs.append(f"{w}: unknown consumer for case {a.get('case_id')!r}"); continue
         if a.get("disposition") not in DISPOSITIONS: errs.append(f"{w}: disposition must be one of {DISPOSITIONS}"); continue
-        got = a.get("answers") or {}
+        raw_got = a.get("answers") or {}
+        if not isinstance(raw_got, dict):
+            errs.append(f"{w}: answers must be an object")
+            continue
+        got = raw_got
         if a["disposition"] in ("refused", "unavailable"):
             if got: errs.append(f"{w}: refused/unavailable answers must carry no question answers")
             continue
@@ -237,9 +267,19 @@ def validate_answers(ds, ansdoc):
         if set(got) != set(want): errs.append(f"{w}: answers must contain exactly {sorted(want)}, got {sorted(got)}")
         for q, v in got.items():
             if q in want: validate_answer_value(want[q], v, errs, f"{w}.{q}")
-        for k in ("usage", "latency_ms", "cost_usd"):
+        for k in ("latency_ms", "cost_usd"):
             if k in a and a[k] is not None and (not isinstance(a[k], (int, float, dict)) or (isinstance(a[k], (int, float)) and a[k] < 0)):
                 errs.append(f"{w}: {k} must be non-negative or null (unknown)")
+        if "usage" in a and a["usage"] is not None:
+            usage = a["usage"]
+            if not isinstance(usage, dict):
+                errs.append(f"{w}: usage must be an object or null (unknown)")
+            else:
+                for key in ("input_tokens", "output_tokens"):
+                    if key in usage and usage[key] is not None:
+                        count = usage[key]
+                        if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+                            errs.append(f"{w}: usage.{key} must be a non-negative integer or null (unknown)")
     return errs
 
 def _pr(tp, fp, fn):
@@ -249,17 +289,28 @@ def _pr(tp, fp, fn):
     return {"precision": prec, "recall": rec, "f1": f1, "tp": tp, "fp": fp, "fn": fn}
 
 def score(ds, ansdoc):
-    errs = validate_dataset(ds) + validate_answers(ds, ansdoc)
-    cases = {c["case_id"]: c for c in ds.get("cases", [])}
-    by_id = {a.get("case_id"): a for a in ansdoc.get("answers", [])}
-    report_version = ds.get("format_version") if ds.get("format_version") in SUPPORTED_FORMATS else FORMAT
-    report = {"format_version": report_version, "dataset_id": ds.get("dataset_id"), "validation_errors": errs,
+    try:
+        errs = validate_dataset(ds) + validate_answers(ds, ansdoc)
+    except Exception as error:
+        errs = [f"validation failed: {error}"]
+    raw_cases = ds.get("cases", []) if isinstance(ds, dict) else []
+    cases = {c.get("case_id"): c for c in raw_cases if isinstance(c, dict)}
+    raw_ans = ansdoc.get("answers", []) if isinstance(ansdoc, dict) else []
+    if not isinstance(raw_ans, list):
+        raw_ans = []
+    by_id = {a.get("case_id"): a for a in raw_ans if isinstance(a, dict)}
+    report_version = ds.get("format_version") if isinstance(ds, dict) and ds.get("format_version") in SUPPORTED_FORMATS else FORMAT
+    report = {"format_version": report_version, "dataset_id": ds.get("dataset_id") if isinstance(ds, dict) else None, "validation_errors": errs,
               "questions": {}, "totals": {}}
     total = answered = abstained = invalid = refused = 0
     lat, costs, in_tok, out_tok = [], [], [], []
     usage_known = {"latency": True, "cost": True, "input_tokens": True, "output_tokens": True}
     # Usage belongs to each reported call, including calls omitted from case scoring.
-    for a in ansdoc.get("answers", []):
+    for a in raw_ans:
+        if not isinstance(a, dict):
+            usage_known["latency"] = usage_known["cost"] = False
+            usage_known["input_tokens"] = usage_known["output_tokens"] = False
+            continue
         latency = a.get("latency_ms")
         if (isinstance(latency, (int, float)) and not isinstance(latency, bool) and latency >= 0
                 and (not isinstance(latency, float) or math.isfinite(latency))):
@@ -283,19 +334,38 @@ def score(ds, ansdoc):
     choice_conf = defaultdict(Counter); choice_counts = defaultdict(lambda: [0, 0, 0])  # tp,fp,fn
     pred_stats = {}
     def record_abstained_expected_failure(case):
-        if case["consumer"] != "failure_categorization":
+        if not isinstance(case, dict) or case.get("consumer") != "failure_categorization":
             return
-        expected = case["expected"]["failure_category"]["value"]
+        exp = case.get("expected")
+        if not isinstance(exp, dict):
+            return
+        fc = exp.get("failure_category")
+        if not isinstance(fc, dict) or "value" not in fc:
+            return
+        expected = fc["value"]
+        if not isinstance(expected, str):
+            return
         if expected != "insufficient_evidence":
-            choice_counts[expected][2] += 1
+            try:
+                choice_counts[expected][2] += 1
+            except TypeError:
+                return
 
     for cid, case in cases.items():
         total += 1
         a = by_id.get(cid)
-        if a is None or a.get("disposition") not in DISPOSITIONS or (validate_answers(ds, {"format_version": report_version, "answers": [a]})):
+        try:
+            answer_invalid = a is None or not isinstance(a, dict) or a.get("disposition") not in DISPOSITIONS or bool(validate_answers(ds, {"format_version": report_version, "answers": [a]}))
+        except Exception:
+            answer_invalid = True
+        if answer_invalid:
             invalid += 1
             abstained += 1
             record_abstained_expected_failure(case)
+            continue
+        if not isinstance(case, dict) or not isinstance(case.get("expected"), dict):
+            invalid += 1
+            abstained += 1
             continue
         if a["disposition"] in ("refused", "unavailable"):
             refused += 1
@@ -306,16 +376,25 @@ def score(ds, ansdoc):
             abstained += 1
             record_abstained_expected_failure(case)
             continue
-        got = a.get("answers") or {}
+        raw_got = a.get("answers") or {}
+        got = raw_got if isinstance(raw_got, dict) else {}
         case_answered = True
         for q, exp in case["expected"].items():
-            pred = got.get(q, {}); ev, pv = exp["value"], pred.get("value")
+            if not isinstance(exp, dict) or "value" not in exp:
+                continue
+            pred = got.get(q, {})
+            if not isinstance(pred, dict):
+                pred = {}
+            ev, pv = exp["value"], pred.get("value")
             if case["consumer"] == "failure_categorization":
                 if pv == "insufficient_evidence":
                     case_answered = False
                     record_abstained_expected_failure(case)
                     continue
-                choice_conf[ev][pv] += 1
+                try:
+                    choice_conf[ev][pv] += 1
+                except TypeError:
+                    continue
                 for cls in FAILURE_CATEGORIES:
                     if cls == "insufficient_evidence": continue
                     if ev == cls and pv == cls: choice_counts[cls][0] += 1
@@ -400,16 +479,25 @@ def _target_recorded_opening(doc):
     return next(iter(openings.values()), None)
 
 def check_split(ds, manifest, prior_holdout_ids):
-    errs = validate_dataset(ds)
+    try:
+        errs = validate_dataset(ds)
+    except Exception as error:
+        errs = [f"validation failed: {error}"]
+    if not isinstance(manifest, dict):
+        return errs + ["manifest must be an object"]
     if manifest.get("format_version") not in SUPPORTED_FORMATS: errs.append(f"manifest format_version must be one of {', '.join(SUPPORTED_FORMATS)}")
     hid = manifest.get("holdout_id")
     if not isinstance(hid, str) or not hid.strip(): errs.append("manifest holdout_id must be a non-empty string")
     if hid in (prior_holdout_ids or []): errs.append(f"holdout_id {hid} already used/opened; reused holdout IDs are rejected")
-    if hid in manifest.get("previously_opened_holdout_ids", []): errs.append(f"holdout_id {hid} listed in previously_opened_holdout_ids")
+    prev_opened = manifest.get("previously_opened_holdout_ids", [])
+    if isinstance(prev_opened, list) and hid in prev_opened: errs.append(f"holdout_id {hid} listed in previously_opened_holdout_ids")
     if not _ts(manifest.get("intake_snapshot_at")):
         errs.append("manifest intake_snapshot_at must be ISO-8601")
-    cases = {c["case_id"]: c for c in ds.get("cases", [])}
+    raw_cases = ds.get("cases", []) if isinstance(ds, dict) else []
+    cases = {c.get("case_id"): c for c in raw_cases if isinstance(c, dict)}
     assign = manifest.get("assignments", {})
+    if not isinstance(assign, dict):
+        return errs + ["manifest assignments must be an object"]
     seen_split = {}
     for cid, split in assign.items():
         if cid not in cases: errs.append(f"manifest assigns unknown case {cid}")
@@ -418,25 +506,39 @@ def check_split(ds, manifest, prior_holdout_ids):
     fam, subj = {}, {}
     for cid, split in seen_split.items():
         c = cases.get(cid)
-        if not c: continue
+        if not isinstance(c, dict): continue
         for key, store in (("family_id", fam), ("subject", subj)):
-            k = c.get("family_id") if key == "family_id" else (c.get("evidence_packet") or {}).get("subject_id")
+            packet = c.get("evidence_packet")
+            packet = packet if isinstance(packet, dict) else {}
+            k = c.get("family_id") if key == "family_id" else packet.get("subject_id")
             if k in store and (store[k] == "holdout") != (split == "holdout"):
                 errs.append(f"{key} {k} overlaps holdout and non-holdout splits (case {cid})")
             store.setdefault(k, split)
         label = c.get("label", {})
+        if not isinstance(label, dict):
+            label = {}
         if split == "holdout" and label.get("provenance") != "independent_human":
             errs.append(f"holdout case {cid}: label.provenance must be independent_human, got {label.get('provenance')!r} (synthetic is not human ground truth)")
         elif split == "holdout":
-            errs.extend(_validate_human_label_import(
-                label, cid, c.get("expected"), manifest.get("intake_snapshot_at", ""),
-                ds.get("format_version")))
-        ep = c.get("evidence_packet") or {}
+            try:
+                errs.extend(_validate_human_label_import(
+                    label, cid, c.get("expected"), manifest.get("intake_snapshot_at", ""),
+                    ds.get("format_version") if isinstance(ds, dict) else None))
+            except Exception as error:
+                errs.append(f"holdout case {cid}: label validation failed: {error}")
+        ep = c.get("evidence_packet")
+        ep = ep if isinstance(ep, dict) else {}
         if _ts(ep.get("collected_at", "")) and _ts(manifest.get("intake_snapshot_at", "")) and _ts(ep["collected_at"]) > _ts(manifest["intake_snapshot_at"]):
             errs.append(f"case {cid}: evidence after intake_snapshot_at")
     if manifest.get("split_strategy_time") and not errs:
-        non = [_ts(cases[c]["evidence_packet"]["collected_at"]) for c, s in seen_split.items() if s != "holdout" and c in cases]
-        hold = [_ts(cases[c]["evidence_packet"]["collected_at"]) for c, s in seen_split.items() if s == "holdout" and c in cases]
+        def _collected(case_id):
+            pkt = cases[case_id].get("evidence_packet") if isinstance(cases.get(case_id), dict) else None
+            pkt = pkt if isinstance(pkt, dict) else {}
+            return _ts(pkt.get("collected_at", ""))
+        non = [_collected(c) for c, s in seen_split.items() if s != "holdout" and c in cases]
+        hold = [_collected(c) for c, s in seen_split.items() if s == "holdout" and c in cases]
+        non = [t for t in non if t is not None]
+        hold = [t for t in hold if t is not None]
         if non and hold and min(hold) <= max(non): errs.append("time holdout: earliest holdout evidence must be after latest train/dev evidence")
     if not errs:
         try:
@@ -535,14 +637,42 @@ def main(argv=None):
                      "criterion_ref": {"index": "int", "text_digest": "sha256:<64 hex of criterion text>"}})
     if a.cmd == "seed": return emit(seed_answers(a.format_version) if a.answers else seed_dataset(a.format_version))
     if a.cmd in ("validate", "score"):
-        ds = load(a.dataset); errs = validate_dataset(ds)
-        ans = load(a.answers) if a.answers else None
-        if ans is not None: errs += validate_answers(ds, ans)
+        try:
+            ds = load(a.dataset)
+            try:
+                errs = validate_dataset(ds)
+            except Exception as error:
+                errs = [f"validation failed: {error}"]
+            ans = load(a.answers) if a.answers else None
+            if ans is not None:
+                try:
+                    errs += validate_answers(ds, ans)
+                except Exception as error:
+                    errs += [f"validation failed: {error}"]
+        except Exception as error:
+            errs = [f"validation failed: {error}"]
+            ans = None
+            ds = {}
         if a.cmd == "validate": return emit({"ok": not errs, "errors": errs}, 0 if not errs else 2)
-        if ans is None: return emit({"error": "score requires --answers"}, 2)
-        return emit(score(ds, ans))
+        if ans is None and a.answers is None: return emit({"error": "score requires --answers"}, 2)
+        try:
+            return emit(score(ds, ans))
+        except Exception as error:
+            fallback = validate_dataset(ds) if isinstance(ds, dict) else [f"validation failed: {error}"]
+            try:
+                fallback += validate_answers(ds, ans) if isinstance(ans, dict) else [f"validation failed: {error}"]
+            except Exception:
+                pass
+            if not fallback:
+                fallback = [f"scoring failed: {error}"]
+            report_version = ds.get("format_version") if isinstance(ds, dict) and ds.get("format_version") in SUPPORTED_FORMATS else FORMAT
+            return emit({"format_version": report_version, "dataset_id": ds.get("dataset_id") if isinstance(ds, dict) else None,
+                         "validation_errors": fallback, "questions": {}, "totals": {}}, 0)
     if a.cmd == "check-split":
-        errs = check_split(load(a.dataset), load(a.manifest), [x for x in a.prior_holdout_ids.split(",") if x])
+        try:
+            errs = check_split(load(a.dataset), load(a.manifest), [x for x in a.prior_holdout_ids.split(",") if x])
+        except Exception as error:
+            errs = [f"validation failed: {error}"]
         return emit({"ok": not errs, "errors": errs}, 0 if not errs else 2)
     if a.cmd == "check-targets":
         errs = check_targets(load(a.targets), a.holdout_opened_at)

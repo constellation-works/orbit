@@ -477,6 +477,76 @@ class EvalTests(unittest.TestCase):
         early = self._run("check-targets", "--targets", str(self._dump("early-targets.json", targets)))
         self.assertEqual(early.returncode, 0, early.stdout + early.stderr)
 
+    def test_malformed_values_rejected_structured(self):
+        ds = self._load(self.ds)
+        ans = self._load(self.ans)
+        # Non-object usage is rejected by validate and reported by score.
+        bad_usage = json.loads(json.dumps(ans))
+        bad_usage["answers"][0]["usage"] = 5
+        bad_usage_path = self._dump("malformed-usage-object.json", bad_usage)
+        r = self._run("validate", "--dataset", str(self.ds), "--answers", str(bad_usage_path))
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertFalse(json.loads(r.stdout)["ok"])
+        self.assertIn("usage", r.stdout)
+        rep = self._score(self.ds, bad_usage_path)
+        self.assertTrue(rep["validation_errors"], rep)
+        self.assertTrue(any("usage" in e for e in rep["validation_errors"]), rep)
+        # Negative token counts are rejected by validate and reported by score.
+        bad_tokens = json.loads(json.dumps(ans))
+        bad_tokens["answers"][0]["usage"] = {"input_tokens": -500, "output_tokens": 10}
+        bad_tokens_path = self._dump("malformed-usage-tokens.json", bad_tokens)
+        r = self._run("validate", "--dataset", str(self.ds), "--answers", str(bad_tokens_path))
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertFalse(json.loads(r.stdout)["ok"])
+        self.assertIn("usage.input_tokens", r.stdout)
+        rep = self._score(self.ds, bad_tokens_path)
+        self.assertTrue(rep["validation_errors"], rep)
+        # Non-list criterion_refs on an answer is rejected, not a traceback.
+        bad_refs = json.loads(json.dumps(ans))
+        bad_refs["answers"][0]["answers"]["failure_category"]["criterion_refs"] = 5
+        bad_refs_path = self._dump("malformed-criterion-refs-answer.json", bad_refs)
+        r = self._run("validate", "--dataset", str(self.ds), "--answers", str(bad_refs_path))
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("criterion_refs", r.stdout)
+        rep = self._score(self.ds, bad_refs_path)
+        self.assertTrue(rep["validation_errors"], rep)
+        # Non-list criterion_refs on a dataset is rejected everywhere.
+        ds_refs = json.loads(json.dumps(ds))
+        kontra = next(c for c in ds_refs["cases"] if c["case_id"] == "seed-task-contradictory")
+        kontra["expected"]["requirements_conflict"]["criterion_refs"] = 5
+        ds_refs_path = self._dump("malformed-criterion-refs-dataset.json", ds_refs)
+        r = self._run("validate", "--dataset", str(ds_refs_path))
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("criterion_refs", r.stdout)
+        rep = self._score(ds_refs_path, self.ans)
+        self.assertTrue(rep["validation_errors"], rep)
+        r = self._run("check-split", "--dataset", str(ds_refs_path),
+                      "--manifest", str(self._dump("malformed-refs-manifest.json", self._manifest(ds_refs))))
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("criterion_refs", r.stdout)
+        # A case without expected is rejected by validate and scored structurally.
+        ds_no_expected = json.loads(json.dumps(ds))
+        del ds_no_expected["cases"][0]["expected"]
+        ds_no_expected_path = self._dump("missing-expected-ds.json", ds_no_expected)
+        r = self._run("validate", "--dataset", str(ds_no_expected_path))
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("expected answers required", r.stdout)
+        rep = self._score(ds_no_expected_path, self.ans)
+        self.assertTrue(rep["validation_errors"], rep)
+        # Missing collected_at with time splitting is a structured check-split error.
+        ds_no_ts = json.loads(json.dumps(ds))
+        del ds_no_ts["cases"][0]["evidence_packet"]["collected_at"]
+        ds_no_ts_path = self._dump("missing-collected-at-ds.json", ds_no_ts)
+        r = self._run("validate", "--dataset", str(ds_no_ts_path))
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        manifest = self._manifest(ds_no_ts, holdout_id="holdout-malformed-time")
+        manifest["split_strategy_time"] = True
+        r = self._run("check-split", "--dataset", str(ds_no_ts_path),
+                      "--manifest", str(self._dump("malformed-time-manifest.json", manifest)))
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertFalse(json.loads(r.stdout)["ok"])
+        self.assertIn("collected_at", r.stdout)
+
     def _targets(self):
         return {"format_version": "decision-assistance-eval/1", "registered_at": "2026-01-15T00:00:00Z",
                 "baseline": {"name": "existing-workflow", "version": "1"},
