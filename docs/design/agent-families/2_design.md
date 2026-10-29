@@ -4,7 +4,7 @@ type: design
 title: "Agent Families — Design"
 owner: human
 last_updated: 2026-10-27
-last_validated: 2026-10-27
+last_validated: 2026-10-29
 status: Draft
 feature: agent-families
 doc_role: design
