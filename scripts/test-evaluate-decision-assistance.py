@@ -547,6 +547,43 @@ class EvalTests(unittest.TestCase):
         self.assertFalse(json.loads(r.stdout)["ok"])
         self.assertIn("collected_at", r.stdout)
 
+    def test_criterion_refs_checked_against_packet(self):
+        import hashlib
+        ds = self._load(self.ds)
+        ans = self._load(self.ans)
+        # Mismatched digest: ref index exists but digest belongs to other text.
+        bad_digest = json.loads(json.dumps(ans))
+        for a in bad_digest["answers"]:
+            if a["case_id"] == "seed-task-contradictory":
+                other = "sha256:" + hashlib.sha256(b"unrelated criterion text").hexdigest()
+                a["answers"]["requirements_conflict"]["criterion_refs"][0] = {"index": 0, "text_digest": other}
+        r = self._run("validate", "--dataset", str(self.ds),
+                      "--answers", str(self._dump("bad-digest-ans.json", bad_digest)))
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertFalse(json.loads(r.stdout)["ok"])
+        self.assertIn("criterion_ref", r.stdout)
+        self.assertIn("digest does not match", r.stdout)
+        # Unknown index: well-formed ref whose index is absent from the packet.
+        bad_index = json.loads(json.dumps(ans))
+        for a in bad_index["answers"]:
+            if a["case_id"] == "seed-task-contradictory":
+                a["answers"]["requirements_conflict"]["criterion_refs"] = [
+                    {"index": 999, "text_digest": "sha256:" + hashlib.sha256(b"x").hexdigest()}]
+        r = self._run("validate", "--dataset", str(self.ds),
+                      "--answers", str(self._dump("bad-index-ans.json", bad_index)))
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertFalse(json.loads(r.stdout)["ok"])
+        self.assertIn("not in packet criteria", r.stdout)
+        # Task-quality packet without criteria is rejected.
+        no_criteria = json.loads(json.dumps(ds))
+        for c in no_criteria["cases"]:
+            if c["case_id"] == "seed-task-vague":
+                del c["evidence_packet"]["criteria"]
+        r = self._run("validate", "--dataset", str(self._dump("no-criteria-ds.json", no_criteria)))
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertFalse(json.loads(r.stdout)["ok"])
+        self.assertIn("criteria", r.stdout)
+
     def _targets(self):
         return {"format_version": "decision-assistance-eval/1", "registered_at": "2026-01-15T00:00:00Z",
                 "baseline": {"name": "existing-workflow", "version": "1"},
