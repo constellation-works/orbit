@@ -28,8 +28,11 @@ overrides it: `orbit workspace sync` and `orbit update` keep the file byte for
 byte and never retire it, and sync warns that it occupies the bundled
 default's name. That warning is expected here; do not move or rename the file.
 The rest of this runbook describes this workspace's definition and harness.
-The generic default's area brief also points workers here when the repository
-provides this harness, including browser-kit and website preparation.
+The generic default's area brief names this workspace's runbooks only as guarded
+examples: workers use them only when the checkout provides this harness and its
+workspace guide permits it, discovering the repository's own permitted recipe
+otherwise, and retaining `NOT_RUN` with the capability probe when neither a
+usable host kit nor an applicable permitted recipe exists.
 
 ## Mint and run
 

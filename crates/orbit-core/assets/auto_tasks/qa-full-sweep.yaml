@@ -161,11 +161,16 @@ template:
     > macOS needs no Linux loader or font inputs. Read the shared kit without
     > modifying it, and never run `orbit browser-kit` from the worker. When
     > the variable is absent, record `orbit browser-kit install` as the host
-    > fix in the capability probe. If no kit is usable, use the repository's
-    > disposable Playwright/Chromium recipe under `.orbit/tmp/` (for this
-    > repository, docs/runbooks/website-validation.md), unpacking missing
-    > Linux libraries without root. Do not install host packages or bypass
-    > the worker sandbox. A genuinely unavailable path or failed Chromium
+    > fix in the capability probe. If no kit is usable, discover the current
+    > repository's own documented disposable Playwright/Chromium recipe and
+    > use it only when it exists and the repository's workspace guide permits
+    > it, keeping the installation under `.orbit/tmp/` and unpacking missing
+    > Linux libraries without root (in a repository that ships one, for
+    > example `docs/runbooks/website-validation.md` when that file is
+    > present). Do not install host packages or bypass the worker sandbox.
+    > When no usable kit and no applicable permitted repository recipe exists,
+    > keep the capability probe and mark the scenario `NOT_RUN`; never invent
+    > a successful capability. A genuinely unavailable path or failed Chromium
     > launch remains `NOT_RUN` with the capability probe retained.
     >
     > For repositories with `scripts/qa-full-sweep.sh`, pass the sourced kit
@@ -175,12 +180,14 @@ template:
     > `--browser-fontconfig-file "$FONTCONFIG_FILE"`. Preserve a
     > colon-separated library search path as one quoted argument. Retain
     > the launched Chromium version and screenshots with
-    > `--browser-evidence-dir .orbit/tmp/qa-full-sweep/browser`. Follow
-    > docs/runbooks/qa-full-sweep.md for the full invocation and disposable
-    > fallback paths. Include `--website-build --run-commands`: the website
-    > leg prepares dependencies with `npm ci` and a private npm cache in a
-    > scratch source copy through the isolated procedure in
-    > docs/runbooks/website-validation.md, then builds and records `PASS`
+    > `--browser-evidence-dir .orbit/tmp/qa-full-sweep/browser`. When
+    > `docs/runbooks/qa-full-sweep.md` is present, follow it for the full
+    > invocation and disposable fallback paths. Include
+    > `--website-build --run-commands`: the website leg prepares dependencies
+    > with `npm ci` and a private npm cache in a scratch source copy through the
+    > repository's own isolated procedure (in a repository that ships it,
+    > the isolated procedure in `docs/runbooks/website-validation.md` when
+    > that file is present), then builds and records `PASS`
     > or `FAIL`. It never deploys. For other repositories, use their own
     > isolated dependency preparation and build commands.
     >
