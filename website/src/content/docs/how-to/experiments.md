@@ -306,11 +306,15 @@ Read the warnings before the verdict:
   overlay digest received more than one treatment; its runs before and
   after the change are not the same treatment. Conclude or clone rather
   than reading through a drift warning.
-- **Primary unmeasured.** Two metrics have no source series yet —
-  `turns_before_first_edit` and `result_bytes_before_first_edit` report
-  `measured: false`. As a primary metric they can never produce a winner;
-  the verdict is `inconclusive` at the horizon. Keep them as context, not
-  as the metric you conclude on.
+- **Unmeasured first edits.** `turns_before_first_edit` and
+  `result_bytes_before_first_edit` score each task's first implement
+  invocation from its recorded tool calls: the calls before the first
+  editor tool, with a first-call edit scoring zero. A settled task whose
+  first invocation has no recorded tool calls, no recognized editor tool
+  (a shell command such as `command_execution` is not an edit), or no
+  implement invocation at all is unmeasured and stays out of `n`. A task
+  still in flight is open. Older runs may lack tool-call traces, so their
+  `n` can be smaller than their settled tasks.
 
 The readout is descriptive, not a significance oracle. It reports no
 p-value for the treatment difference itself; the interval excluding zero
