@@ -2,6 +2,7 @@
 
 mod auto_fix;
 mod base_update;
+mod ci_rerun;
 mod completion;
 mod infrastructure;
 
@@ -20,4 +21,8 @@ pub use infrastructure::{
     PR_INFRASTRUCTURE_RESERVED_EVENT, PrInfrastructureAdmission, PrInfrastructureEvidence,
     PrInfrastructureReservation, RequiredGate, decide_pr_infrastructure,
     pr_infrastructure_reservations,
+};
+
+pub use ci_rerun::{
+    CI_RERUN_RESERVED_EVENT, CiRerunAdmission, CiRerunPlan, CiRerunRoot, decide_ci_rerun,
 };

@@ -28,8 +28,8 @@ const MAX_JOB_LOG_BYTES: usize = 64 * 1024;
 // normal capture bound. Keep the original 100-row window and total_count so
 // exact-tip completeness checks and bounded ancestry selection stay unchanged.
 // Do not default a missing list to []: a malformed read must still fail.
-const COMMIT_RUN_FIELDS: &str = "{total_count, workflow_runs: (.workflow_runs | if type != \"array\" then error(\"workflow_runs must be an array\") else map({id, name, workflow_id, status, conclusion, run_started_at, run_attempt, event, head_branch, head_sha, pull_requests}) end)}";
-const RUN_JOB_FIELDS: &str = "{total_count, jobs: (.jobs | if type != \"array\" then error(\"jobs must be an array\") else map({id, name, status, conclusion, started_at, completed_at, steps: (.steps | if type == \"array\" then map({name, conclusion}) else . end)}) end)}";
+const COMMIT_RUN_FIELDS: &str = "{total_count, workflow_runs: (.workflow_runs | if type != \"array\" then error(\"workflow_runs must be an array\") else map({id, name, workflow_id, repository: {id: .repository.id, full_name: .repository.full_name}, status, conclusion, run_started_at, run_attempt, event, head_branch, head_sha, pull_requests}) end)}";
+const RUN_JOB_FIELDS: &str = "{total_count, jobs: (.jobs | if type != \"array\" then error(\"jobs must be an array\") else map({id, name, status, conclusion, started_at, completed_at, steps: (.steps | if type == \"array\" then map({name, number, status, conclusion}) else . end)}) end)}";
 
 /// Every job of the newest attempt of each workflow run GitHub recorded for
 /// `commit`, with its conclusion and first failed step. Base ancestry reads
@@ -199,6 +199,9 @@ pub(super) fn ci_commit_jobs(input: &Value) -> Result<Value, OrbitError> {
                 "run_id": run_id,
                 "job_id": job["id"],
                 "workflow": run["name"],
+                "workflow_id":run["workflow_id"],
+                "repository_id":run["repository"]["id"],
+                "repository":run["repository"]["full_name"],
                 "name": job["name"],
                 "status": job["status"],
                 "conclusion": job["conclusion"],
@@ -274,8 +277,27 @@ pub(super) fn ci_rerun_failed(input: &Value) -> Result<Value, OrbitError> {
             "invalid private automation VCS workflow run id '{run_id}'"
         )));
     }
+    if let Some(expected) = input.get("plan") {
+        let plan: orbit_types::workflow::CiRerunPlan = serde_json::from_value(expected.clone())
+            .map_err(|_| super::prerequisite::unreadable("CI retry reservation"))?;
+        if plan.run_id.to_string() != run_id {
+            return Err(super::prerequisite::unreadable("CI retry action run"));
+        }
+        let refreshed = super::ci_rerun::ci_rerun_plan(
+            &json!({"workspace_path":workspace_path,"pr":plan.pr_number,"head_sha":plan.head_sha,"head_branch":plan.head_branch,"base_branch":plan.base_branch,"accepted_base":plan.accepted_base,"run_id":plan.run_id,"roots":plan.roots,"deadline_ms":input["deadline_ms"]}),
+        )?;
+        let refreshed: orbit_types::workflow::CiRerunPlan =
+            serde_json::from_value(refreshed["plan"].clone())
+                .map_err(|_| super::prerequisite::unreadable("refreshed CI retry plan"))?;
+        if refreshed != plan {
+            return Err(super::prerequisite::unreadable(
+                "CI retry authorization changed before send",
+            ));
+        }
+    }
     let deadline = input
         .get("prerequisite")
+        .or_else(|| input.get("plan"))
         .map(|_| super::super::completion_deadline::Deadline::from_input(input))
         .transpose()?;
     if let Some(deadline) = deadline {

@@ -60,6 +60,7 @@ pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost +
     base_branch: Option<&str>,
     failed: &[(Option<String>, String)],
     required: &RequiredChecks,
+    allow_candidate_sibling: bool,
 ) -> HeadCheckEvidence {
     let jobs = match commit_jobs(host, workspace, head) {
         Ok(jobs) => jobs,
@@ -70,6 +71,7 @@ pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost +
         }
     };
     let mut details = Vec::new();
+    let mut waits = Vec::new();
     let mut annotations = Vec::new();
     for check in failed {
         let label = match &check.0 {
@@ -134,7 +136,10 @@ pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost +
             &signature.text,
             pr.parse::<u64>().ok(),
         ) {
-            Ok(Some(reason)) => return HeadCheckEvidence::WaitForBase(reason),
+            Ok(Some(reason)) => {
+                waits.push(reason);
+                continue;
+            }
             Err(reason) => return HeadCheckEvidence::Stop(reason),
             Ok(None) => {}
         }
@@ -145,6 +150,9 @@ pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost +
             signature.text,
             excerpt(&log)
         ));
+    }
+    if !waits.is_empty() && (details.is_empty() || !allow_candidate_sibling) {
+        return HeadCheckEvidence::WaitForBase(waits.join("; "));
     }
     if details.is_empty() {
         return HeadCheckEvidence::Stop(format!("the rollup names no failed check on head {head}"));
@@ -356,21 +364,25 @@ pub(in crate::executor::automation::vcs) fn unmoved_red_base<H: RuntimeHost + ?S
                 suspect = true;
                 reasons.push(why);
             }
-            // A base-suspect sibling holds even beside a candidate-caused
-            // one; otherwise a candidate-caused sibling decides, and an
-            // unread one does not.
-            CheckFailureClass::Candidate => candidate_owned = true,
+            // Only an independently source-attributed candidate overrides
+            // the hold. A diagnostic-only aggregate must not cancel its
+            // leaf's suspicion while dependency evidence is unproven.
+            CheckFailureClass::Candidate => {
+                candidate_owned |=
+                    super::suspect::cites_changed_candidate(workspace, head, base, &log)
+                        .map_err(|error| error.to_string())?;
+            }
             CheckFailureClass::Inconclusive => {
                 inconclusive.get_or_insert(format!("'{label}' is inconclusive: {why}"));
             }
             _ => return Ok(None),
         }
     }
-    if suspect {
-        return Ok(Some(reasons.join("; ")));
-    }
     if candidate_owned {
         return Ok(None);
+    }
+    if suspect {
+        return Ok(Some(reasons.join("; ")));
     }
     if let Some(gap) = inconclusive {
         return Err(gap);

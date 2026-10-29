@@ -1127,7 +1127,61 @@ failing again while the same-check base run passes makes the failure `candidate`
 results, `handoff_land` stops in review after
 `max_base_ci_cycles` observation cycles (default 3) or `max_wait_seconds` (default 3600 seconds),
 whichever comes first. Each observation cycle rechecks the failed job against the accepted base
-ancestry. Reruns record `ci_check_rerun` history with the head, run and failed-job identities.
+ancestry. Reruns share the eligible-set planner with owner-local `auto_fix=true` completion. Before the
+workflow-wide `--failed` action, it authenticates the **complete** latest-attempt job and step
+listing, not only required failed checks. Every failed job must be an independently eligible
+transient/flaky root or a dependency-only waiter whose versioned evidence reaches those roots.
+An independent candidate failure vetoes the shared action and keeps its ordinary repair route;
+unreadable, pending, unknown or ambiguous evidence holds without granting retry or repair authority.
+Neither matching text nor sharing a run proves a dependency.
+
+The generic `orbit-dependency-evidence:` v1 producer record is emitted only for an actual
+`dependency_failed` result. It binds repository, workflow execution revision/ref, producer source
+revision, run/attempt, waiter job and failed step, and exact dependency identities/conclusions.
+The adapter independently binds the record to complete provider logs/steps, the current required
+integration/policy, PR/head/branch, and trusted source. The workflow and producer file must have
+identical blobs at accepted base, event base, PR head and execution revision. The execution merge
+must still be the provider's current PR merge with the exact event parents; otherwise evidence
+holds. The producer executes in a **complete separate event-base checkout**, selected by an
+immutable checkout action and the trusted workflow's `ORBIT_DEPENDENCY_PRODUCER` and
+`ORBIT_DEPENDENCY_PRODUCER_SHA` bindings. Its working directory is that checkout. Checkout parity
+alone does not authenticate execution: the workflow also declares
+`ORBIT_DEPENDENCY_EXECUTION: isolated-source-v1`, bound to the record's `execution_contract`.
+This workspace-owned promise requires trusted source acquisition before candidate commands and
+an absolute invocation entrypoint that excludes ambient import, shell-hook, configuration and
+executable search inputs before executing the producer. The adapter authenticates the promise
+and exact workflow/producer blobs; it does not interpret a programming language or treat a
+record as proof of isolation. Maintainers must validate the invocation's implementation.
+
+This workspace checks out the producer before candidate scripts, starts `/usr/bin/python3 -I`
+directly as the step shell, clears the environment to explicit identity/token bindings, fixes
+tool search to `/usr/bin:/bin`, and creates an empty gh configuration directory. Python startup
+and imports cannot use candidate `PYTHONPATH`, user site or the working/script directory;
+`GITHUB_PATH` cannot substitute the interpreter or gh. The executable workflow fixture actually
+attempts those interpositions. Repository imports, if needed by another workspace, must come
+from the authenticated source tree under its own isolation implementation. Core remains
+language-neutral. This boundary trusts runner/OS binaries, installed system libraries, Actions
+runtime and filesystem integrity. It does **not** attest against same-user filesystem writes,
+process-loader injection (for example `LD_PRELOAD`), privileged runner compromise or log forgery
+by a compromised runner. Such a threat model requires a separate trusted execution boundary;
+this contract grants no such protection. Sparse checkouts, legacy/spoofed records,
+changed sources, step-only dependency claims and cyclic/unresolved dependency graphs confer no
+dependency-only authority. Source records are evidence, never mutation consent. The current
+single-workflow planner holds explicitly if more than one workflow needs a shared first retry.
+
+`ci_check_rerun_reserved` retains the bounded exact authorization and consumes the shared
+once-per-head transient/flaky budget **before** the provider call, under the owner task lock or
+live handoff claim journal. Admission rechecks native/source/PR authority; the initiating caller
+confirms the reservation again and the adapter re-reads identities, policy, sources, diagnostics
+and the whole failed set before sending. Only the caller that created the reservation may send.
+An unknown/lost reply leaves that reservation intact; restart or concurrent observation never
+resends it. A definite accepted request also records `ci_check_rerun`. Current provider attempts
+and every current required check are still observed; a reservation is no passing-check evidence.
+Only the same PR/head/workflow/run's next attempt repeating a reserved root's job/signature can
+attribute that repeat to the candidate. Other signatures or runs inherit neither attribution nor
+another retry. `auto_fix=false` remains non-mutating and retains its manual-repeat hold. Existing
+cycle/deadline bounds, reviewed-head checks and merge/review policy remain gating. Existing heads
+without the producer cannot be retroactively authorized by this contract.
 `candidate` is a repairable stop whose evidence carries the failed job, its signature and a log
 excerpt. An `inherited` failure that still fails after an update onto a passing base tip
 the head contains is the candidate's and takes that same repairable stop [ORB-16322]. When the automatic

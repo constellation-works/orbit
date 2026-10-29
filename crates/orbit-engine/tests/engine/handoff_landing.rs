@@ -816,7 +816,7 @@ impl FakeForge {
     }
 
     fn job_json(job: &FakeJob) -> Value {
-        json!({ "run_id": job.run_id, "job_id": job.job_id, "workflow": "CI", "name": "clippy", "status": "completed", "conclusion": job.conclusion, "failed_step": (job.conclusion == "failure").then_some("Run clippy"), "run_attempt": job.run_attempt, "event": job.event, "pull_requests": [{"number": 42}], "pull_request_numbers": [42], })
+        json!({ "run_id": job.run_id, "job_id": job.job_id, "workflow": "CI", "workflow_id":1,"started_at":"2026-10-26T14:00:00Z","completed_at":"2026-10-26T14:01:00Z","name": "clippy", "status": "completed", "conclusion": job.conclusion, "failed_step": (job.conclusion == "failure").then_some("Run clippy"), "run_attempt": job.run_attempt, "event": job.event, "pull_requests": [{"number": 42}], "pull_request_numbers": [42], })
     }
 }
 
@@ -829,6 +829,28 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
         Err(OrbitError::InvalidInput(
             "active execution claim requires a claim-scoped mutation".into(),
         ))
+    }
+    fn admit_ci_rerun(
+        &self,
+        _tasks: &[String],
+        _handoff: Option<&str>,
+        plan: &orbit_types::workflow::CiRerunPlan,
+    ) -> Result<orbit_types::workflow::CiRerunAdmission, OrbitError> {
+        let mut history = self.history.lock().unwrap();
+        let decision = orbit_types::workflow::decide_ci_rerun(&history, plan);
+        if matches!(decision, orbit_types::workflow::CiRerunAdmission::Reserved) {
+            history.push(orbit_types::task::TaskHistoryEntry {
+                at: chrono::Utc::now(),
+                by: "owner".into(),
+                event: orbit_types::workflow::CI_RERUN_RESERVED_EVENT.into(),
+                note: Some(serde_json::to_string(plan).unwrap()),
+                from_status: None,
+                to_status: None,
+                operation_id: None,
+                decision: None,
+            });
+        }
+        Ok(decision)
     }
     fn admit_handoff_base_update(
         &self,
@@ -938,6 +960,15 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
         let mut state = self.state.lock().unwrap();
         let candidate = &self.context.candidate;
         match operation {
+            "ci.rerun_plan" => {
+                let job = state.jobs.get(&state.head).unwrap();
+                if job.event != "pull_request" {
+                    return Err(OrbitError::Execution("foreign retry event".into()));
+                }
+                Ok(
+                    json!({"plan":orbit_types::workflow::CiRerunPlan {schema_version:1,repository:candidate.repository.clone(),repository_id:1,pr_number:"42".into(),head_sha:state.head.clone(),head_branch:candidate.source_branch.clone(),base_branch:candidate.base_branch.clone(),accepted_base:candidate.base.commit.clone(),run_id:job.run_id,run_attempt:job.run_attempt,workflow_id:1,roots:serde_json::from_value(input["roots"].clone()).unwrap(),failed_jobs:vec![json!({"id":job.job_id,"name":"clippy","started_at":"2026-10-26T14:00:00Z","completed_at":"2026-10-26T14:01:00Z"})],authentication:json!({})}}),
+                )
+            }
             "ci.current_gates" => Ok(json!({"gates_passed":true,"required":[],"missing":[]})),
             "ci.emission_evidence" => Ok(json!({"evidence":null})),
             "pr.status" => {
@@ -1019,6 +1050,9 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
                     .map(|(sha, job)| {
                         let mut value = Self::job_json(job);
                         value["head_sha"] = json!(sha);
+                        value["head_branch"] = json!(self.context.candidate.source_branch);
+                        value["repository_id"] = json!(1);
+                        value["repository"] = json!(self.context.candidate.repository);
                         if let Some((started, completed)) = state.job_times.get(&job.job_id) {
                             value["started_at"] = json!(started);
                             value["completed_at"] = json!(completed);
@@ -1055,7 +1089,14 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
                 if state.queued_rerun {
                     state.jobs.remove(&head);
                 } else {
-                    let rerun = state.after_rerun.take().expect("a scripted rerun");
+                    let mut rerun = state.after_rerun.take().expect("a scripted rerun");
+                    let original = state.jobs.get(&head).unwrap();
+                    rerun.run_attempt = original.run_attempt + 1;
+                    rerun.event = original.event;
+                    state.job_times.insert(
+                        rerun.job_id,
+                        ("2026-10-26T14:02:00Z", "2026-10-26T14:03:00Z"),
+                    );
                     state.jobs.insert(head, rerun);
                 }
                 state.aggregate = state.after_recovery_aggregate.take();
@@ -1874,7 +1915,7 @@ fn untouched_failure_reruns_once_after_fresh_base_pass() {
                         HandoffLandingStep::StopForRequeue
                     } else {
                         HandoffLandingStep::Stop {
-                            repairable: case != "transient_after_flake",
+                            repairable: !matches!(case, "transient_after_flake" | "shared_budget"),
                         }
                     };
                     assert_steps(&forge.steps(), &[step], case);
@@ -1883,6 +1924,8 @@ fn untouched_failure_reruns_once_after_fresh_base_pass() {
                         case,
                         if case == "transient_after_flake" {
                             &["classified `transient`", "one rerun"]
+                        } else if case == "shared_budget" {
+                            &["CI retry was reserved", "observing without resending"]
                         } else {
                             &["classified `candidate`", "automatic repair"]
                         },
@@ -2765,10 +2808,11 @@ fn a_transient_check_failure_is_rerun_once_before_it_is_judged() {
 
         let outcome = land_now(&forge);
 
-        assert_eq!(
-            forge.sent("ci.rerun_failed"),
-            vec![json!({"run_id": "1", "workspace_path": forge.repo.to_string_lossy()})]
-        );
+        let sent = forge.sent("ci.rerun_failed");
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0]["run_id"], "1");
+        assert_eq!(sent[0]["plan"]["head_sha"], candidate);
+        assert_eq!(sent[0]["plan"]["failed_jobs"][0]["id"], 11);
         assert_not_sent(&forge, &["pr.update_branch"], "transient");
         if lands {
             assert_eq!(outcome.expect("the rerun passes")["phase"], "landed");
@@ -2795,23 +2839,19 @@ fn transient_non_pull_request_rerun_records_the_source_event() {
         let mut failure = failed(1, 11, NETWORK_FLAKE);
         failure.event = event;
         forge.job(&candidate, failure);
-        forge.state.lock().unwrap().after_rerun = Some(passed(1, 12));
-
-        let outcome = land_now(&forge);
-
-        assert_eq!(
-            outcome.expect("the transient rerun passes")["phase"],
-            "landed",
-            "{event}: successful rerun lands"
+        assert!(
+            land_now(&forge).is_err(),
+            "{event}: a foreign event cannot authorize a PR retry"
         );
-        let history = forge.history.lock().unwrap();
-        let reruns = history
-            .iter()
-            .filter(|row| row.event == "ci_check_rerun")
-            .collect::<Vec<_>>();
-        assert_eq!(reruns.len(), 1, "{event}: record the rerun once");
-        let note: Value = serde_json::from_str(reruns[0].note.as_deref().unwrap()).unwrap();
-        assert_eq!(note["event"], event, "{event}: preserve the run event");
+        assert!(forge.sent("ci.rerun_failed").is_empty());
+        assert!(
+            !forge
+                .history
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|row| row.event == "ci_check_rerun")
+        );
     }
 }
 

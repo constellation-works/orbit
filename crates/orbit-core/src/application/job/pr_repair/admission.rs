@@ -333,3 +333,119 @@ impl OrbitRuntime {
         })
     }
 }
+
+impl OrbitRuntime {
+    /// Reserve the shared retry while holding owner/claim admission.
+    pub(crate) fn admit_ci_rerun(
+        &self,
+        task_ids: &[String],
+        handoff_id: Option<&str>,
+        plan: &orbit_types::workflow::CiRerunPlan,
+    ) -> Result<orbit_types::workflow::CiRerunAdmission, OrbitError> {
+        use orbit_types::workflow::{CI_RERUN_RESERVED_EVENT, CiRerunAdmission, decide_ci_rerun};
+        self.ensure_coordination_task_write_permitted()?;
+        if self.worker_invocation().is_some() {
+            return Ok(CiRerunAdmission::Refused(
+                "CI retry requires the owning host".into(),
+            ));
+        }
+        if let Some(handoff_id) = handoff_id {
+            let (claim, accepted) = self.landing_claim(handoff_id)?;
+            let candidate = &accepted.handoff.candidate;
+            if plan.repository != candidate.repository
+                || plan.head_branch != candidate.source_branch
+                || plan.base_branch != candidate.base_branch
+                || candidate.delivery
+                    != (orbit_types::workflow::handoff::HandoffDelivery::PullRequest {
+                        number: plan
+                            .pr_number
+                            .parse()
+                            .map_err(|_| OrbitError::InvalidInput("invalid CI retry PR".into()))?,
+                    })
+            {
+                return Err(OrbitError::InvalidInput(
+                    "CI retry differs from accepted handoff".into(),
+                ));
+            }
+            if plan.head_sha != candidate.candidate.commit {
+                let response = orbit_engine::RuntimeHost::run_private_vcs_operation(
+                    self,
+                    "pr.status",
+                    serde_json::json!({"workspace_path":self.paths().repo_root,"pr":plan.pr_number}),
+                )?;
+                let status = orbit_engine::PullRequestStatus::from_status_response(&response);
+                if status.head_sha.as_deref() != Some(&plan.head_sha) {
+                    return Err(OrbitError::InvalidInput(
+                        "CI retry head changed before admission".into(),
+                    ));
+                }
+                orbit_engine::verify_handoff_pull_request_head(
+                    &self.paths().repo_root,
+                    candidate,
+                    &status,
+                )?;
+            }
+            let observation = orbit_store::contracts::HandoffObservation {
+                candidate: candidate.clone(),
+                footprint_widening: accepted.handoff.footprint_widening.clone(),
+                required_commands: self.workflow_required_validation_commands().to_vec(),
+                owner_completion_authority: self.handoff_completion_authority(),
+                review: None,
+                known_red: vec![],
+                light_delivery: self.owner_light_delivery(&accepted.handoff.task_id, candidate)?,
+            };
+            let auth = orbit_store::contracts::ClaimInvocation::trusted_operator(
+                claim.claim.task_id.clone(),
+                claim.claim.claim_id,
+                "owner-ci-retry".into(),
+            )
+            .with_handoff_observation(observation);
+            return self
+                .owner_commit_boundary()?
+                .reserve_handoff_ci_rerun(&auth, handoff_id, plan);
+        }
+        let primary = task_ids
+            .iter()
+            .min()
+            .ok_or_else(|| OrbitError::InvalidInput("CI retry has no owning task".into()))?;
+        let mut decision = None;
+        self.stores()
+            .tasks()
+            .with_task_write_lock(primary, &mut || {
+                if self.get_task(primary)?.status.is_terminal() {
+                    decision = Some(CiRerunAdmission::Refused(
+                        "CI retry owning task is terminal".into(),
+                    ));
+                    return Ok(());
+                }
+                let admitted = decide_ci_rerun(&self.get_task_history(primary)?, plan);
+                if matches!(admitted, CiRerunAdmission::Reserved) {
+                    self.apply_task_automation_update(
+                        primary,
+                        TaskAutomationUpdate {
+                            append_history: vec![TaskHistoryEntry {
+                                at: Utc::now(),
+                                by: "system".into(),
+                                event: CI_RERUN_RESERVED_EVENT.into(),
+                                note: Some(
+                                    serde_json::to_string(plan).map_err(|error| {
+                                        OrbitError::Execution(error.to_string())
+                                    })?,
+                                ),
+                                from_status: None,
+                                to_status: None,
+                                operation_id: None,
+                                decision: None,
+                            }],
+                            ..Default::default()
+                        },
+                    )?;
+                }
+                decision = Some(admitted);
+                Ok(())
+            })?;
+        decision.ok_or_else(|| {
+            OrbitError::Execution("CI retry admission did not run under the task lock".into())
+        })
+    }
+}

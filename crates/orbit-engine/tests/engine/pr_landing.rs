@@ -59,6 +59,7 @@ pub(super) use absent_context::adopted_policy_cases;
 #[path = "pr_landing/auto_fix/scenarios.rs"]
 mod auto_fix;
 mod check_annotations;
+mod ci_rerun;
 mod completion_observation;
 mod conventions;
 mod draft_handoff;
@@ -5317,6 +5318,46 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
         }
         Ok(decision)
     }
+    fn admit_ci_rerun(
+        &self,
+        _tasks: &[String],
+        _handoff: Option<&str>,
+        plan: &orbit_types::workflow::CiRerunPlan,
+    ) -> Res<orbit_types::workflow::CiRerunAdmission> {
+        let decision = orbit_types::workflow::decide_ci_rerun(&self.history(TASK_ID), plan);
+        if matches!(decision, orbit_types::workflow::CiRerunAdmission::Reserved) {
+            self.seed_reserved(
+                orbit_types::workflow::CI_RERUN_RESERVED_EVENT,
+                plan,
+                "forge/retry-reserved",
+            );
+        }
+        let forge = self.repo.parent().unwrap().join("forge");
+        if matches!(decision, orbit_types::workflow::CiRerunAdmission::Reserved)
+            && forge.join("retry-change-policy").exists()
+        {
+            let path = forge.join("retry-config.json");
+            let mut config: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            config["wrong_app"] = json!(true);
+            fs::write(path, serde_json::to_vec(&config).unwrap()).unwrap();
+        }
+        if matches!(decision, orbit_types::workflow::CiRerunAdmission::Reserved)
+            && forge.join("retry-ambiguous-ledger").exists()
+        {
+            let mut other = plan.clone();
+            if fs::read_to_string(forge.join("retry-ambiguous-ledger")).unwrap() == "unsupported" {
+                other.schema_version = 2;
+            } else {
+                other.run_id += 1;
+            }
+            auto_fix::seed_auto_fix_history(
+                self,
+                orbit_types::workflow::CI_RERUN_RESERVED_EVENT,
+                &other,
+            );
+        }
+        Ok(decision)
+    }
     fn admit_pr_infrastructure(
         &self,
         execution: &str,
@@ -5778,6 +5819,12 @@ if [ -f "$forge/pr-number-json" ]; then number_json=$(cat "$forge/pr-number-json
 export GIT_AUTHOR_NAME=Forge GIT_AUTHOR_EMAIL=forge@example.invalid
 export GIT_COMMITTER_NAME=Forge GIT_COMMITTER_EMAIL=forge@example.invalid
 printf '%s %s\n' "$1" "${2:-}" >> "$forge/calls"
+if [ -f "$forge/retry-config.json" ]; then
+    if python3 "$forge/retry-gh.py" "$forge" "$@"; then exit 0; else
+        code=$?
+        if [ "$code" != 77 ]; then exit "$code"; fi
+    fi
+fi
 head_sha() {
     # A deleted branch reads as empty so a test can model its absence.
     git --git-dir="$remote" rev-parse --verify --quiet "refs/heads/$(cat "$forge/pr-head")" || true

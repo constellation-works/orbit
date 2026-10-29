@@ -68,6 +68,15 @@ macro_rules! review_methods {
             request: &PrAutoFixRequest,
         ) -> Result<PrAutoFixAdmission, OrbitError>;
 
+        /// Atomically reserve one authenticated unchanged-head CI retry.
+        /// A handoff also rechecks its current claim and landing authority.
+        fn admit_ci_rerun(
+            &self,
+            task_ids: &[String],
+            handoff_id: Option<&str>,
+            plan: &orbit_types::workflow::CiRerunPlan,
+        ) -> Result<orbit_types::workflow::CiRerunAdmission, OrbitError>;
+
         /// Reserve the cumulative infrastructure rerun before mutation, under the
         /// owner task lock. Hosts without a durable ledger refuse by default.
         fn admit_pr_infrastructure(
@@ -160,9 +169,9 @@ macro_rules! review_methods {
             reason: &str,
         ) -> Result<(), OrbitError>;
 
-        /// Append one of the two CI observations owned by a live landing
+        /// Append a permitted CI observation owned by a live landing
         /// attempt. `event` is restricted by the owner store to
-        /// `ci_check_rerun` or `ci_base_suspect`.
+        /// `ci_check_rerun`, `ci_base_suspect` or `ci_check_rerun_reserved`.
         fn record_handoff_landing_history(
             &self,
             handoff_id: &str,

@@ -1,5 +1,7 @@
 mod check_annotations;
 mod ci;
+mod ci_rerun;
+mod dependency_record;
 mod dispatch;
 mod emission;
 mod evidence;
@@ -69,3 +71,5 @@ pub(crate) const CI_EMISSION_OBSERVE: &str = "ci.emission_observe";
 
 /// Current exact policy gates on an adopted provider head.
 pub(crate) const CI_CURRENT_GATES: &str = "ci.current_gates";
+
+pub(crate) const CI_RERUN_PLAN: &str = "ci.rerun_plan";

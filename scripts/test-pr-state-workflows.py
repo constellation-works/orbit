@@ -8,6 +8,7 @@ from pathlib import Path
 import fnmatch
 import re
 import self_test_hang
+import shlex
 import shutil
 import signal
 import sys
@@ -458,9 +459,21 @@ class NextestShardWorkflowTests(unittest.TestCase):
         env = dict(PATH=f"{self.root / 'bin'}:{os.environ['PATH']}", RUNNER_TEMP=str(self.root),
                    SHARD_FIXTURE_EXIT=str(expected_status),
                    **self.document["env"], **job.get("env", {}))
+        env.update(step.get("env", {}))
+        cwd = self.root / step.get("working-directory", ".")
+        cwd.mkdir(parents=True, exist_ok=True)
+        if step.get("working-directory"):
+            # Stub only the producer boundary, leaving the actual hardened
+            # workflow shell and argument construction in execution.
+            helper = cwd / "scripts/ci-await-jobs.py"
+            helper.parent.mkdir(parents=True, exist_ok=True)
+            helper.write_text(f"import json, sys\nopen({str(self.calls)!r}, 'a').write(json.dumps(sys.argv) + '\\n')\n")
+        script = self.root / "step-script"
+        script.write_text(step["run"])
+        shell = step.get("shell", "bash --noprofile --norc -e -o pipefail {0}")
         result = self_test_hang.run(
-            ["bash", "-e", "-o", "pipefail", "-c", step["run"]],
-            step=name, cwd=self.root,
+            [word.replace("{0}", str(script)) for word in shlex.split(shell)],
+            step=name, cwd=cwd,
             env={key: str(value) for key, value in env.items()},
             text=True, capture_output=True)
         self.assertEqual(result.returncode, expected_status, result.stdout + result.stderr)
@@ -521,7 +534,7 @@ class NextestShardWorkflowTests(unittest.TestCase):
                          "the shard jobs must select every count partition of NEXTEST_SHARDS")
         self.assertEqual(sorted(partitions.values()), sorted(f"Test shard {k}/{shards}" for k in range(1, shards + 1)))
         [wait] = self.run_step(jobs["ci"], "Await the test build and nextest shards")
-        self.assertEqual(wait[0], ".orbit/tmp/workflow-ci/scripts/ci-await-jobs.py")
+        self.assertEqual(wait[0], "scripts/ci-await-jobs.py")
         awaited = wait[2::2]
         self.assertEqual(wait[1::2], ["--job"] * len(awaited))
         self.assertEqual(sorted(awaited), sorted([jobs["test-build"]["name"], *partitions.values()]),

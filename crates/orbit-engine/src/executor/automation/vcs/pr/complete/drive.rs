@@ -350,6 +350,27 @@ pub(super) fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                     None => error,
                 });
             }
+            if diagnose {
+                let retry = super::super::auto_fix::recover_ci_rerun(
+                    host,
+                    auto_fix,
+                    input,
+                    workspace_path,
+                    pr_number,
+                    &status,
+                    completion_deadline_ms,
+                );
+                infrastructure_wait |= match retry {
+                    Ok(waiting) => waiting,
+                    Err(error) => {
+                        // The existing evidence/hold route retains its typed
+                        // refusal and any recorded base inheritance. A failed
+                        // planner read grants no CI mutation permission.
+                        tracing::debug!(%error,"CI retry read deferred to existing check evidence gates");
+                        false
+                    }
+                };
+            }
             infrastructure_wait |= matches!(
                 super::super::infrastructure::recover(
                     host,

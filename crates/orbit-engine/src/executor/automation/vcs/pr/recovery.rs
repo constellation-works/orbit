@@ -70,6 +70,7 @@ pub(crate) fn completion_recovery_checks<H: RuntimeHost + ?Sized>(
                 .and_then(Value::as_str),
             &[failed],
             &required,
+            false,
         ) {
             HeadCheckEvidence::Repair { evidence, .. } => evidence,
             HeadCheckEvidence::Stop(reason) | HeadCheckEvidence::Inconclusive(reason) => reason,

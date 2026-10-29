@@ -22,6 +22,18 @@ pub(super) enum UntouchedBaseEvidence {
     PassingBaseRun,
 }
 
+/// A mixed failure's candidate attribution needs its own changed source.
+pub(super) fn cites_changed_candidate(
+    workspace: &Path,
+    head: &str,
+    base: &str,
+    log: &str,
+) -> Result<bool, OrbitError> {
+    let cited = repository_citations(workspace, head, log).map_err(OrbitError::Execution)?;
+    let changed = git_output_paths(workspace, &["diff", "--name-only", "-z", base, head])?;
+    Ok(cited.iter().any(|path| changed.contains(path)))
+}
+
 /// Independently guard the repair evidence path, including job-level recovery.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn watcher_suspicion<H: RuntimeHost + ?Sized>(
@@ -333,6 +345,65 @@ pub(super) fn has_matching_candidate_rerun<H: RuntimeHost + ?Sized>(
         let Ok(history) = host.get_task_history(task) else {
             continue;
         };
+        let reservations = history
+            .iter()
+            .filter(|entry| entry.event == orbit_types::workflow::CI_RERUN_RESERVED_EVENT)
+            .map(|entry| {
+                entry
+                    .note
+                    .as_deref()
+                    .and_then(|note| {
+                        serde_json::from_str::<orbit_types::workflow::CiRerunPlan>(note).ok()
+                    })
+                    .filter(|plan| plan.schema_version == 1)
+            })
+            .collect::<Option<Vec<_>>>();
+        let Some(reservations) = reservations else {
+            return false;
+        };
+        let same_head = reservations
+            .iter()
+            .filter(|plan| plan.head_sha == head && plan.pr_number.parse::<u64>().ok() == pr_number)
+            .collect::<Vec<_>>();
+        if same_head.windows(2).any(|pair| pair[0] != pair[1]) {
+            return false;
+        }
+        for plan in same_head {
+            if job["repository_id"].as_u64() != Some(plan.repository_id)
+                || job["repository"].as_str() != Some(plan.repository.as_str())
+                || job["head_branch"].as_str() != Some(plan.head_branch.as_str())
+                || job["head_sha"].as_str() != Some(head)
+            {
+                return false;
+            }
+            if plan.head_sha != head
+                || plan.pr_number.parse::<u64>().ok() != pr_number
+                || plan.run_id != current_run
+                || plan.run_attempt.checked_add(1) != Some(current_attempt)
+                || job["workflow_id"].as_u64() != Some(plan.workflow_id)
+            {
+                continue;
+            }
+            for root in &plan.roots {
+                let prior = plan
+                    .failed_jobs
+                    .iter()
+                    .find(|prior| prior["id"].as_u64() == Some(root.job_id));
+                if root.classification == "flaky"
+                    && root.check == check
+                    && root.signature == signature
+                    && prior.is_some_and(|prior| {
+                        prior["name"] == job["name"]
+                            && prior["completed_at"]
+                                .as_str()
+                                .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok())
+                                .is_some_and(|completed| current_start >= completed)
+                    })
+                {
+                    return true;
+                }
+            }
+        }
         for entry in history
             .iter()
             .filter(|entry| matches!(entry.event.as_str(), "ci_base_suspect" | "ci_check_rerun"))

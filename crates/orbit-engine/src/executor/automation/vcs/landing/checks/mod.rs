@@ -80,6 +80,7 @@ mod head;
 mod jobs;
 mod log;
 mod recovery;
+mod rerun;
 mod suspect;
 
 pub(in crate::executor::automation::vcs) use base_tip::base_tip_check_evidence;
@@ -90,3 +91,5 @@ pub(in crate::executor::automation::vcs) use head::{
 pub(in crate::executor::automation::vcs) use recovery::{
     CheckRecovery, CheckRecoveryStep, failed_checks, recover_failed_checks,
 };
+
+pub(in crate::executor::automation::vcs) use rerun::{CiRerunStep, plan_ci_rerun};
