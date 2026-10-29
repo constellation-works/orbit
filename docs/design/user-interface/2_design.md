@@ -372,8 +372,10 @@ tense and current task statuses for history. An ended window distinguishes
 zero, positive and unknown shared occupancy, while a live pull or winding-down
 window is never labelled ended. The independent default backlog forecast
 (30-day lookback, no arrivals) links to Analytics › Forecast with p50–p90 time
-and cost, counts and tokens in its tooltip. A failed or missing estimate is
-one muted line; it does not delay the card or action readback.
+and cost, and a visible freshness label shared by its counts and figures
+(`Stored <age>` or `Live`). Counts, tokens and exact cost are in its tooltip
+and accessible text. A failed or missing estimate is one muted line; it does
+not delay the card or action readback.
 
 The footer links the scoped run, names the admission mode and offers **Stop**
 or **Send pending results**. Queued windows retain their own run, ceiling,

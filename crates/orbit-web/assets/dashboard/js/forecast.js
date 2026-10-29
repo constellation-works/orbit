@@ -250,6 +250,15 @@ function forecastCount(value) {
   return n == null || n < 0 ? 0 : Math.trunc(n);
 }
 
+function backlogForecastFreshness(payload) {
+  if (payload.served_from === "live") return "Live";
+  if (payload.served_from === "stored") {
+    const age = relativeTime(payload.generated_at);
+    return age ? `Stored ${age}` : "Stored time unavailable";
+  }
+  return "Forecast freshness unavailable";
+}
+
 /// Compact drain-card figures. Null when time to drain has no quantile.
 /// Tokens and cost are null when that pair has none, so a missing cost is
 /// left out rather than shown as a dash.
@@ -266,6 +275,7 @@ export function backlogForecastSummary(payload) {
     exactCost: costed ? formatForecastQuantileRange(forecast.usd, formatForecastUsd) : null,
     tokens: quantilePair(forecast.tokens) ? formatForecastQuantileRange(forecast.tokens, formatForecastTokens) : null,
     counts: `${forecastCount(backlog.backlog)} backlog · ${forecastCount(backlog.in_progress)} in progress`,
+    freshness: backlogForecastFreshness(payload),
   };
 }
 
@@ -275,10 +285,10 @@ function wholeUsd(value) {
   return n == null ? "—" : `$${Math.round(n).toLocaleString()}`;
 }
 
-/// One line linking to Analytics › Forecast: time to drain and cost as
-/// p50 – p90. The counts, tokens and exact cost are in its tooltip and
-/// accessible text, so the crowded dock spends one row on it. A null summary is the muted
-/// unavailable line.
+/// Compact link to Analytics › Forecast: p50 – p90 time to drain and cost,
+/// with a freshness label for all the snapshot's figures. Counts, tokens and
+/// exact cost are in its tooltip and accessible text. A null summary is the
+/// muted unavailable line.
 export function drainBacklogForecastLink(summary) {
   const unavailable = !summary;
   const link = el("a", { class: unavailable ? "drain-backlog-forecast unavailable" : "drain-backlog-forecast" });
@@ -290,13 +300,19 @@ export function drainBacklogForecastLink(summary) {
   }
   const figures = [summary.drain, summary.cost].filter(Boolean).join(" · ");
   const detail = [
-    summary.counts, summary.tokens && `Tokens ${summary.tokens}`, summary.exactCost && `Cost ${summary.exactCost}`,
+    summary.freshness, summary.counts,
+    summary.drain && `Time to drain ${summary.drain}`, summary.cost && `Cost ${summary.cost}`,
+    summary.tokens && `Tokens ${summary.tokens}`, summary.exactCost && `Exact cost ${summary.exactCost}`,
+  ].filter(Boolean).join(" · ");
+  const accessibleDetail = [
+    summary.counts, summary.tokens && `Tokens ${summary.tokens}`, summary.exactCost && `Exact cost ${summary.exactCost}`,
   ].filter(Boolean).join(" · ");
   link.title = `p50 – p90 · ${detail}\nAnalytics › Forecast`;
   link.append(
     el("span", { class: "drain-section-label", text: "Backlog" }),
+    el("span", { class: "drain-forecast-meta drain-backlog-forecast-freshness", text: summary.freshness }),
     el("span", { class: "drain-backlog-forecast-figures", text: figures }),
-    el("span", { class: "visually-hidden", text: ` p50 – p90, ${detail}` }),
+    el("span", { class: "visually-hidden", text: ` p50 – p90, ${accessibleDetail}` }),
     el("span", { class: "drain-backlog-forecast-go", text: "›", "aria-hidden": "true" }),
   );
   return link;
