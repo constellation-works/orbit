@@ -111,10 +111,12 @@ pub(super) fn describe(class: CheckFailureClass, jobs: &[FailedJob]) -> String {
         .iter()
         .map(|job| {
             format!(
-                "'{}' ({}: {}) failed with signature `{}`; log excerpt:\n{}",
+                "'{}' ({}: {}, run {:?}, job {}) failed with signature `{}`; log excerpt:\n{}",
                 job.label,
                 job.class.as_str(),
                 job.why,
+                job.run_id,
+                job.job_id,
                 job.signature,
                 job.excerpt
             )

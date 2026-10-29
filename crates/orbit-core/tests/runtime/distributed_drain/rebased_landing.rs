@@ -968,6 +968,105 @@ fn base_update_admission_rechecks_current_native_handoff_authority() {
         ),
         "authority recheck never grants another provider update"
     );
+    let landing = ClaimInvocation::trusted_operator(
+        accepted.handoff.task_id.clone(),
+        accepted.handoff.claim_id.clone(),
+        "owner-ci-retry".into(),
+    );
+    owner
+        .mutate_execution_claim(
+            Some(&landing),
+            "dispatch-ci-retry",
+            &ClaimMutation::DispatchLanding {
+                handoff_id: accepted.handoff_id.clone(),
+                job_run_id: None,
+            },
+        )
+        .unwrap();
+    let retry = orbit_types::workflow::CiRerunPlan {
+        schema_version: 1,
+        repository: request.repository.clone(),
+        repository_id: 1,
+        pr_number: request.pr_number.clone(),
+        head_sha: request.head_sha.clone(),
+        head_branch: request.head_branch.clone(),
+        base_branch: request.base_branch.clone(),
+        accepted_base: request.base_sha.clone(),
+        run_id: 700,
+        run_attempt: 1,
+        workflow_id: 600,
+        roots: vec![orbit_types::workflow::CiRerunRoot {
+            job_id: 1000,
+            check: "test".into(),
+            classification: "flaky".into(),
+            signature: "observed failure".into(),
+        }],
+        failed_jobs: vec![json!({"id":1000})],
+        authentication: json!({"fixture":"provider authenticated by engine"}),
+    };
+    let barrier = std::sync::Barrier::new(2);
+    let decisions = std::thread::scope(|scope| {
+        let first = scope.spawn(|| {
+            barrier.wait();
+            RuntimeHost::admit_ci_rerun(
+                owner,
+                std::slice::from_ref(&accepted.handoff.task_id),
+                Some(&accepted.handoff_id),
+                &retry,
+            )
+            .unwrap()
+        });
+        let second = scope.spawn(|| {
+            barrier.wait();
+            RuntimeHost::admit_ci_rerun(
+                owner,
+                std::slice::from_ref(&accepted.handoff.task_id),
+                Some(&accepted.handoff_id),
+                &retry,
+            )
+            .unwrap()
+        });
+        [first.join().unwrap(), second.join().unwrap()]
+    });
+    assert_eq!(
+        decisions
+            .iter()
+            .filter(|decision| matches!(
+                decision,
+                orbit_types::workflow::CiRerunAdmission::Reserved
+            ))
+            .count(),
+        1,
+        "two observations share exactly one pre-action CI reservation"
+    );
+    assert_eq!(
+        decisions
+            .iter()
+            .filter(|decision| matches!(
+                decision,
+                orbit_types::workflow::CiRerunAdmission::Observe(_)
+            ))
+            .count(),
+        1
+    );
+    let reopened = calm_host(
+        OrbitRuntime::from_roots(&owner.paths().global_dir, &owner.paths().orbit_dir)
+            .unwrap()
+            .with_automation_machine_identity(Some(OWNER.to_string())),
+    );
+    assert!(
+        matches!(RuntimeHost::admit_ci_rerun(&reopened,std::slice::from_ref(&accepted.handoff.task_id),Some(&accepted.handoff_id),&retry).unwrap(),orbit_types::workflow::CiRerunAdmission::Observe(prior) if *prior==retry),
+        "a fresh runtime re-observes the durable authorization after an unknown reply, without admitting another send"
+    );
+    assert_eq!(
+        reopened
+            .get_task_history(&accepted.handoff.task_id)
+            .unwrap()
+            .iter()
+            .filter(|entry| entry.event == orbit_types::workflow::CI_RERUN_RESERVED_EVENT)
+            .count(),
+        1
+    );
     owner
         .revoke_handoff_as_operator(
             &accepted.handoff_id,
@@ -981,6 +1080,16 @@ fn base_update_admission_rechecks_current_native_handoff_authority() {
     assert!(
         RuntimeHost::admit_handoff_base_update(owner, &accepted.handoff_id, &request).is_err(),
         "revocation refuses even a reserved mutation before the provider call"
+    );
+    assert!(
+        RuntimeHost::admit_ci_rerun(
+            owner,
+            std::slice::from_ref(&accepted.handoff.task_id),
+            Some(&accepted.handoff_id),
+            &retry
+        )
+        .is_err(),
+        "a revoked source/PR lease cannot reauthorize a reserved CI action"
     );
     assert_eq!(
         owner.get_task_history(&accepted.handoff.task_id).unwrap(),

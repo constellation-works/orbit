@@ -142,6 +142,58 @@ finally:
             step="ci-await-jobs",
             env=self.env, text=True, capture_output=True)
 
+    def test_dependency_record_is_bound_to_the_actual_failed_dependency(self):
+        self.env.update(GITHUB_RUN_ATTEMPT="1", GITHUB_SHA="a" * 40,
+                        ORBIT_DEPENDENCY_PRODUCER_SHA="c" * 40,
+                        ORBIT_DEPENDENCY_EXECUTION="isolated-source-v1",
+                        GITHUB_JOB="check", ORBIT_DEPENDENCY_JOB_NAME="waiter",
+                        ORBIT_DEPENDENCY_STEP="Wait", GITHUB_WORKFLOW_REF="fixture/orbit/.github/workflows/ci.yml@refs/pull/7/merge")
+        source = job("waiter", "in_progress", steps=[("Wait", "in_progress", None)])
+        source.update(id=42, run_id=4242, run_attempt=1, head_sha="b" * 40)
+        source["steps"][0]["number"] = 3
+        dependency = job(EXPECTED[0], conclusion="failure")
+        dependency.update(id=43, run_id=4242, run_attempt=1, head_sha="b" * 40)
+        result = self.wait([source, dependency], jobs=[EXPECTED[0]])
+        self.assertEqual(result.returncode, 1)
+        records = [json.loads(line.split("orbit-dependency-evidence:", 1)[1])
+                   for line in result.stdout.splitlines() if line.startswith("orbit-dependency-evidence:")]
+        self.assertEqual(len(records), 1, result.stdout + result.stderr)
+        record = records[0]
+        self.assertEqual(record["schema_version"], 1)
+        self.assertEqual(record["kind"], "dependency_failed")
+        self.assertEqual(record["source"]["job_id"], 42)
+        self.assertEqual(record["source"]["step_number"], 3)
+        self.assertEqual(record["dependencies"][0]["job_id"], 43)
+        self.assertEqual(record["dependencies"][0]["conclusion"], "failure")
+
+    def test_no_dependency_authority_for_api_timeout_own_or_unknown_failures(self):
+        self.env.update(GITHUB_RUN_ATTEMPT="1", GITHUB_SHA="a" * 40,
+                        ORBIT_DEPENDENCY_PRODUCER_SHA="c" * 40,
+                        ORBIT_DEPENDENCY_EXECUTION="isolated-source-v1",
+                        GITHUB_JOB="check", ORBIT_DEPENDENCY_JOB_NAME="waiter",
+                        ORBIT_DEPENDENCY_STEP="Wait", GITHUB_WORKFLOW_REF="fixture/orbit/.github/workflows/ci.yml@refs/pull/7/merge")
+        for case in ("api", "timeout", "own", "unknown", "skipped", "missing_identity"):
+            with self.subTest(case=case):
+                source = job("waiter", "in_progress", steps=[("Wait", "in_progress", None)])
+                source.update(id=42, run_id=4242, run_attempt=1, head_sha="b" * 40)
+                source["steps"][0]["number"] = 3
+                dependency = job(EXPECTED[0], conclusion="failure")
+                dependency.update(id=43, run_id=4242, run_attempt=1, head_sha="b" * 40)
+                if case == "own":
+                    source["status"], source["conclusion"] = "completed", "failure"
+                if case == "timeout":
+                    dependency["status"], dependency["conclusion"] = "in_progress", None
+                if case == "unknown":
+                    dependency["conclusion"] = None
+                if case == "skipped":
+                    dependency["conclusion"] = "skipped"
+                if case == "missing_identity":
+                    del dependency["id"]
+                result = self.wait(None if case == "api" else [source, dependency],
+                                   jobs=[EXPECTED[0]], timeout="2", poll="1", virtual=True)
+                self.assertEqual(result.returncode, 1)
+                self.assertNotIn("orbit-dependency-evidence:", result.stdout)
+
     def test_unchanged_jobs_do_not_add_a_full_poll_interval_to_either_handoff(self):
         for step in (None, UPLOAD):
             with self.subTest(step=step):

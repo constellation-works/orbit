@@ -46,8 +46,8 @@ import time
 # Bound on reaping a listing killed at the deadline, added to --timeout-seconds.
 CLEANUP_SECONDS = 5
 
-FIELDS = (".jobs[] | {name, status, conclusion, started_at, completed_at, html_url,"
-          " steps: [.steps[]? | {name, status, conclusion}]}")
+FIELDS = (".jobs[] | {id, run_id, run_attempt, head_sha, name, status, conclusion, started_at, completed_at, html_url,"
+          " steps: [.steps[]? | {name, number, status, conclusion}]}")
 
 
 class ListingTimeout(Exception):
@@ -203,7 +203,11 @@ class JobListingPoller:
                 self.poll_seconds = max(self.poll_seconds, first_minimum, self.fallback_seconds)
                 return jobs
             payload = json.loads(body)
+            if payload.get("total_count") != len(payload["jobs"]):
+                return None
             self.jobs = {job["name"]: job for job in payload["jobs"]}
+            if len(self.jobs) != len(payload["jobs"]):
+                return None
             self.etag = headers.get("etag")
         else:
             print(f"ci-await: job listing returned unexpected HTTP status {http_status}", file=sys.stderr)
@@ -220,6 +224,48 @@ def elapsed(started, completed):
     except (AttributeError, ValueError):
         return "unknown"
     return str(int((end - start).total_seconds()))
+
+
+def dependency_failure_record(jobs, dependency, step=None):
+    """Emit evidence only for an identified dependency failure, never authority."""
+    try:
+        source = jobs[os.environ["ORBIT_DEPENDENCY_JOB_NAME"]]
+        if source["status"] != "in_progress" or source["conclusion"] is not None:
+            return
+        source_step = [item for item in source["steps"]
+                       if item["name"] == os.environ["ORBIT_DEPENDENCY_STEP"]]
+        if len(source_step) != 1 or source_step[0]["status"] != "in_progress":
+            return
+        run_id, attempt = int(os.environ["GITHUB_RUN_ID"]), int(os.environ["GITHUB_RUN_ATTEMPT"])
+        for item in (source, dependency):
+            if (item["run_id"] != run_id or item["run_attempt"] != attempt
+                    or not isinstance(item["id"], int) or item["id"] <= 0):
+                return
+        if source["id"] == dependency["id"] or source["head_sha"] != dependency["head_sha"]:
+            return
+        if step is None:
+            if dependency["status"] != "completed" or dependency["conclusion"] != "failure":
+                return
+        elif step["status"] != "completed" or step["conclusion"] != "failure":
+            return
+        record = {"schema_version": 1, "kind": "dependency_failed",
+                  "repository": os.environ["GITHUB_REPOSITORY"],
+                  "workflow_ref": os.environ["GITHUB_WORKFLOW_REF"],
+                  "execution_sha": os.environ["GITHUB_SHA"],
+                  "producer_sha": os.environ["ORBIT_DEPENDENCY_PRODUCER_SHA"],
+                  "execution_contract": os.environ["ORBIT_DEPENDENCY_EXECUTION"],
+                  "head_sha": source["head_sha"], "run_id": run_id, "run_attempt": attempt,
+                  "source": {"job_id": source["id"], "job_key": os.environ["GITHUB_JOB"],
+                             "job_name": source["name"], "step_name": source_step[0]["name"],
+                             "step_number": source_step[0]["number"]},
+                  "dependencies": [{"job_id": dependency["id"], "job_name": dependency["name"],
+                                    "status": dependency["status"], "conclusion": dependency["conclusion"],
+                                    "step": step}]}
+        if len(json.dumps(record)) <= 8192:
+            print("orbit-dependency-evidence:" + json.dumps(record, sort_keys=True), flush=True)
+    except (KeyError, TypeError, ValueError):
+        # Legacy/missing identity never changes the wait's ordinary failure.
+        return
 
 
 def main():
@@ -256,7 +302,7 @@ def await_workflow_jobs(args, poller):
             except ListingTimeout:
                 blocked = True
                 listing = "job listing still running at the deadline, killed"
-        if jobs is not None:
+        if jobs is not None and time.monotonic() < deadline:
             pending = []
             for name in args.jobs:
                 job = jobs.get(name, {"status": "missing"})
@@ -265,6 +311,7 @@ def await_workflow_jobs(args, poller):
                 step = next((step for step in job.get("steps") or [] if step.get("name") == args.step), None)
                 if step is not None and step.get("status") == "completed":
                     if step.get("conclusion") != "success":
+                        dependency_failure_record(jobs, job, step)
                         print(f"ci-await: {name} step '{args.step}' concluded "
                               f"{step.get('conclusion') or 'without a conclusion'}: {url}", file=sys.stderr)
                         return 1
@@ -276,6 +323,7 @@ def await_workflow_jobs(args, poller):
                     pending.append(f"{name} ({status})")
                     continue
                 if conclusion != "success":
+                    dependency_failure_record(jobs, job)
                     print(f"ci-await: {name} concluded {conclusion or 'without a conclusion'}: {url}",
                           file=sys.stderr)
                     return 1

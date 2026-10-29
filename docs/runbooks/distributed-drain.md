@@ -1695,8 +1695,9 @@ one. From then on:
     **inherited**. The lookup examines up to 100 recent base-branch push runs,
     retaining the latest run per workflow and commit; evidence outside that
     window does not authorize repair. `orbit run auto --auto-fix` applies the
-    same rule: it holds until task history records the unchanged-head rerun
-    and the same signature is observed again with a passing base check.
+    same rule and, with `auto_fix=true`, produces the first bounded retry through
+    the shared eligible-set planner. With `auto_fix=false` it keeps the
+    non-mutating hold until a verified manual repeat answers the first failure.
     Without decisive evidence, `handoff_land` stops in review after
     `max_base_ci_cycles` (default 3) observation cycles or the existing
     `max_wait_seconds` deadline (default 3600 seconds), whichever comes first.
@@ -1776,9 +1777,61 @@ one. From then on:
   separately failed required aggregate: it is classified on the next poll,
   even when every workflow job now passes.
 
-  Transient and flaky failures share one rerun budget per head. Each rerun
-  records `ci_check_rerun` in task history with the head, workflow run ID,
-  job IDs, check names, classifications and signatures.
+  Transient and flaky failures share one durable rerun budget per head across
+  owner completion and claimed landing. Inspect `ci_check_rerun_reserved`
+  first: it stores the complete exact failed-job authorization before sending
+  `gh run rerun <run> --failed`. A later `ci_check_rerun` means the request
+  received a definite accepted reply. An absent reply record is ambiguous,
+  not permission to resend. Restart and concurrent observations consume the
+  same reservation without another request, repair charge or worker.
+
+  The complete failed set must contain only independently eligible roots and
+  authenticated dependency-only waiters. A genuine candidate sibling keeps
+  its repair route and vetoes the workflow-wide retry. Unreadable/truncated
+  jobs, steps or logs, pending/unknown outcomes, foreign events/identities,
+  policy/source/lease changes or ambiguous dependencies hold explicitly.
+  No check name or error-message match proves a dependency.
+
+  For a dependency-only waiter, the trusted workflow declares
+  `ORBIT_DEPENDENCY_PRODUCER`, `ORBIT_DEPENDENCY_PRODUCER_SHA`,
+  `ORBIT_DEPENDENCY_JOB_NAME`, `ORBIT_DEPENDENCY_STEP` and
+  `ORBIT_DEPENDENCY_EXECUTION: isolated-source-v1`. The last binding promises
+  that source acquisition precedes candidate commands, the workspace-owned
+  invocation excludes ambient imports, shell hooks, tool search and configuration,
+  and the actual producer bytes are re-established after the last candidate
+  operation. Earlier steps share the workspace and could overwrite the checkout;
+  the launch must verify runtime bytes, since blob parity alone cannot detect it.
+  The adapter verifies the source promise against the record's `execution_contract`
+  and immutable workflow bytes, not by interpreting a language or trusting a label
+  alone. Inspect the actual invocation and its executable regressions when adopting
+  it. This workspace uses an absolute isolated Python step shell, a cleared
+  allowlisted environment, fixed system tool paths, fresh gh configuration and a
+  `/usr/bin/git` byte check against the isolated base checkout before launch.
+  It executes the producer in a complete separate event-base checkout. An overwritten
+  helper fails closed without evidence. The v1
+  `orbit-dependency-evidence:` record binds the
+  repository, workflow execution and producer revisions, run/attempt,
+  waiter job/failed step and failed dependency identities. The adapter checks
+  these against provider identities, the current required integration/policy,
+  unchanged trusted workflow/producer blobs and the current event merge.
+  Sparse or candidate-source producer checkouts, timeout/API/own failures,
+  legacy/spoofed records and unresolved/cyclic dependency graphs give no
+  dependency-only authority. Step-only dependency evidence and multiple
+  workflows requiring a first retry hold in this initial bounded contract.
+  Source-policy or merge-ref drift can therefore require operator inspection;
+  it never relaxes a required check. The contract assumes intact runner/OS
+  binaries, system libraries, Actions runtime and filesystem. It does not protect
+  against same-user file tampering, process-loader injection such as `LD_PRELOAD`,
+  privileged runner compromise or forged logs from a compromised runner. Those
+  require a separate trusted execution boundary, outside this recovery authority.
+
+  A passing retry answers only the checks that actually pass. Reviewed-head,
+  review, merge and every current required-check gate remain in force. Only
+  the reserved root's same-signature next attempt of the same PR/head,
+  workflow and run earns candidate attribution. An unrelated identity or
+  signature cannot inherit it or receive another first retry. Older PR heads
+  without the producer need separately authorized operator recovery; these
+  records cannot authorize them retroactively.
   Reruns and repairs are spent once. Inherited handoff updates are bounded
   to three per handoff. A
   failure past that budget, or one the landing cannot classify (its jobs or

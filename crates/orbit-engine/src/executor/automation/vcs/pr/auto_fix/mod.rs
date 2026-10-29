@@ -62,7 +62,7 @@ mod published_head;
 mod verdict;
 
 pub(super) use admission::{AutoFix, admit};
-pub(super) use checks::{base_tip_checks, red_base_wait, repair_failed_checks};
+pub(super) use checks::{base_tip_checks, recover_ci_rerun, red_base_wait, repair_failed_checks};
 pub(super) use ledger::{
     attach_evidence, record_base_path, record_landed_repair, record_published_repair,
     reserve_base_refresh,

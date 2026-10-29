@@ -41,6 +41,59 @@ impl TaskCommitBoundary {
         })
     }
 
+    /// Reserve the exact failed-job set through the live landing claim journal.
+    pub fn reserve_handoff_ci_rerun(
+        &self,
+        auth: &ClaimInvocation,
+        handoff_id: &str,
+        plan: &orbit_types::workflow::CiRerunPlan,
+    ) -> Result<orbit_types::workflow::CiRerunAdmission, OrbitError> {
+        use orbit_types::workflow::{CI_RERUN_RESERVED_EVENT, CiRerunAdmission, decide_ci_rerun};
+        self.with_admission(|| {
+            let authority = self.claim_authority(auth, false)?;
+            self.check_handoff_landing(auth, &authority.state)?;
+            self.check_live_landing_attempt(auth, handoff_id)?;
+            let accepted = self.accepted_handoff(&auth.claim_id)?;
+            let candidate = &accepted.handoff.candidate;
+            if accepted.handoff_id != handoff_id
+                || plan.repository != candidate.repository
+                || plan.head_branch != candidate.source_branch
+                || plan.base_branch != candidate.base_branch
+                || candidate.delivery
+                    != (orbit_types::workflow::handoff::HandoffDelivery::PullRequest {
+                        number: plan.pr_number.parse().map_err(|_| invalid("CI retry PR"))?,
+                    })
+            {
+                return Err(invalid("CI retry differs from accepted handoff"));
+            }
+            let history =
+                crate::repository::task::v2::task_history_from_events(authority.bundle.events);
+            let decision = decide_ci_rerun(&history, plan);
+            if matches!(decision, CiRerunAdmission::Reserved) {
+                let mutation = ClaimMutation::RecordLandingHistory {
+                    handoff_id: handoff_id.into(),
+                    event: CI_RERUN_RESERVED_EVENT.into(),
+                    note: encode(plan)?,
+                };
+                let mutation_id = format!(
+                    "ci-retry:{}:{}:{}",
+                    plan.repository, plan.pr_number, plan.head_sha
+                );
+                let receipt_id = sha256_hex(encode(&(&auth.claim_id, &mutation_id))?.as_bytes());
+                let input = encode(&(
+                    &auth.task_id,
+                    &auth.claim_id,
+                    &auth.machine_id,
+                    &auth.run,
+                    auth.operator,
+                    &mutation,
+                ))?;
+                self.mutate_claim_locked(auth, &mutation, &receipt_id, input)?;
+            }
+            Ok(decision)
+        })
+    }
+
     pub(super) fn check_base_update_scope(
         &self,
         auth: &ClaimInvocation,

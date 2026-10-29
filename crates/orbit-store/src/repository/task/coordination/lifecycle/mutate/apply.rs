@@ -589,7 +589,10 @@ impl TaskCommitBoundary {
                     {
                         return Err(invalid("current operator landing context required"));
                     }
-                    if !matches!(event.as_str(), "ci_check_rerun" | "ci_base_suspect") {
+                    if !matches!(
+                        event.as_str(),
+                        "ci_check_rerun" | "ci_base_suspect" | "ci_check_rerun_reserved"
+                    ) {
                         return Err(invalid("unsupported handoff landing history event"));
                     }
                     if note.trim().is_empty() {

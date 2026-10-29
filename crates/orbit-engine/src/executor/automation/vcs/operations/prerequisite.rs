@@ -108,7 +108,7 @@ pub(super) fn snapshot(
     }
 }
 
-fn snapshot_once(
+pub(super) fn snapshot_once(
     deadline: Deadline,
     workspace: &Path,
     pr: &str,

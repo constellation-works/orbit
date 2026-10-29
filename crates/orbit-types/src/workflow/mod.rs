@@ -234,3 +234,7 @@ pub use pr_recovery::{
     PR_BASE_UPDATE_BUDGET_SPENT, PR_BASE_UPDATE_RESERVED_EVENT, PrBaseUpdateAdmission,
     PrBaseUpdateReservation, decide_pr_base_update, pr_base_update_reservations,
 };
+
+pub use pr_recovery::{
+    CI_RERUN_RESERVED_EVENT, CiRerunAdmission, CiRerunPlan, CiRerunRoot, decide_ci_rerun,
+};

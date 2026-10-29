@@ -292,6 +292,16 @@ jobs:
 
       - *workflow-ci
 
+      # Capture trusted source before any candidate command can persist
+      # executable/import search paths for a later action checkout.
+      - name: Check out dependency evidence producer
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          path: .orbit/tmp/dependency-producer
+          persist-credentials: false
+
       - name: Check bundled auto-task body history
         run: |
           scripts/require-python.sh --yaml
@@ -504,16 +514,74 @@ jobs:
       # in docs/design-patterns/test_strategy.md) and its conclusion is the
       # gate's result. A failed or skipped test job fails it at once, and a
       # partition-guard failure after the archive upload fails the test build.
+      # Dependency evidence executes from one complete trusted base tree,
+      # including any repository helpers the producer imports.
       - name: Await the test build and nextest shards
+        working-directory: .orbit/tmp/dependency-producer
+        # Absolute interpreter and isolated startup precede any inherited
+        # shell hooks or Python imports. The trusted workflow owns this
+        # language-specific implementation of the generic source contract.
+        shell: /usr/bin/python3 -I {0}
         env:
           GH_TOKEN: ${{ github.token }}
+          ORBIT_DEPENDENCY_JOB_NAME: Check / Clippy / Test
+          ORBIT_DEPENDENCY_STEP: Await the test build and nextest shards
+          ORBIT_DEPENDENCY_PRODUCER: scripts/ci-await-jobs.py
+          ORBIT_DEPENDENCY_PRODUCER_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+          ORBIT_DEPENDENCY_EXECUTION: isolated-source-v1
+          # Step binding overrides GITHUB_ENV; keep equal to the workflow's
+          # shard count (the executable partition fixture checks agreement).
+          NEXTEST_SHARDS: "3"
         run: |
-          set -euo pipefail
-          jobs=(--job "Test build")
-          for shard in $(seq 1 "$NEXTEST_SHARDS"); do
-            jobs+=(--job "Test shard $shard/$NEXTEST_SHARDS")
-          done
-          python3 .orbit/tmp/workflow-ci/scripts/ci-await-jobs.py "${jobs[@]}"
+          import os
+          import runpy
+          import subprocess
+          import sys
+          import tempfile
+
+          allowed = ("GH_TOKEN", "GITHUB_REPOSITORY", "GITHUB_RUN_ID",
+                     "GITHUB_RUN_ATTEMPT", "GITHUB_SHA", "GITHUB_JOB",
+                     "GITHUB_WORKFLOW_REF", "ORBIT_DEPENDENCY_JOB_NAME",
+                     "ORBIT_DEPENDENCY_STEP", "ORBIT_DEPENDENCY_PRODUCER",
+                     "ORBIT_DEPENDENCY_PRODUCER_SHA", "ORBIT_DEPENDENCY_EXECUTION",
+                     "NEXTEST_SHARDS")
+          clean = {key: os.environ[key] for key in allowed if key in os.environ}
+          os.environ.clear()
+          os.environ.update(clean, PATH="/usr/bin:/bin", GH_HOST="github.com")
+          # No candidate gh aliases/config, proxy, Python, shell, git or
+          # executable-search environment reaches the producer or its gh.
+          with tempfile.TemporaryDirectory(prefix="orbit-ci-producer-") as config:
+              os.environ["GH_CONFIG_DIR"] = config
+              # Earlier job steps share the workspace and could have
+              # overwritten the trusted checkout. Re-establish the actual
+              # producer bytes from the isolated base checkout after the
+              # last candidate-controlled operation, before executing them.
+              producer = os.environ["ORBIT_DEPENDENCY_PRODUCER"]
+              expected_base = os.environ["ORBIT_DEPENDENCY_PRODUCER_SHA"]
+              os.environ["GIT_CONFIG_GLOBAL"] = "/dev/null"
+              os.environ["GIT_CONFIG_SYSTEM"] = "/dev/null"
+              for key in [key for key in os.environ if key.startswith("GIT_")
+                          and key not in ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM")]:
+                  del os.environ[key]
+
+              def verified_output(*args):
+                  completed = subprocess.run(
+                      ["/usr/bin/git", *args],
+                      capture_output=True, text=True, timeout=10, check=False)
+                  if completed.returncode != 0:
+                      raise SystemExit(
+                          f"trusted producer verification failed: git {' '.join(args)}")
+                  return completed.stdout.strip()
+
+              if verified_output("rev-parse", "HEAD") != expected_base:
+                  raise SystemExit("producer source differs from its trusted base")
+              if verified_output("hash-object", producer) != verified_output(
+                      "rev-parse", f"HEAD:{producer}"):
+                  raise SystemExit("producer helper differs from its trusted source")
+              sys.argv = [producer, "--job", "Test build"]
+              for shard in range(1, int(os.environ["NEXTEST_SHARDS"]) + 1):
+                  sys.argv += ["--job", f"Test shard {shard}/{os.environ['NEXTEST_SHARDS']}"]
+              runpy.run_path(sys.argv[0], run_name="__main__")
 
       # [ORB-10126] Confirm disk headroom survived the workspace build/test.
       - name: Report disk usage

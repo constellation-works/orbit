@@ -2272,7 +2272,23 @@ Each `[[review.host_evidence]]` rule has `kind` (`codeql` or `host_sandbox_test`
   updates per handoff. A transient failure gets one shared rerun. For an untouched-path failure, a
   successful same-check push run on the accepted base ancestry authorizes one rerun of the original
   `pull_request` run; this base run may predate the candidate failure, and a base pass alone does not
-  attribute the failure to the candidate. Orbit runs `gh run rerun <id> --failed`; GitHub retains the
+  attribute the failure to the candidate. Both owner completion with `auto_fix=true` and claimed
+  landing use the shared bounded eligible-set planner. It authorizes the workflow-wide action only
+  for a complete authenticated failed-job set of eligible roots and dependency-only waiters; an
+  independent candidate failure vetoes that retry, and uncertain evidence holds. The generic
+  versioned producer contract authenticates the workflow and the producer's complete event-base
+  source checkout and the workspace-owned `isolated-source-v1` execution promise. The trusted
+  invocation must exclude ambient imports, shell hooks, configuration and executable search, and
+  re-establish the actual producer bytes after the last candidate operation; this workspace uses
+  an absolute isolated interpreter, a cleared environment and a git byte check before launch.
+  Runner/OS and filesystem integrity remain prerequisites; this is no attestation against a
+  compromised runner. Changed/legacy/spoofed sources, an overwritten helper or records grant no
+  dependency-only authority. `ci_check_rerun_reserved` consumes the shared once-per-head budget
+  before sending, and survives restart or an unknown reply without another request. `auto_fix=false`
+  keeps its conservative manual-repeat hold. No new recovery setting weakens required checks.
+  See the [eligible-set recovery contract](design/distributed-drain/2_design.md) and
+  [operator recovery procedure](runbooks/distributed-drain.md).
+  Orbit runs `gh run rerun <id> --failed`; GitHub retains the
   original event's `GITHUB_SHA` and `GITHUB_REF`, while Orbit CI's candidate-build jobs explicitly
   check out the PR head rather than a merge with the current base. A passing rerun clears the failure;
   the same signature failing again with the passing base result enters the one automatic repair for

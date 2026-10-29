@@ -322,6 +322,16 @@ pub trait NullRuntimeHost: Send + Sync {
             "no base update ledger".into(),
         ))
     }
+    fn admit_ci_rerun(
+        &self,
+        _task_ids: &[String],
+        _handoff_id: Option<&str>,
+        _plan: &orbit_types::workflow::CiRerunPlan,
+    ) -> Result<orbit_types::workflow::CiRerunAdmission, OrbitError> {
+        Ok(orbit_types::workflow::CiRerunAdmission::Refused(
+            "this host keeps no CI retry ledger".into(),
+        ))
+    }
     fn admit_pr_infrastructure(
         &self,
         _execution: &str,
