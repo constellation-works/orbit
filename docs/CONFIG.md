@@ -50,7 +50,7 @@ Both config files must be regular files. Runtime loads and workspace plugin-togg
 |---|---|
 | `orbit config show` | Effective merged view. Identity (`machine.id`, `machine.task_prefix`) leads, then Machine, Delivery (`workflow.*`), Crews, Execution, Review and Housekeeping. Each row's description is one sentence; defaults, ranges and interactions are in this reference. Unconfigured advanced keys are hidden with a count per section. `--all` (alias `--advanced`) lists every key, expands unset sections, and appends Paths, Crew purposes and Review, which restate rows above. `--json` adds `provenance` and always includes `crew_purposes` and `review`. |
 | `orbit config get <key>` | One value. |
-| `orbit config set <key> <value>` | Write the workspace file (`--global` for the global one). The value parses as a TOML literal, else a string. Without a workspace file, pass `--fresh` (start empty) or `--seed-from-global` (copy the global file without its global-only keys: `[machine]`, each `[crews.<name>] env`, `lease.intake.peer_user` and `[lease.listener]`). |
+| `orbit config set <key> <value>` | Write the workspace file (`--global` for the global one). The value parses as a TOML literal, else a string. Without a workspace file, pass `--fresh` (start empty) or `--seed-from-global` (copy the global file without its global-only keys: `[assistance]`, `[machine]`, each `[crews.<name>] env`, `lease.intake.peer_user` and `[lease.listener]`). |
 | `orbit config keys` | Every fixed settable key with type, section and description. |
 | `orbit config path` | The resolved `config.toml` path. |
 
