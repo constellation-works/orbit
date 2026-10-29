@@ -2,6 +2,7 @@
 //! Only bounded text/JSON evidence is supported; no images, URLs or tool calls
 //! are interpreted as executable input. No agent crew participates.
 
+mod send_error;
 mod wire;
 
 use chrono::{DateTime, Utc};
@@ -17,6 +18,7 @@ use orbit_types::assistance::{
 use serde_json::Value;
 
 use crate::application::assistance::{self, AssistanceAdapter};
+use send_error::{DecisionsSendFailureClass, decisions_send_failure_reason};
 
 pub const DECISIONS_ENDPOINT: &str = "https://api.openai.com/v1/decisions";
 
@@ -91,12 +93,17 @@ impl DecisionsTransport for OpenAiDecisionsTransport {
             .header("X-Client-Request-Id", attempt_id)
             .json(body)
             .send()
-            .map_err(|e| {
-                if e.is_timeout() {
-                    AssistanceReason::TimeoutUnknown
+            .map_err(|error| {
+                let failure = if error.is_connect() {
+                    DecisionsSendFailureClass::Connect
+                } else if error.is_builder() {
+                    DecisionsSendFailureClass::Builder
+                } else if error.is_timeout() {
+                    DecisionsSendFailureClass::Timeout
                 } else {
-                    AssistanceReason::Unavailable
-                }
+                    DecisionsSendFailureClass::Other
+                };
+                decisions_send_failure_reason(failure)
             })?;
         let status = response.status().as_u16();
         if response

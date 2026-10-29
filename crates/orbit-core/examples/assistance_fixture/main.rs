@@ -2,7 +2,10 @@
 //! No live HTTP or promotional credits; no automated feature tests are added.
 mod fixture;
 use chrono::Duration;
-use fixture::{AssistanceFixture, CREDENTIAL, FixtureResult};
+use fixture::{
+    AssistanceFixture, CREDENTIAL, FixtureResult, ambiguous_non_timeout_send_failure_reason,
+    builder_send_failure_reason, connect_send_failure_reason, timeout_send_failure_reason,
+};
 use orbit_core::adapter::decisions::AssistanceHttpResponse;
 use orbit_store::Store;
 use orbit_store::contracts::assistance::{AssistanceAdmission, AssistanceStoreBackend};
@@ -129,6 +132,155 @@ fn fixture_service_boundaries(root: &Path, schema: &Value) -> FixtureResult {
             .ok_or("missing stale result")?
             .disposition,
         AssistanceDisposition::Stale
+    );
+    Ok(())
+}
+
+fn fixture_send_failure_reconciliation(root: &Path, schema: &Value) -> FixtureResult {
+    let f = AssistanceFixture::open_fixture(root, schema, "task_quality")?;
+    let id = f.enqueue(f.request("lost-response")?)?;
+    let work = f.record(&id)?.work;
+    f.fail_send(ambiguous_non_timeout_send_failure_reason())?;
+    f.process()?;
+
+    let after_loss = f.record(&id)?;
+    let first_attempt = after_loss
+        .attempts
+        .first()
+        .ok_or("lost-response attempt missing")?;
+    let accounting = f.store.assistance_accounting("synthetic-only/1")?;
+    let reserved_charge = work
+        .budget
+        .assistance_charge_bound(u64::from(work.limits.max_input_tokens))
+        .ok_or("synthetic charge bound missing")?;
+    assert!(
+        first_attempt.outcome_unknown,
+        "synthetic non-timeout lost-response was recorded as known: reason={:?}, unknown_attempts={}, attempt_reason={:?}",
+        first_attempt.result.as_ref().map(|result| result.reason),
+        accounting.outcome_unknown_attempts,
+        first_attempt.result.as_ref().map(|result| result.reason),
+    );
+    assert!(after_loss.current);
+    assert_eq!(
+        first_attempt
+            .result
+            .as_ref()
+            .ok_or("lost-response result missing")?
+            .reason,
+        AssistanceReason::TimeoutUnknown
+    );
+    assert_eq!(
+        first_attempt.reserved_tokens,
+        u64::from(work.limits.max_input_tokens)
+    );
+    assert_eq!(
+        accounting.reserved_tokens,
+        u64::from(work.limits.max_input_tokens)
+    );
+    assert_eq!(first_attempt.reserved_charge_microusd, reserved_charge);
+    assert_eq!(accounting.reserved_charge_microusd, reserved_charge);
+    assert_eq!(accounting.attempts, 1);
+    assert_eq!(accounting.outcome_unknown_attempts, 1);
+    let first_attempt_id = first_attempt.attempt_id.clone();
+
+    f.advance(i64::from(work.limits.retry_delay_seconds))?;
+    f.respond(f.good_response())?;
+    f.process()?;
+    let after_retry = f.record(&id)?;
+    assert!(after_retry.current);
+    assert_eq!(after_retry.attempts.len(), 2);
+    assert_eq!(after_retry.attempts[0].ordinal, 1);
+    assert_eq!(after_retry.attempts[1].ordinal, 2);
+    assert_ne!(after_retry.attempts[1].attempt_id, first_attempt_id);
+    assert_eq!(
+        after_retry
+            .result
+            .as_ref()
+            .ok_or("retry result missing")?
+            .disposition,
+        AssistanceDisposition::Suggested
+    );
+    let retry_accounting = f.store.assistance_accounting("synthetic-only/1")?;
+    assert_eq!(retry_accounting.attempts, 2);
+    assert_eq!(retry_accounting.outcome_unknown_attempts, 1);
+    assert_eq!(
+        retry_accounting.reserved_tokens,
+        u64::from(work.limits.max_input_tokens) * 2
+    );
+    assert_eq!(
+        retry_accounting.reserved_charge_microusd,
+        reserved_charge * 2
+    );
+    f.advance(i64::from(work.limits.retry_delay_seconds))?;
+    f.process()?;
+    assert_eq!(f.record(&id)?.attempts.len(), 2);
+    assert_eq!(
+        f.store.assistance_accounting("synthetic-only/1")?.attempts,
+        2
+    );
+
+    let pre_send = AssistanceFixture::open_fixture(&root.join("pre-send"), schema, "task_quality")?;
+    let pre_send_id = pre_send.enqueue(pre_send.request("pre-send-builder")?)?;
+    pre_send.fail_send(builder_send_failure_reason())?;
+    pre_send.process()?;
+    let pre_send_record = pre_send.record(&pre_send_id)?;
+    let pre_send_attempt = pre_send_record
+        .attempts
+        .first()
+        .ok_or("pre-send attempt missing")?;
+    assert!(!pre_send_attempt.outcome_unknown);
+    assert_eq!(
+        pre_send_attempt
+            .result
+            .as_ref()
+            .ok_or("pre-send result missing")?
+            .reason,
+        AssistanceReason::Unavailable
+    );
+    assert_eq!(
+        pre_send
+            .store
+            .assistance_accounting("synthetic-only/1")?
+            .outcome_unknown_attempts,
+        0
+    );
+
+    let connect = AssistanceFixture::open_fixture(&root.join("connect"), schema, "task_quality")?;
+    let connect_id = connect.enqueue(connect.request("connect-failure")?)?;
+    connect.fail_send(connect_send_failure_reason())?;
+    connect.process()?;
+    let connect_attempt = connect
+        .record(&connect_id)?
+        .attempts
+        .into_iter()
+        .next()
+        .ok_or("connect attempt missing")?;
+    assert!(!connect_attempt.outcome_unknown);
+    assert_eq!(
+        connect_attempt
+            .result
+            .ok_or("connect result missing")?
+            .reason,
+        AssistanceReason::Unavailable
+    );
+
+    let timeout = AssistanceFixture::open_fixture(&root.join("timeout"), schema, "task_quality")?;
+    let timeout_id = timeout.enqueue(timeout.request("timeout-failure")?)?;
+    timeout.fail_send(timeout_send_failure_reason())?;
+    timeout.process()?;
+    let timeout_record = timeout.record(&timeout_id)?;
+    let timeout_attempt = timeout_record
+        .attempts
+        .first()
+        .ok_or("timeout attempt missing")?;
+    assert!(timeout_attempt.outcome_unknown);
+    assert_eq!(
+        timeout_attempt
+            .result
+            .as_ref()
+            .ok_or("timeout result missing")?
+            .reason,
+        AssistanceReason::TimeoutUnknown
     );
     Ok(())
 }
@@ -537,6 +689,7 @@ fn main() -> FixtureResult {
             serde_json::from_slice(&std::fs::read(args.get(2).ok_or("schema path required")?)?)?;
         let root = Path::new(args.get(3).ok_or("isolated root required")?);
         fixture_service_boundaries(&root.join("service"), &schema)?;
+        fixture_send_failure_reconciliation(&root.join("send-failure"), &schema)?;
         fixture_restart_retry(&root.join("restart"), &schema)?;
         fixture_validation(&root.join("validation"), &schema)?;
         fixture_budgets(&root.join("bounds"), &schema)?;
