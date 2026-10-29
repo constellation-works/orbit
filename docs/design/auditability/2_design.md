@@ -4,7 +4,7 @@ type: design
 title: "Auditability — Design"
 owner: codex
 last_updated: 2026-10-29
-last_validated: 2026-10-26
+last_validated: 2026-10-29
 status: Draft
 feature: auditability
 doc_role: design
