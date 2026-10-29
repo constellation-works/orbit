@@ -23,9 +23,10 @@ template:
       `orbit tool run orbit.task.artifact.get --input '{"id":"<id>","path":"dependency-freshness.json","model":"<agent-family>"}'`.
       Search coverage with
       `orbit tool run orbit.search --input '{"query":"<one distinctive token>","kind":"task","all":true,"model":"<agent-family>"}'`
-      (lexical search matches one substring: use a single distinctive token,
-      never a multi-word phrase, and never treat a 0-hit multi-word query as
-      proof that nothing covers a candidate). Inspect a candidate with
+      (task search matches non-adjacent terms, full matches first: use a
+      single distinctive token, never a multi-word phrase, and never treat a
+      0-hit multi-word query as proof that nothing covers a candidate). Inspect
+      a candidate with
       `orbit tool run orbit.task.show --input '{"id":"<id>","model":"<agent-family>"}'`.
       List open dependency work with
       `orbit tool run orbit.task.list --input '{"status":["proposed","backlog","in-progress","review","blocked"],"tag":"dependency-freshness","limit":200,"model":"<agent-family>"}'`.

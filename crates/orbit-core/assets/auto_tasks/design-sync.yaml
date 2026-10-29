@@ -61,8 +61,9 @@ template:
     - Every task ID cited anywhere in the feature folder's docs.
     - `orbit tool run orbit.search --input '{"query":"<one token>","kind":"task","all":true,"model":"<agent-family>"}'`
       separately for `docs/design/<feature>/`, the feature slug, and the
-      feature's tag when tasks use one. Lexical search takes one token per
-      query; do not treat a zero-hit multi-word query as evidence of absence.
+      feature's tag when tasks use one. Task search matches non-adjacent
+      terms; keep each query to one token, and do not treat a zero-hit
+      multi-word query as evidence of absence.
       Inspect truncation and narrow or page before claiming completeness.
     - Tasks whose `spawned_from` or `resolves` relations point at a cited task
       and implement a phase or slice. Search each cited ID as a separate token

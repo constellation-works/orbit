@@ -32,8 +32,8 @@ template:
       `orbit tool run orbit.task.show --input '{"id":"<id>","model":"<agent-family>"}'`.
       Search titles as a backstop with
       `orbit tool run orbit.search --input '{"query":"ci-budget","kind":"task","all":true,"model":"<agent-family>"}'`
-      (lexical search matches one substring; never treat a 0-hit
-      multi-word query as proof that nothing is open).
+      (task search matches non-adjacent terms, full matches first; never
+      treat a 0-hit multi-word query as proof that nothing is open).
     - Read hosted run history only through the granted run tools. After
       discovering the workflow and documented run population, call
       `github.run.list` with `status:"completed"`, the discovered workflow
