@@ -223,6 +223,13 @@ fn usage_key_mode(key: &str) -> Option<UsageKeyMode> {
     }
 }
 
+/// One provider request's own usage object (a Claude message's `usage`, a
+/// Codex `last_token_usage`), read with the keys of the invocation totals so
+/// both land in the same buckets.
+pub(crate) fn request_usage(map: &JsonMap) -> Option<TokenUsage> {
+    usage_from_map(map, UsageKeyMode::Standard)
+}
+
 fn usage_from_map(map: &JsonMap, key_mode: UsageKeyMode) -> Option<TokenUsage> {
     let input = match key_mode {
         UsageKeyMode::Standard => first_u64(map, STANDARD_INPUT_KEYS),

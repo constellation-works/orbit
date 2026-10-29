@@ -201,7 +201,8 @@ its token-derived estimate from the shared, versioned configuration data in
 effective date, with provider input/cache semantics handled by shared accounting;
 the experiment has no provider-specific prices or pricing branches. A task is
 measured only when **every** linked invocation can be priced. No invocations,
-an unknown model or invalid token split without reported cost makes its
+an unknown model, an invalid token split, or totals over a prompt-size tier
+threshold without per-request usage, each without reported cost, makes its
 whole cost unmeasured; partial sums never enter estimates, differences or the
 cumulative series. A valid reported zero remains measured.
 

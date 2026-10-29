@@ -10,6 +10,7 @@ mod common;
 pub(crate) mod copilot;
 pub(crate) mod gemini;
 pub(crate) mod grok;
+mod long_prompt;
 pub(crate) mod mock_agent;
 pub(crate) mod muse;
 pub(crate) mod ollama;
@@ -19,6 +20,7 @@ pub use antigravity::{
     antigravity_background_task_diagnostic, antigravity_print_timeout_diagnostic,
     antigravity_terminal_error_diagnostic, apply_antigravity_print_timeout,
 };
+pub use long_prompt::provider_long_prompt_requests;
 pub use muse::muse_terminal_failure_diagnostic;
 pub use usage_window::provider_usage_windows;
 
