@@ -58,8 +58,18 @@ Code, Codex, Gemini CLI, Antigravity, Grok, GitHub Copilot, or Muse Code (the
 Cursor, Pi, and OpenCode lanes were [retired](/concepts/agents/#retired-providers)).
 It passes the agent your task's context, such as the task
 description, prompts, and workspace files. The agent may send that content to
-its provider, under the provider's own terms and privacy policy. Orbit itself
-does not contact any AI provider's API.
+its provider, under the provider's own terms and privacy policy. Aside from
+the optional decision assistance described below, Orbit itself does not
+contact any AI provider's API.
+
+### Optional decision assistance (off by default)
+
+If you enable it, Orbit sends a bounded assistance request directly to the
+fixed OpenAI Decisions endpoint (`https://api.openai.com/v1/decisions`). Each
+request carries only the policy's allowed evidence fields and its question
+text, using the model fixed in the policy. The host-only `[assistance]` table
+ships with an empty policy list, so this traffic is off by default and never
+leaves your machine until you add a policy. No agent crew makes these calls.
 
 ### Your Git host
 

@@ -64,13 +64,16 @@ choose, or through federated MCP over SSH to hosts you configure.
 | Plugin archive fetch | When `orbit plugin add` or `orbit plugin upgrade` uses an HTTPS archive source | The configured archive URL | The archive is fetched with `curl`; Orbit requires and checks a pinned SHA-256 digest before unpacking it. |
 | Git plugin source | When `orbit plugin add` or `orbit plugin upgrade` uses a `git+` source | The configured Git remote | Orbit runs Git to clone or fetch the requested source and ref. |
 | Task publication | When you explicitly publish tasks to a bound Git repository | The repository you chose | The selected task bundles and history are pushed through Git. |
+| Optional decision assistance | Only when a host-owned `[assistance]` policy enables it (off by default: `policies = []`) | `https://api.openai.com/v1/decisions` (fixed; no configurable endpoint, proxy, or crew route) | The policy's allowed evidence fields and question text, sent with the model fixed in the policy. Ungranted fields and references are omitted; secrets are redacted before transmission. No agent crew makes these calls. |
 
 Every Orbit crew dispatches through a provider CLI. Selecting an HTTP-only
 provider such as `openai_compat` fails structurally before making a request.
+The only Orbit-initiated model call is the optional decision assistance
+listed in the table above.
 
 Orbit has no update check on startup, no crash reporter, no usage analytics,
 and no "phone home" of any kind. There is no network call you cannot trace to a
-command you ran or a crew you configured.
+command you ran, a crew you configured, or an assistance policy you enabled.
 
 ### Initiated by tools Orbit runs for you
 
@@ -85,8 +88,8 @@ invoked by an activity: a pull request is opened against the remote you
 configured, using the GitHub identity you already have.
 
 If your organisation's compliance posture depends on where model traffic goes,
-that decision is made when you choose which agent CLIs and providers to install
-and which crews to enable — not by Orbit.
+that decision is made when you choose which agent CLIs and providers to install,
+which crews to enable, and which assistance policies to add — not by Orbit.
 
 One specific worth knowing:
 
@@ -188,8 +191,8 @@ project security reporting.
 - **Retention is yours.** Logs rotate locally ([logging](./runbooks/logging.md));
   audit history in `orbit.db` is kept until you delete it. Nothing ages out to
   a remote.
-- **Air-gapped use works** apart from explicit update downloads and
-  whatever your agent CLIs need. Install the binary
+- **Air-gapped use works** apart from explicit update downloads,
+  whatever your agent CLIs need, and any assistance policy you enable. Install the binary
   by hand and Orbit initiates no further connections.
 
 ## Related
