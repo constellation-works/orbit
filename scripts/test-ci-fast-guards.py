@@ -1401,6 +1401,25 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         result = self.run_guard("check-artifact-redaction-guardrail.sh")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_artifact_redaction_guidance_names_existing_module(self):
+        """A rejected local helper must be pointed at a redaction module that exists."""
+        if not shutil.which("rg"):
+            self.skipTest("ripgrep not installed")
+        self.use_real_ripgrep()
+        targets = self.redaction_fixture_targets()
+        self.write_clean_redaction_tree(targets)
+        present = next(t for t in targets if t.endswith(".rs"))
+        (self.root / present).write_text("fn redact_local() {}\n")
+        result = self.run_guard("check-artifact-redaction-guardrail.sh")
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        namespaces = re.findall(r"orbit_common::[\w:]+", result.stderr)
+        self.assertTrue(namespaces, f"guidance names no orbit_common namespace:\n{result.stderr}")
+        crate_src = SCRIPTS.parent / "crates/orbit-common/src"
+        for namespace in namespaces:
+            module = crate_src.joinpath(*namespace.removeprefix("orbit_common::").split("::"))
+            resolves = module.with_name(module.name + ".rs").is_file() or (module / "mod.rs").is_file()
+            self.assertTrue(resolves, f"guidance names a module that does not exist: {namespace}")
+
     def write_clean_terminal_tree(self):
         cli_src = self.root / "crates/orbit-cli/src"
         (cli_src / "output/tests").mkdir(parents=True, exist_ok=True)
