@@ -210,6 +210,30 @@ finally:
         self.assertTrue(any("&page=2" in path for path in self.requests), self.requests)
         self.assertIn("paginated=true", result.stdout)
 
+    def test_paginated_listing_honors_server_backoff_without_hiding_later_pages(self):
+        building = [job("Test build", "in_progress")]
+        self.pages = [building, building]
+        self.response_headers = {"Retry-After": "60"}
+        result = self.wait([job("unused")], timeout="31", jobs=["Test build"],
+                           poll="15", virtual=True)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("timed out after 31 s waiting for Test build (in_progress)", result.stderr)
+        self.assertEqual(float((self.root / "elapsed").read_text()), 31,
+                         "the server minimum cannot extend the absolute deadline")
+        times = [float(headers["X-Fixture-Time"]) for headers in self.request_headers]
+        self.assertEqual(times, [0, 0, 0], times)
+
+        # A backoff header must not hide a later-page negative conclusion.
+        self.requests.clear()
+        self.request_headers.clear()
+        self.pages = [[job("Test build")], [job("Test shard 1/2", conclusion="failure")]]
+        self.response_headers = {"Retry-After": "60"}
+        result = self.wait([job("unused")], jobs=["Test build", "Test shard 1/2"])
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("Test shard 1/2 concluded failure", result.stderr)
+        self.assertTrue(any("&page=2" in path for path in self.requests), self.requests)
+        self.assertIn("paginated=true", result.stdout)
+
     def test_waits_until_every_named_job_succeeds(self):
         building = [job("Test build", "in_progress"), job("Check / Clippy / Test", "in_progress")]
         sharding = [job("Test build"), job("Test shard 1/2"), job("Test shard 2/2", "queued")]
