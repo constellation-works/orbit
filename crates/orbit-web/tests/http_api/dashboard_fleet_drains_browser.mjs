@@ -17,6 +17,8 @@ const initializer = `
   const liveLocal = new URLSearchParams(location.search).has('liveLocal');
   const noLive = new URLSearchParams(location.search).has('noLive');
   const fleetFailure = new URLSearchParams(location.search).has('fleetFailure');
+  const forecastSource = new URLSearchParams(location.search).get('forecastSource');
+  const storedForecastAt = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
   const holdFleet = new URLSearchParams(location.search).get('holdFleet') === '1';
   const remoteFleetFailure = new URLSearchParams(location.search).has('remoteFleetFailure');
   globalThis.remoteFleetPending = false;
@@ -64,8 +66,12 @@ const initializer = `
     const window = { key: url.searchParams.get('since'), bucket_seconds: 3600 };
     if (api === '/api/diagnostics/implement_one') return json({ window,
       outcome: url.searchParams.get('outcome'), current: {}, previous: {}, buckets: [] });
-    if (api === '/api/diagnostics/backlog_forecast') return json({ backlog: { backlog: 3, in_progress: 1 },
-      forecast: { time_to_drain_hours: { p50: 1, p90: 2 }, usd: { p50: 3, p90: 4 } } });
+    if (api === '/api/diagnostics/backlog_forecast') return json({
+      ...(forecastSource === 'stored' ? { served_from: 'stored', generated_at: storedForecastAt, stored: { latest_at: storedForecastAt } } : {}),
+      ...(forecastSource === 'live' ? { served_from: 'live', generated_at: new Date().toISOString() } : {}),
+      backlog: { backlog: 3, in_progress: 1 },
+      forecast: { time_to_drain_hours: { p50: 1, p90: 2 }, usd: { p50: 3, p90: 4 } },
+    });
     if (api === '/api/diagnostics/completions') return json({ window, buckets: [],
       current: { done: { total: 0, low: 0, medium: 0, hard: 0, other: 0 }, rejected: 0, archived: 0 } });
     if (api === '/api/diagnostics/defects') return json({ error: 'Not supported by fixture host' }, 404);
@@ -365,6 +371,76 @@ async function assertPollBudget(browser, port) {
   }
 }
 
+async function assertDrainForecastFreshness(browser, port) {
+  const outcomes = [];
+  for (const scenario of [
+    { source: 'stored', expected: /^Stored \d+ h ago$/ },
+    { source: 'live', expected: /^Live$/ },
+    { source: 'unknown', expected: /^Forecast freshness unavailable$/ },
+  ]) {
+    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    try {
+      await page.goto(`http://127.0.0.1:${port}/?workspace=idle&forecastSource=${scenario.source}#tasks?dock=drain`);
+      await page.waitForFunction(() => globalThis.fleetReady);
+      const link = page.locator('#auto-drain-body .drain-backlog-forecast');
+      await link.waitFor({ state: 'visible' });
+      const rendered = await link.evaluate(node => ({
+        freshness: node.querySelector('.drain-backlog-forecast-freshness')?.textContent,
+        freshnessVisible: Boolean(node.querySelector('.drain-backlog-forecast-freshness')?.getClientRects().length),
+        title: node.title,
+        accessibleText: node.textContent,
+        figures: node.querySelector('.drain-backlog-forecast-figures')?.textContent,
+      }));
+      assert.ok(rendered.freshness, `${scenario.source} forecast exposes a freshness label`);
+      assert.match(rendered.freshness, scenario.expected, `${scenario.source} forecast shows its freshness`);
+      assert.equal(rendered.freshnessVisible, true, `${scenario.source} freshness is visible on the card`);
+      assert.ok(rendered.title.includes(rendered.freshness), `${scenario.source} title labels the forecast details`);
+      assert.ok(rendered.accessibleText.includes(rendered.freshness), `${scenario.source} accessible text labels the forecast details`);
+      assert.ok(rendered.accessibleText.includes(rendered.figures), `${scenario.source} accessible text includes the labelled figures`);
+      assert.ok(rendered.accessibleText.includes('3 backlog · 1 in progress'), `${scenario.source} accessible text includes the labelled counts`);
+      assert.ok(await page.getByRole('link', { name: rendered.freshness, exact: false }).count() > 0,
+        `${scenario.source} freshness is included in the link's accessible name`);
+      assert.ok(rendered.title.includes('3 backlog · 1 in progress'), `${scenario.source} title includes counts`);
+      assert.ok(rendered.title.includes('Time to drain'), `${scenario.source} title labels drain figures`);
+      assert.ok(rendered.title.includes('Cost'), `${scenario.source} title labels cost figures`);
+      assert.ok(rendered.figures.includes('1') && rendered.figures.includes('$'), `${scenario.source} visible figures render`);
+      if (scenario.source === 'unknown') {
+        assert.ok(!rendered.freshness.includes('Live'), 'missing source is not presented as live');
+      }
+      if (scenario.source === 'stored') {
+        for (const width of [1440, 375]) {
+          const capturePage = width === 1440 ? page : await browser.newPage({ viewport: { width, height: 900 } });
+          try {
+            if (capturePage !== page) {
+              await capturePage.goto(`http://127.0.0.1:${port}/?workspace=idle&forecastSource=stored#tasks?dock=drain`);
+              await capturePage.waitForFunction(() => globalThis.fleetReady);
+            }
+            const captureLink = capturePage.locator('#auto-drain-body .drain-backlog-forecast');
+            if (width === 1440) {
+              await captureLink.waitFor({ state: 'visible' });
+              await captureLink.evaluate(node => node.scrollIntoView({ block: 'center' }));
+            } else {
+              await capturePage.waitForFunction(() => globalThis.fleetRequests.some(url =>
+                new URL(url, location.href).pathname.endsWith('/diagnostics/backlog_forecast'))
+                && document.querySelector('#auto-drain-body .drain-backlog-forecast'));
+            }
+            await capturePage.evaluate(() => document.fonts.ready);
+            const screenshotName = width === 1440 ? 'drain-card-dark-1440.png' : 'tasks-dark-375.png';
+            await capturePage.screenshot({ path: path.join(evidence, screenshotName), animations: 'disabled' });
+          } finally {
+            if (capturePage !== page) await capturePage.close();
+          }
+        }
+      }
+      outcomes.push({ source: scenario.source, freshness: rendered.freshness, passed: true });
+    } finally {
+      await page.close();
+    }
+  }
+  fs.writeFileSync(path.join(evidence, 'drain-forecast-freshness.json'), JSON.stringify(outcomes, null, 2));
+  return outcomes;
+}
+
 // Public page navigation, selection and reload exercise defaults through the
 // shipped app, including a browser that refuses both storage reads and writes.
 async function assertWorkspaceDefaults(browser, port) {
@@ -466,6 +542,7 @@ await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 let browser;
 try {
   browser = await chromium.launch({ headless: true, executablePath: process.env.ORBIT_CHROMIUM_PATH || undefined });
+  const drainForecastFreshness = await assertDrainForecastFreshness(browser, server.address().port);
   const workspaceDefaults = await assertWorkspaceDefaults(browser, server.address().port);
   const warmup = await assertIndependentWarmup(browser, server.address().port);
   const fleetPartial = await assertFleetPartial(browser, server.address().port);
@@ -543,7 +620,7 @@ try {
   await page.waitForFunction(() => document.querySelector('#workspace-select')?.value === 'idle');
   assert.deepEqual(errors, []);
   const polls = await assertPollBudget(browser, server.address().port);
-  fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ status: 'passed', measurements, polls, warmup, workspaceDefaults, fleetPartial,
+  fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ status: 'passed', measurements, polls, warmup, workspaceDefaults, fleetPartial, drainForecastFreshness,
     guarantees: ['initial Tasks and Run detail render during held remote fleet warmup', 'warmup and first refresh share in-flight fleet reads', 'late fleet completion updates the indicator and preserves the selected view', `ready fleet hosts shown while another host is loading at ${fleetPartialWidths}px`, 'pending host distinct from idle and unavailable and settles without dropping ready rows or changing selection', `ready workspace focus preserved and Enter selects it when another host settles (success and failure, ${fleetPartialWidths}px)`, 'idle workspace fleet indicator', 'host failures retained', '375px no horizontal page scroll', 'one line per workspace with nothing waiting', 'host tabs show one host at a time and remember the choice', 'keyboard remote scope selection', 'row click local scope selection', 'two-host poll stays within 10 requests', 'panel poll does not read fleet drains'], errors }, null, 2));
   console.log('fleet browser startup, scope, mobile, and poll-budget checks passed');
 } finally {
