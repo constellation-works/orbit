@@ -101,7 +101,11 @@ function close() {
   setLive(false);
 }
 
-function open() {
+// `catchUpUrl` is the URL of a stream that fully closed and whose retry this
+// is. A fresh source's first open is not a reconnect, and the server replays
+// nothing without Last-Event-ID, so the replacement announces the catch-up
+// itself, as a reconnect would.
+function open({ catchUpUrl = null } = {}) {
   const wanted = !document.hidden && !isAggregateView() && getWorkspace() && typeof EventSource === "function"
     ? withWorkspace(STREAM_PATH)
     : null;
@@ -116,7 +120,7 @@ function open() {
   let opened = false;
   stream.onopen = () => {
     if (source !== stream) return;
-    if (opened) deliver({ kind: "reconnect" });
+    if (opened || wanted === catchUpUrl) deliver({ kind: "reconnect" });
     opened = true;
     setLive(true);
   };
@@ -139,7 +143,7 @@ function open() {
     close();
     retryTimer = setTimeout(() => {
       retryTimer = null;
-      open();
+      open({ catchUpUrl: wanted });
     }, RETRY_MS);
   };
 }
