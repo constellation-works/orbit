@@ -25,7 +25,7 @@ import { destinationLabel, initRouter, initTabs as iT, navigateToRun as nTR, sco
 import { initRuns, jobRunsQuery, runsQueryKey, mergeRunsWithFriction, renderRuns, runIsCancellable, buildCancelRunButton, buildReplayRunButton } from './js/runs.js';
 import { fetchAndRenderAutoDrainPane, fetchAndRenderOperations, fetchAndRenderJobs, initOperations, peekRoutineFailures, startFleetIndicatorRefresh } from './js/operations.js';
 import { onDrainReadinessChange } from './js/drain-waits.js';
-import { onTaskRuntimeChange, setRunningRuns, setTaskLocks } from './js/task-runtime.js';
+import { onTaskRuntimeChange, runStartedAt, setRunningRuns, setTaskLocks } from './js/task-runtime.js';
 import { taskState } from './js/task-shared.js';
 import { primeTaskDetail, taskDetailSnapshot } from './js/task-data.js';
 import { primeTaskRuns, taskRunsTabActive } from './js/task-detail.js';
@@ -108,6 +108,7 @@ let searchQuery = "";
 let cancelTaskLookup = () => {};
 let activeStatuses = new Set(DEFAULT_ACTIVE_STATUSES);
 let lastTasks = [];
+let elapsedTaskRefreshTimer = null;
 // Paging metadata from task-list envelopes drives the visible range and
 // Previous/Next availability.
 let lastTasksMeta = null;
@@ -179,12 +180,53 @@ function taskContext() {
     getSearchQuery: () => searchQuery,
     setSearchQuery: (value) => { searchQuery = value; },
     getActiveStatuses: () => activeStatuses,
-    setActiveStatuses: (statuses) => { activeStatuses = statuses; },
+    setActiveStatuses: (statuses) => {
+      activeStatuses = statuses;
+      syncElapsedTaskRefresh();
+    },
     statusOrder: STATUS_ORDER,
     defaultActiveStatuses: DEFAULT_ACTIVE_STATUSES,
     fmtAbsTime,
     refreshDashboard,
   };
+}
+
+// Run-row elapsed labels change at each run's minute boundary. Repaint from
+// the task and run caches so a quiet live stream needs no extra API reads.
+function syncElapsedTaskRefresh({ repaint = false } = {}) {
+  if (elapsedTaskRefreshTimer !== null) {
+    clearTimeout(elapsedTaskRefreshTimer);
+    elapsedTaskRefreshTimer = null;
+  }
+  if (activeTab !== "tasks" || isAggregateView() || !changeStreamLive()
+    || document.hidden || !activeStatuses.has("in-progress")) return;
+
+  const now = Date.now();
+  const nextBoundary = lastTasks.reduce((earliest, task) => {
+    if (!task || task.status !== "in-progress") return earliest;
+    const started = runStartedAt(task.job_run_id);
+    if (!Number.isFinite(started)) return earliest;
+    const elapsed = now - started;
+    const boundary = elapsed < 0
+      ? started
+      : started + (Math.floor(elapsed / 60_000) + 1) * 60_000;
+    return Math.min(earliest, boundary);
+  }, Infinity);
+  if (!Number.isFinite(nextBoundary)) return;
+
+  if (repaint) renderTasks(lastTasks, taskContext());
+  elapsedTaskRefreshTimer = setTimeout(() => {
+    elapsedTaskRefreshTimer = null;
+    if (activeTab === "tasks" && !document.hidden && changeStreamLive()) {
+      renderTasks(lastTasks, taskContext());
+    }
+    syncElapsedTaskRefresh();
+  }, Math.max(1, nextBoundary - Date.now() + 1));
+}
+
+function renderTaskList(tasks, context) {
+  renderTasks(tasks, context);
+  syncElapsedTaskRefresh();
 }
 
 function auditContext() {
@@ -237,7 +279,11 @@ function routerContext() {
   return {
     // getters/setters for router-owned state (kept in app.js per extraction contract)
     getTab: () => activeTab,
-    setTab: (v) => { activeTab = v; reschedulePolling(); },
+    setTab: (v) => {
+      activeTab = v;
+      reschedulePolling();
+      syncElapsedTaskRefresh({ repaint: v === "tasks" });
+    },
     getJobsSubtab: () => activeJobsSubtab,
     setJobsSubtab: (v) => { activeJobsSubtab = v; },
     getDiagSubtab: () => activeDiagSubtab,
@@ -921,7 +967,7 @@ function wireTaskIdResolver() {
       lastTasks[listedAt] = task;
       openVisibleTask(task.id, ctx);
     } else {
-      renderTasks(lastTasks, ctx);
+      renderTaskList(lastTasks, ctx);
     }
     input.value = "";
     clearLookupStatus();
@@ -1197,7 +1243,7 @@ function fetchAndRenderTasks({ includeCrews = true } = {}) {
           next_cursor: payload.next_cursor || null,
         }
       : null;
-    renderTasks(tasks, taskContext());
+    renderTaskList(tasks, taskContext());
     if (taskScrollResetPending) {
       const body = $("tasks-body");
       if (body) body.scrollTop = 0;
@@ -1637,7 +1683,10 @@ function fetchAndRenderTaskLocks() {
 // in-flight count, drain chip and host chips follow notices on every page.
 function wireChangeStream() {
   setStreamCoverage(() => activeTab === "tasks" && !isAggregateView() && changeStreamLive());
-  onChangeStreamLive(() => reschedulePolling());
+  onChangeStreamLive((live) => {
+    reschedulePolling();
+    syncElapsedTaskRefresh({ repaint: live });
+  });
   onChange(["resync", "reconnect"], () => refreshDashboardNow());
   onChange(["host.resources"], (notices) => applyPushedHostResources(notices[notices.length - 1].resources));
   const quietly = (label, start) => {
@@ -2012,13 +2061,13 @@ const tasksContext = taskContext();
 // The drain readiness snapshot arrives apart from the task list; repaint the
 // rows when it changes what they say about a backlog task's wait.
 onDrainReadinessChange(() => {
-  if (activeTab === "tasks") renderTasks(lastTasks, taskContext());
+  if (activeTab === "tasks") renderTaskList(lastTasks, taskContext());
   // Each lock row counts the waiting tasks it holds back.
   if (lastLocks && lastLocks.workspace && lastLocks.workspace === getWorkspace()) paintLocksPanel(lastLocks.payload);
 });
 // Run start times and file locks arrive apart from the task list too.
 onTaskRuntimeChange(() => {
-  if (activeTab === "tasks") renderTasks(lastTasks, taskContext());
+  if (activeTab === "tasks") renderTaskList(lastTasks, taskContext());
 });
 buildChips(tasksContext);
 wireSearch(tasksContext);
