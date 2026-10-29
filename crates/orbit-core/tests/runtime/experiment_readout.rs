@@ -594,6 +594,177 @@ fn first_edit_readout_scores_the_first_implement_invocation() {
 }
 
 #[test]
+fn first_edit_readout_excludes_a_retry_when_same_timestamp_paging_stalls() {
+    if !super::dispatch_admission::isolated(
+        "experiment_readout::first_edit_readout_excludes_a_retry_when_same_timestamp_paging_stalls",
+    ) {
+        return;
+    }
+
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("home/.orbit");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(
+        workspace.join("config.toml"),
+        "[experiments]\nenabled = true\n",
+    )
+    .unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let actor = ExperimentActor {
+        actor: "readout-test".into(),
+        reason: None,
+    };
+    let experiment = runtime
+        .create_experiment(
+            "first-edit-incomplete",
+            ExperimentDefinitionInput {
+                arms: Some(json!([
+                    { "name": "control", "control": true },
+                    { "name": "treatment" }
+                ])),
+                primary_metric: Some("turns_before_first_edit".into()),
+                guardrails: Some(json!({ "result_bytes_before_first_edit": "+0" })),
+                min_sample: Some(1),
+                ..ExperimentDefinitionInput::default()
+            },
+            actor.clone(),
+        )
+        .unwrap();
+    runtime
+        .change_experiment(&experiment.id, ExperimentChange::Start, actor)
+        .unwrap();
+    enroll_first_edit_sample(
+        &runtime,
+        &experiment.id,
+        "control",
+        Some(&[("read", 100), ("read", 100), ("edit", 0)]),
+        true,
+    );
+    let task_id = enroll_first_edit_sample(
+        &runtime,
+        &experiment.id,
+        "treatment",
+        Some(&[("read", 100), ("edit", 0)]),
+        true,
+    );
+    let older = Utc::now() - Duration::hours(1);
+    let newer = older + Duration::minutes(1);
+    let store = runtime.sqlite_store().unwrap();
+    store
+        .connection()
+        .lock()
+        .unwrap()
+        .execute("UPDATE invocations SET ts = ?1", [older.to_rfc3339()])
+        .unwrap();
+
+    let complete = runtime.experiment_readout(&experiment.id, None).unwrap();
+    for (name, means) in [
+        ("turns_before_first_edit", [2.0, 1.0]),
+        ("result_bytes_before_first_edit", [200.0, 100.0]),
+    ] {
+        let metric = complete.metrics.iter().find(|m| m.metric == name).unwrap();
+        for (arm, mean) in ["control", "treatment"].into_iter().zip(means) {
+            let estimate = metric.arms.iter().find(|a| a.arm == arm).unwrap();
+            assert_eq!(estimate.estimate.n, 1, "complete {name}: {arm}");
+            assert_eq!(estimate.estimate.mean, Some(mean));
+        }
+    }
+    assert_eq!(complete.primary_observations.len(), 2);
+    assert!(complete.verdict.horizon_reached);
+    assert!(
+        complete
+            .warnings
+            .iter()
+            .all(|w| w.kind != "first_edit_incomplete")
+    );
+
+    runtime
+        .insert_invocation_trace_record(&InvocationInsertParams {
+            job_run_id: "first-edit-retry".into(),
+            account: None,
+            activity_id: "agent_implement".into(),
+            agent: "codex".into(),
+            provider: None,
+            model: None,
+            task_ids: vec![task_id.clone()],
+            trace: InvocationTrace {
+                tool_calls: vec![ToolCallTrace {
+                    tool_name: "edit".into(),
+                    ..ToolCallTrace::default()
+                }],
+                ..InvocationTrace::default()
+            },
+        })
+        .unwrap();
+    {
+        let connection = store.connection();
+        let mut connection = connection.lock().unwrap();
+        let tx = connection.transaction().unwrap();
+        tx.execute(
+            "UPDATE invocations SET ts = ?1 WHERE job_run_id = 'first-edit-retry'",
+            [newer.to_rfc3339()],
+        )
+        .unwrap();
+        // One bounded fixture batch fills the newest page at exactly one
+        // timestamp. Inclusive timestamp pagination repeats it and cannot
+        // reach the older originals; no timing or concurrent load is needed.
+        tx.execute(
+            "WITH RECURSIVE fixture(n) AS (
+                VALUES(1) UNION ALL SELECT n + 1 FROM fixture WHERE n < 9999
+             ) INSERT INTO invocations(ts, workspace_id, job_run_id, activity_id, agent)
+             SELECT ?1, ?2, 'first-edit-page-' || n, 'agent_implement', 'codex' FROM fixture",
+            rusqlite::params![newer.to_rfc3339(), runtime.workspace_id().unwrap()],
+        )
+        .unwrap();
+        tx.commit().unwrap();
+    }
+    let collected = runtime.first_implement_edits(Some(older)).unwrap();
+    assert!(
+        collected.truncated,
+        "fixture must hit the pagination boundary"
+    );
+    assert_eq!(collected.by_task[&task_id].score, Some((0, 0)));
+
+    let incomplete = runtime.experiment_readout(&experiment.id, None).unwrap();
+    for name in ["turns_before_first_edit", "result_bytes_before_first_edit"] {
+        let metric = incomplete
+            .metrics
+            .iter()
+            .find(|m| m.metric == name)
+            .unwrap();
+        for arm in &metric.arms {
+            assert_eq!(arm.estimate.n, 0, "incomplete {name}: {}", arm.arm);
+            assert_eq!(arm.estimate.mean, None);
+            assert_eq!((arm.unmeasured, arm.open), (1, 0));
+            assert!(arm.segments.iter().all(|s| s.estimate.n == 0));
+        }
+        for difference in &metric.differences {
+            assert_eq!(difference.overall.estimate, None);
+            assert_eq!(difference.overall.interval, None);
+        }
+    }
+    assert!(incomplete.primary_observations.is_empty());
+    assert_eq!(incomplete.verdict.state, "collecting");
+    assert!(!incomplete.verdict.horizon_reached);
+    assert!(incomplete.verdict.arm.is_none());
+    assert_eq!(incomplete.guardrails[0].arms[0].status, "unknown");
+    let warning = incomplete
+        .warnings
+        .iter()
+        .find(|w| w.kind == "first_edit_incomplete")
+        .expect("incomplete collection must carry coverage evidence");
+    assert!(!warning.message.is_empty());
+    let unaffected = incomplete
+        .metrics
+        .iter()
+        .find(|m| m.metric == "delivery_done_rate")
+        .unwrap();
+    assert!(unaffected.arms.iter().all(|a| a.estimate.n == 1));
+}
+
+#[test]
 fn cost_readout_excludes_partial_sums_and_identifies_estimated_tasks() {
     if !super::dispatch_admission::isolated(
         "experiment_readout::cost_readout_excludes_partial_sums_and_identifies_estimated_tasks",

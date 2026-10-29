@@ -46,6 +46,7 @@ const WARNING_LABELS = {
   drift: "Drift",
   lagging: "Open outcomes",
   primary_unmeasured: "Primary unmeasured",
+  first_edit_incomplete: "First-edit coverage incomplete",
   crew_mismatch: "Crew outside arm pool",
   crew_mismatch_unavailable: "Crew admission pool unavailable",
   forced: "Forced assignments",
