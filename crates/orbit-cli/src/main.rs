@@ -453,18 +453,30 @@ fn plugin_cli_groups() -> Vec<orbit_core::adapter::command::PluginCliGroup> {
 /// `main` and the help goldens both build it here, so a golden pins the help
 /// the binary prints rather than the bare derive.
 fn cli_command(groups: &[orbit_core::adapter::command::PluginCliGroup]) -> Command {
+    // Grouped rows share one description column per template derived from the
+    // longest name, wrapping to the sink width on a terminal [ORB-19912].
+    // Width 0 (piped) keeps single-line rows so help goldens stay
+    // deterministic. The width comes from the sink, the only place that
+    // queries terminal state (`check-terminal-state-guard.sh`); `main` still
+    // resolves its own sink after parsing for rendering.
+    let term_width = crate::output::sink::OutputSink::from_process(None, false).width();
     let root = plugin_cli::augment(command::Cli::command(), groups);
-    let root = if groups.is_empty() {
-        root
-    } else {
+    let mut root = root.help_template(crate::help::root_help_template(term_width));
+    if !groups.is_empty() {
         // The hand-rolled top-level template lists commands by section, so a
         // plugin group is listed in its own section rather than left out of
         // `orbit --help` entirely.
-        root.help_template(command::ROOT_HELP_TEMPLATE.replace(
+        root = root.help_template(crate::help::root_help_template(term_width).replace(
             "\nOptions:",
             &format!("{}\nOptions:", plugin_cli::help_section(groups)),
-        ))
-    };
+        ));
+    }
+    root = root.mut_subcommand("run", |cmd| {
+        cmd.help_template(crate::help::run_help_template(term_width))
+    });
+    root = root.mut_subcommand("task", |cmd| {
+        cmd.help_template(crate::help::task_help_template(term_width))
+    });
     install_output_args(root, true)
 }
 

@@ -3,45 +3,45 @@ orbit <VERSION>
 Usage: orbit [OPTIONS] <COMMAND>
 
 Environment:
-  init        Initialize the global Orbit root (~/.orbit)
-  workspace   Manage workspaces
-  config      Show or update Orbit configuration
-  host        Register and inspect the remote Orbit hosts this machine reaches over SSH
-  browser-kit Install, verify and remove the headless browser kit workers check UIs with
-  plugin      Install and manage Orbit plugins
-  migrate     Apply or inspect pending .orbit layout/schema migrations
-  update      Install a published Orbit release and converge to it
+  init         Initialize the global Orbit root (~/.orbit)
+  workspace    Manage workspaces
+  config       Show or update Orbit configuration
+  host         Register and inspect the remote Orbit hosts this machine reaches over SSH
+  browser-kit  Install, verify and remove the headless browser kit workers check UIs with
+  plugin       Install and manage Orbit plugins
+  migrate      Apply or inspect pending .orbit layout/schema migrations
+  update       Install a published Orbit release and converge to it
 
 Knowledge:
-  task        Create, update, and manage tasks
-  decision    List, show and answer human decision requests on held work
-  friction    Report, list, and triage friction records
-  search      Search tasks and frictions
+  task         Create, update, and manage tasks
+  decision     List, show and answer human decision requests on held work
+  friction     Report, list, and triage friction records
+  search       Search tasks and frictions
 
 Operate:
-  run         Run workflows, drain the backlog, and inspect runs
-  job         Define, list, and manage job workflows
-  experiment  Define, run and conclude experiments over agent treatments
-  lease       Coordinate path leases with the workspace owner
-  tool        Manage and run Orbit tools, including external MCP plugins
-  gc          Inspect and explicitly reap Orbit-managed garbage
+  run          Run workflows, drain the backlog, and inspect runs
+  job          Define, list, and manage job workflows
+  experiment   Define, run and conclude experiments over agent treatments
+  lease        Coordinate path leases with the workspace owner
+  tool         Manage and run Orbit tools, including external MCP plugins
+  gc           Inspect and explicitly reap Orbit-managed garbage
 
 Observe:
-  audit       Query the audit event log
-  codebase    Rank the repository paths that are risky for agents to change
-  agents      Score orchestrators, implementers, reviewers and pilots by crew and model
-  log         Tail the unified Orbit log feed
-  doctor      Diagnose workspace health, provider CLIs, and filesystem access
+  audit        Query the audit event log
+  codebase     Rank the repository paths that are risky for agents to change
+  agents       Score orchestrators, implementers, reviewers and pilots by crew and model
+  log          Tail the unified Orbit log feed
+  doctor       Diagnose workspace health, provider CLIs, and filesystem access
 
 Scheduler:
-  clock       Inspect, control, and manually tick the machine scheduler
-  sweep       Compatibility alias for `orbit clock tick`
-  routine     Inspect and control scheduled routines on this machine
-  auto-task   Define recurring auto-task templates (the scheduler primitive)
+  clock        Inspect, control, and manually tick the machine scheduler
+  sweep        Compatibility alias for `orbit clock tick`
+  routine      Inspect and control scheduled routines on this machine
+  auto-task    Define recurring auto-task templates (the scheduler primitive)
 
 Services:
-  mcp         Register MCP client integrations and run the MCP server
-  web         Run the Orbit dashboard
+  mcp          Register MCP client integrations and run the MCP server
+  web          Run the Orbit dashboard
 
 Options:
       --root <ROOT>
