@@ -10,6 +10,7 @@ mod inline_publication;
 mod observation;
 mod publication;
 mod published_owner;
+mod reconciliation;
 mod resumed_recovery;
 mod successor;
 
@@ -24,8 +25,8 @@ use orbit_store::contracts::JobRunQuery;
 use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{
     ActivityV2Spec, CommitObservationStatus, JobRun, JobRunState, JobV2, JobV2StepBody,
-    PipelineState, SOURCE_REPAIR_KEY, SOURCE_REPAIR_LINKED, SOURCE_REPAIR_RESERVED,
-    SourceRepairAdmission, SourceRepairBinding,
+    PipelineState, SOURCE_REPAIR_KEY, SOURCE_REPAIR_LINKED, SourceRepairAdmission,
+    SourceRepairBinding,
 };
 use serde_json::{Value, json};
 

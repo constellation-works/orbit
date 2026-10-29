@@ -7,7 +7,7 @@ use super::{Candidate, Outcome};
 use crate::context::RuntimeHost;
 use orbit_common::OrbitError;
 use orbit_types::task::Task;
-use orbit_types::workflow::{JobRun, SOURCE_REPAIR_RESERVED, SourceRepairAdmission};
+use orbit_types::workflow::{JobRun, SourceRepairAdmission, source_repair_authorizations};
 use serde_json::{Value, json};
 use std::path::Path;
 
@@ -35,12 +35,10 @@ pub(super) fn continue_source<H: RuntimeHost + ?Sized>(
     {
         return Err(refused("run/task/scope/authority binding changed"));
     }
-    let reserved = host
-        .get_task_history(&task.id)?
+    let reserved = source_repair_authorizations(&host.get_task_history(&task.id)?)
+        .map_err(|_| refused("unreadable operator authorization history"))?
         .iter()
-        .filter(|entry| entry.event == SOURCE_REPAIR_RESERVED && entry.by == "system")
-        .filter_map(|entry| entry.note.as_deref())
-        .any(|note| serde_json::from_str::<Value>(note).is_ok_and(|value| value == *request));
+        .any(|record| serde_json::to_value(record).is_ok_and(|value| value == *request));
     if !reserved {
         return Err(refused("durable operator reservation missing"));
     }
