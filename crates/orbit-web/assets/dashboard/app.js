@@ -11,7 +11,7 @@ import { fetchAndRenderScoreboard, placeholdScoreboardAggregate } from './js/sco
 import { fetchAndRenderAgents, getAgentsRole, placeholdAgentsAggregate, setAgentsRole, wireAgentControls } from './js/agents.js';
 import { fetchAndRenderReliability, wireReliabilityWindowSelector } from './js/reliability.js';
 import { openDoctor, peekDoctor, wireDoctorPanel } from './js/doctor.js';
-import { initLogTail, fitLogPanelToViewport, setDockMode } from './js/log-tail.js';
+import { initLogTail, fitLogPanelToViewport, setDockMode, setDockRouteShown } from './js/log-tail.js';
 import { renderDiagnostics } from './js/diagnostics.js';
 import { fetchAndRenderMetrics, placeholdMetricsAggregate } from './js/metrics.js';
 import { fetchAndRenderResources, placeholdResourcesAggregate } from './js/resources.js';
@@ -341,6 +341,7 @@ function routerContext() {
     openDoctor: () => openDoctor().catch((e) => console.error("Failed to run doctor", e)),
     fitLogPanelToViewport,
     setDrainView: (mode) => setDockMode(mode),
+    setDockRouteShown,
 
     // Events and Codebase pass-throughs (re-exported here for router;
     // imported at top of this file)

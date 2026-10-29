@@ -44,8 +44,10 @@ Agent runs produce more state changes, logs, and diagnostics than a human can re
 
 The Tasks dock holds the Auto-drain status and forecast, a simple **Start a
 window** card, **Locks held** and **Log**. It gives way to the task pane when
-a task opens, and to the list below 1000px. Locks held lists holders by task
-or locked paths by file, marking a path more than one task holds, with a
+a task opens. Below 1000px the list keeps the full width, and an explicit Drain,
+Locks held or Log link shows the dock in its place until **Back to tasks**.
+Locks held lists holders by task or locked paths by file, marking a path more
+than one task holds, with a
 filter by task ID. On a replica checkout, Start pulls directly from the
 owner; the Auto-drain card can stop that pull's admissions.
 

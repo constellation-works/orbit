@@ -327,8 +327,13 @@ Steps show a loading skeleton until the detail read settles, a read error on fai
 The two-column desktop layout stacks below 900px, and routine/clock metadata collapses to one column below 600px so schedules, state labels, and controls remain scannable at 480–720px widths.
 
 The **Tasks dock** is the home of **Drain**, **Locks held** and **Log**.
-It stays beside the task list, gives way to an open task, and is hidden below
-1000px so the list keeps its width. Drain contains the Auto-drain status card
+It stays beside the task list and gives way to an open task. Below 1000px the
+list keeps the full width, so the dock is not beside it. An explicit dock route
+(`#tasks?dock=…`, from the top-bar drain indicator, a Drain, Locks held or Log
+link, or the bottom log bar) shows the dock in place of the list at that width:
+its tabs sit under a **Back to tasks** control, which drops only `dock=` from the
+hash, keeping the list's filters. Any Tasks route without `dock=` shows the list
+again. The log scrolls within 70% of the viewport height there. Drain contains the Auto-drain status card
 and a simple **Start a window** card. Locks held has By file (default) and
 By task views, remembered for Tasks, and a task-ID filter. Log is the live,
 filterable tail; its tab names the worst level present. The active tab's
@@ -347,8 +352,9 @@ page loading and failure, the list's load note (`Loading…`, `Refresh failed`,
 `Unable to load`), and the action and folded-status notices (Settle merged
 PRs, approvals, an undo for a task the filter hides). Each keeps its
 `role="status"` live region; the newest is on top, and more than fit scroll
-inside the area. Where the dock is hidden (an open task, or below 1000px) the
-area floats over the foot of the list. Static group hints stay with their
+inside the area. Where the dock is hidden by an open task the area floats over
+the foot of the list; in a phone dock route it is hidden with the list, and
+its notices show again when the list returns. Static group hints stay with their
 cards, and the create composer's feedback stays in the composer. Host
 readings live only in the rail's Host block. The top-bar drain
 indicator opens `#tasks?dock=drain` in All workspaces mode, where the status

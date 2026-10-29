@@ -836,10 +836,36 @@ main.tasks-layout:not(:has(> .tasks-dock > #side-dock)) { grid-template-columns:
    area stays, floating at the foot of the view (see below). */
 main.tasks-layout.task-pane-open > .tasks-dock { display: contents; }
 main.tasks-layout.task-pane-open > .tasks-dock > #side-dock { display: none; }
+/* The Back control shows only where a dock route stands in for the list. */
+.dock-back {
+  display: none;
+  align-items: center;
+  align-self: flex-start;
+  min-height: 36px;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--fg-dim);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.dock-back:hover { color: var(--fg); }
+.dock-back:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
 @media (max-width: 1000px) {
   main.tasks-layout { grid-template-columns: minmax(0, 1fr); }
   .tasks-dock { display: contents; }
   .tasks-dock > #side-dock { display: none; }
+  /* An explicit Drain, Locks held or Log route (`dock=` in the hash) shows the
+     dock in place of the list, and the message area goes with the list. Any
+     route without `dock=` returns to the list, and desktop keeps the dock beside
+     it. The list's column has an inline display, hence !important. The log
+     scrolls inside a bounded height rather than running down the page. */
+  main.tasks-layout.dock-route > .col-tasks { display: none !important; }
+  main.tasks-layout.dock-route > .tasks-dock > #side-dock { display: flex; }
+  main.tasks-layout.dock-route > .tasks-dock > .tasks-messages { display: none; }
+  main.tasks-layout.dock-route .dock-back { display: inline-flex; }
+  main.tasks-layout.dock-route #dock-pane-log .log-stream { max-height: 70svh; }
 }
 .tasks-dock #side-dock { flex: 1 1 auto; gap: 12px; }
 /* The active tab's first card starts level with the first task block, and
