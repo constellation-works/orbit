@@ -85,8 +85,108 @@ fn incident() -> (Fixture, JobRun) {
     (f, stopped)
 }
 
+/// The supported drain grant resets the deadline, then a plain retry inherits
+/// the repair retry's failure receipt. Neither worker reaches a repair agent.
+pub(super) fn supported_incident() -> (Fixture, JobRun, JobRun) {
+    let (mut f, _, _) = escalated_completion_fixture();
+    let forge = super::escalated_publication::green_forge(&mut f);
+    forge.set(&f.head, &["help-entrypoint"], &[], &[]);
+    f.state.completion_deadlines.insert("17".into(), 1);
+    f.state
+        .record_step(6, JobRunState::Success, Some(Value::Null), None);
+    f.state
+        .record_pipeline_output("resume_candidate", Value::Null);
+    f.runtime
+        .write_run_state(&f.source.run_id, &f.state)
+        .unwrap();
+    f.runtime
+        .apply_task_automation_update(
+            &f.task,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::Review),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let drain = f
+        .runtime
+        .insert_job_run(
+            "workspace_auto_pipeline",
+            1,
+            Utc::now(),
+            Some(json!({})),
+            None,
+        )
+        .unwrap();
+    let pass = f
+        .runtime
+        .run_deterministic(
+            "adopt_orphaned_deliveries",
+            &json!({}),
+            &json!({"run_id":drain.run_id,
+        "max_active_leaf_runs":4,"completion":"done","auto_fix":true}),
+            Default::default(),
+        )
+        .unwrap();
+    let started = &pass["auto_fix"]["started"][0];
+    let id = started["resumed_run_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{pass}"));
+    f.wait(id);
+    let mut retry = f.runtime.show_job_run_observed(id).unwrap();
+    let mut state = f.runtime.read_run_state(id).unwrap().unwrap();
+    assert!(state.completion_deadlines.is_empty());
+    assert_eq!(
+        retry.input.as_ref().unwrap()["out_of_run_auto_fix"]["drain_run_id"],
+        drain.run_id
+    );
+    // Deterministic expired timestamps avoid sleeping or changing the clock.
+    // The first retry failed its reader after allocating a fresh budget.
+    retry.created_at = f.source.finished_at.unwrap() + chrono::Duration::milliseconds(1);
+    retry.started_at = Some(retry.created_at);
+    state.completion_deadlines.insert(
+        "17".into(),
+        (retry.created_at + chrono::Duration::milliseconds(1))
+            .timestamp_millis()
+            .try_into()
+            .unwrap(),
+    );
+    f.start_actions(id);
+    let receipt = f.action("pr_failure_handoff", json!({"run_id":id,
+        "failed_step_id":"complete_pr","activity_name":"pr_complete","error_code":"execution",
+        "error_message":"completion reader overflow","job_input":retry.input,"pipeline":state.pipeline}));
+    assert_eq!(receipt["decision"], "review_completion_failure");
+    assert_eq!(receipt["handoff_run_id"], id);
+    state.record_failure_activity("pr_failure_handoff".into(), "complete_pr".into(), receipt);
+    retry.state = JobRunState::Failed;
+    retry.pid = None;
+    retry.finished_at = Some(Utc::now());
+    save_run(&f, &retry);
+    f.runtime.write_run_state(id, &state).unwrap();
+    super::inline_completion_retry::audit_started(&f, &retry, "complete_pr");
+    let inherited = f
+        .runtime
+        .submit_resume_run(id, Some("operator"), None)
+        .unwrap();
+    f.wait(&inherited.run_id);
+    let mut held = f.runtime.show_job_run_observed(&inherited.run_id).unwrap();
+    held.state = JobRunState::Held;
+    held.pid = None;
+    held.finished_at = Some(Utc::now());
+    save_run(&f, &held);
+    super::inline_completion_retry::audit_started(&f, &held, "complete_pr");
+    let inherited_state = f.runtime.read_run_state(&held.run_id).unwrap().unwrap();
+    assert_eq!(
+        inherited_state.failure_activity_checkpoint,
+        state.failure_activity_checkpoint
+    );
+    assert_ne!(state.completion_deadlines, f.state.completion_deadlines);
+    assert!(state.completion_deadlines["17"] < Utc::now().timestamp_millis().try_into().unwrap());
+    (f, retry, held)
+}
+
 fn expired_inline_publication_gets_fresh_same_pr_repair() {
-    let (mut f, retry) = incident();
+    let (mut f, retry, inherited) = supported_incident();
     let config = f.repo.join(".orbit/config.toml");
     let policy = std::fs::read_to_string(&config)
         .unwrap()
@@ -95,6 +195,11 @@ fn expired_inline_publication_gets_fresh_same_pr_repair() {
     reload(&mut f);
     let original = f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap();
     let retry_before = f.runtime.read_run_state(&retry.run_id).unwrap().unwrap();
+    let inherited_before = f
+        .runtime
+        .read_run_state(&inherited.run_id)
+        .unwrap()
+        .unwrap();
     let inspection = f
         .runtime
         .run_tool_as_human("orbit.workflow.run.resume", f.request("inspect"))
@@ -117,6 +222,7 @@ fn expired_inline_publication_gets_fresh_same_pr_repair() {
     let admitted = run.input.as_ref().unwrap();
     assert_eq!(admitted["completion"], "review");
     assert_eq!(admitted["auto_fix"], false);
+    assert!(admitted.get("out_of_run_auto_fix").is_none());
     assert_eq!(admitted["review"], admitted["__source_repair"]["review"]);
     assert_eq!(admitted["review"]["timing"], "before-landing");
     assert_eq!(
@@ -126,6 +232,34 @@ fn expired_inline_publication_gets_fresh_same_pr_repair() {
     let fresh = f.runtime.read_run_state(id).unwrap().unwrap();
     assert!(fresh.step_states.is_empty());
     assert!(fresh.completion_deadlines.is_empty());
+    let audit = [&retry, &inherited]
+        .iter()
+        .map(|member| {
+            f.runtime
+                .list_v2_audit_events(orbit_store::contracts::V2AuditEventFilter {
+                    workspace_id: f.runtime.workspace_id().unwrap(),
+                    run_id: Some(member.run_id.clone()),
+                    ..Default::default()
+                })
+                .unwrap()
+                .into_iter()
+                .map(|row| row.payload_json)
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    use std::io::Write;
+    writeln!(
+        std::io::stderr(),
+        "inline-completion-lineage-evidence: {}",
+        json!({
+        "source_run":f.source,"source_state":original,
+        "grant_run":retry,"grant_state":retry_before,
+        "inherited_run":inherited,"inherited_state":inherited_before,
+        "grant_history":f.runtime.get_task_history(&f.task).unwrap().into_iter()
+            .filter(|entry|entry.event == "pr_auto_fix_out_of_run").collect::<Vec<_>>(),
+        "audit":audit,"inspection":inspection,"fresh_input":admitted})
+    )
+    .expect("fixture lineage evidence");
     for field in [
         "request_key",
         "diagnosis",
@@ -181,6 +315,13 @@ fn expired_inline_publication_gets_fresh_same_pr_repair() {
         f.runtime.read_run_state(&retry.run_id).unwrap().unwrap(),
         retry_before
     );
+    assert_eq!(
+        f.runtime
+            .read_run_state(&inherited.run_id)
+            .unwrap()
+            .unwrap(),
+        inherited_before
+    );
 }
 
 fn reload(f: &mut Fixture) {
@@ -195,7 +336,7 @@ fn reload(f: &mut Fixture) {
     }));
 }
 
-fn rework(f: &Fixture) -> Value {
+pub(super) fn rework(f: &Fixture) -> Value {
     let inspection = f
         .runtime
         .run_tool_as_human("orbit.workflow.run.resume", f.request("inspect"))
@@ -208,7 +349,7 @@ fn rework(f: &Fixture) -> Value {
     input
 }
 
-fn refused_without_effects(f: &Fixture, input: Value, case: &str) -> String {
+pub(super) fn refused_without_effects(f: &Fixture, input: Value, case: &str) -> String {
     let snapshot = || {
         json!({"task":f.runtime.get_task(&f.task).unwrap(),
         "history":f.runtime.get_task_history(&f.task).unwrap(),
@@ -219,7 +360,8 @@ fn refused_without_effects(f: &Fixture, input: Value, case: &str) -> String {
     let error = f
         .runtime
         .run_tool_as_human("orbit.workflow.run.resume", input)
-        .unwrap_err()
+        .err()
+        .unwrap_or_else(|| panic!("{case}: unexpectedly admitted"))
         .to_string();
     assert_eq!(
         snapshot(),

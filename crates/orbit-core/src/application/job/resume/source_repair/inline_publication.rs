@@ -106,6 +106,23 @@ impl OrbitRuntime {
             .read_run_state(&source.run_id)?
             .ok_or_else(|| refuse("source checkpoints missing"))?;
         let definition = self.source_repair_definition(source)?;
+        // Do not let a malformed retry sort behind its publisher and disappear
+        // from the newer-run slice (including ties resolved by store ordering).
+        for run in runs.iter().filter(|run| {
+            run.run_id != source.run_id
+                && run.retry_source_run_id.is_some()
+                && run.created_at <= source.created_at
+        }) {
+            if run.retry_source_run_id.as_deref() == Some(source.run_id.as_str())
+                || self
+                    .read_run_state(&run.run_id)?
+                    .is_some_and(|state| state.pipeline["worktree"]["job_run_id"] == source.run_id)
+            {
+                return Err(refuse(
+                    "inline publication retry lineage ordering is ambiguous",
+                ));
+            }
+        }
         // A failed completion may have left uncommitted repairs even without
         // a later retry. They must not be dropped when adopting the PR head.
         let clean = match self.retained_candidate(task, Some(&source.run_id), Some(source)) {
@@ -140,6 +157,7 @@ impl OrbitRuntime {
                 // publisher; another run's copied prefix grants no authority.
                 let mut child = run;
                 let mut visited = BTreeSet::new();
+                let mut lineage = vec![run];
                 while child.run_id != source.run_id {
                     if !visited.insert(child.run_id.as_str()) {
                         return Err(refuse("inline publication retry lineage repeats a run"));
@@ -149,18 +167,24 @@ impl OrbitRuntime {
                         .as_deref()
                         .and_then(|id| runs.iter().find(|parent| parent.run_id == id))
                         .ok_or_else(|| refuse("inline publication retry lineage is incomplete"))?;
+                    if !is_delivery(&parent.job_id) {
+                        return Err(refuse("inline publication retry parent is not a delivery"));
+                    }
                     if parent.created_at >= child.created_at {
                         return Err(refuse(
                             "inline publication retry lineage ordering disagrees",
                         ));
                     }
+                    lineage.push(parent);
                     child = parent;
                 }
+                lineage.reverse();
                 evidence.push(self.observe_inline_completion_retry(
                     task,
                     (&source_state, &definition),
                     run,
                     &state,
+                    &lineage,
                 )?);
             } else {
                 evidence.push(self.observe_successor_member(source, task, run)?);
@@ -232,6 +256,7 @@ impl OrbitRuntime {
         publication: (&PipelineState, &JobV2),
         retry: &JobRun,
         state: &PipelineState,
+        lineage: &[&JobRun],
     ) -> Result<Value, OrbitError> {
         let (original, definition) = publication;
         self.require_stopped_inline_lineage_member(retry, task)?;
@@ -271,22 +296,24 @@ impl OrbitRuntime {
             .into_iter()
             .filter(|entry| entry.at >= retry.created_at && Some(entry.at) <= retry.finished_at)
             .collect::<Vec<_>>();
+        let grant = self.authenticate_inline_retry_budget(task, original, retry, state, lineage)?;
         if !completion
             || retry.state == JobRunState::Success
             || state.run_id != retry.run_id
             || state.job_id != retry.job_id
             || digest(&self.source_repair_definition(retry)?)? != digest(definition)?
-            || state.completion_deadlines != original.completion_deadlines
             || state.final_recovery != original.final_recovery
             || state.rebase_recovery_checkpoints != original.rebase_recovery_checkpoints
+            || state.child_dispatches != original.child_dispatches
             || state.step_states.iter().any(|(index, status)| {
                 *index != failed_index
                     && (original.step_states.get(index) != Some(status)
                         || state.step_output(*index) != original.step_output(*index))
             })
-            || retry.input.as_ref().is_some_and(|input| {
-                input.get(SOURCE_REPAIR_KEY).is_some() || input.get("out_of_run_auto_fix").is_some()
-            })
+            || retry
+                .input
+                .as_ref()
+                .is_some_and(|input| input.get(SOURCE_REPAIR_KEY).is_some())
             || orbit_types::workflow::pr_completion_has_mutation_provenance(&history)
             || retry
                 .steps
@@ -297,20 +324,47 @@ impl OrbitRuntime {
                     !value.is_null() && original.pipeline.get(key) != Some(value)
                 })
             })
-            || state.step_states.iter().any(|(index, _)| {
-                state.step_output(*index).is_some_and(|output| {
-                    !output.is_null() && original.step_output(*index) != Some(output)
+            || state
+                .step_outputs
+                .keys()
+                .chain(state.step_output_pointers.keys())
+                .any(|index| {
+                    state.step_output(*index).is_some_and(|output| {
+                        !output.is_null() && original.step_output(*index) != Some(output)
+                    })
                 })
-            })
         {
             return Err(refuse(
                 "completion retry may have changed the original publication; reconcile its candidate explicitly",
             ));
         }
-        if state.failure_activity_checkpoint != original.failure_activity_checkpoint
-            && state.failure_activity_checkpoint.is_some()
-        {
-            authenticate_kept_inline_receipt(retry, task, state, definition)?;
+        let receipt_origin = if let Some(checkpoint) = &state.failure_activity_checkpoint {
+            if checkpoint.failed_step_id != failed {
+                return Err(refuse(
+                    "completion retry receipt names a different failed step",
+                ));
+            }
+            // A plain resume can inherit its parent's failure hook. Authenticate
+            // the complete origin, then require uninterrupted inheritance along
+            // this exact chain. A run id in an agent's output alone proves nothing.
+            let owner_id = field(&checkpoint.output, "handoff_run_id")?;
+            let owner_at = lineage
+                .iter()
+                .position(|run| run.run_id == owner_id)
+                .ok_or_else(|| refuse("completion retry receipt owner is outside its lineage"))?;
+            let owner = lineage[owner_at];
+            let owner_state = self
+                .read_run_state(owner_id)?
+                .ok_or_else(|| refuse("completion retry receipt origin checkpoints missing"))?;
+            authenticate_kept_inline_receipt(owner, task, &owner_state, definition)?;
+            for member in &lineage[owner_at..] {
+                let inherited = self.read_run_state(&member.run_id)?.ok_or_else(|| {
+                    refuse("completion retry receipt lineage checkpoints missing")
+                })?;
+                if inherited.failure_activity_checkpoint.as_ref() != Some(checkpoint) {
+                    return Err(refuse("completion retry receipt inheritance disagrees"));
+                }
+            }
             let receipt = &state
                 .failure_activity_checkpoint
                 .as_ref()
@@ -326,7 +380,10 @@ impl OrbitRuntime {
             {
                 return Err(refuse("completion retry kept a different publication"));
             }
-        }
+            json!({"run":owner,"state":owner_state})
+        } else {
+            Value::Null
+        };
         let rows = self.list_v2_audit_events(orbit_store::contracts::V2AuditEventFilter {
             workspace_id: self.workspace_id()?,
             run_id: Some(retry.run_id.clone()),
@@ -338,12 +395,16 @@ impl OrbitRuntime {
         if rows.len() > 256 {
             return Err(refuse("completion retry audit exceeds inspection window"));
         }
+        if !grant.is_null() && rows.is_empty() {
+            return Err(refuse("completion retry audit evidence missing"));
+        }
         for row in &rows {
             let event: orbit_types::workflow::activity_job::V2AuditEvent =
                 serde_json::from_str(&row.payload_json).map_err(|error| {
                     refuse(format!("completion retry audit unreadable: {error}"))
                 })?;
-            if matches!(event.kind, orbit_types::workflow::activity_job::V2AuditEventKind::StepStarted { step_id } if step_id != failed)
+            if event.envelope.run_id != retry.run_id
+                || !matches!(event.kind, orbit_types::workflow::activity_job::V2AuditEventKind::StepStarted { step_id } if step_id == failed)
             {
                 return Err(refuse(
                     "completion retry started source work; reconcile its candidate explicitly",
@@ -352,8 +413,133 @@ impl OrbitRuntime {
         }
         let audit = rows.iter().map(|row| &row.payload_json).collect::<Vec<_>>();
         Ok(
-            json!({"run":retry,"state":state,"definition":definition,"audit":audit,"history":history}),
+            json!({"run":retry,"state":state,"definition":definition,"audit":audit,"history":history,
+                "grant":grant,"receipt_origin":receipt_origin}),
         )
+    }
+
+    /// A supported repair grant can renew completion's budget without ever
+    /// reaching a repair agent. Authenticate its host ledger independently of
+    /// the copied input, and permit only the reset at that recorded origin.
+    fn authenticate_inline_retry_budget(
+        &self,
+        task: &Task,
+        original: &PipelineState,
+        retry: &JobRun,
+        state: &PipelineState,
+        lineage: &[&JobRun],
+    ) -> Result<Value, OrbitError> {
+        let marker_key = crate::application::job::resume::OUT_OF_RUN_AUTO_FIX_KEY;
+        let marker = retry.input.as_ref().and_then(|input| input.get(marker_key));
+        let parent = lineage
+            .iter()
+            .rev()
+            .nth(1)
+            .ok_or_else(|| refuse("completion retry parent missing"))?;
+        let parent_state = self
+            .read_run_state(&parent.run_id)?
+            .ok_or_else(|| refuse("completion retry parent checkpoints missing"))?;
+        let Some(marker) = marker else {
+            if parent
+                .input
+                .as_ref()
+                .is_some_and(|input| input.get(marker_key).is_some())
+                || state.completion_deadlines != parent_state.completion_deadlines
+            {
+                return Err(refuse(
+                    "completion retry changed its budget without a supported grant",
+                ));
+            }
+            return Ok(Value::Null);
+        };
+        let pr = field(&original.pipeline["pr_open"], "pr_number")?;
+        if field(marker, "task_id")? != task.id
+            || field(marker, "pr_number")? != pr
+            || field(marker, "head_sha")? != field(&original.pipeline["push"], "local_sha")?
+            || !matches!(
+                field(marker, "blocker")?,
+                "failed_checks" | "conflict" | "landing_review"
+            )
+            || marker
+                .get("failed_checks")
+                .and_then(Value::as_array)
+                .is_none_or(|checks| checks.iter().any(|check| check.as_str().is_none()))
+            || marker
+                .get("drain_run_id")
+                .is_none_or(|id| !id.is_null() && id.as_str().is_none_or(str::is_empty))
+            || retry.input.as_ref().is_none_or(|input| {
+                input["auto_fix"] != true || input["footprint_deferred"] != true
+            })
+        {
+            return Err(refuse(
+                "completion retry repair grant contradicts its publication",
+            ));
+        }
+        let history = self.get_task_history(&task.id)?;
+        let mut grants = Vec::new();
+        for entry in history
+            .iter()
+            .filter(|entry| entry.event == "pr_auto_fix_out_of_run")
+        {
+            let note: Value = serde_json::from_str(entry.note.as_deref().unwrap_or_default())
+                .map_err(|_| refuse("completion retry repair grant history unreadable"))?;
+            if lineage
+                .iter()
+                .any(|run| note["resumed_run_id"] == run.run_id)
+            {
+                grants.push((entry, note));
+            }
+        }
+        let [(record, note)] = grants.as_slice() else {
+            return Err(refuse(
+                "completion retry repair grant history missing or ambiguous",
+            ));
+        };
+        let origin_id = field(note, "resumed_run_id")?;
+        let origin_at = lineage
+            .iter()
+            .position(|run| run.run_id == origin_id)
+            .ok_or_else(|| refuse("completion retry grant origin missing"))?;
+        let origin = lineage[origin_at];
+        if record.by != "system"
+            || record.at < origin.created_at
+            || Some(record.at) > origin.finished_at
+            || origin_at == 0
+            || origin.retry_source_run_id.as_deref() != Some(field(marker, "source_run_id")?)
+            || [
+                "source_run_id",
+                "pr_number",
+                "head_sha",
+                "blocker",
+                "drain_run_id",
+            ]
+            .iter()
+            .any(|key| note[*key] != marker[*key])
+            || lineage[origin_at..].iter().any(|run| {
+                run.input.as_ref().and_then(|input| input.get(marker_key)) != Some(marker)
+            })
+        {
+            return Err(refuse("completion retry repair grant ownership disagrees"));
+        }
+        if origin.run_id == retry.run_id {
+            // rewind_to_completion clears every deadline. Completion may then
+            // allocate only this PR's fresh deadline; no other budget is granted.
+            if state.completion_deadlines.iter().any(|(number, deadline)| {
+                number != pr
+                    || i64::try_from(*deadline).map_or(true, |deadline| {
+                        deadline <= origin.created_at.timestamp_millis()
+                    })
+            }) {
+                return Err(refuse(
+                    "completion retry renewed an unrelated or invalid deadline",
+                ));
+            }
+        } else if state.completion_deadlines != parent_state.completion_deadlines {
+            return Err(refuse(
+                "completion retry changed an inherited repair deadline",
+            ));
+        }
+        Ok(json!({"record":record,"origin":origin,"marker":marker}))
     }
 }
 
