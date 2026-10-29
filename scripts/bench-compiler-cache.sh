@@ -10,9 +10,10 @@
 # Uses private CARGO_TARGET_DIR values per tree. The same-path pair empties
 # and reuses one private target sequentially to keep cache keys identical.
 # The disk cache and UDS live
-# only under the bench workdir; the harness refuses a caller SCCACHE_DIR outside
-# that tree so it cannot reset an operator cache. Does not enable a global host
-# cache.
+# only under the exclusively owned bench workdir. Python 3 resolves paths before
+# any writes; the cache must be a strict descendant, separate from generated
+# trees, targets and outputs, so resets cannot remove an operator cache or the
+# active benchmark tree. Does not enable a global host cache.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -27,18 +28,78 @@ RESULT="${ORBIT_COMPILER_CACHE_BENCH_RESULT:-$WORKDIR/results-$STAMP.txt}"
 JOBS="${CARGO_BUILD_JOBS:-1}"
 REQUIRE_NS="${ORBIT_COMPILER_CACHE_REQUIRE_NS:-0}"
 SCCACHE_VERSION="v0.17.0"
-BENCH_UDS="$WORKDIR/sccache.sock"
 SCCACHE_BIN=""
 
+# Resolve existing symlink ancestors and missing tails together, before even
+# installing the cleanup trap. Use these canonical paths for every consumer,
+# including daemon controls. The workdir must not be modified by other processes
+# during the benchmark; this is path admission, not a filesystem sandbox.
+validated_paths="$(python3 - "$WORKDIR" "$CACHE_DIR" "$RESULT" <<'PYPATHS'
+from pathlib import Path
+import sys
+
+
+def refuse(message):
+    raise ValueError(message)
+
+
+def overlaps(left, right):
+    return left == right or left in right.parents or right in left.parents
+
+
+try:
+    if any("\n" in path or "\r" in path for path in sys.argv[1:]):
+        refuse("paths must not contain newlines")
+    work, cache, result = (Path(path).resolve() for path in sys.argv[1:])
+    if any("\n" in str(path) or "\r" in str(path) for path in (work, cache, result)):
+        refuse("resolved paths must not contain newlines")
+    if work == Path(work.anchor):
+        refuse("the filesystem root cannot be the benchmark workdir")
+    if work not in cache.parents:
+        refuse("SCCACHE_DIR must resolve strictly below the benchmark workdir")
+    if work not in result.parents or Path(sys.argv[3]).is_symlink():
+        refuse("the result must be a regular output below the benchmark workdir")
+    # Every fixed destination used by copies, target resets, installation,
+    # daemon controls and cleanup. Reject aliases before any side effects.
+    directories = (
+        "a", "b", "a-target", "b-target", "warm-target", "real-custom-a",
+        "real-custom-b", "probe", "probe-target", "probe-c", "probe-d",
+        "probe-c-target", "probe-d-target", "bin",
+    )
+    files = ("sccache.sock", "last-elapsed", "bwrap-probe.err")
+    reserved = [work / name for name in directories + files]
+    for path in reserved + [work / "bin" / "sccache"]:
+        if path.is_symlink():
+            refuse(f"benchmark destination is a symlink: {path}")
+    for name in directories:
+        path = work / name
+        if path.exists() and not path.is_dir():
+            refuse(f"benchmark directory is not a directory: {path}")
+    for path in reserved:
+        if overlaps(cache, path) or overlaps(result, path):
+            refuse(f"cache/result overlaps a reserved benchmark destination: {path}")
+    if overlaps(cache, result):
+        refuse("cache and result must be separate")
+    for path in (work, cache):
+        if path.exists() and not path.is_dir():
+            refuse(f"not a directory: {path}")
+    if result.exists() and not result.is_file():
+        refuse(f"not a regular result file: {result}")
+    print(work)
+    print(cache)
+    print(result)
+except (OSError, RuntimeError, ValueError) as error:
+    print(f"bench-compiler-cache: refusing paths: {error}", file=sys.stderr)
+    sys.exit(1)
+PYPATHS
+)"
+{
+  IFS= read -r WORKDIR
+  IFS= read -r CACHE_DIR
+  IFS= read -r RESULT
+} <<<"$validated_paths"
+BENCH_UDS="$WORKDIR/sccache.sock"
 HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || printf 'unknown')"
-case "$CACHE_DIR" in
-  "$WORKDIR" | "$WORKDIR"/*) ;;
-  *)
-    printf 'bench-compiler-cache: refusing SCCACHE_DIR=%s (must be under %s)\n' \
-      "$CACHE_DIR" "$WORKDIR" >&2
-    exit 1
-    ;;
-esac
 
 stop_owned_daemon() {
   [[ -n "$SCCACHE_BIN" && -x "$SCCACHE_BIN" ]] || return 0
@@ -54,8 +115,16 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$WORKDIR" "$CACHE_DIR"
+mkdir -p "$WORKDIR" "$CACHE_DIR" "$(dirname "$RESULT")"
 : >"$RESULT"
+
+# Remove the directory entry itself, never glob through a preexisting target
+# or source tree. rm does not follow symlinks within it. All callers use fixed
+# direct children of the canonical, exclusively owned workdir admitted above.
+reset_bench_directory() {
+  rm -rf -- "$1"
+  mkdir -p "$1"
+}
 
 log() {
   printf '%s\n' "$*" | tee -a "$RESULT"
@@ -120,7 +189,7 @@ install_isolated_sccache() {
   dest="$WORKDIR/bin/sccache"
   mkdir -p "$WORKDIR/bin"
   url="https://github.com/mozilla/sccache/releases/download/${SCCACHE_VERSION}/${asset}"
-  tmp="$(mktemp -d)"
+  tmp="$(mktemp -d "$WORKDIR/download.XXXXXX")"
   log "downloading isolated $url"
   if ! curl -fsSL "$url" -o "$tmp/$asset"; then
     rm -rf "$tmp"
@@ -151,7 +220,7 @@ time_cmd() {
   local label="$1"
   shift
   local start end elapsed timefile status
-  timefile="$WORKDIR/time-$label"
+  timefile="$(mktemp "$WORKDIR/time-$label.XXXXXX")"
   start="$(now)"
   status=0
   # GNU time supports -f/-o; BSD time (macOS /usr/bin/time) does not.
@@ -171,8 +240,7 @@ time_cmd() {
 run_build() {
   local label="$1" tree="$2" target="$3"
   shift 3
-  mkdir -p "$target"
-  rm -rf "${target:?}/"*
+  reset_bench_directory "$target"
   log "==> $label  (tree=$tree target=$target cwd=$(pwd))"
   (
     cd "$tree"
@@ -201,7 +269,7 @@ can_create_ns() {
 
 copy_tree() {
   local dest="$1"
-  mkdir -p "$dest"
+  reset_bench_directory "$dest"
   if git archive "$HEAD_SHA" >/dev/null 2>&1; then
     git archive "$HEAD_SHA" | tar -x -C "$dest"
   else
@@ -226,7 +294,6 @@ log "workdir=$WORKDIR"
 log "cache_dir=$CACHE_DIR"
 log "note=/usr/bin/time user/sys is the cargo process tree; it excludes a detached sccache daemon. Wrapper defaults (SCCACHE_CLIENT_SIDE=1) keep compiler CPU in the client tree."
 
-mkdir -p "$WORKDIR/a" "$WORKDIR/b"
 copy_tree "$WORKDIR/a"
 copy_tree "$WORKDIR/b"
 
@@ -255,7 +322,7 @@ if [[ -z "$SCCACHE_BIN" || ! -x "$SCCACHE_BIN" ]]; then
 fi
 
 log "sccache_bin=$SCCACHE_BIN"
-log "sccache_version=$("$SCCACHE_BIN" --version 2>/dev/null || echo unknown)"
+log "sccache_version=$(SCCACHE_DIR="$CACHE_DIR" SCCACHE_SERVER_UDS="$BENCH_UDS" "$SCCACHE_BIN" --version 2>/dev/null || echo unknown)"
 log "sccache_uds=$BENCH_UDS"
 CACHE_ENV=(
   SCCACHE_DIR="$CACHE_DIR"
@@ -320,6 +387,7 @@ fi
 
 log ""
 log "### clippy (tiny probe; sccache 0.17 does not cache clippy-driver itself)"
+reset_bench_directory "$WORKDIR/probe"
 mkdir -p "$WORKDIR/probe/src" "$WORKDIR/probe/scripts" "$WORKDIR/probe/.cargo" "$WORKDIR/probe-target"
 cat >"$WORKDIR/probe/Cargo.toml" <<'EOF'
 [package]
@@ -335,7 +403,7 @@ cp "$ROOT/scripts/rustc-compiler-cache.sh" "$WORKDIR/probe/scripts/rustc-compile
 cp "$ROOT/.cargo/config.toml" "$WORKDIR/probe/.cargo/config.toml"
 chmod +x "$WORKDIR/probe/scripts/rustc-compiler-cache.sh"
 (cd "$WORKDIR/probe" && cargo generate-lockfile >/dev/null)
-rm -rf "$WORKDIR/probe-target/"*
+reset_bench_directory "$WORKDIR/probe-target"
 log "==> clippy-probe"
 (
   cd "$WORKDIR/probe"
@@ -350,7 +418,7 @@ log "clippy_note=clippy-driver analysis invocations are non-cacheable (missing o
 
 log ""
 log "### incremental (sccache 0.17.0 prohibits CARGO_INCREMENTAL=1; it does not degrade to rustc)"
-rm -rf "$WORKDIR/probe-target/"*
+reset_bench_directory "$WORKDIR/probe-target"
 log "==> incremental-probe"
 incr_status=0
 (
@@ -371,6 +439,8 @@ if can_create_ns; then
   ns_detail="bwrap can create mount namespaces"
   log ""
   log "### concurrent Linux namespaces (different source, shared disk cache)"
+  reset_bench_directory "$WORKDIR/probe-c"
+  reset_bench_directory "$WORKDIR/probe-d"
   mkdir -p "$WORKDIR/probe-c/src" "$WORKDIR/probe-d/src" \
     "$WORKDIR/probe-c/scripts" "$WORKDIR/probe-d/scripts" \
     "$WORKDIR/probe-c/.cargo" "$WORKDIR/probe-d/.cargo" \
@@ -389,7 +459,8 @@ if can_create_ns; then
   (cd "$WORKDIR/probe-c" && cargo generate-lockfile >/dev/null)
   cp "$WORKDIR/probe-c/Cargo.lock" "$WORKDIR/probe-d/Cargo.lock"
   conc_start="$(now)"
-  PATH="$PATH" ORBIT_COMPILER_CACHE_BIN="$SCCACHE_BIN" \
+  PATH="$PATH" TMPDIR="$WORKDIR" SCCACHE_DIR="$CACHE_DIR" \
+    SCCACHE_SERVER_UDS="$BENCH_UDS" ORBIT_COMPILER_CACHE_BIN="$SCCACHE_BIN" \
     ORBIT_COMPILER_CACHE_REQUIRE_NS="$REQUIRE_NS" \
     "$ROOT/scripts/test-compiler-cache-namespaces.sh" | tee -a "$RESULT"
   conc_wall="$(secs "$conc_start" "$(now)")"

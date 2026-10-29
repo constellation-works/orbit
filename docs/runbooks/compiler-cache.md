@@ -5,7 +5,7 @@ tags: [operations, rust, cache, worktrees, sandbox, linux]
 paths: ["scripts/rustc-compiler-cache.sh", "scripts/compiler-cache.sh", "scripts/test-compiler-cache.sh", "scripts/test-compiler-cache-namespaces.sh", "scripts/bench-compiler-cache.sh", "scripts/cross-revision-check.sh", "scripts/test-cross-revision-check.sh", ".cargo/config.toml"]
 related_features: [policy-sandbox, executors]
 related_artifacts: [ORB-11259, ORB-11755, ORB-11981]
-last_validated: 2026-10-25
+last_validated: 2026-10-29
 ---
 
 # Share Rust dependency compilation across worker worktrees
@@ -617,6 +617,33 @@ scripts/bench-compiler-cache.sh
 
 # On a host that can create user namespaces, also require the concurrent test:
 ORBIT_COMPILER_CACHE_REQUIRE_NS=1 scripts/bench-compiler-cache.sh
+```
+
+The benchmark requires Python 3 for path admission. Use a dedicated, exclusively
+owned `ORBIT_COMPILER_CACHE_BENCH_DIR`; do not modify it from another process
+while the benchmark runs. Before any build, daemon control, write or cleanup,
+the harness resolves parent components and symlink ancestors, including for
+paths that do not yet exist. `SCCACHE_DIR` must resolve strictly below that
+workdir, separate from generated source trees, targets, the installed binary,
+socket and output files. The workdir itself is never a cache reset destination.
+Escaping paths and cache aliases of reserved destinations are refused.
+An ordinary nested private cache, including an alias resolving inside the
+workdir, is accepted; the canonical path is used by resets and daemon controls.
+`ORBIT_COMPILER_CACHE_BENCH_RESULT` must also resolve below the workdir and stay
+separate from the cache and reserved destinations. Existing symlinks at reserved
+destinations or at the result file are refused. Source and target trees are
+replaced as directory entries before reuse so old symlinks within them cannot
+redirect extraction or target clearing. This admission check assumes exclusive
+ownership; it does not protect against concurrent filesystem changes.
+
+The disposable public-script regression uses fake build/cache transports and
+a deletion recorder that never deletes. It covers parent and symlink escapes,
+literal external caches, workdir equality, cache/target overlap and private
+cache operation without compiling or starting daemons:
+
+```bash
+python3 scripts/test-bench-compiler-cache.py
+# Also included in scripts/test-compiler-cache.sh and the CI guardrails.
 ```
 
 The harness records sequential no-cache cold builds, an unnormalized
