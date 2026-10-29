@@ -948,9 +948,21 @@ The returned `binding.superseded` names the task binding being acknowledged
 and digests the complete stopped delivery lineage within the 64-run inspection
 window. Every intervening replacement must meet the cancelled/empty failed
 successor contract below. Completion-only checkpoint retries must trace back
-to the original publisher, preserve its exact publication prefix, deadlines
-and recovery receipts, and have no repair or mutation provenance, source-work
-step or dirty shared checkout. A held retry is acceptable only after its worker
+to the original publisher and preserve its exact publication prefix and final
+and rebase recovery checkpoints. A supported completion-repair grant may have
+cleared and renewed the deadline before its reader failed. Inspection matches
+that grant's task, source, PR, head, blocker and drain against its unique host
+start record; copied input alone grants nothing. Later plain retries must
+preserve the renewed deadline and marker. An inherited failure receipt must
+match its actual origin's complete receipt, belong to the original publication,
+and remain unchanged through every intervening parent. No old receipt or run
+is rewritten to make this proof fit.
+
+The grant records permission, not proof that a repair ran. Admission still
+requires bounded host step-start audits, unchanged non-null outputs and
+publication checkpoints, no repair-agent admission or mutation provenance, and
+no source-work step or dirty or divergent shared checkout. Missing or ambiguous
+grant, receipt-origin or parent history refuses. A held retry is acceptable only after its worker
 has conclusively stopped. Active, foreign, claimed, missing, changed or
 candidate-producing members refuse; none is silently skipped to find an older
 usable publication. A change to a member invalidates the inspected binding.
@@ -973,7 +985,8 @@ unknown reply; a divergent payload or another key on that reserved head refuses.
 Original failure evidence, receipts, deadlines and retained candidates stay
 intact. This repair grants no completion, merge or automatic-fix authority.
 
-The operational case remains ORB-19689 / PR #6851. After deploying this change
+The operational case remains ORB-19689 / PR #6851; ORB-19771 owns its
+post-deployment inspection, submission and recovery. After deploying this change
 to its owner, an operator still needs to verify the stopped lineage, inspect
 the original publishing run ending `0437-c18`, review the exact current PR head
 and submit the repair with fresh policy and the red help-entrypoint evidence.

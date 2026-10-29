@@ -1758,6 +1758,16 @@ retain their refusals, recorded as `candidate-changed`. Conflicts, red checks
 and permission failures keep their existing recovery path; a lost mutation
 reply never grants this read-only retry.
 
+A historical supported completion-repair grant is a separate case: it may have
+renewed a deadline without reaching a repair agent. Fresh operator source
+repair can acknowledge that stopped lineage when the host's unique grant
+record, complete parent chain, receipt origin, step audits and unchanged
+publication prove no source or mutation effects. Plain descendants must retain
+the granted deadline and marker. This admission creates a repair-only attempt
+under current validation and review policy; it preserves the old records and
+inherits no completion, merge or automatic-fix authority. See
+[repairing a kept inline publication](runbooks/stuck-job-runs.md#repair-a-kept-inline-publication-after-completion-expired).
+
 **Escalated blocks.** A final-recovery `requeue` is bounded to two per task
 in 24 hours; past that the decision is refused and the task stays blocked.
 The bound has no configuration key. What final recovery escalates waits in
