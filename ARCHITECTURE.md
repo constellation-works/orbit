@@ -1,7 +1,7 @@
 ---
 type: context
 summary: "Layered crate graph, dependency rules, per-crate roles, store internals and scoping"
-last_validated: 2026-10-28
+last_validated: 2026-10-29
 ---
 
 # Architecture
@@ -32,6 +32,13 @@ secret values before persistence or outbound I/O. Composition exposes an opt-in
 host service without starting workers or enabling any consumer. Details and the
 durable-facility choice are in the
 [service contract](docs/design/decision-assistance/specs/service.md).
+The task-quality application consumer adds local post-commit markers at owner
+task-entry paths and reconciles them from the owner clock when explicitly
+granted. Its bounded, versioned private history/feedback uses durable atomic
+files under the global root; the generic ledger owns inference claims and
+accounting. Task content and terminal state fence admission and result reads,
+and no task lock spans adapter I/O. See the
+[task-quality contract](docs/design/decision-assistance/specs/task-quality.md).
 
 The store's run-resource minute history feeds profile-cache freshness with a
 probe over every sampled run: the newest `finished_at` and the count of finished

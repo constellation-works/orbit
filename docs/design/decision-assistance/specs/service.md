@@ -13,9 +13,11 @@ tags: [decision-assistance]
 
 # Service contract: bounded decision assistance
 
-The generic service is implemented; collectors and automatic scheduling are not
-enabled. The [scope](../1_scope.md) remains incomplete until the priority
-consumers and separately authorized evaluation are delivered. The
+The generic service and [private task-quality collector](task-quality.md) are
+implemented; all host grants remain off by default. The [scope](../1_scope.md)
+records parked advisory rollout after both development screens failed, with
+the failure consumer and advisory surfaces archived/deferred. Code completion
+does not establish effectiveness or adoption. The
 [configuration reference](../../../CONFIG.md#assistance--optional-bounded-model-annotations)
 describes the single host-only table, exact fields, defaults and off switch.
 
@@ -30,6 +32,15 @@ time, permitted references, omissions and truncation; and selected JSON fields.
 Criterion references are host-selected index/text-digest pairs checked against
 the packet. The model cannot invent criterion references. Consumers that need
 per-criterion or pair assessments expand their question set themselves.
+
+`enqueue_expanded_assistance(request, secrets, template)` supports a host-granted
+template with a dynamic bounded question set. Its exact template digest must
+match the grant. Expanded questions may only use a template name followed by at
+most two positive numeric indexes, with identical rubric, answer type, allowed
+values and confidence policy. Only criterion references may vary; they are
+checked against the immutable evidence packet. Contract versions must match.
+This admits per-criterion/pair assessments without requiring a host grant per
+task or placing consumer taxonomies in the generic service.
 
 The generic core contains no failure or task-quality taxonomy. The offline
 evaluator remains the owner of the two initial versioned question sets. The
@@ -58,6 +69,12 @@ is the operator/history view, including pending work and shadow results.
 Consumers must pass the latest semantic digest on every read and reconcile
 creation/edit events durably. Atomic task-event publication is a collector duty,
 not an implied side effect of this service.
+
+`assistance_policy_epoch` reads the host grant locally without credentials or
+work writes. `process_next_assistance_checked` accepts a consumer freshness
+predicate checked immediately before and after adapter I/O, outside store
+transactions; superseded subjects finish as stale attempts. Consumers still
+revalidate semantic identity when projecting results after completion.
 
 Only exactly requested names and expected types are accepted, with unique
 choice values and finite probabilities in [0,1]. Choice distributions contain

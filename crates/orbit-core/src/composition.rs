@@ -533,3 +533,15 @@ pub fn host_assistance_service(
         }),
     )
 }
+
+impl OrbitRuntime {
+    /// Join the private task consumer to the host-only adapter and ledger.
+    pub(crate) fn task_quality_service(
+        &self,
+    ) -> Result<crate::application::assistance::AssistanceService, OrbitError> {
+        Ok(host_assistance_service(
+            &self.global_root(),
+            orbit_store::compose::assistance_store_from_store(self.sqlite_store()?),
+        ))
+    }
+}

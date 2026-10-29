@@ -501,6 +501,12 @@ impl OrbitRuntime {
             self.resume_review_evidence(id)?;
             updated = self.get_task(id)?;
         }
+        if task.title != updated.title
+            || task.description != updated.description
+            || task.acceptance_criteria != updated.acceptance_criteria
+        {
+            self.schedule_task_quality_after_commit(&updated);
+        }
         Ok(LockedTaskUpdate {
             task: updated,
             previous_status,

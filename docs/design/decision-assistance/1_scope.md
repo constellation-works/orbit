@@ -4,8 +4,8 @@ owner: codex
 last_updated: 2026-10-29
 last_validated: 2026-10-29
 status: Draft
-stage: building
-next: "Implement opt-in consumer collectors; coordinate independent labels and separately authorized live evaluation before advisory activation."
+stage: parked
+next: "Improve rubrics/packets, independently adjudicate permitted data and register an unopened holdout before any activation; advisory rollout remains parked."
 feature: decision-assistance
 doc_role: scope
 type: design
@@ -15,10 +15,18 @@ tags: [decision-assistance]
 
 # Scope: bounded decision assistance
 
-Status: the offline evaluation contract and optional generic service are implemented.
-Consumer collectors, live evaluation and advisory activation remain pending.
+Status: **advisory rollout is parked** after both preregistered development
+screens failed. The offline evaluation contract and optional generic service
+are implemented; this delivery adds the already admitted private task-quality
+shadow consumer as repository code. The
+[task-quality contract](specs/task-quality.md) documents owner-clock recovery,
+semantic freshness and private feedback. All consumers default off. The failure
+consumer and human-facing advisory surfaces are archived/deferred; implementing
+them is no longer the next step. Private collector code completion is separate
+from effectiveness and adoption: this delivery authorizes no deployment, paid
+replay, prompt tuning, configuration change or API activation.
 The [service contract](specs/service.md) documents the host-only configuration,
-durable ledger and public application boundary. Defaults remain off.
+durable ledger and public application boundary.
 
 Bearing: builds on [activities and jobs](../activity-job/2_design.md),
 [auto-tasks](../auto-tasks/2_design.md), the shipped
@@ -26,6 +34,42 @@ Bearing: builds on [activities and jobs](../activity-job/2_design.md),
 and the [human decision channel](../human-decision-channel/2_design.md).
 Model assistance produces evidence annotations. The existing task, run, review,
 admission and human-decision contracts continue to own actions and authority.
+
+## Development evidence and disposition
+
+The operator's 2026-10-29 development screens provide negative evidence for the
+current rubrics and packets, not an accuracy or rollout pass:
+
+| Consumer | Development provenance | Result |
+|---|---|---|
+| Failure categorization | 30 bounded historical diagnostic packets compared with prior investigator/agent categories; no independent human ground truth. | 26.7% agreement with the agent baseline and 60% substantive coverage; both predeclared quality screens failed. |
+| Task quality | 24 wholly invented tasks and Sonnet-authored synthetic labels, followed by Codex packet review with disagreements frozen before answers; no independent human labels or representative holdout. | 20 fully answered packets and four mixed predicate/refusal packets. Strict whole-result validation and predeclared confidence bands gave 119/212 consensus-cell matches (56.13%), excluding four predeclared uncertain label cells. Outcome agreement was 75%, scope 78.26%, criterion observability 20% and conflict 75.56%; every question group failed its predeclared screen. |
+
+The operator's development-study task retains the protocols and readouts as
+`decision-assistance-development/{protocol,readout}.json` and
+`decision-assistance-quality-development/{protocol,readout}.json` (see Task
+References). Their protocol SHA256 values are
+`766a42cb2e1f7f7b685c22682c1a84c0dab885c7d5f07ee2d8e38e6b5a3f45d3`
+and `a8d2baa0582058f51513c9976715582837e5d2464f0bdd963c5397cfe81948d8`
+respectively. The task-quality protocol was registered at
+2026-10-29T08:59:29.189830Z, before the first request at 09:00:40.190483Z;
+no prompt or threshold adaptation followed the readout. Only invented tasks
+were sent in that screen, with no additional historical diagnostics or chats.
+No real diagnostic content is reproduced here.
+
+These small development samples do not establish calibration, production
+accuracy, operator time savings or utility. Recorded latency and usage-based
+cost estimates do not supply that missing evidence; actual billed costs remain
+unknown without a billing ledger. Failure-screen numbers do not describe task
+quality, and synthetic labels are not adjudicated human ground truth.
+
+Before **any activation**, improve the rubrics and evidence packets, obtain
+independently adjudicated permitted data, and register targets, sample sizes and
+the protocol for a fresh, unopened family/time holdout. Evaluate that holdout
+without adapting to its answers and establish useful coverage, error burden,
+latency and cost against the existing workflow. An explicit operator evidence
+and adoption decision remains required. Until then rollout stays parked and
+the implemented foundation and private collector stay off by default.
 
 ## Problem
 
@@ -275,15 +319,21 @@ fields are implementation contracts still to be designed.
 
 ## Phasing
 
-1. **Evaluation contract.** Freeze question sets and evidence builders for the two
-   priority consumers. Assemble a permitted, human-labeled historical corpus, with
-   ambiguous and insufficient-evidence cases. Record disagreement and adjudication;
-   split by task/failure family and time so near-duplicates cannot leak into holdouts.
-2. **Optional adapter and shadow consumers.** Add the durable bounded work contract,
-   credentials/data controls and both collectors. Validate off/outage behavior and
-   freshness through public task/report boundaries. Run a separately authorized,
-   capped live evaluation, with no workflow actions.
-3. **Advisory integration.** Review per-class precision/recall, abstention coverage,
+This records delivered foundations and conditional re-entry requirements, not
+an instruction to resume the archived/deferred work.
+
+1. **Evaluation foundation — implemented.** Versioned question sets, evidence
+   contracts and offline scoring exist. The development screens above failed;
+   independently adjudicated permitted data and a fresh holdout remain owed.
+2. **Service and private collector — implemented, default off.** The durable
+   bounded service, credentials/data controls and private task-quality collector
+   have synthetic public-boundary verification. This repository-only delivery
+   supplies no live effectiveness or adoption evidence. The failure consumer is
+   archived/deferred rather than awaiting immediate implementation.
+3. **Evidence and advisory integration — parked.** Improve rubrics/packets and
+   independently adjudicate permitted data, including disagreement and ambiguous
+   cases. Split by family and time to prevent near-duplicate leakage and register
+   a protocol before opening a fresh holdout. Review per-class precision/recall, abstention coverage,
    false-positive burden, corrections, latency, cost per useful assessment and
    investigator/author time saved against the existing workflow. Choose and record
    per-question thresholds and sample-size requirements before opening a fresh
@@ -334,5 +384,9 @@ fields are implementation contracts still to be designed.
 - ORB-19718 — author this design and open its review PR; no implementation authorized.
 - ORB-19720 — offline evaluation contract and protocol.
 - ORB-19721 — optional generic service and synthetic public-boundary fixtures.
+- ORB-19723 — private task-quality shadow consumer and reasoned feedback.
+- ORB-19722 — failure consumer, archived/deferred after its development screen.
+- ORB-19724 — advisory surfaces, archived/deferred after the development screens.
+- ORB-19771 — operator development-study protocols, receipts, readouts and parked disposition.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
