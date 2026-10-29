@@ -297,7 +297,10 @@ impl AssistanceService {
         // Queue age bounds queued work only. A completed result stays
         // current while its policy and source digest still match, until
         // retention maintenance removes it (at created_at + queue age +
-        // retention) or a fresher snapshot moves its slot.
+        // retention) or a fresher snapshot moves its slot. Only a settled row
+        // holds a completed answer. Its QueueExpired gap is queue age, not
+        // completion, so the current flag is the same whether or not
+        // maintenance has recorded that gap.
         let identity_matches = policy.is_some_and(|p| {
             p.mode != AssistanceMode::Off
                 && preparation::assistance_policy_digest(&settings, p)
@@ -305,7 +308,11 @@ impl AssistanceService {
                     .as_ref()
                     == Some(&record.work.policy_digest)
         }) && record.work.request.source_digest == source_digest;
-        let completed = record.result.is_some();
+        let completed = record.settled
+            && record
+                .result
+                .as_ref()
+                .is_some_and(|result| result.reason != AssistanceReason::QueueExpired);
         let queue_fresh = completed
             || (self.clock)()
                 < record.work.created_at
@@ -320,6 +327,11 @@ impl AssistanceService {
                 result.reason = AssistanceReason::Superseded;
                 result.answers.clear();
             }
+        }
+        // A queued or claimed row past queue age holds at most a retry
+        // attempt's gap. That is pending state, not a result to present.
+        if !queue_fresh && !record.settled {
+            record.result = None;
         }
         Ok(Some(record))
     }

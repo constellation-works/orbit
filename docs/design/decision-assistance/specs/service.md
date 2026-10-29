@@ -67,8 +67,11 @@ the owner controls when to call it. `assistance_assessment(id, current_digest)`
 is the operator/history view, including pending work and shadow results.
 `assistance_advisory` returns nothing in off/shadow mode or for a stale identity.
 A completed result stays current and readable while its source digest and
-policy still match, until retention ends or a fresher snapshot supersedes it;
-queue age expires queued work only and never relabels a completed result
+policy still match, until retention ends or a fresher snapshot supersedes it.
+Queue age expires queued work only, including retry-pending work. Past queue
+age, that work is not current and presents no result or advisory, whether or
+not maintenance has yet recorded its `QueueExpired` gap; once recorded, the gap
+is readable with `current` false. Queue age never relabels a completed result
 `Superseded`. That label is reserved for a moved slot or a changed
 policy/source identity.
 Consumers must pass the latest semantic digest on every read and reconcile
@@ -203,7 +206,8 @@ It covers off with no credential/queue/call, value redaction and scope, strict
 answer translation, missing/extra/invalid/refused answers, probability bounds,
 choice abstention and choice confidence/distribution consistency,
 unavailable budgets/pricing, overflow/queue expiry, completed results
-outliving queue age until retention or real supersession,
+outliving queue age until retention or real supersession, and expired queued
+and retry-pending work reading the same before and after maintenance,
 restart/claim/retry identities, retained outcome-unknown charges, pre-send refusal
 releases (including a settings-loader failure after claiming), retention,
 shadow/advisory changes, disabled/superseded/late results, lock release before

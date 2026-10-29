@@ -47,6 +47,9 @@ pub struct AssistanceAttempt {
 pub struct AssistanceRecord {
     pub work: AssistanceWork,
     pub current: bool,
+    /// The row reached `done`. A queued or claimed row's `result`, when present,
+    /// is only its last retry attempt's gap, not a settled answer.
+    pub settled: bool,
     pub result: Option<AssistanceResult>,
     pub attempts: Vec<AssistanceAttempt>,
 }

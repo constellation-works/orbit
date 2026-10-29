@@ -100,7 +100,7 @@ built-in defaults. Unknown fields in either table are rejected.
 |---|---|---|
 | `limits.concurrency` | `2` | Active claims across the host store (1–64). |
 | `limits.queue_capacity` / `max_records` | `128` / `1024` | Pending work / all retained work; overflow records a coverage-gap counter. |
-| `limits.queue_age_seconds` / `timeout_seconds` | `300` / `15` | Maximum queue age for queued work and per-attempt deadline (timeout at most 120s). Queue age does not expire a completed result. |
+| `limits.queue_age_seconds` / `timeout_seconds` | `300` / `15` | Maximum queue age for queued work, including retry-pending work, and per-attempt deadline (timeout at most 120s). Expired queued work is not current and has no advisory; queue age does not expire a completed result. |
 | `limits.retry_delay_seconds` / `max_attempts` | `5` / `2` | Delayed retries, at most five attempts including the first. |
 | `limits.max_request_bytes` / `max_response_bytes` | `16384` / `65536` | Serialized outbound request and received response bounds. Oversize is explicit, never silently clipped. |
 | `limits.max_input_tokens` | `32768` | Conservative reservation per attempt; body bytes plus framing must fit. |
