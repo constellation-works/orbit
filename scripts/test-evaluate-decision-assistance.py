@@ -90,6 +90,51 @@ class EvalTests(unittest.TestCase):
         rep = self._score(self.ds, self._dump("ref.json", ans))
         self.assertGreaterEqual(rep["totals"]["refused_or_unavailable"], 1); self.assertGreaterEqual(rep["totals"]["abstained"], 1)
 
+    def test_abstained_true_class_answers_count_as_false_negatives(self):
+        ds = self._load(self.ds)
+        ans = self._load(self.ans)
+        provider_case = next(c for c in ds["cases"] if c["case_id"] == "seed-fail-provider")
+        extra_case = json.loads(json.dumps(provider_case))
+        extra_case["case_id"] = "seed-fail-provider-2"
+        extra_case["family_id"] = "fam-provider-early-exit"
+        extra_case["evidence_packet"]["packet_id"] = "pkt-seed-fail-provider-2"
+        extra_case["evidence_packet"]["subject_id"] = "run-provider-2"
+        ds["cases"] = [provider_case, extra_case]
+
+        provider_answer = next(a for a in ans["answers"] if a["case_id"] == "seed-fail-provider")
+        provider_answer["disposition"] = "suggested"
+        provider_answer["answers"]["failure_category"]["value"] = "provider"
+        ans["answers"] = [provider_answer]
+
+        for early_exit in ("refused", "unavailable", "uncertain", "invalid", "stale", "omitted"):
+            with self.subTest(early_exit=early_exit):
+                case_answers = json.loads(json.dumps(ans))
+                if early_exit in ("refused", "unavailable", "uncertain", "stale"):
+                    case_answers["answers"].append({
+                        "case_id": "seed-fail-provider-2", "disposition": early_exit,
+                        "answers": {} if early_exit in ("refused", "unavailable") else {
+                            "failure_category": {"value": "provider"},
+                        },
+                    })
+                elif early_exit == "invalid":
+                    case_answers["answers"].append({
+                        "case_id": "seed-fail-provider-2", "disposition": "suggested",
+                        "answers": {"failure_category": {"value": "not-a-category"}},
+                    })
+                report = self._score(self._dump(f"provider-{early_exit}-ds.json", ds),
+                                     self._dump(f"provider-{early_exit}-ans.json", case_answers))
+
+                if early_exit == "invalid":
+                    self.assertTrue(report["validation_errors"])
+                else:
+                    self.assertEqual(report["validation_errors"], [])
+                metrics = report["questions"]["failure_category"]["per_class"]["provider"]
+                self.assertEqual(metrics, {"precision": 1.0, "recall": 0.5, "f1": 2 / 3,
+                                           "tp": 1, "fp": 0, "fn": 1})
+                self.assertEqual(report["totals"]["answered"], 1)
+                self.assertEqual(report["totals"]["abstained"], 1)
+                self.assertEqual(report["totals"]["coverage"], 0.5)
+
     def test_poor_classifier_visible(self):
         ans = self._load(self.ans)
         for a in ans["answers"]:

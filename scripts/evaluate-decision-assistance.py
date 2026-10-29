@@ -243,13 +243,30 @@ def score(ds, ansdoc):
     # per-question accumulators
     choice_conf = defaultdict(Counter); choice_counts = defaultdict(lambda: [0, 0, 0])  # tp,fp,fn
     pred_stats = {}
+    def record_abstained_expected_failure(case):
+        if case["consumer"] != "failure_categorization":
+            return
+        expected = case["expected"]["failure_category"]["value"]
+        if expected != "insufficient_evidence":
+            choice_counts[expected][2] += 1
+
     for cid, case in cases.items():
         total += 1
         a = by_id.get(cid)
         if a is None or a.get("disposition") not in DISPOSITIONS or (validate_answers(ds, {"format_version": FORMAT, "answers": [a]})):
-            invalid += 1; abstained += 1; continue
-        if a["disposition"] in ("refused", "unavailable"): refused += 1; abstained += 1; continue
-        if a["disposition"] != "suggested": abstained += 1; continue
+            invalid += 1
+            abstained += 1
+            record_abstained_expected_failure(case)
+            continue
+        if a["disposition"] in ("refused", "unavailable"):
+            refused += 1
+            abstained += 1
+            record_abstained_expected_failure(case)
+            continue
+        if a["disposition"] != "suggested":
+            abstained += 1
+            record_abstained_expected_failure(case)
+            continue
         got = a.get("answers") or {}
         case_answered = True
         for q, exp in case["expected"].items():
@@ -257,7 +274,7 @@ def score(ds, ansdoc):
             if case["consumer"] == "failure_categorization":
                 if pv == "insufficient_evidence":
                     case_answered = False
-                    if ev != "insufficient_evidence": choice_counts[ev][2] += 1
+                    record_abstained_expected_failure(case)
                     continue
                 choice_conf[ev][pv] += 1
                 for cls in FAILURE_CATEGORIES:
