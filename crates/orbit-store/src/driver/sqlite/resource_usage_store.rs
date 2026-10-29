@@ -25,9 +25,9 @@ fn bytes(value: u64) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
 }
 
-fn encode<T: serde::Serialize>(value: &T) -> Result<String, OrbitError> {
+fn encode<T: serde::Serialize>(value: &T, what: &str) -> Result<String, OrbitError> {
     serde_json::to_string(value)
-        .map_err(|error| OrbitError::Store(format!("encode resource evidence: {error}")))
+        .map_err(|error| OrbitError::Store(format!("encode {what}: {error}")))
 }
 
 /// A JSON column read back; a value this binary cannot read is a
@@ -248,12 +248,20 @@ impl ResourceUsageStoreBackend for Store {
         &self,
         record: &AdmissionForecastRecord,
     ) -> Result<(), OrbitError> {
-        let points = encode(&record.points)?;
-        let admitted = encode(&record.admitted)?;
-        let fit_admitted = encode(&record.fit_admitted)?;
-        let fit_skipped = encode(&record.fit_skipped)?;
-        let pull = record.pull.as_ref().map(encode).transpose()?;
-        let covered = record.covered_deliveries.as_ref().map(encode).transpose()?;
+        let points = encode(&record.points, "an admission forecast")?;
+        let admitted = encode(&record.admitted, "an admission forecast")?;
+        let fit_admitted = encode(&record.fit_admitted, "an admission forecast")?;
+        let fit_skipped = encode(&record.fit_skipped, "an admission forecast")?;
+        let pull = record
+            .pull
+            .as_ref()
+            .map(|value| encode(value, "an admission forecast"))
+            .transpose()?;
+        let covered = record
+            .covered_deliveries
+            .as_ref()
+            .map(|value| encode(value, "an admission forecast"))
+            .transpose()?;
         self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
             tx.connection()
                 .execute(
@@ -577,7 +585,7 @@ impl crate::contracts::WorkerResourceLimitStoreBackend for Store {
         &self,
         evidence: &crate::contracts::WorkerResourceLimitEvidence,
     ) -> Result<(), OrbitError> {
-        let encoded = encode(evidence)?;
+        let encoded = encode(evidence, "resource evidence")?;
         self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
             tx.connection()
                 .execute(
