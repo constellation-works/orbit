@@ -18,23 +18,15 @@ impl OrbitRuntime {
                 .map_err(|error| refuse(format!("unreadable prior repair admission: {error}")))?;
         let binding = &admission.binding;
         let entries = self.get_task_history(&task.id)?;
-        let reservations = orbit_types::workflow::source_repair_reservations(&entries)
+        let reservations = orbit_types::workflow::source_repair_authorizations(&entries)
             .map_err(|error| refuse(format!("unreadable repair reservation: {error}")))?;
         let matching = reservations
             .iter()
             .filter(|record| record.request_key == admission.request_key)
             .collect::<Vec<_>>();
-        let recorded =
-            serde_json::to_value(&admission).map_err(|error| refuse(error.to_string()))?;
-        // Run input alone is not operator authority. Require the immutable,
-        // system-authored reservation and its unique link to this exact run.
-        let reserved = entries.iter().any(|entry| {
-            entry.by == "system"
-                && entry.event == SOURCE_REPAIR_RESERVED
-                && entry.note.as_deref().is_some_and(|note| {
-                    serde_json::from_str::<Value>(note).is_ok_and(|value| value == recorded)
-                })
-        });
+        // Run input alone is not operator authority. The resolver authenticates
+        // the immutable system reservation and any fresh authorization; require
+        // its unique link to this exact run as well.
         let links = entries
             .iter()
             .filter(|entry| entry.event == SOURCE_REPAIR_LINKED)
@@ -50,7 +42,6 @@ impl OrbitRuntime {
             .collect::<Vec<_>>();
         if matching.len() != 1
             || digest(matching[0])? != digest(&admission)?
-            || !reserved
             || linked.len() != 1
             || linked[0].0 != "system"
             || linked[0].1.run_id != source.run_id

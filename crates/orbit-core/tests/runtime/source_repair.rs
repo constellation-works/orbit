@@ -32,10 +32,14 @@ mod handoff_requeue;
 mod inline_completion_retry;
 #[path = "source_repair/inline_publication.rs"]
 mod inline_publication;
+#[path = "source_repair/preflight.rs"]
+mod preflight;
 #[path = "source_repair/publication.rs"]
 mod publication;
 #[path = "source_repair/published_owner.rs"]
 mod published_owner;
+#[path = "source_repair/reconciliation.rs"]
+mod reconciliation;
 #[path = "source_repair/replay.rs"]
 mod replay;
 #[path = "source_repair/resumed_recovery.rs"]

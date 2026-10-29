@@ -218,8 +218,9 @@ pub use pr_recovery::{
 
 mod source_repair;
 pub use source_repair::{
-    SOURCE_REPAIR_KEY, SOURCE_REPAIR_LINKED, SOURCE_REPAIR_RESERVED, SourceRepairAdmission,
-    SourceRepairBinding, SourceRepairOwner, SourceRepairSuccessor, source_repair_reservations,
+    SOURCE_REPAIR_KEY, SOURCE_REPAIR_LINKED, SOURCE_REPAIR_RECONCILED, SOURCE_REPAIR_RESERVED,
+    SourceRepairAdmission, SourceRepairBinding, SourceRepairOwner, SourceRepairReconciliation,
+    SourceRepairSuccessor, source_repair_authorizations, source_repair_reservations,
 };
 
 mod post_deploy;

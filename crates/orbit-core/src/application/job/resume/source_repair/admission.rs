@@ -15,7 +15,7 @@ use orbit_types::workflow::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::super::plan::{RESUME_LINEAGE_SCAN_LIMIT, ResumePlan};
+use super::super::plan::ResumePlan;
 use crate::OrbitRuntime;
 use crate::application::job::pipeline::PipelineSubmission;
 use crate::application::job::{ReviewAdmissionHook, RunOwnerLiveness, run_owner_liveness};
@@ -31,6 +31,7 @@ struct Request {
     diagnosis: Option<String>,
     unmet_acceptance: Option<String>,
     policy_digest: Option<String>,
+    reservation_digest: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -112,7 +113,7 @@ pub(super) fn task_pr_association(task: &Task, number: &str, url: &str) -> Resul
 }
 
 fn history(runtime: &OrbitRuntime, task: &str) -> Result<Vec<SourceRepairAdmission>, OrbitError> {
-    orbit_types::workflow::source_repair_reservations(&runtime.get_task_history(task)?)
+    orbit_types::workflow::source_repair_authorizations(&runtime.get_task_history(task)?)
         .map_err(|error| refuse(format!("unreadable repair reservation: {error}")))
 }
 
@@ -292,10 +293,12 @@ impl OrbitRuntime {
                         &source, &self.read_run_state(&source_id)?.ok_or_else(|| refuse("source checkpoints missing"))?) {
                         Some(self.source_rework_policy(&actor, &authority.provenance.to_string())?)
                     } else { None },
-                    "reservations":history(self, &request.task_id)?}),
+                    "reservations":orbit_types::workflow::source_repair_reservations(&self.get_task_history(&request.task_id)?)
+                        .map_err(|e| refuse(e.to_string()))?,
+                    "reservation_digests":self.source_repair_reservation_digests(&request.task_id)?}),
                 )
             }
-            "submit" => {
+            "submit" | "reconcile" => {
                 self.ensure_coordination_task_write_permitted()?;
                 let mut result = None;
                 self.stores()
@@ -312,7 +315,7 @@ impl OrbitRuntime {
                 result.ok_or_else(|| refuse("admission lock did not execute"))
             }
             _ => Err(OrbitError::InvalidInput(
-                "source_repair.action must be inspect or submit".into(),
+                "source_repair.action must be inspect, submit or reconcile".into(),
             )),
         }
     }
@@ -364,8 +367,36 @@ impl OrbitRuntime {
         };
         let reservations = history(self, &request.task_id)?;
         let prior = reservations.iter().find(|record| record.request_key == key);
+        let originals = orbit_types::workflow::source_repair_reservations(
+            &self.get_task_history(&request.task_id)?,
+        )
+        .map_err(|e| refuse(e.to_string()))?;
+        let original = originals.iter().find(|record| record.request_key == key);
+        let reconcile = request.action == "reconcile";
+        if reconcile {
+            let original = original
+                .ok_or_else(|| refuse("reconciliation requires an existing reservation"))?;
+            if request.reservation_digest.as_deref() != Some(digest(original)?.as_str()) {
+                return Err(refuse(
+                    "inspect and acknowledge the exact original reservation_digest",
+                ));
+            }
+            if original.policy_digest.as_deref()
+                != Some(self.source_rework_policy(actor, provenance)?.as_str())
+            {
+                return Err(refuse("current policy changed after reservation"));
+            }
+        } else if request.reservation_digest.is_some() {
+            return Err(refuse(
+                "reservation_digest requires explicit reconcile action",
+            ));
+        }
+        let fresh_authorization = match (prior, original) {
+            (Some(prior), Some(original)) if reconcile => digest(prior)? == digest(original)?,
+            _ => false,
+        };
         if prior.is_some_and(|record| {
-            record.binding != *binding
+            (!fresh_authorization && record.binding != *binding)
                 || record.diagnosis != diagnosis
                 || record.unmet_acceptance != request.unmet_acceptance
                 || record.policy_digest != request.policy_digest
@@ -374,70 +405,51 @@ impl OrbitRuntime {
         }) {
             return Err(refuse("request_key already reserved different input"));
         }
-        // Reconcile an interrupted reply before re-observing a task the admitted
-        // worker may already have rebound. A replay returns evidence, never starts
-        // another worker or grants authority to a terminal repair.
-        if let Some(record) = prior {
-            let links = self.get_task_history(&request.task_id)?;
-            let linked = links
+        // Reconcile lost answers before observing the task a worker may have
+        // rebound. Explicit new consent is only possible when no run exists.
+        if let Some(record) = prior
+            && let Some(run) = self.source_repair_linked_run(&request.task_id, source_id, key)?
+        {
+            if fresh_authorization {
+                return Err(refuse(
+                    "reservation already has a run; replay its original submit payload",
+                ));
+            }
+            if run.retry_source_run_id.as_deref() != Some(source_id)
+                || run
+                    .input
+                    .as_ref()
+                    .and_then(|i| i.get(SOURCE_REPAIR_KEY))
+                    .map(digest)
+                    .transpose()?
+                    != Some(digest(record)?)
+            {
+                return Err(refuse("linked repair evidence changed"));
+            }
+            // A lost spawn reply can leave the durable run without its
+            // post-insert link. Append the corroborated link, never start
+            // another worker or rewrite the original receipt.
+            if !self
+                .get_task_history(&request.task_id)?
                 .iter()
-                .filter(|entry| entry.event == SOURCE_REPAIR_LINKED)
-                .map(|entry| {
-                    serde_json::from_str::<RepairLink>(entry.note.as_deref().unwrap_or_default())
+                .any(|entry| {
+                    entry.event == SOURCE_REPAIR_LINKED
+                        && entry
+                            .note
+                            .as_deref()
+                            .and_then(|note| serde_json::from_str::<RepairLink>(note).ok())
+                            .is_some_and(|link| link.request_key == key)
                 })
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|error| refuse(format!("unreadable repair link: {error}")))?;
-            let ids = linked
-                .iter()
-                .filter(|link| link.request_key == key)
-                .map(|link| link.run_id.clone())
-                .collect::<BTreeSet<_>>();
-            if ids.len() > 1 {
-                return Err(refuse("repair key has inconsistent run links"));
+            {
+                self.source_repair_event(
+                    &request.task_id,
+                    SOURCE_REPAIR_LINKED,
+                    json!({"request_key":key,"run_id":run.run_id}),
+                )?;
             }
-            let run = match ids.into_iter().next() {
-                Some(id) => Some(
-                    self.get_job_run_backend(&id)?
-                        .ok_or_else(|| refuse("linked repair run is missing"))?,
-                ),
-                None => {
-                    // A crash can lose the post-insert link even after many
-                    // older generic retries. Read the normal lineage bound,
-                    // and refuse uncertainty rather than admitting twice.
-                    let children = self
-                        .stores()
-                        .jobs()
-                        .job_run_retries(source_id, RESUME_LINEAGE_SCAN_LIMIT)?;
-                    let at_bound = children.len() == RESUME_LINEAGE_SCAN_LIMIT;
-                    let found = children.into_iter().find(|run| {
-                        run.input
-                            .as_ref()
-                            .is_some_and(|input| input[SOURCE_REPAIR_KEY]["request_key"] == key)
-                    });
-                    if found.is_none() && at_bound {
-                        return Err(refuse(
-                            "repair linkage exceeds the bounded reconciliation window",
-                        ));
-                    }
-                    found
-                }
-            };
-            if let Some(run) = run {
-                if run.retry_source_run_id.as_deref() != Some(source_id)
-                    || run
-                        .input
-                        .as_ref()
-                        .and_then(|i| i.get(SOURCE_REPAIR_KEY))
-                        .map(digest)
-                        .transpose()?
-                        != Some(digest(record)?)
-                {
-                    return Err(refuse("linked repair evidence changed"));
-                }
-                return Ok(
-                    json!({"run_id":run.run_id,"retry_source_run_id":source_id,"state":run.state,"replayed":true}),
-                );
-            }
+            return Ok(
+                json!({"run_id":run.run_id,"retry_source_run_id":source_id,"state":run.state,"replayed":true}),
+            );
         }
         let (source, task, observed) =
             self.observe_source_repair(source_id, &request.task_id, prior.is_some())?;
@@ -468,7 +480,42 @@ impl OrbitRuntime {
                 "publication rework fields do not authorize this source state",
             ));
         }
-        let admission = match prior {
+        // The same lifecycle predicate as automation readmission, under the
+        // same owning task lock, before any reservation, charge or task effect.
+        if crate::application::task::in_progress_transition_requires_plan(task.status) {
+            crate::application::task::ensure_task_has_execution_plan(&task.id, &task.plan)?;
+        }
+        if !crate::application::task::task_status_transition_allowed(
+            task.status,
+            TaskStatus::InProgress,
+        ) {
+            return Err(refuse("task lifecycle refuses source repair readmission"));
+        }
+        if fresh_authorization {
+            super::reconciliation::validate_source_repair_plan_correction(
+                &task,
+                original.ok_or_else(|| refuse("original reservation missing"))?,
+                binding,
+            )?;
+        }
+        // Resolve all deterministic lifecycle, lineage and policy prerequisites
+        // before appending either reservation or fresh consent.
+        let (ancestors, lineage) = self.resume_lineage_run_ids(&source)?;
+        let mut fresh = json!({"task_ids":[task.id]});
+        self.install_review_admission("task_pr_pipeline", &mut fresh, None, false)?;
+        let mut current: ReviewAdmission =
+            serde_json::from_value(fresh[orbit_types::workflow::REVIEW_ADMISSION_KEY].clone())
+                .map_err(|e| refuse(e.to_string()))?;
+        if let Some(prior) = prior {
+            let mut comparable = current.clone();
+            comparable.captured_at = prior.review.captured_at;
+            if digest(&comparable)? != digest(&prior.review)? {
+                return Err(refuse(
+                    "current review/validation policy changed after reservation",
+                ));
+            }
+        }
+        let mut admission = match prior {
             Some(record) => record.clone(),
             None => {
                 let spent =
@@ -489,12 +536,6 @@ impl OrbitRuntime {
                         "this published head already has a repair reservation; replay its request_key",
                     ));
                 }
-                let mut fresh = json!({"task_ids":[task.id]});
-                self.install_review_admission("task_pr_pipeline", &mut fresh, None, false)?;
-                let review: ReviewAdmission = serde_json::from_value(
-                    fresh[orbit_types::workflow::REVIEW_ADMISSION_KEY].clone(),
-                )
-                .map_err(|error| refuse(error.to_string()))?;
                 let record = SourceRepairAdmission {
                     request_key: key.into(),
                     binding: binding.clone(),
@@ -505,7 +546,7 @@ impl OrbitRuntime {
                     authorizer_provenance: provenance.into(),
                     authorized_at: Utc::now(),
                     attempt: spent as u32 + 1,
-                    review,
+                    review: current.clone(),
                 };
                 self.source_repair_event(
                     &task.id,
@@ -515,18 +556,21 @@ impl OrbitRuntime {
                 record
             }
         };
-        // A reservation whose insertion was interrupted retains its charge and
-        // captured policy. It cannot silently grant old policy after a config edit.
-        let mut fresh = json!({"task_ids":[task.id]});
-        self.install_review_admission("task_pr_pipeline", &mut fresh, None, false)?;
-        let mut current: ReviewAdmission =
-            serde_json::from_value(fresh[orbit_types::workflow::REVIEW_ADMISSION_KEY].clone())
-                .map_err(|e| refuse(e.to_string()))?;
-        current.captured_at = admission.review.captured_at;
-        if digest(&current)? != digest(&admission.review)? {
-            return Err(refuse(
-                "current review/validation policy changed after reservation",
-            ));
+        if fresh_authorization {
+            let reservation = admission.clone();
+            admission.binding = binding.clone();
+            admission.authorized_at = Utc::now();
+            current.captured_at = admission.authorized_at;
+            admission.review = current;
+            self.source_repair_event(
+                &task.id,
+                orbit_types::workflow::SOURCE_REPAIR_RECONCILED,
+                serde_json::to_value(orbit_types::workflow::SourceRepairReconciliation {
+                    reservation,
+                    authorization: admission.clone(),
+                })
+                .map_err(|e| refuse(e.to_string()))?,
+            )?;
         }
         // Build new input from a small allowlist. No completion, auto-fix,
         // certification, crew draw or checkpoint from the old run survives.
@@ -535,7 +579,6 @@ impl OrbitRuntime {
         // Normal admission resolves the current task crew with its original
         // assignment provenance. Copying task.crew into an explicit run override
         // would bypass provider holds and turn a pool/default into operator intent.
-        let (ancestors, lineage) = self.resume_lineage_run_ids(&source)?;
         let plan = ResumePlan {
             attempt: source.attempt.saturating_add(1),
             source,
@@ -549,7 +592,7 @@ impl OrbitRuntime {
             completion_repair: false,
         };
         // Review -> in-progress is a new operator source decision, not restored
-        // completion authority. Its reservation is already durable above.
+        // completion authority. Lifecycle was preflighted before persistence.
         if task.status != TaskStatus::InProgress {
             self.apply_task_automation_update(&task.id, TaskAutomationUpdate {
                 status:Some(TaskStatus::InProgress),expected_status:Some(task.status),
