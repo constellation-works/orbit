@@ -18,6 +18,7 @@ import time
 import unittest
 
 from workflow_helper_tests import WorkflowHelperRevisionTests
+from ci_cache_workflow_tests import CiDependencyCacheWorkflowTests
 
 try:
     import yaml
@@ -284,6 +285,9 @@ class CiCacheWorkflowTests(unittest.TestCase):
                 if uses.startswith("Swatinem/rust-cache@"):
                     condition = step.get("with", {}).get("save-if")
                     self.assertIsNotNone(condition, f"{name}: rust-cache saves on every event unless save-if limits it")
+                    if step.get("with", {}).get("lookup-only"):
+                        self.assertIs(condition, False, "cache lookups must never save, including after a miss")
+                        continue
                 elif uses.startswith("actions/cache/save@"):
                     condition = step.get("if")
                     self.assertIsNotNone(condition, f"{name}: an unconditional cache save runs on pull requests")
@@ -727,6 +731,21 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
                 self.assertEqual(admitted, {"scope", "msrv", "ci", "test-build", "test-1", "test-2", "test-3"})
         self.assertEqual(self.push("docs/guide.md", same_tree=True, before_check="cancelled"), "skip",
                          "an exact tree that passed on the PR head is safe independently of BEFORE")
+
+    def test_validated_push_admits_seeders_even_after_a_superseded_pending_push(self):
+        seeds = yaml.safe_load((ROOT / ".github/workflows/ci-cache-seed.yml").read_text())["jobs"]
+        original_head = self.HEAD
+        for fast_forward in (False, True):
+            self.HEAD = self.SHA if fast_forward else original_head
+            for before in ("success", "cancelled", "queued", None):
+                with self.subTest(fast_forward=fast_forward, previous_push=before):
+                    mode = self.push("Cargo.toml", same_tree=True, before_check=before)
+                    self.assertEqual(mode, "skip", "the full PR proof establishes validation trust")
+                    admitted = {name for name, job in seeds.items() if name != "scope" and
+                                evaluate(job["if"], "push", bindings={SCOPE: mode})}
+                    self.assertEqual(admitted, {"seed-check", "seed-build"},
+                                     "a replaced pending push cannot prove either archive was saved")
+        self.HEAD = original_head
 
     def test_modes_admit_the_matching_jobs(self):
         document = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())

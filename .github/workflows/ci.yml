@@ -213,6 +213,7 @@ jobs:
       # Pull requests restore only; pushes to main and agent-main save.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
+          prefix-key: v1-rust-${{ hashFiles('Cargo.toml') }}
           save-if: ${{ github.event_name == 'push' }}
 
       - name: Check workspace on MSRV toolchain
@@ -312,6 +313,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         id: rust-cache
         with:
+          prefix-key: v1-rust-${{ hashFiles('Cargo.toml') }}
           shared-key: rust-1.98.1-checks
           cache-on-failure: true
           save-if: ${{ github.event_name == 'push' }}
@@ -628,6 +630,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         id: rust-cache
         with:
+          prefix-key: v1-rust-${{ hashFiles('Cargo.toml') }}
           shared-key: rust-1.98.1
           cache-on-failure: true
           save-if: ${{ github.event_name == 'push' }}
