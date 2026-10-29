@@ -263,8 +263,10 @@ its reset, and the skipped crews; `orbit doctor` warns on the provider's
 wait lifts by itself after the reset. Thresholds and budgets are in
 [configuration.md](configuration.md#common-settings). When the scheduled
 task pilot withholds its dispatch, its reason names the provider or crew,
-when the backoff ends, the failing run, and the skipped crews; the next
-tick after the hold lifts dispatches again with no operator action.
+when the backoff ends, the failing run, and the skipped crews. After the
+hold lifts, the pilot dispatches again with no operator action once the
+routine's own debounce has passed; the first tick after the hold lifts
+only starts that debounce.
 
 ## Worker Resource Containment
 
