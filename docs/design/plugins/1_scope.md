@@ -749,7 +749,7 @@ Reaching another machine through a federated destination still needs a `network`
 - A host registered with `orbit host add` is reached over the federated route. That route needs the `network` grant and `ssh` in `requires.programs`, as stated above; without them the call fails with `unreachable_destination`.
 - A host this machine does not list is refused before the selected workspace is opened, with `invalid_input` naming the host.
 
-MCP `tools/call` takes the same selectors. A host-qualified selector there goes through the MCP server's federated router, which refuses a machine it does not list with `unknown_host`, a host that does not answer with `unreachable_destination`, a host that answers without the workspace with `stale_route`, and an ambiguous workspace name with `unknown_selector`.
+MCP `tools/call` takes the same selectors. A host-qualified selector there goes through the MCP server's federated router, which refuses a machine it does not list with `unknown_selector` before contacting any destination, a host that does not answer with `unreachable_destination`, a host that answers without the workspace with `stale_route`, and an ambiguous workspace name with `unknown_selector`. (`unknown_host` belongs to the distinct explicit host-resolution entry point `host_workspace_selector`, not to `tools/call` selector routing.)
 
 **Credential binding.** The descriptor must hold a current session record whose token names
 the same device and inode in the host-owned session directory; a forged file is no credential.
