@@ -190,6 +190,8 @@ pub(super) enum CostSource {
 /// What the records say about the enrolled tasks.
 pub(super) struct Observed {
     pub(super) tasks: Vec<TaskOutcome>,
+    /// The shared scan could not confirm tasks' earliest implement invocations.
+    pub(super) first_edit_incomplete: bool,
     /// Each arm's overlay digests as its runs received them.
     pub(super) run_digests: BTreeMap<String, BTreeSet<String>>,
     /// Landed tasks whose regression window is still open.
@@ -356,6 +358,7 @@ impl OrbitRuntime {
         if ids.is_empty() {
             return Ok(Observed {
                 tasks: Vec::new(),
+                first_edit_incomplete: false,
                 run_digests: BTreeMap::new(),
                 open_regression_windows: 0,
             });
@@ -371,7 +374,7 @@ impl OrbitRuntime {
         let spend = self.task_spend(&ids, since)?;
         let lines = self.landed_task_lines_changed(&ids, since)?;
         let (run_events, run_digests) = self.run_audit(experiment_id, &ids, since)?;
-        let first_edits = self.first_implement_edits(Some(since))?.by_task;
+        let first_edits = self.first_implement_edits(Some(since))?;
 
         let mut landed_at = BTreeMap::new();
         let mut histories = BTreeMap::new();
@@ -457,7 +460,14 @@ impl OrbitRuntime {
                         .map(|ms| ms as f64 / 60_000.0),
                 ),
             );
-            let first_edit = first_edits.get(id).and_then(|edit| edit.score);
+            // A newest-first scan may retain a later retry when truncated.
+            // Completeness is scan-wide: no task's earliest invocation is
+            // certified, even when the scan holds a score for that task.
+            let first_edit = if first_edits.truncated {
+                None
+            } else {
+                first_edits.by_task.get(id).and_then(|edit| edit.score)
+            };
             values.insert(
                 "turns_before_first_edit",
                 settled(first_edit.map(|(turns, _)| turns as f64)),
@@ -524,6 +534,7 @@ impl OrbitRuntime {
         }
         Ok(Observed {
             tasks: outcomes,
+            first_edit_incomplete: first_edits.truncated,
             run_digests,
             open_regression_windows,
         })

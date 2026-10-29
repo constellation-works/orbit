@@ -315,6 +315,13 @@ Read the warnings before the verdict:
   implement invocation at all is unmeasured and stays out of `n`. A task
   still in flight is open. Older runs may lack tool-call traces, so their
   `n` can be smaller than their settled tasks.
+  If the invocation scan is incomplete because of a record limit or pagination stall,
+  the readout reports a `first_edit_incomplete` coverage warning. The scan
+  cannot confirm which tasks' earliest invocations it holds, so both first-edit
+  metrics are unmeasured for every settled task in that readout; in-flight
+  outcomes remain open. These values contribute no samples to estimates,
+  comparisons, the primary metric's chart, or the verdict and its guardrails.
+  Other metrics remain available.
 
 The readout is descriptive, not a significance oracle. It reports no
 p-value for the treatment difference itself; the interval excluding zero

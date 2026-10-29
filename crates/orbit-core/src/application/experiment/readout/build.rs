@@ -46,6 +46,12 @@ fn build_readout(
         .map(|arm| arm.name.clone());
     let tasks = &observed.tasks;
     let mut warnings = Vec::new();
+    if observed.first_edit_incomplete {
+        warnings.push(ReadoutWarning {
+            kind: "first_edit_incomplete",
+            message: "The implement-invocation scan was incomplete (record limit or pagination stall); the earliest invocation cannot be confirmed. Both first-edit metrics are excluded for every settled task in this readout; in-flight outcomes remain open.".into(),
+        });
+    }
 
     let arms: Vec<ReadoutArm> = record
         .arms
