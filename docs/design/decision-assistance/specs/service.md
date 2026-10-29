@@ -78,7 +78,9 @@ revalidate semantic identity when projecting results after completion.
 
 Only exactly requested names and expected types are accepted, with unique
 choice values and finite probabilities in [0,1]. Choice distributions contain
-exactly the allowed values and sum to one within 0.001. Missing, refused,
+exactly the allowed values and sum to one within 0.001. The chosen value must
+be the most probable one, and the confidence must equal its probability; both
+within 0.01, otherwise the answer is malformed. Missing, refused,
 malformed, unavailable and stale responses carry distinct fixed reason codes.
 A partial refusal abstains for the whole packet. Raw responses, explanations,
 provider errors and chain of thought are never persisted or logged. Results
@@ -187,7 +189,8 @@ scripts/build-budget.py -- cargo run -p orbit-core --example assistance_fixture 
 
 It covers off with no credential/queue/call, value redaction and scope, strict
 answer translation, missing/extra/invalid/refused answers, probability bounds,
-choice abstention, unavailable budgets/pricing, overflow/queue expiry,
+choice abstention and choice confidence/distribution consistency,
+unavailable budgets/pricing, overflow/queue expiry,
 restart/claim/retry identities, retained outcome-unknown charges, pre-send refusal releases, retention,
 shadow/advisory changes, disabled/superseded/late results, lock release before
 I/O, workspace config refusal, child credential exclusion and v71/v72 writer
