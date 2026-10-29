@@ -879,11 +879,25 @@ fn fixture_budgets(root: &Path, schema: &Value) -> FixtureResult {
         .map_err(|_| "settings lock")?
         .limits
         .queue_capacity = 1;
+    let pending_before_displaced_snapshot = pending_assistance_work(&f)?;
     let id = f.enqueue(f.request("expire")?)?;
+    let mut overflow_request = f.request("expire")?;
+    overflow_request.source_digest = assistance::assistance_digest(b"overflow");
     assert_eq!(
-        f.service.enqueue_assistance(f.request("overflow")?, &[])?,
+        f.service.enqueue_assistance(overflow_request, &[])?,
         AssistanceAdmission::QueueFull
     );
+    assert_eq!(
+        pending_assistance_work(&f)?,
+        pending_before_displaced_snapshot,
+        "QueueFull left displaced work consuming pending capacity"
+    );
+    let mut after_overflow = f.request("expire")?;
+    after_overflow.source_digest = assistance::assistance_digest(b"after-overflow");
+    let later_admission = f.service.enqueue_assistance(after_overflow, &[])?;
+    let AssistanceAdmission::Enqueued(later_id) = later_admission else {
+        return Err(format!("admission after QueueFull was {later_admission:?}").into());
+    };
     assert_eq!(
         f.store
             .assistance_accounting("synthetic-only/1")?
@@ -893,10 +907,31 @@ fn fixture_budgets(root: &Path, schema: &Value) -> FixtureResult {
     f.advance(301)?;
     f.store.assistance_maintain(f.now()?)?;
     assert_eq!(
-        f.record(&id)?.result.ok_or("missing expired gap")?.reason,
+        f.record(&id)?
+            .result
+            .ok_or("missing superseded gap")?
+            .reason,
+        AssistanceReason::Superseded
+    );
+    assert_eq!(
+        f.record(&later_id)?
+            .result
+            .ok_or("missing expired gap")?
+            .reason,
         AssistanceReason::QueueExpired
     );
     Ok(())
+}
+
+fn pending_assistance_work(f: &AssistanceFixture) -> Result<u32, OrbitError> {
+    f.store.with_read_connection(|conn| {
+        conn.query_row(
+            "SELECT COALESCE(SUM(state!='done'),0) FROM assistance_work",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|_| OrbitError::Store("fixture pending count".into()))
+    })
 }
 
 fn fixture_config_and_compatibility(root: &Path) -> FixtureResult {
