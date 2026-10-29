@@ -909,6 +909,12 @@ workspace with visual review `live`, and remains for everything else.
 - [ORB-19304] — adds the shared five-level severity scale and weights findings and regressions by it
 - [ORB-11365] — added the bounded artifact read surface and image presentation classification
 - [ORB-18351] — publishes screenshot artifacts into the PR body through the task's evidence ref
+- [ORB-19977] — phase 1: image-input probes
+- [ORB-19978] — phase 2: mock convention
+- [ORB-19979] — phase 3: capture driver and implementer self-check
+- [ORB-19980] — phase 4: capture of record and checks in shadow
+- [ORB-19981] — phase 5: comparison review and verification in shadow
+- [ORB-19982] — phase 6: live mode and experiment
 - [ORB-13989] — made the reviewer fix its findings as one second commit
 - [ORB-14849] — added before-landing review of the open PR
 

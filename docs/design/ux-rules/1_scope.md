@@ -5,7 +5,7 @@ last_updated: 2026-10-29
 last_validated: 2026-10-29
 status: Draft
 stage: designing
-next: "Phase 1 (rule runner, result schema, CLI rules) is filed; build before the visual-review mock phases"
+next: "Phases 1-3 filed as ORB-19974..19976; build before the visual-review mock phases"
 feature: ux-rules
 doc_role: scope
 type: design
@@ -348,5 +348,8 @@ Once the rules exist, `ux-review-ui` and `ux-review-cli` change:
 - [ORB-19681] — the latest `ux-review-cli` pass
 - [ORB-19682] — the latest `ux-review-ui` pass
 - [ORB-19294] — designed script steps, which the routine needs
+- [ORB-19974] — phase 1: rule runner, results schema and CLI rules
+- [ORB-19975] — phase 2: view manifest, browser settings and UI rules
+- [ORB-19976] — phase 3: rule-findings filer and the routine
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

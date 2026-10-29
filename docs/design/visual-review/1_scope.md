@@ -5,7 +5,7 @@ last_updated: 2026-10-29
 last_validated: 2026-10-29
 status: Draft
 stage: designing
-next: "UX rules phases 1-2 come first (they deliver the view manifest and capture settings); then this design's phases, all filed"
+next: "UX rules ORB-19974/19975 first (view manifest, browser settings); then phases 1-6 as ORB-19977..19982"
 feature: visual-review
 doc_role: scope
 type: design
@@ -272,5 +272,11 @@ configurable (`visual_review.block_at`).
 - [ORB-19304] — adds the shared five-level severity scale and weights findings and regressions by it
 - [ORB-11365] — added the bounded artifact read surface and image presentation classification
 - [ORB-18351] — publishes screenshot artifacts into the PR body through the task's evidence ref
+- [ORB-19977] — phase 1: image-input probes
+- [ORB-19978] — phase 2: mock convention
+- [ORB-19979] — phase 3: capture driver and implementer self-check
+- [ORB-19980] — phase 4: capture of record and checks in shadow
+- [ORB-19981] — phase 5: comparison review and verification in shadow
+- [ORB-19982] — phase 6: live mode and experiment
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
