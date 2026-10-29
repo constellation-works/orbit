@@ -1,8 +1,8 @@
 ---
 title: Finding Verification — Design
 owner: claude
-last_updated: 2026-10-28
-last_validated: 2026-10-26
+last_updated: 2026-10-29
+last_validated: 2026-10-29
 status: Accepted
 feature: finding-verification
 doc_role: design
@@ -34,7 +34,7 @@ verification there until its latest verification record is CONFIRMED and its
 
 ## 2. The job
 
-`finding_verification_pipeline` has three steps:
+`finding_verification_pipeline` has three steps [ORB-15662]:
 
 1. **`prepare_finding_verification`** (deterministic). It pins one
    landing-branch revision through the same source snapshot task-pilot uses,
@@ -53,7 +53,7 @@ verification there until its latest verification record is CONFIRMED and its
    partition, with that partition's crew, at `inspection_revision`. It
    returns one verifier report per task. It has no task-update, lifecycle,
    dispatch or repository-write grant. Its explicit `tool_disallow_list`
-   withholds mutation and dispatch tools, and the reviewer filesystem profile
+   withholds mutation and dispatch tools [ORB-16713], and the reviewer filesystem profile
    keeps repository inspection read-only. Shipped activities declare their
    tool policy explicitly; an empty policy in a custom activity still warns
    when loaded.
@@ -83,7 +83,7 @@ parse, fails a rule, or cites a missing file or line leaves its task
 `unverified` with reason `invalid_verdict` or `invalid_evidence`. A verifier
 that completes successfully but omits a verdict leaves `missing_verdict`.
 `severity` is the five-level scale review findings and `regression_from`
-classifications share: a classified link carries `severity` and reads back
+classifications share [ORB-19409]: a classified link carries `severity` and reads back
 with `severity_source`, and the verifier confirms or adjusts the filer's
 rating (source `verified`).
 The shipped job forwards the position-aligned `fan_in.errors` array to apply
@@ -124,11 +124,11 @@ records the tier actually drawn from. When no tier from the task's upward
 has one, the default crew verifies if it can inspect. Otherwise preparation
 fails with `inspection_crew_unavailable` before any verifier is dispatched.
 
-Trust in a verdict comes from its inspection proof, not its provider: each
+Trust in a verdict comes from its inspection proof, not its provider [ORB-17800]: each
 partition result reports `observed_revision` (`git rev-parse HEAD`) and
 `observed_tree` (`git rev-parse 'HEAD^{tree}'`) from its checkout, compared
 case-insensitively with the pinned revision and its tree, recomputed
-host-side. A partition that fails leaves every task in it unverified with
+host-side [ORB-17833]. A partition that fails leaves every task in it unverified with
 one of two reasons:
 
 | Reason | Cause |
@@ -319,3 +319,16 @@ recorded rejection succeeds without a second write.
   implementer's are. An operator who doubts one reopens the task.
 - **Claimed runs do not reject.** A claimed implementer's
   `finding_invalid` blocker leaves the rejection to the owner's operator.
+
+## Task References
+
+- ORB-15662 — the verification job, its prepare and apply steps, and the verdict record.
+- ORB-15760 — the opt-in workspace gate for verification holds.
+- ORB-15792 — drawing verifiers only from inspection-capable crews.
+- ORB-16713 — the verifier's explicit mutation and dispatch deny list.
+- ORB-17800 — proving inspection by the observed revision and tree instead of a provider gate.
+- ORB-17833 — enforcing and hardening the inspection proof with required checkpoints.
+- ORB-19409 — the five-level severity scale shared with regression links.
+- ORB-19635 — the task-pilot and implementer default rejection routes.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

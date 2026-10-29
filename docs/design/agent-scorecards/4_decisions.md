@@ -1,8 +1,8 @@
 ---
 title: Agent Scorecards — Decisions
 owner: claude
-last_updated: 2026-10-24
-last_validated: 2026-10-24
+last_updated: 2026-10-29
+last_validated: 2026-10-29
 status: Draft
 feature: agent-scorecards
 doc_role: decisions
@@ -103,6 +103,7 @@ Keep cost outside the score and keep the existing shrinkage and support rules.
 
 ## Task References
 
-ORB-17779 — replaced complexity-weighted implementer credit with unit landings and same-task-mix fleet expectations.
+- ORB-17118 — the unit-landed orchestrator principle this decision extends.
+- ORB-17779 — replaced complexity-weighted implementer credit with unit landings and same-task-mix fleet expectations.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

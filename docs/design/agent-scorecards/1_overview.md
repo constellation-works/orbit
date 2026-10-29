@@ -1,8 +1,8 @@
 ---
 title: Agent Scorecards — Overview
 owner: claude
-last_updated: 2026-10-19
-last_validated: 2026-10-26
+last_updated: 2026-10-29
+last_validated: 2026-10-29
 status: Draft
 stage: shipped
 next: "—"
@@ -40,10 +40,10 @@ The orchestrator composite also charges the orchestrator for crew-caused rework.
 
 | Concern | File | Task |
 |---------|------|------|
-| Problem attribution and the shared score | [2_design.md §3–§4](./2_design.md#3-attribution-each-problem-has-one-owner) | ORB-16952 |
-| Each role's terms and weights | [2_design.md §5](./2_design.md#5-roles) | ORB-16952 (orchestrators) |
-| API, CLI and MCP contract | [2_design.md §6–§7](./2_design.md#6-api-contract) | ORB-16952 (API) |
-| Delivery tracks and their order | [2_design.md §10](./2_design.md#10-delivery-plan) | — |
+| Problem attribution and the shared score | [2_design.md §3–§4](./2_design.md#3-attribution-each-problem-has-one-owner) | ORB-16952 (landed; strip clarified by ORB-19644) |
+| Each role's terms and weights | [2_design.md §5](./2_design.md#5-roles) | ORB-16952 (orchestrators), ORB-16954 (implementers), ORB-16955 (reviewers), ORB-16956 (pilots), ORB-17779 (tier expectations) |
+| API, CLI and MCP contract | [2_design.md §6–§7](./2_design.md#6-api-contract) | ORB-16952 (API), ORB-16957 (CLI and MCP) |
+| Delivery tracks and their order | [2_design.md §10](./2_design.md#10-delivery-plan) | ORB-16952, ORB-16953, ORB-16954, ORB-16955, ORB-16956, ORB-16957 (tracks B–G, all landed) |
 | Standing rules | [4_decisions.md](./4_decisions.md) | — |
 | The Agents dashboard view | [2_design.md §1](./2_design.md#1-destination-and-layout), [user-interface 2_design.md §5c](../user-interface/2_design.md#5c-analytics--agents) | ORB-16953 |
 
@@ -51,5 +51,11 @@ The orchestrator composite also charges the orchestrator for crew-caused rework.
 
 - ORB-16952 — the core scan, attribution, shared score, Orchestrators role and `/api/agents` routes.
 - ORB-16953 — the Agents dashboard destination, which retired Analytics › Orchestrators and `/api/orchestrators/*`.
+- ORB-16954 — the Implementers role whose terms this overview summarizes.
+- ORB-16955 — the Reviewers role whose terms this overview summarizes.
+- ORB-16956 — the Pilots role whose terms this overview summarizes.
+- ORB-16957 — the CLI and MCP contract for the scorecards.
+- ORB-17779 — the same-tier fleet expectations behind each role's terms.
+- ORB-19644 — the strip-ownership clarification behind the attribution row.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

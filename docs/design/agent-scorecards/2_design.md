@@ -1,8 +1,8 @@
 ---
 title: Agent Scorecards — Design
 owner: claude
-last_updated: 2026-10-28
-last_validated: 2026-10-26
+last_updated: 2026-10-29
+last_validated: 2026-10-29
 status: Draft
 feature: agent-scorecards
 doc_role: design
@@ -165,7 +165,7 @@ A problem counts against the run responsible for it, not the task's latest crew,
 
 ### 3.3 The attribution strip
 
-`GET /api/agents/attribution` counts the window's problems by owner: `orchestrators`, `implementers`, `reviewers`, `pilots` and `not_scored`, with `not_scored` broken down by reason. Each problem contributes once to an owner total and, for a role owner, once to that role's charged rows (crew, model, problems), including roles not yet computed. These are ownership counts, not score contributions: rankings use only their role's scored terms, weights and denominators. In particular, `no_test` escapes increase the Implementers strip count and escaped-regression stats while leaving the Implementers score unchanged. The strip explains that ownership counts include unscored context and Implementers' escaped regressions do not affect scores.
+`GET /api/agents/attribution` counts the window's problems by owner: `orchestrators`, `implementers`, `reviewers`, `pilots` and `not_scored`, with `not_scored` broken down by reason. Each problem contributes once to an owner total and, for a role owner, once to that role's charged rows (crew, model, problems), including roles not yet computed. These are ownership counts, not score contributions: rankings use only their role's scored terms, weights and denominators. In particular, `no_test` escapes increase the Implementers strip count and escaped-regression stats while leaving the Implementers score unchanged. The strip explains that ownership counts include unscored context and Implementers' escaped regressions do not affect scores [ORB-19644].
 
 The Not scored bucket covers problems without a role owner; it is not a total of every unscored stat. An Implementers-owned `no_test` escape is unscored context within Implementers, not a Not scored reason (unless attribution is unavailable or the attempt is `no-diff-expected`, as below).
 
@@ -269,7 +269,7 @@ The role panel shows each orchestrator's rework split into spec (counted), crew 
 
 **Current.**
 
-Unit: **implemented tasks**, meaning tasks with at least one implementation run by the row's crew and model that started in the window. Tasks tagged `no-diff-expected` are not implementer work and are left out entirely: no units, credit, charges or fleet expectation, in the headline rows and the by-type cells alike. The tag is judged per attempt, as of the attempt's start, replayed from the task's `tags_changed` history, so a tag added after work began does not exempt that attempt and removing it does not retroactively count one. The tag alone decides: an untagged task that ends with no diff (a verified no-diff or already-landed handoff) still counts with its normal credits and charges. Implementer problems on an excluded attempt are Not scored with reason `no_diff_expected`, so the attribution strip and the ranking still agree. Tag edits made before writes recorded `tags_changed` entries cannot be reconstructed; those attempts read the task's current tags. A configured by-type entry that matches only on `no-diff-expected` keeps its cells, all empty. The Pilots role's own `no-diff-expected` exclusion (§5.4) is unchanged, and both roles read the one `is_no_diff_expected` predicate.
+Unit: **implemented tasks**, meaning tasks with at least one implementation run by the row's crew and model that started in the window. Tasks tagged `no-diff-expected` are not implementer work and are left out entirely [ORB-18078]: no units, credit, charges or fleet expectation, in the headline rows and the by-type cells alike. The tag is judged per attempt, as of the attempt's start, replayed from the task's `tags_changed` history, so a tag added after work began does not exempt that attempt and removing it does not retroactively count one. The tag alone decides: an untagged task that ends with no diff (a verified no-diff or already-landed handoff) still counts with its normal credits and charges. Implementer problems on an excluded attempt are Not scored with reason `no_diff_expected`, so the attribution strip and the ranking still agree. Tag edits made before writes recorded `tags_changed` entries cannot be reconstructed; those attempts read the task's current tags. A configured by-type entry that matches only on `no-diff-expected` keeps its cells, all empty. The Pilots role's own `no-diff-expected` exclusion (§5.4) is unchanged, and both roles read the one `is_no_diff_expected` predicate.
 
 | Term | Weight | Definition |
 |---|---|---|
@@ -332,7 +332,7 @@ actual-minus-expected rate, so `score_base + Σ contribution` equals raw before
 rounding. Other roles have neither additive field and retain their formulas.
 The former `tier_comparison` stat is removed: scored expectations supersede it.
 
-**Escaped regressions, residual and diff economy are shown, not scored.** The
+**Escaped regressions, residual and diff economy are shown, not scored [ORB-19629].** The
 2026-10-27 riskiness backtest found lines changed the strongest regression
 predictor (AUC 0.737); crew proneness added nothing beyond size. Routing larger
 work to a crew should not penalize its score. Regression linking is still thin;
@@ -388,7 +388,7 @@ and support separately. The existing **Score breakdown** shows the 100-point fle
 and each term's actual and expected counts beside its contribution. It adds no
 new section or per-tier table.
 
-**By-type matrix.** `orbit agents scorecard --role implementers --by-type`
+**By-type matrix [ORB-17814].** `orbit agents scorecard --role implementers --by-type`
 (and its `--json`) splits the same evidence into one cell per `(crew, model,
 tier, type)`, where the type comes from the ordered
 `workflow.crew_performance_types` list: a task takes the first type whose
@@ -414,7 +414,7 @@ Unit: **settled reviews**, meaning review gate attempts by the row's crew and mo
 
 | Term | Weight | Definition |
 |---|---|---|
-| Findings that held | +1 | Findings repaired by the reviewer and validated, open findings on a `reject` that the next implementation run changed a cited path to address, and review-job findings finding verification CONFIRMED or, with no verdict, whose task landed; each weighted by severity (§4.6): critical 8, high 4, medium 2, low 1, nit 0.25. A CONFIRMED finding counts at the verifier's severity, an unverified landed one at the highest severity rated on its own `regression_from` links (else `low`), a review gate finding at the reviewer's own. |
+| Findings that held | +1 | Findings repaired by the reviewer and validated, open findings on a `reject` that the next implementation run changed a cited path to address, and review-job findings finding verification CONFIRMED or, with no verdict, whose task landed [ORB-19633]; each weighted by severity (§4.6): critical 8, high 4, medium 2, low 1, nit 0.25. A CONFIRMED finding counts at the verifier's severity, an unverified landed one at the highest severity rated on its own `regression_from` links (else `low`), a review gate finding at the reviewer's own. |
 | Fixes that held | +1 | `accept_with_fixes` verdicts whose fixes passed owner revalidation and whose task has no regression with escape `review_missed`. |
 | Rejected findings | −1 | Findings closed by an authorized decision (`Disposed`), and findings a review job filed as tasks that finding verification REJECTED. A filed finding dropped without a verdict costs nothing (see below). |
 | False rejects | −2 | `reject` verdicts where the next implementation run changed none of the rejected findings' cited paths and the next review accepted. |
@@ -651,5 +651,10 @@ Each track updates the docs its change makes stale in the same PR. That includes
 - ORB-17118 — Orchestrators credit one point per landed task instead of weighting by self-assessed complexity, drop landed initiative and show unclassified rework and regressions beside the score; smoothing only lowers a score, with K raised from 10 to 30.
 - ORB-17291 — orchestrator rows keyed by the task's `orchestrator_model`, recorded at creation from an explicit input or the orchestrator crew's configured model.
 - ORB-19304 — one severity scale for findings and regression links (critical to nit, weights 8 to 0.25), verified severity scored, escaped and missed regressions weighted by it.
+- ORB-17814 — the Implementers by-type matrix that scores each crew and model per complexity tier and type.
+- ORB-18078 — the `no-diff-expected` exclusion from Implementers units, credit, charges and fleet expectations.
+- ORB-19629 — unscored escaped regressions with the severity-weighted residual and diff economy shown beside the score.
+- ORB-19644 — the strip ownership clarification that unscored `no_test` context still counts toward Implementers ownership.
+- ORB-19633 — scoring an unverified review-job finding by its task's outcome (landed holds, open unjudged, drops neutral).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
