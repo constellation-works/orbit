@@ -430,6 +430,19 @@ spec:
       file and record the mapping and evidence in `assessment_rationale`. Add
       no whole generated tree, unrelated goldens, or outputs of sources
       consulted only as evidence. Companions are regenerated, never hand-edited.
+    - Handwritten expected-value fixtures: when a planned source change
+      necessarily invalidates an exact existing handwritten expectation (a
+      hand-maintained inventory, table or fixture whose asserted values the
+      source change must extend or alter), declare that exact fixture and
+      record the source-to-expectation dependency and its pinned source
+      evidence (`path:line` at `source_revision`) in `assessment_rationale`.
+      This is neither a generated companion nor a test only consulted or run:
+      omit fixtures that are merely read, executed or unchanged, do not
+      reserve every affected test or a whole test directory, and do not
+      derive the expectation from the source it guards. A required fixture
+      that does not exist at `source_revision` follows the Existence rule
+      below: report it as an evidence gap unless creation is authorized, and
+      never invent a filename.
     - Registration wiring: for a new or renamed action or a changed
       cross-module interface, inspect the existing sites it needs to resolve
       and run: the typed action catalog or registry, any embedding or asset

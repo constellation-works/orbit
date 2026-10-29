@@ -295,6 +295,22 @@ known missing companion; a generator relationship alone grants no creation
 intent. Task-pilot records an expected missing output without authorization
 as an evidence gap rather than proposing an undeclared missing selector.
 
+Follow a planned source change into any exact existing handwritten
+expected-value fixture it necessarily invalidates: a hand-maintained
+inventory, table or fixture whose asserted values the change must extend or
+alter (for example, an independently handwritten expected inventory that a
+new registry entry extends). Declare only that exact existing fixture, cite
+its pinned source evidence (`path:line` at the revision being scoped), and
+record the source-to-expectation dependency in the description or authoring
+evidence. Such a fixture is neither generated output nor a test only
+consulted or run: do not declare fixtures that are merely read, executed or
+unchanged, do not reserve every affected test or a whole test directory, and
+do not derive the expectation dynamically from the source it guards, which
+would remove its independent check. A required fixture that does not yet
+exist follows the creation-intent rules below; without that authorization,
+name it as an evidence gap rather than declaring its missing selector, and
+never invent a filename.
+
 When the planned change establishes a new or renamed action, or a changed
 cross-module interface, follow it through the existing registration wiring
 it requires and declare the exact existing sites that source evidence shows
