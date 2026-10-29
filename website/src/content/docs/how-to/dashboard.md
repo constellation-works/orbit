@@ -247,21 +247,35 @@ currently lock, by file or by task. **Log** is a live `orbit.log` tail you can
 filter to **all**, **err**, **deny**, or **warn**. Opening a task replaces the
 dock with its detail; below 1000px the task list fills the width.
 
-While the browser tab is visible, the dashboard keeps a live change stream
-open to the selected workspace. When a task, run, lock or drain changes,
-whether from the dashboard, the CLI, an agent or a drain, the panels that show
-it update within a few seconds, and nothing else is read again. With the
-stream connected, Tasks makes no other periodic requests apart from a full
-refresh every three minutes as a safety net. The host chips also update from
-the stream. If the stream cannot connect, for example because the host runs an
-older Orbit, the task list, the run times of tasks in progress, the locks and
-the drain state refresh about every 30 seconds instead. After a dropped
-connection the dashboard picks up the changes it missed, or refreshes in full
-when it cannot tell what it missed. A change that brings nothing new leaves the
-list as it is, and a changed task redraws only its own row, so the scroll
-position, the open task and keyboard focus stay put. Crew choices, the Health counts on the rail and
-the drain forecast refresh when you open Tasks, when you click **Refresh**, and
-otherwise every five minutes.
+While the browser tab is visible and a workspace is selected, the dashboard
+opens a live change stream for that workspace. **All workspaces** has no single
+workspace to stream and uses the regular 30-second refresh. In Tasks, task,
+run, lock and drain notices refresh the panels subscribed to those kinds; while
+refreshes succeed, a full refresh runs on a three-minute safety interval.
+Other tabs keep their regular 30-second refresh even while a workspace stream
+is open. Host chips can also update from host-resource notices. If the stream
+cannot connect, for example because the host runs an older Orbit, Tasks returns
+to regular polling. A fully closed stream is retried after 60 seconds. When it
+reconnects or sends a resync notice, the dashboard refreshes in full to cover
+any gap. A failed full refresh doubles the normal 30-second interval up to five
+minutes; a successful refresh resets that normal interval to 30 seconds. With
+the Tasks stream connected, the safety poll still keeps a three-minute floor
+between periodic full refreshes.
+
+In a hidden browser tab, the dashboard closes the stream and refreshes no
+panels. It checks failed runs and, for a selected workspace, drain state and
+red-base holds once a minute. New failed runs add a `(N failed)` prefix to the
+page title until the tab is shown again. **Notify** opts in to a browser
+notification when a drain ends or a task is newly held on a red base; the
+browser asks for permission only when you click it. Showing the tab refreshes
+the dashboard and reopens the stream when a concrete workspace is selected. A
+change that brings nothing new leaves the list as it is, and a changed task
+redraws only its own row, so the scroll position, open task and keyboard focus
+stay put.
+Slow Tasks reads (crew choices, Health counts and the drain forecast) run on
+entry or manual **Refresh**, then when five minutes have elapsed and a full
+refresh reaches that check. With the connected Tasks safety poll, this may be
+the next three-minute poll after the five-minute threshold.
 
 A task's detail leads with **Details**: status, complexity, crew, the
 operating systems it can run on, who created and carried it, its run and the

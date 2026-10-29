@@ -184,13 +184,27 @@ run/step inspection, routines, knowledge/frictions, audit, and metrics. Verify t
 selected workspace before any mutation; a dashboard aggregate or metric is not
 proof that a particular task or run succeeded.
 
-A visible dashboard refreshes every 30 seconds. In a background browser tab it
-refreshes no panels and instead checks failed runs and the drain once a minute:
-the page title gains a `(N failed)` prefix for runs that failed while the tab
-was hidden, cleared when the tab is shown again. **Notify** in the top bar opts
-in to a browser notification when a drain ends or a task is newly held on a red
-base while the tab is hidden; the browser asks for permission only on that
-click.
+A visible dashboard with a workspace selected opens a change stream for that
+workspace; **All workspaces** has no single-workspace stream. In the Tasks tab,
+the connected stream sends change notices to the panels that subscribe to them,
+and a full refresh uses a three-minute safety interval while refreshes succeed.
+Other tabs keep the regular 30-second refresh even while a workspace stream is
+open. **All workspaces** has no stream and uses that same 30-second interval.
+If the stream is unavailable, Tasks also keeps polling at the regular cadence;
+a fully closed stream is retried after 60 seconds. A failed full refresh doubles
+the normal 30-second interval up to five minutes, and a successful refresh
+resets that normal interval to 30 seconds.
+With the Tasks stream connected, the safety poll still keeps a three-minute
+floor between periodic full refreshes.
+
+In a background browser tab, the dashboard closes the stream and refreshes no
+panels. It checks failed runs and, for a selected workspace, drain state and
+red-base holds once a minute. The page title gains a `(N failed)` prefix for
+runs that failed while the tab was hidden, cleared when the tab is shown again.
+**Notify** in the top bar opts in to a browser notification when a drain ends or
+a task is newly held on a red base while the tab is hidden; the browser asks for
+permission only on that click. Showing the tab refreshes the dashboard and
+reopens the stream when a concrete workspace is selected.
 
 ### Switching hosts in the dashboard
 
