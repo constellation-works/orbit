@@ -158,7 +158,10 @@ def score(ds, ansdoc):
         for q, exp in case["expected"].items():
             pred = got.get(q, {}); ev, pv = exp["value"], pred.get("value")
             if case["consumer"] == "failure_categorization":
-                if pv == "insufficient_evidence": case_answered = False; continue
+                if pv == "insufficient_evidence":
+                    case_answered = False
+                    if ev != "insufficient_evidence": choice_counts[ev][2] += 1
+                    continue
                 choice_conf[ev][pv] += 1
                 for cls in FAILURE_CATEGORIES:
                     if cls == "insufficient_evidence": continue

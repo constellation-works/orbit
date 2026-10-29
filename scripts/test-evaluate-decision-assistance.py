@@ -41,6 +41,40 @@ class EvalTests(unittest.TestCase):
         ds = self._load(self.ds)
         self.assertTrue(all(c["label"]["provenance"] == "synthetic" and not c["label"]["human_ground_truth"] for c in ds["cases"]))
 
+    def test_abstained_true_class_counts_as_false_negative(self):
+        ds = self._load(self.ds)
+        ans = self._load(self.ans)
+        provider_case = next(c for c in ds["cases"] if c["case_id"] == "seed-fail-provider")
+        extra_case = json.loads(json.dumps(provider_case))
+        extra_case["case_id"] = "seed-fail-provider-2"
+        extra_case["family_id"] = "fam-provider-abstention"
+        extra_case["evidence_packet"]["packet_id"] = "pkt-seed-fail-provider-2"
+        extra_case["evidence_packet"]["subject_id"] = "run-provider-2"
+        ds["cases"].append(extra_case)
+
+        provider_answer = next(a for a in ans["answers"] if a["case_id"] == "seed-fail-provider")
+        extra_answer = json.loads(json.dumps(provider_answer))
+        extra_answer["case_id"] = "seed-fail-provider-2"
+        extra_answer["answers"]["failure_category"]["value"] = "insufficient_evidence"
+        ans["answers"].append(extra_answer)
+
+        abstain_report = self._score(self._dump("provider-abstain-ds.json", ds),
+                                     self._dump("provider-abstain-ans.json", ans))
+        extra_answer["answers"]["failure_category"]["value"] = "product_defect"
+        wrong_class_report = self._score(self._dump("provider-wrong-ds.json", ds),
+                                         self._dump("provider-wrong-ans.json", ans))
+
+        abstain_metrics = abstain_report["questions"]["failure_category"]["per_class"]["provider"]
+        wrong_metrics = wrong_class_report["questions"]["failure_category"]["per_class"]["provider"]
+        self.assertEqual(abstain_metrics["recall"], 0.5)
+        self.assertEqual(abstain_metrics["fn"], 1)
+        self.assertEqual(abstain_metrics["precision"], wrong_metrics["precision"])
+        self.assertEqual(abstain_metrics["precision"], 1.0)
+        self.assertEqual(abstain_report["totals"]["abstained"], wrong_class_report["totals"]["abstained"] + 1)
+        self.assertEqual(abstain_report["totals"]["answered"], wrong_class_report["totals"]["answered"] - 1)
+        self.assertEqual(abstain_report["totals"]["coverage"],
+                         abstain_report["totals"]["answered"] / abstain_report["totals"]["cases"])
+
     def test_malformed_answers_rejected(self):
         ans = self._load(self.ans); ans["answers"][0]["answers"] = {"failure_category": {"value": "bogus", "probability": 1.5}, "extra": {"value": 1}}
         p = self._dump("bad.json", ans); r = run("validate", "--dataset", str(self.ds), "--answers", str(p))
