@@ -32,9 +32,9 @@ template:
       `orbit tool run orbit.task.show --input '{"id":"<id>","model":"<agent-family>"}'`.
       Search before filing with
       `orbit tool run orbit.search --input '{"query":"<one distinctive token>","kind":"task","all":true,"model":"<agent-family>"}'`
-      (lexical search matches one substring: use a single distinctive
-      token, never a multi-word phrase, and never treat a 0-hit multi-word
-      query as proof that nothing covers a candidate).
+      (task search matches non-adjacent terms, full matches first: use a
+      single distinctive token, never a multi-word phrase, and never treat a
+      0-hit multi-word query as proof that nothing covers a candidate).
     - Relations point from the referencing task to its target: a filed
       task carries `spawned_from` to its chore, and a later regression
       carries `regression_from` to the filed task it regresses. A task's

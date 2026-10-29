@@ -29,9 +29,10 @@ template:
       `orbit tool run orbit.task.artifact.get --input '{"id":"<id>","path":"architecture.json","model":"<agent-family>"}'`.
       Search coverage with
       `orbit tool run orbit.search --input '{"query":"<one distinctive token>","kind":"task","all":true,"model":"<agent-family>"}'`
-      (lexical search matches one substring: use a single distinctive token,
-      never a multi-word phrase, and never treat a 0-hit multi-word query as
-      proof that nothing covers a finding). Inspect a candidate with
+      (task search matches non-adjacent terms, full matches first: use a
+      single distinctive token, never a multi-word phrase, and never treat a
+      0-hit multi-word query as proof that nothing covers a finding). Inspect
+      a candidate with
       `orbit tool run orbit.task.show --input '{"id":"<id>","model":"<agent-family>"}'`.
     - Before filing, read the installed `orbit` skill's task-authoring
       reference and follow it for task shape. File an improvement (tool-created

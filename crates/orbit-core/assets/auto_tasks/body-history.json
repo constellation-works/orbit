@@ -202,6 +202,28 @@
         "## Output",
         "## Safety and evidence"
       ],
+      "digest": "55c8792d05df45e28f5742598041df051157054e450f8b112175795e7b17d8ec",
+      "revision": "31a349018685766ddcf36a9a2332b3891127415e",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "30 7 * * 1"
+        },
+        "tags": [
+          "backlog-hygiene",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## Candidate rules",
+        "## Output",
+        "## Safety and evidence"
+      ],
       "digest": "745705a6a5dd80671f318841e44059c9f6e4f2e3ba68c0c726079195ee22eb93",
       "revision": "c9ebc0bc60791950c7c6b4bec42d6eb8b4a3aabb",
       "settings": {
@@ -1502,6 +1524,31 @@
     },
     {
       "comments": [],
+      "digest": "a223d9a81295f6814e3610d8664c2937b91bb6b90b483fd9d58ca85237fafe4e",
+      "revision": "31a349018685766ddcf36a9a2332b3891127415e",
+      "settings": {
+        "complexity": "hard",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "deliveries_landed": {
+            "branch": "__ORBIT_BASE_BRANCH__",
+            "coverage": "landed_code_review_v1",
+            "max_items": 20,
+            "max_wait_minutes": 360,
+            "retries": 1,
+            "threshold": 3
+          }
+        },
+        "tags": [
+          "delivery-code-review",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [],
       "digest": "a2b9cffebfa32b8315f394ccd2ebe165ca6d5c1d9a6cd1aa50584e1828f47f76",
       "revision": "488f7c8537da74815bcf136ab6f099da5cfc76ca",
       "settings": {
@@ -2469,6 +2516,27 @@
     },
     {
       "comments": [
+        "## Pass",
+        "## Rules and command surfaces"
+      ],
+      "digest": "87c0fd41d32e5c9aa768fd0227f1bfd3826ed95f362420a2bec31f7c31ab5d3d",
+      "revision": "31a349018685766ddcf36a9a2332b3891127415e",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "15 7 * * *"
+        },
+        "tags": [
+          "friction-curation",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
         "# The portable system lane is seeded per machine and compatibility-aliased",
         "# for configs written before that crew existed.",
         "## Pass",
@@ -3296,6 +3364,27 @@
       ],
       "digest": "56d1eaab4590c9dc89ae8a1ca215a94212ce2e8c41b089d0e8f438ea2a853e2b",
       "revision": "ef65d1a5682e7352fb809bad89080dd505b0d2d2",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "50 * * * *"
+        },
+        "tags": [
+          "qa-sweep",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## Persist the execution summary",
+        "## Record the cursor"
+      ],
+      "digest": "595d40ad635f7887a9e55e4f6fa2936d584103945e780ab2f4f280f5ba4a824c",
+      "revision": "31a349018685766ddcf36a9a2332b3891127415e",
       "settings": {
         "complexity": "medium",
         "dedupe": "skip_if_open",

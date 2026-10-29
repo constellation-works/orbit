@@ -29,9 +29,9 @@ template:
       and skip a get when the path is absent.
     - Search coverage with
       `orbit tool run orbit.search --input '{"query":"<one distinctive token>","kind":"task","all":true,"model":"<agent-family>"}'`.
-      Lexical search matches one substring: use a single distinctive token,
-      never a multi-word phrase, and never treat a 0-hit multi-word query as
-      proof that nothing covers a finding.
+      Task search matches non-adjacent terms, full matches first: use a single
+      distinctive token, never a multi-word phrase, and never treat a 0-hit
+      multi-word query as proof that nothing covers a finding.
     - Before filing, read the installed `orbit` skill's task-authoring
       reference and follow it. File a finding (tool-created tasks start
       `proposed`) with

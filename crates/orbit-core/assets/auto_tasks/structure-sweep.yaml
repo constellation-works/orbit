@@ -36,9 +36,10 @@ template:
     - Use the registered Orbit tool surface, never direct lifecycle CLI
       subcommands. Search coverage with
       `orbit tool run orbit.search --input '{"query":"<one distinctive token>","kind":"task","all":true,"model":"<agent-family>"}'`
-      (lexical search matches one substring: use a single distinctive token
-      such as a file stem, never a multi-word phrase, and never treat a
-      0-hit multi-word query as proof that nothing covers a candidate).
+      (task search matches non-adjacent terms, full matches first: use a
+      single distinctive token such as a file stem, never a multi-word phrase,
+      and never treat a 0-hit multi-word query as proof that nothing covers a
+      candidate).
       Inspect a candidate task with
       `orbit tool run orbit.task.show --input '{"id":"<id>","model":"<agent-family>"}'`.
       List open work with

@@ -35,8 +35,8 @@ template:
       `orbit tool run orbit.task.show --input '{"id":"<id>","model":"<agent-family>"}'`.
       Search as a backstop with
       `orbit tool run orbit.search --input '{"query":"<one distinctive token from the test name>","kind":"task","all":true,"model":"<agent-family>"}'`
-      (lexical search matches one substring; never treat a 0-hit
-      multi-word query as proof that nothing is open). Exhaust a
+      (task search matches non-adjacent terms, full matches first; never
+      treat a 0-hit multi-word query as proof that nothing is open). Exhaust a
       `truncated` list by repeating it with `limit` at least the
       returned `total`; a first page is not proof that no task exists.
     - Check hosted history is reachable before measuring anything with
