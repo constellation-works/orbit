@@ -99,8 +99,8 @@ orbit workspace init --mcp
 
 `orbit init` sets up this machine under `~/.orbit/`. It asks for a **machine
 name**, which you can rename later, and a **task-ID prefix** of 2–5 uppercase
-letters, such as `ABC`, which can never change (`ORB` and `ADR` are reserved).
-For an unattended setup, pass both:
+letters, such as `ABC`, which can never change (`ORB`, `ADR`, `L` and `F` are
+reserved). For an unattended setup, pass both:
 
 ```bash
 orbit init --non-interactive --machine-name build-01 --task-prefix ABC

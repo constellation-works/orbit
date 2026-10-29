@@ -23,7 +23,7 @@ behavior you changed, Clippy on touched crates, and goldens for changed golden
 surfaces. The repository provides these broader targets when needed:
 
 ```bash
-make ci-fast            # formatting and repository guardrails; no Rust tests
+make ci-fast            # formatting, repository guardrails, and an MSRV compile check; no Rust tests
 make ci-test-affected   # full test targets for changed crates and their dependents
 make ci-lint            # dependency direction, then clippy and rustdoc with warnings as errors
 make goldens            # CLI help, MCP, CI log, and sandbox profile goldens
@@ -57,4 +57,4 @@ or `codex`) for that commit only. Don't leave the repository configured with
 that identity afterward.
 
 When you author tasks or design docs, identify yourself by agent family
-(`codex`, `claude`, `gemini`, or `grok`), not by a full model string.
+(`codex`, `claude`, `gemini`, `grok`, or `muse`), not by a full model string.
