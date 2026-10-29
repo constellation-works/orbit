@@ -80,15 +80,31 @@ A split manifest (`check-split`) assigns each case to `train`, `dev` or
 
 ## Targets before holdout access
 
-Before a holdout is opened, register a target file (`check-targets`):
-per-question `min_precision`/`min_recall` and positive `min_samples` for every
-question, plus a named baseline (the existing workflow/report without model
-assistance, with its measured per-class errors, abstentions and cost).
-Registration timestamp must precede holdout access; the check rejects
-late registration. Sample requirements are set per question from the
-baseline's class prevalence so rare classes (for example `one_off`) cannot
-pass on a handful of cases. Deviations require a new target registration and
-a fresh, unopened holdout.
+Before a holdout is opened, register a target file (`check-targets`). The file
+names the baseline (`baseline.name`: the existing workflow/report without model
+assistance) and holds one target entry per question with `min_precision`,
+`min_recall` and a positive integer `min_samples`.
+
+`check-targets` enforces that every question has an entry, that `min_samples`
+is a positive integer, that `min_precision`/`min_recall` lie in `[0,1]` when
+present, and that `baseline.name` is non-empty. When `--holdout-opened-at` is
+passed, it also rejects a registration timestamp at or after holdout access;
+without that flag the late-registration check is skipped.
+
+Manual steps. No command checks these; the operator records them with the
+registration and the readout:
+
+- **Threshold presence.** Confirm each entry has both `min_precision` and
+  `min_recall`; `check-targets` does not require them.
+- **Sample sizing.** Set each question's `min_samples` from the baseline's class
+  prevalence so rare classes (for example `one_off`) are not judged on a
+  handful of cases. `check-targets` only checks that the value is a positive
+  integer.
+- **Baseline measurements.** Record the baseline's measured per-class errors,
+  abstentions and cost with the registration. The target file does not carry
+  them and `check-targets` does not validate them.
+- **Deviations.** A deviation from the registered targets requires a new target
+  registration and a fresh, unopened holdout.
 
 ## Baseline comparison and readout
 
@@ -96,8 +112,9 @@ Score the baseline and the candidate on the identical frozen holdout with the
 same scorer version. Report per-class precision/recall, coverage/abstention,
 false-positive burden (extra investigator/author work per suggestion),
 confusion matrices, latency, cost per answered case, and every metric that is
-`unknown`. A candidate wins only on the pre-registered targets it meets; a
-well-formed answer is not evidence of correctness.
+`unknown`. A candidate wins only on the pre-registered targets it meets; this
+comparison is manual, because `score` reports metrics and does not read the
+target file. A well-formed answer is not evidence of correctness.
 
 ## Live activation and budget handoff (not authorized here)
 
@@ -113,5 +130,7 @@ operator-coordinated evidence, not prerequisites for this offline delivery.
 ## Task References
 
 - ORB-19720 — implement these evaluation contracts, seed set and scoring.
+- ORB-19760 — scope of the `check-targets` checks; the remaining target
+  registration rules are manual steps.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
