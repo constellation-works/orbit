@@ -24,7 +24,7 @@ fn migration_freeze_isolated(test: &str) -> bool {
 }
 
 fn rewind(conn: &Connection, version: u32) {
-    crate::support::drop_decision_assistance_tables(conn).unwrap();
+    crate::support::drop_replayed_migration_tables(conn).unwrap();
     conn.execute(
         "DELETE FROM schema_meta WHERE key LIKE 'migration.v%' AND key >= ?1",
         [format!("migration.v{version:04}")],

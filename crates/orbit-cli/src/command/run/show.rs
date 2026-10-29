@@ -473,6 +473,21 @@ pub(crate) fn run_show_payload(
             crate::output::color::bold("Steps:"),
         ));
     }
+    if let Some(evidence) = runtime.worker_resource_limit_evidence(&run.run_id)? {
+        header.push_str(&format!(
+            "\nWorker resource limit (watchdog): {} bytes, {} processes; error=worker_resource_limit",
+            evidence.memory_bytes, evidence.process_count,
+        ));
+        for process in &evidence.top_processes {
+            header.push_str(&format!(
+                "\n  {} (pid {}): {} bytes",
+                process.command, process.pid, process.memory_bytes
+            ));
+        }
+        doc["worker_resource_limit"] = serde_json::to_value(evidence).map_err(|error| {
+            OrbitError::Execution(format!("serialize worker resource evidence: {error}"))
+        })?;
+    }
     header.push('\n');
 
     Ok(Payload::blocks(

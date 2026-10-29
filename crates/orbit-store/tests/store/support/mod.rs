@@ -1,9 +1,10 @@
 use std::process::Command;
 
-/// Remove tables introduced after a fixture's target schema before replaying migrations.
-pub fn drop_decision_assistance_tables(connection: &rusqlite::Connection) -> rusqlite::Result<()> {
+/// Remove v72/v73 tables before fixtures replay their migrations from an older schema.
+pub fn drop_replayed_migration_tables(connection: &rusqlite::Connection) -> rusqlite::Result<()> {
     connection.execute_batch(
-        "DROP TABLE IF EXISTS assistance_attempts;
+        "DROP TABLE IF EXISTS worker_resource_limits;
+         DROP TABLE IF EXISTS assistance_attempts;
          DROP TABLE IF EXISTS assistance_slots;
          DROP TABLE IF EXISTS assistance_budgets;
          DROP TABLE IF EXISTS assistance_work;",

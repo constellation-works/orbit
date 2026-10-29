@@ -95,6 +95,52 @@ pub(crate) fn diagnostic_step(
         return Ok(());
     }
 
+    write_diagnostic_step(
+        runs,
+        &current,
+        started_at,
+        finished_at,
+        error_code,
+        message,
+        state,
+    )
+}
+
+/// A watchdog cause must remain visible even when an earlier activity failed.
+/// Linux scope diagnostics retain their existing first-error policy.
+#[cfg(target_os = "macos")]
+pub(crate) fn watchdog_diagnostic_step(
+    runs: &dyn JobRunStoreBackend,
+    run: &JobRun,
+    started_at: DateTime<Utc>,
+    finished_at: DateTime<Utc>,
+    error_code: Option<&str>,
+    message: &str,
+    state: JobRunState,
+) -> Result<(), OrbitError> {
+    let current = runs
+        .get_job_run(&run.run_id)?
+        .ok_or_else(|| OrbitError::not_found(NotFoundKind::JobRun, run.run_id.clone()))?;
+    write_diagnostic_step(
+        runs,
+        &current,
+        started_at,
+        finished_at,
+        error_code,
+        message,
+        state,
+    )
+}
+
+fn write_diagnostic_step(
+    runs: &dyn JobRunStoreBackend,
+    current: &JobRun,
+    started_at: DateTime<Utc>,
+    finished_at: DateTime<Utc>,
+    error_code: Option<&str>,
+    message: &str,
+    state: JobRunState,
+) -> Result<(), OrbitError> {
     let step_index = current
         .steps
         .iter()
@@ -112,7 +158,7 @@ pub(crate) fn diagnostic_step(
         lock_wait_ms: None,
         step_index,
         target_type: JobTargetType::Job,
-        target_id: run.job_id.clone(),
+        target_id: current.job_id.clone(),
         started_at,
         finished_at,
         duration_ms,
@@ -122,6 +168,6 @@ pub(crate) fn diagnostic_step(
         error_code: error_code.map(str::to_string),
         error_message: Some(message.to_string()),
     };
-    let _ = runs.complete_job_run_step(&run.run_id, &params)?;
+    let _ = runs.complete_job_run_step(&current.run_id, &params)?;
     Ok(())
 }

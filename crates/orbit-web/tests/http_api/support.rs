@@ -752,9 +752,9 @@ pub(super) fn error_code(response: Response, status: u16, code: &str) -> Value {
 
 /// Restore the pre-retention-analytics store shape so the public open path
 /// must backfill existing rows, rewinding the later executor census, crew
-/// account readings, handoff write guards and task-run ownership with it. The
-/// fixture records invocations with the current binary before the upgrade, so
-/// `invocations.account` stays.
+/// account readings, handoff write guards, task-run ownership and worker
+/// resource evidence with it. The fixture records invocations with the current
+/// binary before the upgrade, so `invocations.account` stays.
 /// Fixture-only; every caller runs in a child.
 pub(super) fn rewind_retention_analytics(fixture: &Fixture) {
     fixture
@@ -764,7 +764,8 @@ pub(super) fn rewind_retention_analytics(fixture: &Fixture) {
         .with_transaction(|tx| {
             tx.connection()
                 .execute_batch(
-                    "DROP TABLE IF EXISTS assistance_attempts;
+                    "DROP TABLE IF EXISTS worker_resource_limits;
+             DROP TABLE IF EXISTS assistance_attempts;
              DROP TABLE IF EXISTS assistance_slots;
              DROP TABLE IF EXISTS assistance_budgets;
              DROP TABLE IF EXISTS assistance_work;
