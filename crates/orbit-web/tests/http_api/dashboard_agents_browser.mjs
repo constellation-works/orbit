@@ -308,6 +308,10 @@ try {
   assert.equal(await page.locator('#agents-count').textContent(), '4 rows · 3 ranked', 'the panel labels all rows and the ranked subset');
   assert.match(await body.locator('.agents-strip').textContent(), /131 problems in 30d/);
   assert.equal(await body.locator('.agents-strip-seg.is-current.agents-owner-orchestrators').count(), 1);
+  const stripContext = body.locator('.agents-strip [role="note"]');
+  assert.equal(await stripContext.count(), 1, 'ownership counts disclose unscored context');
+  assert.equal(await stripContext.isVisible(), true, 'the explanation is visible beside the counts');
+  assert.equal(await body.locator('.agents-strip').getAttribute('aria-describedby'), await stripContext.getAttribute('id'), 'assistive technology associates the counts with their explanation');
   assert.equal(await body.locator('.agents-row-select[aria-pressed="true"] .agents-crew').textContent(), 'claude-orchestrator');
   assert.equal(await body.locator('.agents-penalty').count(), 0, 'the detail column has no penalty section');
   assert.match(await body.locator('tr.agents-row-below').textContent(), /below 10/);
