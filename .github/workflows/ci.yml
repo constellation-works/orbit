@@ -533,8 +533,8 @@ jobs:
           # shard count (the executable partition fixture checks agreement).
           NEXTEST_SHARDS: "3"
         run: |
+          import hashlib
           import os
-          import runpy
           import subprocess
           import sys
           import tempfile
@@ -564,24 +564,50 @@ jobs:
                           and key not in ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM")]:
                   del os.environ[key]
 
-              def verified_output(*args):
-                  completed = subprocess.run(
-                      ["/usr/bin/git", *args],
-                      capture_output=True, text=True, timeout=10, check=False)
-                  if completed.returncode != 0:
-                      raise SystemExit(
-                          f"trusted producer verification failed: git {' '.join(args)}")
-                  return completed.stdout.strip()
+              def object_id(kind, data):
+                  header = f"{kind} {len(data)}\0".encode()
+                  return hashlib.sha1(header + data).hexdigest()
 
-              if verified_output("rev-parse", "HEAD") != expected_base:
-                  raise SystemExit("producer source differs from its trusted base")
-              if verified_output("hash-object", producer) != verified_output(
-                      "rev-parse", f"HEAD:{producer}"):
+              def verified_object(kind, oid):
+                  completed = subprocess.run(
+                      ["/usr/bin/git", "--no-replace-objects", "cat-file", kind, oid],
+                      capture_output=True, timeout=10, check=False)
+                  if completed.returncode != 0 or object_id(kind, completed.stdout) != oid:
+                      raise SystemExit("producer source object differs from its trusted identity")
+                  return completed.stdout
+
+              # Resolve only hash-verified objects from the immutable event
+              # base, never mutable HEAD, refs, filters or object filenames.
+              commit = verified_object("commit", expected_base)
+              tree = commit.split(b"\n", 1)[0].removeprefix(b"tree ").decode("ascii")
+              parts = producer.split("/")
+              for index, part in enumerate(parts):
+                  entries = verified_object("tree", tree)
+                  while entries:
+                      metadata, separator, rest = entries.partition(b"\0")
+                      if not separator or len(rest) < 20:
+                          raise SystemExit("producer source tree is malformed")
+                      mode, name = metadata.split(b" ", 1)
+                      oid, entries = rest[:20].hex(), rest[20:]
+                      if name == part.encode():
+                          expected_mode = (b"100644", b"100755") if index == len(parts) - 1 else (b"40000",)
+                          if mode not in expected_mode:
+                              raise SystemExit("producer source path has an unexpected type")
+                          tree = oid
+                          break
+                  else:
+                      raise SystemExit("producer is absent from its trusted source")
+              with open(producer, "rb") as helper:
+                  producer_bytes = helper.read()
+              if object_id("blob", producer_bytes) != tree:
                   raise SystemExit("producer helper differs from its trusted source")
               sys.argv = [producer, "--job", "Test build"]
               for shard in range(1, int(os.environ["NEXTEST_SHARDS"]) + 1):
                   sys.argv += ["--job", f"Test shard {shard}/{os.environ['NEXTEST_SHARDS']}"]
-              runpy.run_path(sys.argv[0], run_name="__main__")
+              exec(compile(producer_bytes, producer, "exec"),
+                   {"__name__": "__main__", "__file__": producer,
+                    "__package__": "", "__spec__": None, "__cached__": None,
+                    "__loader__": None})
 
       # [ORB-10126] Confirm disk headroom survived the workspace build/test.
       - name: Report disk usage

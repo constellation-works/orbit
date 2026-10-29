@@ -81,17 +81,24 @@ class WorkflowHelperRevisionTests(unittest.TestCase):
                 "import runpy, sys\nsys.argv += ['--timeout-seconds', '1']\n"
                 f"runpy.run_path({str(ROOT / 'scripts/ci-await-jobs.py')!r}, run_name='__main__')\n")
             (trusted / "scripts/ci-await-jobs.py").write_text(stub)
-            subprocess.run(["git", "init"], cwd=trusted, capture_output=True, check=True)
-            subprocess.run(["git", "config", "user.email", "fixture@example.invalid"],
-                           cwd=trusted, capture_output=True, check=True)
-            subprocess.run(["git", "config", "user.name", "Fixture"],
-                           cwd=trusted, capture_output=True, check=True)
-            subprocess.run(["git", "add", "scripts/ci-await-jobs.py"],
-                           cwd=trusted, capture_output=True, check=True)
-            subprocess.run(["git", "commit", "-m", "trusted producer"],
-                           cwd=trusted, capture_output=True, check=True)
-            base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=trusted,
-                                  capture_output=True, text=True, check=True).stdout.strip()
+            git_env = dict(os.environ, HOME=str(root), GIT_CONFIG_GLOBAL="/dev/null",
+                           GIT_CONFIG_NOSYSTEM="1")
+
+            def git(*args):
+                return subprocess.run(
+                    ["git", *args], cwd=trusted, env=git_env,
+                    capture_output=True, text=True, timeout=10, check=True).stdout.strip()
+
+            git("init")
+            git("config", "user.email", "fixture@example.invalid")
+            git("config", "user.name", "Fixture")
+            git("add", "scripts/ci-await-jobs.py")
+            git("commit", "-m", "trusted producer")
+            base = git("rev-parse", "HEAD")
+            base_object = trusted / ".git/objects" / base[:2] / base[2:]
+            trusted_commit = base_object.read_bytes()
+            trusted_bytes = root / "trusted-source.py"
+            trusted_bytes.write_text(stub)
             command = root / "step"
             command.write_text(step["run"])
             marker = root / "interposed"
@@ -106,18 +113,42 @@ class WorkflowHelperRevisionTests(unittest.TestCase):
                 file.write_text(f"#!{sys.executable}\n" + attack)
                 file.chmod(0o755)
             for case in ("pythonpath", "cwd", "python-executable", "gh-executable",
-                         "helper_overwrite"):
+                         "helper_overwrite", "clean_filter", "replace_object", "object_storage"):
                 with self.subTest(case=case):
+                    base_object.chmod(0o644)
+                    base_object.write_bytes(trusted_commit)
+                    git("update-ref", "-d", "refs/replace/" + base)
+                    (trusted / ".gitattributes").unlink(missing_ok=True)
                     (trusted / "scripts/ci-await-jobs.py").write_text(stub)
+                    git("add", "scripts/ci-await-jobs.py")
                     for module in ("argparse", "subprocess", "sitecustomize"):
                         (trusted / "scripts" / (module + ".py")).unlink(missing_ok=True)
                     reached.unlink(missing_ok=True)
                     if marker.exists():
                         marker.unlink()
-                    if case == "helper_overwrite":
+                    if case in ("helper_overwrite", "clean_filter", "replace_object", "object_storage"):
                         # An earlier candidate step overwrites the trusted
                         # checkout with ordinary workspace writes before launch.
                         (trusted / "scripts/ci-await-jobs.py").write_text(attack)
+                    if case == "clean_filter":
+                        # A clean filter can hash the trusted bytes while
+                        # runpy still executes the overwritten file.
+                        (trusted / ".gitattributes").write_text(
+                            "scripts/ci-await-jobs.py filter=trusted\n")
+                        git("config", "filter.trusted.clean", "cat " + shlex.quote(str(trusted_bytes)))
+                    if case in ("replace_object", "object_storage"):
+                        # HEAD's spelling stays the trusted base, but replace
+                        # refs redirect its tree to the overwritten producer.
+                        git("add", "scripts/ci-await-jobs.py")
+                        tree = git("write-tree")
+                        replacement = git("commit-tree", tree, "-p", base, "-m", "replacement")
+                        if case == "replace_object":
+                            git("replace", base, replacement)
+                        else:
+                            # A loose-object filename is not content proof.
+                            # Replace its bytes without changing HEAD's ID.
+                            object_file = trusted / ".git/objects" / replacement[:2] / replacement[2:]
+                            base_object.write_bytes(object_file.read_bytes())
                     path = os.environ["PATH"]
                     if case == "python-executable":
                         path = str(poison) + ":" + path
@@ -145,7 +176,7 @@ class WorkflowHelperRevisionTests(unittest.TestCase):
                         [word.replace("{0}", str(command)) for word in shlex.split(shell)],
                         step="dependency producer ambient " + case, cwd=trusted, env=env,
                         text=True, capture_output=True)
-                    if case == "helper_overwrite":
+                    if case in ("helper_overwrite", "clean_filter", "replace_object", "object_storage"):
                         self.assertFalse(reached.exists(), result.stdout + result.stderr)
                     else:
                         self.assertTrue(reached.exists(), result.stdout + result.stderr)
