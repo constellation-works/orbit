@@ -132,6 +132,62 @@ class EvalTests(unittest.TestCase):
         r = run("check-split", "--dataset", str(self._dump("ds3.json", ds)), "--manifest", str(self._dump("m4.json", m)))
         self.assertEqual(r.returncode, 2); self.assertIn("family_id", r.stdout)
 
+    def test_holdout_requires_independent_human_import_fields(self):
+        ds = self._load(self.ds)
+        case = next(c for c in ds["cases"] if c["case_id"] == "seed-fail-provider")
+        case["label"] = {"provenance": "independent_human"}
+        manifest = self._manifest(ds)
+        manifest["assignments"][case["case_id"]] = "holdout"
+        r = run("check-split", "--dataset", str(self._dump("bare-human-ds.json", ds)),
+                "--manifest", str(self._dump("bare-human-manifest.json", manifest)))
+        self.assertEqual(r.returncode, 2, r.stdout)
+        errors = json.loads(r.stdout)["errors"]
+        for field in ("labeler_id", "labeler_role", "labeled_at", "intake_snapshot_at",
+                      "second_label_or_adjudication"):
+            self.assertTrue(any(field in error for error in errors), errors)
+
+        valid_records = [
+            {
+                "kind": "second_independent_label",
+                "labeler_id": "labeler-2",
+                "labeler_role": "incident investigator",
+                "labeled_at": "2026-01-12T00:00:00Z",
+                "value": case["expected"],
+            },
+            {
+                "kind": "adjudication",
+                "adjudicator_id": "adjudicator-1",
+                "adjudicator_role": "senior investigator",
+                "adjudicated_at": "2026-01-13T00:00:00Z",
+                "original_labels": [
+                    {"labeler_id": "labeler-1", "labeler_role": "investigator",
+                     "labeled_at": "2026-01-10T00:00:00Z", "value": case["expected"]},
+                    {"labeler_id": "labeler-2", "labeler_role": "investigator",
+                     "labeled_at": "2026-01-12T00:00:00Z", "value": {"failure_category": {"value": "product_defect"}}},
+                ],
+                "rationale_category": "evidence_review",
+                "value": case["expected"],
+            },
+        ]
+        for index, record in enumerate(valid_records):
+            with self.subTest(kind=record["kind"]):
+                valid_ds = self._load(self.ds)
+                valid_case = next(c for c in valid_ds["cases"] if c["case_id"] == "seed-fail-provider")
+                valid_case["label"] = {
+                    "provenance": "independent_human",
+                    "labeler_id": "labeler-1",
+                    "labeler_role": "incident investigator",
+                    "labeled_at": "2026-01-10T00:00:00Z",
+                    "intake_snapshot_at": valid_ds["intake_snapshot_at"],
+                    "second_label_or_adjudication": record,
+                }
+                valid_manifest = self._manifest(valid_ds)
+                valid_manifest["assignments"][valid_case["case_id"]] = "holdout"
+                r = run("check-split", "--dataset",
+                        str(self._dump(f"valid-human-ds-{index}.json", valid_ds)),
+                        "--manifest", str(self._dump(f"valid-human-manifest-{index}.json", valid_manifest)))
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
     def test_targets_before_holdout_only(self):
         t = {"format_version": "decision-assistance-eval/1", "registered_at": "2026-01-15T00:00:00Z",
              "baseline": {"name": "existing-workflow", "version": "1"},

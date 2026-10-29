@@ -54,12 +54,19 @@ calls, or advisory display. Implementation:
   human ground truth in any report or readout.
 - Human import is permitted only for data the operator confirms may be used:
   bounded evidence available at intake, redacted at the external boundary, no
-  credentials, attachments or ambient environment data. Import records
-  labeler identity/role, labeling timestamp and the intake snapshot.
-- Two independent labelers label each human case blind to model output and to
-  each other. Disagreement goes to a third adjudicator who sees both labels
-  and the evidence (not later outcomes unavailable at intake); the adjudicated
-  label, both originals and rationale category are retained. Unresolvable
+  credentials, attachments or ambient environment data. A holdout label must
+  include these import fields, which `check-split` enforces:
+  `labeler_id`, `labeler_role`, `labeled_at`, `intake_snapshot_at`, and
+  `second_label_or_adjudication`.
+- `second_label_or_adjudication` is an object whose `kind` is
+  `second_independent_label` or `adjudication`. A second-label record retains
+  its `labeler_id`, `labeler_role`, `labeled_at` and `value`; its labeler must
+  differ from the first. Two independent labelers label each human case blind
+  to model output and to each other. When they disagree, the record must be an
+  adjudication with `adjudicator_id`, `adjudicator_role`, `adjudicated_at`,
+  both `original_labels` (each retaining labeler identity, role, timestamp and
+  value) and a `rationale_category`; the adjudicator must be a third person.
+  The adjudicated `value` is the accepted label. Unresolvable
   cases are labeled `insufficient_evidence` or excluded with a recorded
   reason — never force-labeled. Author dismissals of advisory flags are
   feedback, not ground truth, until independently re-labeled this way.
