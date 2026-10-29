@@ -32,7 +32,7 @@ Every recorded problem has exactly one owning role, or none (**Not scored**). Th
 
 ### Consequences
 
-- The attribution strip's per-role totals equal the problems behind the four scorecards, and no problem appears in two.
+- The attribution strip's per-role totals are ownership counts, not score contributions: each problem contributes once to exactly one owner total, and no problem appears in two, but rankings use only their role's scored terms. In particular, `no_test` escapes increase the Implementers strip count while leaving the Implementers score unchanged.
 - An implementer is not charged for a defect review should have seen; the reviewer is. Orchestrator spec regressions narrow to escape `spec_ambiguous`.
 - Cost: a problem that really was shared is charged to one role only, so a weak implementer paired with a weak reviewer looks better than either deserves on its own tab. Reading roles together is required to see that.
 
