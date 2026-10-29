@@ -300,16 +300,18 @@ at the first reading), totals, limits and observation time, one record per run
 until that run is deleted. `orbit run show --json` returns it under
 `worker_resource_limit`. Arguments and environment are not collected.
 
-Polling can overshoot between checks. Unreadable snapshots skip a check. A
-process that calls `setsid` after leaving the tree and any children it starts
-escape tracking; a session that starts and loses its leader between checks can
-also be missed. A killed worker cannot run its watchdog. These are watchdog
-gaps, not guarantees of kernel containment. Other platforms without systemd
-still launch uncontained silently. With
-`machine.worker_containment = "strict"` or `--strict-worker-containment` on
+Polling can overshoot between checks. Unreadable snapshots skip a check. After
+a breach, persistent identity-binding or signal errors keep the watchdog
+retrying and the run active until it can verify that tracked children stopped;
+finalization can be delayed indefinitely. A process that calls `setsid` after
+leaving the tree, and any children it starts, escape tracking; a session that
+starts and loses its leader between checks can also be missed. A killed worker
+cannot run its watchdog. These are watchdog gaps, not guarantees of kernel
+containment. Other platforms without systemd still launch uncontained silently.
+With `machine.worker_containment = "strict"` or `--strict-worker-containment` on
 `orbit run ship` or `orbit run auto`, an unavailable scope instead refuses the
-worker before spawn, including macOS (strict keeps its kernel-only meaning); `orbit run show` reports
-`worker_containment_unavailable` and the reason. The CLI flag is inherited by
+worker before spawn, including macOS (strict keeps its kernel-only meaning);
+`orbit run show` reports `worker_containment_unavailable` and the reason. The CLI flag is inherited by
 the auto coordinator's leaf workers. Uncontained workers share the launching
 service's cgroup. The rendered `orbit-sweep.service`
 carries `MemoryHigh=70%` and `TasksMax=4096` as a backstop, and re-enabling the
