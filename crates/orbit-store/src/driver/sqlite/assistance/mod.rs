@@ -17,6 +17,7 @@ use crate::contracts::assistance::{
     AssistanceAccounting, AssistanceAdmission, AssistanceAttempt, AssistanceClaim,
     AssistanceRecord, AssistanceStoreBackend, AssistanceWork,
 };
+use settlement::AssistanceOutbound;
 
 pub(super) fn assistance_json<T: Serialize>(value: &T) -> Result<String, OrbitError> {
     serde_json::to_string(value)
@@ -67,7 +68,31 @@ impl AssistanceStoreBackend for Store {
     ) -> Result<bool, OrbitError> {
         result.validate_result(&claim.work.request.contract);
         self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
-            settlement::assistance_settle_claim(tx.connection(), claim, result, now)
+            settlement::assistance_settle_claim(
+                tx.connection(),
+                claim,
+                result,
+                now,
+                AssistanceOutbound::Attempted,
+            )
+        })
+    }
+
+    fn assistance_finish_unattempted(
+        &self,
+        claim: &AssistanceClaim,
+        mut result: AssistanceResult,
+        now: DateTime<Utc>,
+    ) -> Result<bool, OrbitError> {
+        result.validate_result(&claim.work.request.contract);
+        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+            settlement::assistance_settle_claim(
+                tx.connection(),
+                claim,
+                result,
+                now,
+                AssistanceOutbound::Unattempted,
+            )
         })
     }
 

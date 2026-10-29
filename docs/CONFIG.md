@@ -110,6 +110,13 @@ built-in defaults. Unknown fields in either table are rejected.
 | `budget.input_microusd_per_million_tokens` / `pricing_version` | absent / absent | Operator-verified uncached Decisions input price ceiling and provenance version. Missing pricing refuses calls; it never means free. |
 | `policies` | `[]` | Exact workspace/use-case grants, described below. |
 
+A claim refused before any outbound request is entered (unavailable credential,
+changed configuration, a request over its input bound, a superseded subject, or
+a deadline reached before send) releases its reservation to the allocation and
+records no outcome-unknown attempt, because nothing was sent. A claim whose
+request entered the transport keeps its full reservation, including connect and
+client-build failures, which are conservatively charged.
+
 Each policy requires `workspace_id`, `use_case`, `model` (`gpt-6-luna`),
 `model_revision` (an operator-maintained cache epoch), `policy_version`,
 `contract_digest` (SHA-256 of the serialized typed contract), `evidence_fields`,

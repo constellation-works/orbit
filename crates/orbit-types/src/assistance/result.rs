@@ -54,6 +54,9 @@ pub enum AssistanceReason {
     Unavailable,
     TimeoutUnknown,
     ClaimExpiredUnknown,
+    /// The claim deadline passed before any outbound request was built. Nothing
+    /// was sent, so the claim releases its reservation instead of counting unknown.
+    DeadlineBeforeSend,
     QueueExpired,
     QueueFull,
     BudgetExhausted,
