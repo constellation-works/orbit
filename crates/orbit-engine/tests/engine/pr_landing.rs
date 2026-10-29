@@ -5958,6 +5958,21 @@ refuse() {
     printf 'gh: %s (HTTP %s)\n' "$2" "$1" >&2
     exit 1
 }
+# Apply the adapter's actual gh --jq expression before writing captured stdout.
+# Without a projection, emit the raw service response, including large fields.
+commit_ci_response() {
+    answer=$1
+    shift
+    previous=""
+    for arg in "$@"; do
+        if [ "$previous" = --jq ]; then
+            jq -c "$arg" "$answer"
+            return
+        fi
+        previous=$arg
+    done
+    cat "$answer"
+}
 # Jobs and logs planted per commit under `$forge/commit-ci/<sha>/`.
 commit_ci_api() {
     if [ ! -d "$forge/commit-ci" ]; then
@@ -5974,9 +5989,9 @@ commit_ci_api() {
                 esac
             done
             if [ -z "$sha" ] && [ -f "$forge/base-push-runs.json" ]; then
-                cat "$forge/base-push-runs.json"
+                commit_ci_response "$forge/base-push-runs.json" "$@"
             elif [ -n "$sha" ] && [ -f "$forge/commit-ci/$sha/runs.json" ]; then
-                cat "$forge/commit-ci/$sha/runs.json"
+                commit_ci_response "$forge/commit-ci/$sha/runs.json" "$@"
             else
                 echo '{"workflow_runs":[]}'
             fi
@@ -6008,7 +6023,7 @@ commit_ci_api() {
                 echo "fake gh: jobs for run $run unavailable" >&2
                 exit 2
             fi
-            cat "$answer"
+            commit_ci_response "$answer" "$@"
             ;;
         *)
             echo "fake gh: unsupported call: $*" >&2
