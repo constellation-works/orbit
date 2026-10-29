@@ -151,6 +151,9 @@ pub(super) fn assistance_settle_claim(
         assistance_complete_gap(conn, &claim.work.id, AssistanceReason::QueueExpired)?;
         return Ok(false);
     }
+    // Bounded retry is only for transient outcomes: unknown dispatches and fully
+    // received timeout/rate-limit/server statuses (Unavailable). Definitive
+    // client rejections (Refused) and malformed responses complete here.
     let retry = (unknown || result.reason == AssistanceReason::Unavailable)
         && ordinal < work.limits.max_attempts;
     conn.execute("UPDATE assistance_work SET state=?2,ready_at=?3,claim_id=NULL,claim_until=NULL,result_json=?4 WHERE id=?1",
