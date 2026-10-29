@@ -1094,6 +1094,74 @@ fn mcp_serve_tools_list_matches_production_snapshot() {
 }
 
 #[test]
+fn mcp_model_schema_admits_full_model_strings_and_call_succeeds() {
+    let (_workspace, mut client) = McpWorkspace::served();
+    let listed = client.tools_list();
+    let tools = tools_array(&listed);
+
+    // Every advertised provenance `model` must admit recognized full model
+    // strings (ORB-19690), not only the canonical families.
+    let mut checked = 0usize;
+    for tool in tools {
+        let Some(model) = tool["inputSchema"]["properties"].get("model") else {
+            continue;
+        };
+        checked += 1;
+        assert!(
+            model.get("enum").is_none(),
+            "{} model must not be limited to a finite family enum: {model}",
+            tool["name"]
+        );
+        let pattern = model["pattern"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{} model must advertise a pattern: {model}", tool["name"]));
+        let regex = regex::Regex::new(pattern).expect("advertised model pattern compiles");
+        for accepted in [
+            "codex",
+            "claude",
+            "gemini",
+            "grok",
+            "muse",
+            "gpt-6.1-sol",
+            "o1-preview",
+            "o3-mini",
+            "claude-opus-5-5",
+            "opus",
+            "sonnet-5",
+            "fable-1",
+            "gemini-3.8-flash-high",
+            "grok-4.7",
+            "grok3-mini",
+            "muse-wonder-1.0",
+        ] {
+            assert!(
+                regex.is_match(accepted),
+                "{} model pattern must admit {accepted:?}: {pattern}",
+                tool["name"]
+            );
+        }
+        for refused in ["llama-3", "unknown-model", ""] {
+            assert!(
+                !regex.is_match(refused),
+                "{} model pattern must not admit {refused:?}: {pattern}",
+                tool["name"]
+            );
+        }
+    }
+    assert!(checked > 0, "at least one tool advertises a model field");
+
+    // The same values pass the real call; unknown/mismatched stay refused.
+    let listed_tasks = client.call_tool_ok("orbit_task_list", json!({ "model": "gpt-6.1-sol" }));
+    assert!(listed_tasks["tasks"].is_array(), "{listed_tasks}");
+    client.call_tool_ok("orbit_task_list", json!({ "model": "codex" }));
+    client.call_tool_err("orbit_task_list", json!({ "model": "llama-3" }));
+    client.call_tool_err(
+        "orbit_task_list",
+        json!({ "model": "gpt-6.1-sol", "agent": "claude" }),
+    );
+}
+
+#[test]
 fn mcp_task_list_fields_cli_example_runs_with_canonical_tool_name() {
     let (workspace, mut client, task_id) = McpWorkspace::with_task("CLI example probe");
     let listed = client.tools_list();
