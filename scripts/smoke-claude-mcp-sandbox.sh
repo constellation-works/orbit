@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Sandboxed companion to smoke-claude-mcp.sh.
 #
-# Wraps `claude -p` in `sandbox-exec -f <profile>` using a profile that mirrors
-# crates/orbit-exec/src/macos_sandbox.rs::compile_macos_sandbox_profile() for an
-# implicit unrestricted fsProfile (read=./**, modify=./**) — the same shape an
-# activity gets when it omits `fsProfile:`. This reproduces the kernel
-# confinement orbit-engine applies to direct_agent steps so we can see what
-# breaks when claude calls the Orbit MCP server under sandbox.
+# Wraps `claude -p` in `sandbox-exec -f <profile>` using this script's own
+# hand-written profile. It checks that Claude can reach Orbit MCP while running
+# under that profile. The profile is not compiled from Orbit's production
+# policy, and its broad HOME/.orbit write allowance and missing credential-read
+# denials mean success does not establish production confinement equivalence or
+# prove kernel behavior beyond this `sandbox-exec` invocation.
 #
 # Pass criterion: a new successful run-mcp audit row for orbit.task.list
 # after this invocation's baseline. CLI or unrelated tool rows do not qualify.
@@ -25,7 +25,7 @@ done
 DB="$HOME/.orbit/orbit.db"
 [[ -f "$DB" ]] || { echo "FAIL: $DB missing" >&2; exit 2; }
 
-# --- compile sandbox profile (mirrors macos_sandbox.rs) ---
+# --- write this diagnostic sandbox profile ---
 mkdir -p "$REPO_ROOT/.orbit/tmp"
 PROFILE=$(mktemp "$REPO_ROOT/.orbit/tmp/orbit-smoke-XXXXXX")
 trap 'python3 -c "from pathlib import Path; import sys; Path(sys.argv[1]).unlink()" "$PROFILE"' EXIT
@@ -61,7 +61,8 @@ cat >"$PROFILE" <<EOF
 (allow file-write* (subpath "${REPO_ESC}"))
 EOF
 
-echo "--- compiled profile (${PROFILE}) ---"
+echo "--- diagnostic profile (${PROFILE}) ---"
+echo "Diagnostic only: this hand-written profile does not establish equivalence to Orbit's production confinement."
 cat "$PROFILE"
 echo "----------------------------------------"
 

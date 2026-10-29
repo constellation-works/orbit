@@ -2,9 +2,9 @@
 """Public-CLI verification for decision-assistance evaluation (acceptance criterion 4).
 
 Exercises scripts/evaluate-decision-assistance.py only through its CLI on
-isolated fixtures under .orbit/tmp: malformed answers, insufficient evidence,
-refusals, a deliberately poor classifier, split/target guards, unknown metrics.
-No external calls.
+isolated fixtures under .orbit/tmp: malformed answers, task-quality and
+failure-category abstentions, a deliberately poor classifier, split/target
+guards, and unknown metrics. No external calls.
 """
 import json, subprocess, sys, tempfile, unittest
 from datetime import datetime, timedelta, timezone
@@ -134,6 +134,70 @@ class EvalTests(unittest.TestCase):
                 self.assertEqual(report["totals"]["answered"], 1)
                 self.assertEqual(report["totals"]["abstained"], 1)
                 self.assertEqual(report["totals"]["coverage"], 0.5)
+
+    def test_task_quality_abstentions_count_true_predicates_as_false_negatives(self):
+        seed_ds = self._load(self.ds)
+        seed_ans = self._load(self.ans)
+        templates = {
+            "outcome_unclear": "seed-task-vague",
+            "criterion_not_observable": "seed-task-vague",
+            "requirements_conflict": "seed-task-contradictory",
+            "scope_clarification": "seed-task-cross-component",
+        }
+        abstentions = ("refused", "unavailable", "uncertain", "invalid", "stale", "omitted")
+
+        for predicate, template_id in templates.items():
+            template = next(case for case in seed_ds["cases"] if case["case_id"] == template_id)
+            for abstention in abstentions:
+                with self.subTest(predicate=predicate, abstention=abstention):
+                    cases = []
+                    answers = []
+                    for suffix in ("suggested", "abstained"):
+                        case = json.loads(json.dumps(template))
+                        case["case_id"] = f"task-quality-{predicate}-{abstention}-{suffix}"
+                        case["family_id"] = case["case_id"]
+                        case["evidence_packet"]["packet_id"] = f"pkt-{case['case_id']}"
+                        case["evidence_packet"]["subject_id"] = case["case_id"]
+                        case["expected"] = {
+                            question: {"value": question == predicate}
+                            for question in case["expected"]
+                        }
+                        refs = template["expected"].get(predicate, {}).get("criterion_refs")
+                        if refs:
+                            case["expected"][predicate]["criterion_refs"] = refs
+                        cases.append(case)
+
+                    suggested = {"case_id": cases[0]["case_id"], "disposition": "suggested",
+                                 "answers": json.loads(json.dumps(cases[0]["expected"]))}
+                    answers.append(suggested)
+                    if abstention != "omitted":
+                        rejected = {"case_id": cases[1]["case_id"], "disposition": abstention}
+                        if abstention not in ("refused", "unavailable"):
+                            rejected["answers"] = json.loads(json.dumps(cases[1]["expected"]))
+                        if abstention == "invalid":
+                            rejected["answers"][predicate] = {"value": "not-a-boolean"}
+                        answers.append(rejected)
+
+                    dataset = dict(seed_ds, cases=cases)
+                    answer_doc = {"format_version": seed_ans["format_version"], "answers": answers}
+                    report = self._score(self._dump("task-quality-ds.json", dataset),
+                                         self._dump("task-quality-ans.json", answer_doc))
+
+                    metrics = report["questions"][predicate]
+                    self.assertEqual((metrics["tp"], metrics["fp"], metrics["fn"]), (1, 0, 1))
+                    self.assertEqual(metrics["precision"], 1.0)
+                    self.assertEqual(metrics["recall"], 0.5)
+                    self.assertEqual(metrics["f1"], 2 / 3)
+                    totals = report["totals"]
+                    self.assertEqual(totals["cases"], 2)
+                    self.assertEqual(totals["answered"], 1)
+                    self.assertEqual(totals["abstained"], 1)
+                    self.assertEqual(totals["coverage"], 0.5)
+                    self.assertEqual(totals["refused_or_unavailable"],
+                                     1 if abstention in ("refused", "unavailable") else 0)
+                    self.assertEqual(totals["invalid"],
+                                     1 if abstention in ("invalid", "omitted") else 0)
+                    self.assertEqual(bool(report["validation_errors"]), abstention == "invalid")
 
     def test_poor_classifier_visible(self):
         ans = self._load(self.ans)

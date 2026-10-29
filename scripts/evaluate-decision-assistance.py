@@ -365,23 +365,28 @@ def score(ds, ansdoc):
     # per-question accumulators
     choice_conf = defaultdict(Counter); choice_counts = defaultdict(lambda: [0, 0, 0])  # tp,fp,fn
     pred_stats = {}
-    def record_abstained_expected_failure(case):
-        if not isinstance(case, dict) or case.get("consumer") != "failure_categorization":
+    def record_abstained_expected_labels(case):
+        if not isinstance(case, dict):
             return
         exp = case.get("expected")
         if not isinstance(exp, dict):
             return
-        fc = exp.get("failure_category")
-        if not isinstance(fc, dict) or "value" not in fc:
-            return
-        expected = fc["value"]
-        if not isinstance(expected, str):
-            return
-        if expected != "insufficient_evidence":
-            try:
-                choice_counts[expected][2] += 1
-            except TypeError:
+        if case.get("consumer") == "failure_categorization":
+            fc = exp.get("failure_category")
+            if not isinstance(fc, dict) or "value" not in fc:
                 return
+            expected = fc["value"]
+            if not isinstance(expected, str):
+                return
+            if expected != "insufficient_evidence":
+                try:
+                    choice_counts[expected][2] += 1
+                except TypeError:
+                    return
+        elif case.get("consumer") == "task_quality":
+            for question, expected in exp.items():
+                if isinstance(expected, dict) and expected.get("value") is True:
+                    pred_stats.setdefault(question, [0, 0, 0, 0])[2] += 1
 
     for cid, case in cases.items():
         total += 1
@@ -393,7 +398,7 @@ def score(ds, ansdoc):
         if answer_invalid:
             invalid += 1
             abstained += 1
-            record_abstained_expected_failure(case)
+            record_abstained_expected_labels(case)
             continue
         if not isinstance(case, dict) or not isinstance(case.get("expected"), dict):
             invalid += 1
@@ -402,11 +407,11 @@ def score(ds, ansdoc):
         if a["disposition"] in ("refused", "unavailable"):
             refused += 1
             abstained += 1
-            record_abstained_expected_failure(case)
+            record_abstained_expected_labels(case)
             continue
         if a["disposition"] != "suggested":
             abstained += 1
-            record_abstained_expected_failure(case)
+            record_abstained_expected_labels(case)
             continue
         raw_got = a.get("answers") or {}
         got = raw_got if isinstance(raw_got, dict) else {}
@@ -421,7 +426,7 @@ def score(ds, ansdoc):
             if case["consumer"] == "failure_categorization":
                 if pv == "insufficient_evidence":
                     case_answered = False
-                    record_abstained_expected_failure(case)
+                    record_abstained_expected_labels(case)
                     continue
                 try:
                     choice_conf[ev][pv] += 1

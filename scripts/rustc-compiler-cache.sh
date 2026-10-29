@@ -132,7 +132,9 @@ if [[ "$source_aliased" -eq 1 || "$target_aliased" -eq 1 ]]; then
   debug "rewriting paths onto source=$source_aliased ($STABLE_SRC) target=$target_aliased ($STABLE_TGT)"
   rewritten=()
   for arg in "$@"; do
-    rewritten+=("$(rewrite_value "$arg")")
+    # The sentinel prevents command substitution from trimming input LF bytes.
+    new="$(rewrite_value "$arg"; printf '\001')"
+    rewritten+=("${new%$'\001'}")
   done
   set -- "${rewritten[@]}"
   # Bash 3.2 lacks array loading, and macOS env does not provide GNU env -0.
@@ -144,7 +146,9 @@ if [[ "$source_aliased" -eq 1 || "$target_aliased" -eq 1 ]]; then
   while IFS= read -r name; do
     value="${!name}"
     [[ -n "$name" ]] || continue
-    new="$(rewrite_value "$value")"
+    # Keep the sentinel through command substitution, then remove only it.
+    new="$(rewrite_value "$value"; printf '\001')"
+    new="${new%$'\001'}"
     if [[ "$new" != "$value" ]]; then
       export "${name}=${new}"
     fi
