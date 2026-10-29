@@ -218,6 +218,11 @@ def validate_dataset(ds):
         criteria_list = raw_criteria if isinstance(raw_criteria, list) else []
         if "criteria" in ep and not isinstance(raw_criteria, list):
             errs.append(f"{w}: evidence_packet.criteria must be a list")
+        if c.get("consumer") == "task_quality":
+            if "criteria" not in ep:
+                errs.append(f"{w}: task_quality evidence_packet must carry non-empty criteria")
+            elif isinstance(raw_criteria, list) and len(criteria_list) == 0:
+                errs.append(f"{w}: task_quality evidence_packet must carry non-empty criteria")
         crits = {cr.get("index"): cr for cr in criteria_list if isinstance(cr, dict)}
         for idx, cr in crits.items():
             if "text" in cr and cr.get("text_digest") != digest(cr["text"]): errs.append(f"{w}: criterion {idx} text_digest mismatch")
@@ -230,7 +235,15 @@ def validate_dataset(ds):
             refs = a.get("criterion_refs", []) if isinstance(a, dict) else []
             if isinstance(refs, list):
                 for r in refs:
-                    if isinstance(r, dict) and r.get("index") in crits and r.get("text_digest") != crits[r["index"]].get("text_digest"):
+                    if not isinstance(r, dict):
+                        continue
+                    ref_index = r.get("index")
+                    ref_digest = r.get("text_digest")
+                    if not isinstance(ref_index, int) or not is_digest(ref_digest):
+                        continue
+                    if ref_index not in crits:
+                        errs.append(f"{w}.{q}: criterion_ref index {ref_index} not in packet criteria")
+                    elif ref_digest != crits[ref_index].get("text_digest"):
                         errs.append(f"{w}.{q}: criterion_ref digest does not match packet criterion")
     return errs
 
@@ -265,8 +278,27 @@ def validate_answers(ds, ansdoc):
             continue
         want = QUESTION_SETS[case["consumer"]]["questions"]
         if set(got) != set(want): errs.append(f"{w}: answers must contain exactly {sorted(want)}, got {sorted(got)}")
+        raw_packet = case.get("evidence_packet")
+        packet = raw_packet if isinstance(raw_packet, dict) else {}
+        raw_criteria = packet.get("criteria", [])
+        criteria_list = raw_criteria if isinstance(raw_criteria, list) else []
+        crits = {cr.get("index"): cr for cr in criteria_list if isinstance(cr, dict)}
         for q, v in got.items():
             if q in want: validate_answer_value(want[q], v, errs, f"{w}.{q}")
+            refs = v.get("criterion_refs", []) if isinstance(v, dict) else []
+            if not isinstance(refs, list):
+                continue
+            for r in refs:
+                if not isinstance(r, dict):
+                    continue
+                ref_index = r.get("index")
+                ref_digest = r.get("text_digest")
+                if not isinstance(ref_index, int) or not is_digest(ref_digest):
+                    continue
+                if ref_index not in crits:
+                    errs.append(f"{w}.{q}: criterion_ref index {ref_index} not in packet criteria")
+                elif ref_digest != crits[ref_index].get("text_digest"):
+                    errs.append(f"{w}.{q}: criterion_ref digest does not match packet criterion")
         for k in ("latency_ms", "cost_usd"):
             if k in a and a[k] is not None and (not isinstance(a[k], (int, float, dict)) or (isinstance(a[k], (int, float)) and a[k] < 0)):
                 errs.append(f"{w}: {k} must be non-negative or null (unknown)")
