@@ -44,7 +44,82 @@ const UNCONDITIONAL_MINT_WARNING = "Manual mint ignores this definition's schedu
 
 // ---------------------------------------------------------------------------
 // Auto-tasks
-registerOperationsReset(() => closeEditors("auto-task"));
+// Presentation bound for the definition list: each group initially renders
+// at most this many rows. The filter and the per-group reveal below make
+// every definition reachable without rendering all of them.
+const AUTO_TASK_GROUP_LIMIT = 8;
+let autoTaskFilterQuery = "";
+const autoTaskRevealedGroups = new Set();
+registerOperationsReset(() => {
+  closeEditors("auto-task");
+  autoTaskFilterQuery = "";
+  autoTaskRevealedGroups.clear();
+});
+
+function autoTaskMatchesFilter(definition, query) {
+  if (!query) return true;
+  const haystack = [
+    definition.name,
+    definition.template_summary,
+    definition.template?.title,
+    definition.schedule_summary,
+  ].filter(Boolean).join(" ").toLowerCase();
+  return haystack.includes(query);
+}
+
+function autoTaskFilterBar(payload, total, matched, visible) {
+  const query = autoTaskFilterQuery.trim();
+  const input = el("input", {
+    class: "auto-tasks-filter-input",
+    type: "search",
+    "aria-label": "Filter auto-task definitions by name",
+  });
+  input.id = "auto-tasks-filter-input";
+  input.value = autoTaskFilterQuery;
+  input.placeholder = "Filter definitions by name…";
+  input.addEventListener("input", () => {
+    autoTaskFilterQuery = input.value;
+    renderAutoTasks(payload, { restoreFilterFocus: true });
+  });
+  const status = el("span", {
+    class: "auto-tasks-filter-status",
+    text: query
+      ? `${matched} of ${total} definitions match the filter`
+      : `Showing ${visible} of ${total} definitions`,
+    role: "status",
+    "aria-live": "polite",
+  });
+  const children = [input, status];
+  if (query) {
+    const clear = el("button", { class: "operation-button secondary", text: "Clear filter" });
+    clear.type = "button";
+    clear.addEventListener("click", () => {
+      autoTaskFilterQuery = "";
+      renderAutoTasks(payload, { restoreFilterFocus: true });
+    });
+    children.push(clear);
+  }
+  return el("div", { class: "auto-tasks-filter" }, children);
+}
+
+function autoTaskGroupReveal(payload, title, matchedCount, visibleCount) {
+  if (matchedCount <= AUTO_TASK_GROUP_LIMIT) return null;
+  const revealed = autoTaskRevealedGroups.has(title);
+  const button = el("button", {
+    class: "operation-button secondary auto-tasks-reveal",
+    text: revealed
+      ? `Show fewer ${title} definitions`
+      : `Show all ${matchedCount} ${title} definitions (${matchedCount - visibleCount} more)`,
+  });
+  button.type = "button";
+  button.setAttribute("aria-expanded", revealed ? "true" : "false");
+  button.addEventListener("click", () => {
+    if (revealed) autoTaskRevealedGroups.delete(title);
+    else autoTaskRevealedGroups.add(title);
+    renderAutoTasks(payload);
+  });
+  return el("div", { class: "auto-tasks-group-more" }, [button]);
+}
 
 
 function lastEvaluationText(definition) {
@@ -310,7 +385,7 @@ function openDuplicateNote(duplicates, held) {
   return held === duplicates ? "scheduler skips these slots" : `scheduler skips ${held} of these slots`;
 }
 
-export function renderAutoTasks(payload, { force = false } = {}) {
+export function renderAutoTasks(payload, { force = false, restoreFilterFocus = false } = {}) {
   noteCronZone(payload);
   operationsState.lastAutoTasks = payload;
   const body = $("auto-tasks-body");
@@ -349,17 +424,47 @@ export function renderAutoTasks(payload, { force = false } = {}) {
     const schedulerNote = el("p", { class: "operation-control-note auto-tasks-scheduler-note" });
     schedulerNote.id = "auto-tasks-scheduler-note";
     body.appendChild(schedulerNote);
+    const query = autoTaskFilterQuery.trim().toLowerCase();
     const groups = [
       ["active", "On a schedule", "minted by the scheduler when due; a skip-if-open slot is skipped while an instance is open", enabled.filter((definition) => autoTaskTrigger(definition) === "schedule")],
       ["accent", "On delivery", "minted after landed deliveries, not on a clock", enabled.filter((definition) => autoTaskTrigger(definition) === "delivery")],
       ["paused", "Disabled", "kept in the repo, never evaluated", definitions.filter((definition) => !autoTaskOn(definition))],
     ];
+    // Filtering reveals every match; without a filter each group is capped
+    // and revealed on demand. Summary stats above stay on the full list.
+    const presented = groups.map(([tone, title, hint, members]) => {
+      const matched = members.filter((definition) => autoTaskMatchesFilter(definition, query));
+      const visible = query || autoTaskRevealedGroups.has(title)
+        ? matched
+        : matched.slice(0, AUTO_TASK_GROUP_LIMIT);
+      return { tone, title, hint, members, matched, visible };
+    });
+    const matchedTotal = presented.reduce((sum, group) => sum + group.matched.length, 0);
+    const visibleTotal = presented.reduce((sum, group) => sum + group.visible.length, 0);
+    body.appendChild(autoTaskFilterBar(payload, definitions.length, matchedTotal, visibleTotal));
     const columns = ["", "Definition", "Trigger", "Next mint", "Last minted", ""];
-    for (const [tone, title, hint, members] of groups) {
+    if (query && matchedTotal === 0) {
+      body.appendChild(el("div", {
+        class: "empty-state",
+        text: `No definitions match "${autoTaskFilterQuery.trim()}". Clear the filter to see all ${definitions.length} definitions.`,
+      }));
+    }
+    for (const { tone, title, hint, members, matched, visible } of presented) {
       if (!members.length) continue;
-      const group = operationGroup(tone, title, members.length, hint);
-      group.appendChild(operationColumns(columns));
-      for (const definition of members) group.appendChild(autoTaskRow(payload, definition, workspace.id));
+      if (query && !matched.length) continue;
+      const count = query ? matched.length : members.length;
+      const detail = query
+        ? `${hint} · ${matched.length} of ${members.length} match the filter`
+        : matched.length > visible.length
+          ? `${hint} · showing ${visible.length} of ${members.length}`
+          : hint;
+      const group = operationGroup(tone, title, count, detail);
+      if (visible.length) group.appendChild(operationColumns(columns));
+      for (const definition of visible) group.appendChild(autoTaskRow(payload, definition, workspace.id));
+      if (!query) {
+        const reveal = autoTaskGroupReveal(payload, title, matched.length, visible.length);
+        if (reveal) group.appendChild(reveal);
+      }
       body.appendChild(group);
     }
   }
@@ -375,6 +480,14 @@ export function renderAutoTasks(payload, { force = false } = {}) {
   const enabledCount = definitions.filter(autoTaskOn).length;
   if (count) count.textContent = readable ? `${enabledCount} enabled of ${definitions.length} · ${workspace.name}` : "read-only";
   setRailSubtabCount("rail-count-ops-auto-tasks", readable && definitions.length ? `${enabledCount}/${definitions.length}` : "");
+  if (restoreFilterFocus) {
+    const input = $("auto-tasks-filter-input");
+    if (input) {
+      input.focus();
+      const end = input.value.length;
+      try { input.setSelectionRange(end, end); } catch { /* search inputs may not support selection */ }
+    }
+  }
 }
 
 function operationCountId(bodyId) {
