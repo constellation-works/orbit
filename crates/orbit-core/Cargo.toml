@@ -40,6 +40,7 @@ orbit-runtime = { path = "../orbit-runtime" }
 orbit-store = { path = "../orbit-store" }
 orbit-tools = { path = "../orbit-tools" }
 regex.workspace = true
+reqwest.workspace = true
 rsa.workspace = true
 rusqlite.workspace = true
 serde_json.workspace = true

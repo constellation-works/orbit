@@ -10,6 +10,7 @@
 //! perform filesystem, process, environment, database, network, logging, or
 //! tracing work and does not depend on another Orbit crate.
 
+pub mod assistance;
 pub mod desktop;
 pub mod identity;
 pub mod plugin;

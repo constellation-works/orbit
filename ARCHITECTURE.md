@@ -21,6 +21,18 @@ Foundation    orbit-common · orbit-types
 
 Domain crates own their data and transport. Application layers compose them. Kernel crates expose reusable mechanisms and never depend back on a feature.
 
+Optional decision assistance keeps pure versioned question, evidence and answer
+contracts in `orbit-types::assistance`, host-only grants in
+`orbit-config::assistance`, and an independent additive v72 ledger behind
+`orbit-store::contracts::assistance`. Core's application service owns admission,
+freshness and the non-authoritative port; its Decisions adapter uses the workspace
+`reqwest` dependency directly. There is no new internal crate edge. The shared
+`orbit-common::security::redaction` implementation scrubs explicitly supplied
+secret values before persistence or outbound I/O. Composition exposes an opt-in
+host service without starting workers or enabling any consumer. Details and the
+durable-facility choice are in the
+[service contract](docs/design/decision-assistance/specs/service.md).
+
 The store's run-resource minute history feeds profile-cache freshness with a
 probe over every sampled run: the newest `finished_at` and the count of finished
 runs that have any minute row. A run's minute indexes count from the start of

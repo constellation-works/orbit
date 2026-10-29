@@ -70,6 +70,67 @@ For registered settings, fallback values and global comparisons use the config l
 
 ---
 
+## `[assistance]` — optional bounded model annotations
+
+The single advanced `assistance` table is **global-only**. Workspace files and
+workspace-scoped writes refuse it, including an empty table. Global settings are
+never copied into a new workspace file. It is shown by `orbit config show --json`
+and read with `orbit config get assistance`; a replacement uses
+`orbit config set --global assistance '<table>'`. Nested fields are part of this
+one setting, not separately registered dotted keys.
+
+The default is off and unfunded:
+
+```toml
+[assistance]
+policies = []
+```
+
+No task/report consumer or background worker is automatically installed or
+activated. Composition exposes a library service for explicitly integrated
+consumers. `off` enqueues nothing and reads no credential. `shadow` retains results
+for operator comparison while the advisory read returns nothing. `advisory`
+permits annotations for the matching current source and policy; no mode grants
+workflow authority. Moving from shadow to advisory changes the cache identity.
+
+| Field | Built-in default | Meaning |
+|---|---|---|
+| `limits.concurrency` | `2` | Active claims across the host store (1–64). |
+| `limits.queue_capacity` / `max_records` | `128` / `1024` | Pending work / all retained work; overflow records a coverage-gap counter. |
+| `limits.queue_age_seconds` / `timeout_seconds` | `300` / `15` | Maximum queue age and per-attempt deadline (timeout at most 120s). |
+| `limits.retry_delay_seconds` / `max_attempts` | `5` / `2` | Delayed retries, at most five attempts including the first. |
+| `limits.max_request_bytes` / `max_response_bytes` | `16384` / `65536` | Serialized outbound request and received response bounds. Oversize is explicit, never silently clipped. |
+| `limits.max_input_tokens` | `32768` | Conservative reservation per attempt; body bytes plus framing must fit. |
+| `limits.retention_seconds` | `604800` | Terminal payload/attempt retention after the queue deadline; at most 30 days. |
+| `budget.epoch` | `unfunded` | Host allocation identity. Its cumulative counters survive payload retention. |
+| `budget.token_ceiling` / `spend_ceiling_microusd` | `0` / `0` | Cumulative reserved input tokens / micro-USD for that allocation. |
+| `budget.input_microusd_per_million_tokens` / `pricing_version` | absent / absent | Operator-verified uncached Decisions input price ceiling and provenance version. Missing pricing refuses calls; it never means free. |
+| `policies` | `[]` | Exact workspace/use-case grants, described below. |
+
+Each policy requires `workspace_id`, `use_case`, `model` (`gpt-6-luna`),
+`model_revision` (an operator-maintained cache epoch), `policy_version`,
+`contract_digest` (SHA-256 of the serialized typed contract), `evidence_fields`,
+`evidence_ref_prefixes`, and `credential_env`. Its optional `mode` defaults to
+`off`. The digest binds exact question names/types, choices, rubrics, criterion
+references, versions and evaluated thresholds. Consumer taxonomies remain in
+the consumer. Evidence field/reference grants can only be narrowed by a packet;
+ungranted fields/references are omitted with explicit truncation metadata.
+
+`credential_env` must name an `ORBIT_ASSISTANCE_*` host environment variable.
+That namespace is refused by the agent subprocess environment builder even in
+explicit passthrough or crew mappings. Resolve the intended project's key only
+in the adapter; config contains its reference, never its value. The fixed
+destination is `https://api.openai.com/v1/decisions`; there is no configurable
+endpoint, redirect, proxy or agent-crew route. Explicit secret-value and shared
+credential-pattern redaction run before storage and transmission. References
+are provenance strings, never fetched attachments or instructions.
+
+Live evaluation and activation still require the separate operator decision in
+the [evaluation protocol](design/decision-assistance/2_evaluation.md). This
+configuration surface does not activate either priority consumer. See the
+[service contract](design/decision-assistance/specs/service.md) for API usage,
+attempt accounting, freshness and the offline fixture command.
+
 ## `[machine]` — who this machine is
 
 Global-only. `orbit init` writes the identity keys once.

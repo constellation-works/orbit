@@ -17,6 +17,7 @@ pub const SYSTEM_AUDIT_IDENTITY: &str = "system";
 
 pub(crate) mod admission;
 pub mod agents;
+pub mod assistance;
 pub mod audit_event;
 pub mod auto_tasks;
 pub mod change_watch;

@@ -59,6 +59,55 @@ If the workspace file does not exist yet, add `--fresh` to start it empty or
 For extra agent instructions selected by a task's tags, edit the
 [Tag instructions](#tag-instructions) tables directly.
 
+## Decision assistance
+
+The advanced `assistance` table is host-only. Workspace files and workspace
+writes refuse it; a global-to-workspace seed omits it. The default is off and
+unfunded:
+
+```toml
+[assistance]
+policies = []
+```
+
+No task/report consumer or worker is automatically activated. An explicitly
+integrated consumer uses `off` (no queue or requests), `shadow` (operator
+comparison only), or `advisory` (current annotations). Annotations never approve,
+dispatch or change workflow authority. Switching modes invalidates cached
+results. Configuration alone does not install a consumer.
+
+Each policy names `workspace_id`, `use_case`, `mode`, `model` (`gpt-6-luna`),
+`model_revision`, `policy_version`, `contract_digest`, `evidence_fields`,
+`evidence_ref_prefixes` and `credential_env`. The consumer integration supplies
+the immutable typed contract and digest. Only the host grant selects permitted
+evidence and the credential reference. `credential_env` must name an
+`ORBIT_ASSISTANCE_*` host variable, whose value is excluded from agent
+environments. Values and supplied secrets are redacted before persistence and
+transmission to the fixed `https://api.openai.com/v1/decisions` destination.
+Evidence references are not fetched. No agent crew makes these calls.
+
+`limits` defaults to concurrency `2`, queue capacity `128`, retained records
+`1024`, queue age `300` seconds, timeout `15` seconds, retry delay `5` seconds,
+at most `2` attempts, request/response bounds `16384`/`65536` bytes, `32768`
+reserved input tokens per attempt, and `604800` seconds of retention. Unknown
+calls retain their full token/spend reservations; retries reserve again under
+the same logical assessment. Late, stale, refused and unavailable results are
+explicit gaps rather than clean assessments.
+
+`budget` requires a named `epoch`, cumulative `token_ceiling` and
+`spend_ceiling_microusd`, and a verified
+`input_microusd_per_million_tokens` with `pricing_version`. Defaults are
+`unfunded`, zero ceilings and unknown pricing, which refuses calls. Reservation
+counters survive payload retention; the owner integration must keep maintenance
+running to expire retained payloads. A provider model change requires a new
+`model_revision` epoch. Live evaluation and advisory activation need a separate
+operator decision identifying the evaluated contract, evidence permissions and
+budget; they are not enabled by default.
+
+Read the whole table with `orbit config get assistance`; replace it with
+`orbit config set --global assistance '<table>'`. Its nested fields are not
+separate settable keys.
+
 ## Scheduled credentials: clock.env
 
 `~/.orbit/clock.env` holds the credentials for runs no login shell starts.
@@ -542,6 +591,7 @@ warning. A `[crews.system]` table you define is an ordinary crew.
 | `ci_failure.operator_suppression_hours` | **Advanced.** integer · **Default:** `6`<br>Hours an archived/rejected CI sweep finding without `covered_by` holds its exact failure key (0–720). Explicit task/PR covers hold while open or until a failing checkout contains the landed fix; operator holds report their owner and reason. |
 | `publication.routine_attachments` | string · **Default:** `omit`<br>Weekly task publication attachment policy: `omit`, `fail`, or `include`. See [Scheduled publication](../../how-to/task-publication/#scheduled-publication). |
 | `publication.routine_allow_unscanned_attachments` | **Advanced.** boolean · **Default:** `false`<br>Explicitly accept unscanned attachments when the routine policy is `include`; sensitive path and size limits still apply. |
+| `assistance` | **Advanced.** table · **Default:** off and unfunded (`policies = []`)<br>Host-only workspace/use-case grants, modes, evidence scope, credential references and bounded requests, reservations and retention. No consumers activate automatically. See [Decision assistance](#decision-assistance). |
 | `automation.stall_window_minutes` | **Advanced.** integer · **Default:** `60`<br>Minutes a delivery-automation deferral may persist before Orbit logs a warning and files one friction (1–1440). |
 | `decision_channel.enabled` | bool · **Default:** `false`<br>Raise decision requests for work held on a human decision. |
 | `lease.enabled` | bool · **Default:** `false`<br>Accept path-lease operations in this workspace. While false, every lease operation is refused with an error naming this key. See [Hold paths with leases](../../how-to/path-leases/). |

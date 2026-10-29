@@ -670,12 +670,20 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::super::apply_invocation_long_prompt_requests,
     },
+    // Independent optional ledger only. Older writers never touch these tables;
+    // no task projection or trigger requires assistance-aware writers.
+    Migration {
+        version: 72,
+        name: "decision_assistance",
+        compat: MigrationCompatibility::Additive,
+        apply: super::super::apply_decision_assistance,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 71;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 72;
 
 /// A migration recorded as applied in the `schema_meta` ledger.
 #[derive(Debug, Clone, PartialEq, Eq)]
