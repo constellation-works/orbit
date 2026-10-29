@@ -574,6 +574,7 @@ fi
   run_guard "$repo_root/scripts/test-ci-repack-nextest.py"
   run_guard "$repo_root/scripts/test-cpu-utilisation.py"
   run_guard "$repo_root/scripts/test-path-leases-listener-sudo.py"
+  run_guard "$repo_root/scripts/test-bench-build-budget.py"
   drain_pool
   reap_waiting_guard
   exit "$failed"

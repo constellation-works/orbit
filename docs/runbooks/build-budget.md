@@ -224,6 +224,11 @@ refused. The script removes its owned `trees`, `targets`, and `locks`
 directories on exit, and leaves the result, measurement logs, timing files,
 and ownership marker in the workdir.
 
+Those workdir refusals and owned-path cleanup run without Cargo in
+`scripts/test-bench-build-budget.py`, which drives the script with command shims.
+`make build-budget-test` runs it, and the repository guard pool runs it in full CI
+and whenever `scripts/` changes.
+
 The default workload starts four cold `cargo check -p orbit-types --offline` commands.
 Both arms are capped at two Cargo jobs for safe measurement; the current arm admits all
 four at once, while the budgeted arm admits two. The output records wall time, summed user
