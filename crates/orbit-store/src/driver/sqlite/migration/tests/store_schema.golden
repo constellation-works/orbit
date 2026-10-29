@@ -460,3 +460,7 @@ v72 decision_assistance
 + ["table","assistance_slots","assistance_slots","CREATE TABLE assistance_slots (\n            slot TEXT PRIMARY KEY,\n            request_id TEXT NOT NULL REFERENCES assistance_work(id) ON DELETE CASCADE\n        )"]
 + ["table","assistance_work","assistance_work","CREATE TABLE assistance_work (\n            id TEXT PRIMARY KEY,\n            slot TEXT NOT NULL,\n            workspace_id TEXT NOT NULL,\n            use_case TEXT NOT NULL,\n            policy_digest TEXT NOT NULL,\n            payload_json TEXT NOT NULL,\n            created_at INTEGER NOT NULL,\n            expires_at INTEGER NOT NULL,\n            retain_until INTEGER NOT NULL,\n            state TEXT NOT NULL CHECK (state IN ('queued', 'claimed', 'done')),\n            attempt_count INTEGER NOT NULL DEFAULT 0,\n            ready_at INTEGER NOT NULL,\n            claim_until INTEGER,\n            claim_id TEXT,\n            result_json TEXT\n        )"]
 
+v73 worker_resource_limits
++ ["index","sqlite_autoindex_worker_resource_limits_1","worker_resource_limits",null]
++ ["table","worker_resource_limits","worker_resource_limits","CREATE TABLE worker_resource_limits (\n            workspace_id TEXT NOT NULL,\n            run_id TEXT NOT NULL,\n            evidence_json TEXT NOT NULL,\n            PRIMARY KEY (workspace_id, run_id),\n            FOREIGN KEY (workspace_id, run_id) REFERENCES job_runs(workspace_id, run_id)\n                ON DELETE CASCADE\n        )"]
+

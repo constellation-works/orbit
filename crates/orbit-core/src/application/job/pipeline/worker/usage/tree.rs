@@ -29,6 +29,12 @@ use super::super::scope::ScopeUsage;
 /// already records for a cgroup scope.
 pub(in crate::application::job::pipeline::worker) struct TreeSampler {
     cpu: TreeCpuAccount,
+    #[cfg(target_os = "macos")]
+    pub(super) latest: Vec<orbit_store::contracts::WorkerProcessResources>,
+    #[cfg(target_os = "macos")]
+    previous: std::collections::HashMap<ProcessStartKey, u64>,
+    #[cfg(target_os = "macos")]
+    last_read: Option<std::time::Instant>,
     read: Box<dyn FnMut() -> Option<Vec<ProcessTreeProcess>> + Send>,
     locate: Box<dyn FnMut(u32) -> Option<(ProcessStartKey, u32)> + Send>,
 }
@@ -41,6 +47,12 @@ impl TreeSampler {
     ) -> Self {
         Self {
             cpu: TreeCpuAccount::new(),
+            #[cfg(target_os = "macos")]
+            latest: Vec::new(),
+            #[cfg(target_os = "macos")]
+            previous: std::collections::HashMap::new(),
+            #[cfg(target_os = "macos")]
+            last_read: None,
             read: Box::new(read),
             locate: Box::new(locate),
         }
@@ -50,6 +62,8 @@ impl TreeSampler {
     /// cannot be read. A miss does not move the baseline.
     pub(in crate::application::job::pipeline::worker) fn usage(&mut self) -> Option<ScopeUsage> {
         let current = (self.read)()?;
+        #[cfg(target_os = "macos")]
+        self.track_process_levels(&current);
         self.cpu.observe(&current, &mut self.locate);
         let memory_bytes = current.iter().fold(0u64, |total, process| {
             total.saturating_add(process.phys_footprint)
@@ -59,6 +73,37 @@ impl TreeSampler {
             cpu_usage_usec: self.cpu.cumulative_ns() / 1_000,
             memory_bytes,
         })
+    }
+
+    #[cfg(target_os = "macos")]
+    fn track_process_levels(&mut self, current: &[ProcessTreeProcess]) {
+        let now = std::time::Instant::now();
+        let wall = self
+            .last_read
+            .map(|before| now.duration_since(before).as_secs_f64());
+        self.latest = current
+            .iter()
+            .map(|process| {
+                let cpu_cores = wall.filter(|wall| *wall > 0.0).and_then(|wall| {
+                    self.previous.get(&process.key).map(|before| {
+                        process.cpu_time_ns.saturating_sub(*before) as f64 / 1e9 / wall
+                    })
+                });
+                orbit_store::contracts::WorkerProcessResources {
+                    pid: process.key.pid,
+                    starttime: process.key.starttime,
+                    command: orbit_common::process::ancestry::process_command_name(process.key)
+                        .unwrap_or_else(|| "<unavailable>".into()),
+                    memory_bytes: process.phys_footprint,
+                    cpu_cores,
+                }
+            })
+            .collect();
+        self.previous = current
+            .iter()
+            .map(|process| (process.key, process.cpu_time_ns))
+            .collect();
+        self.last_read = Some(now);
     }
 }
 

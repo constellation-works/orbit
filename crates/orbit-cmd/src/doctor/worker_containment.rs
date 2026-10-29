@@ -27,6 +27,22 @@ fn worker_containment_row_for(
             format!("cannot inspect machine.worker_* limits: {error}"),
             Some("Repair the config reported by `orbit doctor`, then rerun it.".to_string()),
         ),
+        Ok(settings) if !linux && cfg!(target_os = "macos") => (
+            if settings.enabled {
+                WorkspaceDoctorStatus::Info
+            } else {
+                WorkspaceDoctorStatus::Warning
+            },
+            if settings.enabled {
+                format!(
+                    "watchdog containment (1s polling): MemoryMax={}, process limit={}; no kernel containment, memory throttling or CPU quota; strict requires kernel containment",
+                    settings.memory_max, settings.tasks_max
+                )
+            } else {
+                "worker containment is off: no watchdog or kernel limits".to_string()
+            },
+            None,
+        ),
         Ok(_) if !linux => (
             WorkspaceDoctorStatus::Skipped,
             "worker scopes need Linux with a systemd user manager; workers run uncontained here"

@@ -3,6 +3,17 @@
 use super::*;
 
 impl OrbitRuntime {
+    /// The bounded process snapshot captured when this run's watchdog tripped.
+    /// Resource evidence is workspace-scoped and contains no argv or env.
+    pub fn worker_resource_limit_evidence(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<orbit_store::contracts::WorkerResourceLimitEvidence>, OrbitError> {
+        use orbit_store::contracts::WorkerResourceLimitStoreBackend;
+        self.sqlite_store()?
+            .worker_resource_limit_evidence(&self.workspace_id()?, run_id)
+    }
+
     /// [ORB-12903] A run that failed after its worker scope hit a memory or
     /// task limit names that cause, under its own error code, ahead of the
     /// generic failure step finalization would write (the first recorded

@@ -34,7 +34,7 @@ fn existing_store_gains_tool_call_index_without_rewriting_audit_rows() {
     // which finds every feature already at its final version, then the pull
     // forecast decision column at v50.
     // Compatibility is rewritten by the opener.
-    crate::support::drop_decision_assistance_tables(&conn).unwrap();
+    crate::support::drop_replayed_migration_tables(&conn).unwrap();
     conn.execute_batch(
         "DROP INDEX idx_audit_events_command_subcommand_timestamp;
         DROP TABLE job_run_states;

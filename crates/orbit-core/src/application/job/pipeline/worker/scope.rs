@@ -127,8 +127,8 @@ pub(crate) fn contain_worker_command(
         limits,
         strict,
         availability,
-        // Only Linux can ever have a systemd user manager. Elsewhere an
-        // uncontained worker is the only possible outcome, not a degradation.
+        // Only Linux can have a systemd user manager. macOS uses its
+        // in-worker watchdog; other platforms are uncontained.
         cfg!(target_os = "linux"),
         &WARNED,
     )
