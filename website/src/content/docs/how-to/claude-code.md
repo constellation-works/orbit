@@ -25,8 +25,8 @@ To use the mod:
   /plugin marketplace add constellation-works/orbit
   /plugin install orbit
   ```
-- Have the `orbit` CLI installed. The mod searches for `orbit` on your `PATH`,
-  then in `~/.orbit/bin`.
+- Have the `orbit` CLI installed. The mod searches `~/.orbit/bin` first, then
+  your `PATH`.
 - Open Claude Code inside an initialized Orbit workspace, a replica checkout,
   or a directory configured with an [owner host](#plugin-options).
 - Use a terminal with sufficient width. Interactive panes (Board and Ship) open

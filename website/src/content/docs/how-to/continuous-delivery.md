@@ -27,7 +27,8 @@ CLI as the fallback.
 
 The task pilot fills in each task's `context_files` (the files and directories
 it will work in) and assesses its complexity. It does not approve or dispatch
-anything.
+anything. For a bug a review filed, it can also reject the task with its
+evidence when the code disproves the finding.
 
 - **Agent:** ask your agent to pilot the proposed tasks.
 - **Dashboard:** in **Automation → Jobs**, click **Run ▸** on
@@ -204,8 +205,8 @@ end with some tasks still in the backlog.
 
 ## 4. Start a bounded window
 
-- **Dashboard:** on **Drain → Start**, pick a **Window length** (one pass, or
-  `1h` to `24h`), set **Parallel tasks**, and turn on **Mark shipped tasks done** to
+- **Dashboard:** on **Drain → Start**, pick a **Window length** (`1h`, `2h`, `4h`,
+  `8h`, `12h`, or `24h`), set **Parallel tasks**, and turn on **Mark shipped tasks done** to
   complete them (off stops at review). Optionally turn on **Approve qualifying
   proposals** (`--approve-proposed`) or **Auto-fix PR blockers** to repair the
   window's blocked PRs. Click **Start … window** and
@@ -251,8 +252,10 @@ orbit run auto --for 4h --auto-fix
 orbit run auto --for 4h --auto-fix --complete
 ```
 
-The drain keeps watching each PR. Pending checks wait. A failed required check
-or a conflict goes to the existing repair step, which runs as a crew from
+The drain keeps watching each PR. Pending checks wait. A check that failed for a
+network or runner reason is rerun once first, and one that cites only files the
+PR did not change waits for base evidence. A failed required check or a conflict
+then goes to the existing repair step, which runs as a crew from
 `workflow.purpose_crews.auto_fix`, else `workflow.low_complexity_crews`
 (narrowed by `--allow-crew`). The repair then
 passes your required validation and is pushed, and the drain checks the new
