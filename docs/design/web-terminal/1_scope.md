@@ -1,11 +1,11 @@
 ---
 title: "Scope: a terminal in the dashboard"
 owner: claude
-last_updated: 2026-10-25
-last_validated: 2026-10-25
+last_updated: 2026-10-29
+last_validated: 2026-10-29
 status: Draft
 stage: building
-next: "Phase 1: ORB-18488 browser-session credential (in review); then the terminal routes"
+next: "Phase 2: ORB-18489 PTY sessions and local terminal routes; phase 1 landed"
 feature: web-terminal
 doc_role: scope
 type: design
