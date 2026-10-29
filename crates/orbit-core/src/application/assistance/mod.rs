@@ -268,19 +268,28 @@ impl AssistanceService {
             &record.work.request.workspace_id,
             &record.work.request.use_case,
         );
-        let matches = policy.is_some_and(|p| {
+        // Queue age bounds queued work only. A completed result stays
+        // current while its policy and source digest still match, until
+        // retention maintenance removes it (at created_at + queue age +
+        // retention) or a fresher snapshot moves its slot.
+        let identity_matches = policy.is_some_and(|p| {
             p.mode != AssistanceMode::Off
                 && preparation::assistance_policy_digest(&settings, p)
                     .ok()
                     .as_ref()
                     == Some(&record.work.policy_digest)
-        }) && record.work.request.source_digest == source_digest
-            && (self.clock)()
+        }) && record.work.request.source_digest == source_digest;
+        let completed = record.result.is_some();
+        let queue_fresh = completed
+            || (self.clock)()
                 < record.work.created_at
                     + chrono::Duration::seconds(record.work.limits.queue_age_seconds.into());
-        if !record.current || !matches {
+        // Only a moved slot or a changed policy/source identity is real
+        // supersession; queue-age expiry of queued work is not.
+        let superseded = !record.current || !identity_matches;
+        if superseded || !queue_fresh {
             record.current = false;
-            if let Some(result) = &mut record.result {
+            if superseded && let Some(result) = &mut record.result {
                 result.disposition = AssistanceDisposition::Stale;
                 result.reason = AssistanceReason::Superseded;
                 result.answers.clear();
