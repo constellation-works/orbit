@@ -189,7 +189,7 @@ One module computes every role's score. A role supplies its unit of work, its te
 
 ### 4.1 Rates and the raw score
 
-Each term's count is converted to a rate per 100 units of the role's work (§5). A role may give a term its own denominator instead: the pilots' warning terms are rated per 100 settled assessments, not per 100 assessed tasks (§5.4). Such a term also has its own minimum support; below it the term is **provisional**, rated and shown but left out of the raw score, so a handful of settlements cannot swing a rank. Every other term, and every other role, uses the role's units. For roles without expectations, the **raw score** is `Σ weight × rate` over the role's terms. Positive weights are credit; negative weights are problems. Weights live in one table per role, shown in the view and returned in the payload.
+Each term's count is converted to a rate per 100 units of the role's work (§5). A role may give a term its own denominator instead: the pilots' calibration term is rated per 100 placed tasks, and warning terms per 100 settled assessments (§5.4). Such a term also has its own minimum support; below it the term is **provisional**, rated and shown but left out of the raw score, so a handful of observations cannot swing a rank. Every other term, and every other role, uses the role's units. For roles without expectations, the **raw score** is `Σ weight × rate` over the role's terms. Positive weights are credit; negative weights are problems. Weights live in one table per role, shown in the view and returned in the payload.
 
 Implementers instead start at 100 and sum weighted actual-minus-expected rates for their tier mix (§5.2).
 
@@ -209,7 +209,7 @@ Shrinking toward the average narrows a small row's lead but cannot reverse it: w
 
 Rows with fewer than 10 units (`min_support`, default 10, at least 1) are `below_support`. They are greyed, listed after every supported row, and have no rank. Their scores are still computed and shown.
 
-A row none of whose units has been judged yet is `unjudged` (reviewers only, §5.3). It has no rank and no score (`raw` and `score` are null), is greyed with an `unjudged` tag, is listed after every other row, and is left out of the fleet average, so rows waiting for an outcome neither rank at 0 nor drag the average down. A term with its own denominator (§4.1) has its own minimum support, which `min_support` does not change: the pilots' warning terms need 10 settled assessments (`warning_min_support`).
+A row none of whose units has been judged yet is `unjudged` (reviewers only, §5.3). It has no rank and no score (`raw` and `score` are null), is greyed with an `unjudged` tag, is listed after every other row, and is left out of the fleet average, so rows waiting for an outcome neither rank at 0 nor drag the average down. A term with its own denominator (§4.1) has its own support: pilot calibration needs `min_support` placed tasks, while the pilots' warning terms independently need 10 settled assessments (`warning_min_support`).
 
 ### 4.4 Windows and late evidence
 
@@ -466,7 +466,7 @@ The pilot's selectors are the newest receipt's `context_files_after`; the filer'
 | Term | Weight | Definition |
 |---|---|---|
 | F1 lift | +1 | F1 points gained over the filer's own selectors from before any pilot ran, per task. A task's lift can be negative. |
-| Tier calibration | +0.25 | Tasks whose assessed complexity matches their observed tier, so per 100 tasks the percent on the tier. |
+| Tier calibration | +0.25 | Placed tasks whose assessed complexity matches their observed tier, per 100 placed tasks. |
 | Costly misses | −1 | Landed files no pilot selector covered that a base-conflict block of the task, or a refused lock request of the task, named. |
 | Confirmed warnings | +3 | Held assessments the records proved right (below), per 100 settled assessments. |
 | Dismissed warnings | −1 | Held assessments overridden as harmless (below), per 100 settled assessments. |
@@ -476,6 +476,8 @@ The pilot's selectors are the newest receipt's `context_files_after`; the filer'
 A lock-wait episode (Analytics › Codebase's lock contention) knows its holders: each refused request records which task or reservation held each conflicting path, and a reservation resolves to the tasks it named. A wait is charged to a holder's pilot when at least one of the holder's pilot selectors reserves the path and none of those selectors covered a landed file. A wait on a path that a useful selector reserved is not charged, and neither is a wait on a holder no pilot assessed. Both pilot problems count against the pilot run of the holder's newest receipt, in the window that receipt falls in.
 
 The **observed tier** ranks the window's assessed tasks that have an assessed tier (low, medium, hard or xhard) and a total implementation cost (every attempt's run priced) by that cost, cheapest first, and cuts the ranking into tiers in the same proportions the pilots assigned. The observed column totals therefore equal the assessed row totals. Calibration measures whether a pilot orders work correctly, not whether it guesses absolute cost (§11). Tasks without a tier or a priced implementation are not placed. Cost decides only the observed tier and is never a term.
+
+Tier calibration uses only **placed tasks** as its denominator and support (`term_units.tier_calibration`), leaving unplaced tasks out of both the credit and denominator. The tier matrix reports placement coverage as `placed` and `not_placed`. Below the query's `min_support` placed tasks, calibration is provisional and contributes nothing to the score even if the row has enough assessed tasks to rank. Zero placements therefore mean unmeasured calibration: its displayed rate is 0 with support 0 and a provisional marker, never evidence of incorrect assessments. F1 lift, costly misses and lock-wait hours retain all assessed tasks as their denominator; warning terms retain settled assessments and their independent minimum of 10. With full placement coverage and sufficient support, calibration and the score are unchanged.
 
 **Pilot warnings.** F1 lift, tier calibration, costly misses and lock-wait hours grade done tasks; the three warning terms grade every assessment, held or clean, by how it settled. They live in `application/agents/roles/pilot_warnings.rs`. An assessment is one task-pilot receipt: the audit comment the apply step seals with the assessment it persisted. It is **held** when that assessment has at least one finding that holds promotion (`blocked_by`, `adr_conflicts`, `utility_warnings`, `surface_warnings` or `validation_tool_warnings`), and **clean** otherwise. A finding marked `holds_promotion: false` is advisory and never counts. A `blocked_by`, `utility_warnings` or `surface_warnings` finding is judged against the task's current dependency edges, never against which prerequisites are done now: the done state at assessment time is not stored, and a prerequisite finishing later must not turn a past hold clean. The receipt says only whether the assessment held. How it settled comes from task history (edits and status transitions) and block-triage markers, never from agent output.
 
@@ -530,12 +532,12 @@ GET /api/agents/attribution?window=
 - `status`: `ok`, or `not_computed` while a role's track has not landed. A `not_computed` role still returns its `terms`, with empty `rows`.
 - `unit` (label of the role's unit);
 - `fleet_average`, over the judged rows;
-- `terms`: `key`, `label`, `weight`, `definition`, `group`, and `unit` on a term rated per 100 of its own unit (the pilots' warning terms);
+- `terms`: `key`, `label`, `weight`, `definition`, `group`, and `unit` on a term rated per 100 of its own unit (the pilots' calibration and warning terms);
 - `provisional`: for reviewers, the rows' provisional reviews in total; null for the other roles;
 - `rows`, best first;
 - pilots only: `warning_min_support`, and `sources.missed_scope_blocks` as `{available, triage_records, detail}`.
 
-Each row carries `crew`, `model`, `units`, `below_support`, `unjudged` (§4.3; only reviewer rows can be true), `rank` (null below support or unjudged), `counts` and `per_100` (term key to number), `raw` and `score` (null on an unjudged row), `runs_without_model`, `provisional` (reviewers), and `stats` (the not-scored context: key, label, value). An implementers row also carries `reviewed_units`, the count of its tasks with a settled first review: a display-only denominator for the radar's review-derived axes (§1.1), never a scoring denominator. A row of a role with per-term denominators (pilots) also carries `term_units` (term key to its own units) and `provisional_terms` (the keys below their own minimum support).
+Each row carries `crew`, `model`, `units`, `below_support`, `unjudged` (§4.3; only reviewer rows can be true), `rank` (null below support or unjudged), `counts` and `per_100` (term key to number), `raw` and `score` (null on an unjudged row), `runs_without_model`, `provisional` (reviewers), and `stats` (the not-scored context: key, label, value). An implementers row also carries `reviewed_units`, the count of its tasks with a settled first review: a display-only denominator for the radar's review-derived axes (§1.1), never a scoring denominator. A row of a role with per-term denominators (pilots) also carries `term_units` (term key to its own units) and `provisional_terms` (the keys below their own minimum support). Calibration support counts placed tasks and uses `min_support`; warning support counts settled assessments and uses `warning_min_support`.
 
 **Detail** carries the scorecard header, `fleet_average`, `provisional`, the selected `row`, and `terms`. Each term carries its key, label, weight, group, count, `per_100`, contribution and `tasks`, largest count first, plus `units` and `provisional` when it has its own denominator. Each task carries `task_id`, `title`, `status`, `count` and `occurrences` (`at`, `detail`, `run_id`).
 

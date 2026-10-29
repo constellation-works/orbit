@@ -6,14 +6,14 @@
 const SETTLED = 'settled assessments';
 export const pilotTerms = [
   ['f1_lift', 'F1 lift', 1, 'credit'],
-  ['tier_calibration', 'Tier calibration', 0.25, 'credit'],
+  ['tier_calibration', 'Tier calibration', 0.25, 'credit', 'placed tasks'],
   ['confirmed_warnings', 'Confirmed warnings', 3, 'credit', SETTLED],
   ['dismissed_warnings', 'Dismissed warnings', -1, 'problem', SETTLED],
   ['missed_scope_blocks', 'Missed scope blocks', -3, 'problem', SETTLED],
   ['costly_misses', 'Costly misses', -1, 'problem'],
   ['lock_wait_hours', 'Lock-wait hours', -1, 'problem'],
 ].map(([key, label, weight, group, unit]) => ({ key, label, weight, group, definition: label, ...(unit ? { unit } : {}) }));
-const WARNING_TERMS = pilotTerms.filter(term => term.unit).map(term => term.key);
+const WARNING_TERMS = pilotTerms.filter(term => term.unit === SETTLED).map(term => term.key);
 const MIN_SETTLED = 10;
 
 const matrix = (tiers, cells, notPlaced) => {
@@ -35,9 +35,9 @@ const matrix = (tiers, cells, notPlaced) => {
 const row = (crew, model, rank, units, counts, recall, tiers, warnings) => ({
   crew, model, rank, units, score: 0, raw: 0, below_support: rank == null,
   runs_without_model: 0, provisional: null, counts,
-  per_100: Object.fromEntries(Object.entries(counts).map(([key, count]) => [key, count * 100 / Math.max(1, WARNING_TERMS.includes(key) ? warnings.settled : units)])),
-  term_units: Object.fromEntries(WARNING_TERMS.map(key => [key, warnings.settled])),
-  provisional_terms: warnings.settled < MIN_SETTLED ? WARNING_TERMS : [],
+  per_100: Object.fromEntries(Object.entries(counts).map(([key, count]) => [key, count * 100 / Math.max(1, key === 'tier_calibration' ? tiers.placed : WARNING_TERMS.includes(key) ? warnings.settled : units)])),
+  term_units: { tier_calibration: tiers.placed, ...Object.fromEntries(WARNING_TERMS.map(key => [key, warnings.settled])) },
+  provisional_terms: [...(tiers.placed < 10 ? ['tier_calibration'] : []), ...(warnings.settled < MIN_SETTLED ? WARNING_TERMS : [])],
   stats: [
     { key: 'recall_percent', label: 'Recall (%)', value: recall },
     { key: 'precision_percent', label: 'Precision (%)', value: 80 },
@@ -59,7 +59,7 @@ export function pilotCard() {
       matrix(['low', 'medium', 'hard'], [[3, 1, 0], [1, 4, 1], [0, 1, 2]], 1),
       { settled: 20, excluded: 5, precision: 66.67, holds: 40 }),
     row('haiku', 'claude-haiku-5-5', 2, 12, { f1_lift: 1.2, tier_calibration: 4, confirmed_warnings: 2, dismissed_warnings: 3, missed_scope_blocks: 1, costly_misses: 2, lock_wait_hours: 0 }, 66.67,
-      matrix(['low', 'medium', 'hard'], [[1, 2, 0], [2, 2, 1], [0, 1, 1]], 2),
+      matrix(['low', 'medium', 'hard'], [[1, 1, 0], [1, 2, 1], [0, 1, 1]], 4),
       { settled: 6, excluded: 2, precision: 40, holds: 62.5 }),
     row('crew unknown', 'model unknown', null, 2, { f1_lift: 1, tier_calibration: 0, confirmed_warnings: 0, dismissed_warnings: 0, missed_scope_blocks: 0, costly_misses: 0, lock_wait_hours: 0 }, 100,
       matrix([], [], 2),

@@ -14,8 +14,8 @@ use chrono::{DateTime, Utc};
 use super::score::{RowInput, Term};
 use super::{AgentFacts, AgentRole};
 
-/// Builds a role's rows from the scan for the window starting at `since`.
-pub(super) type Rows = for<'a> fn(&'a AgentFacts, DateTime<Utc>) -> Vec<RowInput<'a>>;
+/// Builds a role's rows for the window and requested minimum support.
+pub(super) type Rows = for<'a> fn(&'a AgentFacts, DateTime<Utc>, usize) -> Vec<RowInput<'a>>;
 
 /// Role-level fields a role adds to every response header for the window
 /// starting at `since`.

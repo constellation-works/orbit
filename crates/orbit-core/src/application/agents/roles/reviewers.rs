@@ -179,7 +179,7 @@ impl<'a> Row<'a> {
 
 /// One row per reviewer crew and model with a review settled, or a review
 /// job attempt started, since `since`.
-fn rows(facts: &AgentFacts, since: DateTime<Utc>) -> Vec<RowInput<'_>> {
+fn rows(facts: &AgentFacts, since: DateTime<Utc>, _min_support: usize) -> Vec<RowInput<'_>> {
     let lookback = facts.computed_at - Duration::days(MISS_LOOKBACK_DAYS);
     let by_id: HashMap<&str, &TaskFacts> = facts
         .tasks
