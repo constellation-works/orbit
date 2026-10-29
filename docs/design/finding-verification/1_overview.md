@@ -1,8 +1,8 @@
 ---
 title: Finding Verification — Overview
 owner: claude
-last_updated: 2026-10-28
-last_validated: 2026-10-26
+last_updated: 2026-10-29
+last_validated: 2026-10-29
 status: Accepted
 stage: shipped
 next: "—"
@@ -80,6 +80,7 @@ first is far cheaper, and it gives the operator the evidence either way.
 
 - [ORB-15662] — added the verification job, the verdict record, the promotion
   and admission gate, and the `finding_unverified` state trigger.
+- [ORB-15760] — made the verification gate an opt-in workspace setting, off by default.
 - [ORB-19635] — made the task pilot and the implementer the default rejection
   routes, recording the same verdict with its `source`.
 

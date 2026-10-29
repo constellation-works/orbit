@@ -1,8 +1,8 @@
 ---
 title: "Scope: operator-granted tools for the implementing activity (`granted_tools`)"
 owner: claude
-last_updated: 2026-10-26
-last_validated: 2026-10-26
+last_updated: 2026-10-29
+last_validated: 2026-10-29
 status: Accepted
 stage: shipped
 next: "Operate the shipped grants and reviewed mutation proposal path"
@@ -112,7 +112,7 @@ operator authority, following the field-level authorization pattern of
   authority. Changing it after dispatch means cancelling/requeuing so a
   new attempt starts under the new grant after any preserved worktree is
   removed. Changes are accepted only in proposed, backlog or someday, with no
-  live run or footprint-protecting claim. Revoking it likewise takes
+  live run, footprint-protecting claim or preserved worktree [ORB-18641]. Revoking it likewise takes
   effect at the next attempt, never by reaching into a live run.
 - **Audit.** Every grant change writes (a) a task-history entry recording
   actor provenance, the before/after tool sets and the run/claim state at
@@ -407,10 +407,10 @@ and the governed-operation catalog. The one new governed id
 
 ## Phasing
 
-All six phases are implemented. The phase descriptions below record their
+All six phases are implemented (all done). The phase descriptions below record their
 responsibilities; the decisions above describe the shipped constraints.
 
-1. **Grant field and operator gate.** Add `granted_tools` to the task
+1. **Grant field and operator gate [ORB-18545] (done).** Add `granted_tools` to the task
    record, the dedicated `orbit.task.grant_tools` governed row, the
    field-level check in
    `authorize_registered_tool`, refusal for agent filers, the
@@ -418,23 +418,23 @@ responsibilities; the decisions above describe the shipped constraints.
    history + audit records. No activity behaviour changes yet: grants
    are stored and shown, and admission still refuses a granted tool that
    the deny list covers. Lands dark.
-2. **Grantable classification.** A reviewed classification of the
+2. **Grantable classification [ORB-18546] (done).** A reviewed classification of the
    `agent_implement` deny set (and a default-mutating rule for anything
    unclassified): grantable vs always-operator-only, read/repeat-safe vs
    mutating, enforced at grant time against the governed catalog.
-3. **Implementer admission.** `activity_tools.rs` admits a granted name
+3. **Implementer admission [ORB-18547] (done).** `activity_tools.rs` admits a granted name
    past the deny list for `agent_implement` only, with every downstream
    gate (capability, policy, external auth) untouched; non-implementer
    activities ignore grants. Read/repeat-safe granted tools become
    callable.
-4. **Owner-host placement hold.** The `claimed_required_tool_hold`
+4. **Owner-host placement hold [ORB-18548] (done).** The `claimed_required_tool_hold`
    analogue for grants in dispatch, drain and pull, composed with
    [ORB-18316] label placement as an intersection of hard constraints.
-5. **Mutation proposal artifacts and pipeline application.** The proposal
+5. **Mutation proposal artifacts and pipeline application [ORB-18549] (done).** The proposal
    and receipt artifact shapes, reviewer surfacing, post-approval
    exactly-once application keyed by content hash, and visible
    application-failure state.
-6. **Surfaces and docs.** Task show/history provenance, hold reasons,
+6. **Surfaces and docs [ORB-18550] (done).** Task show/history provenance, hold reasons,
    audit queries, operator runbook notes, and this doc's move to
    Accepted with the shipped behaviour recorded.
 
@@ -483,5 +483,12 @@ differently), and phase 5 is the only one that can change live state.
 - [ORB-18317] — this scope doc: operator-granted tools for the implementing activity
 - [ORB-15162] — established that `required_tools` never overrides an activity disallow list
 - [ORB-18316] — label-based host placement, whose placement resolution grants compose with
+- [ORB-18545] — phase 1: grant field, operator gate, dispatch freeze, and history and audit records.
+- [ORB-18546] — phase 2: grantable classification enforced at grant time.
+- [ORB-18547] — phase 3: implementer admission past the deny list.
+- [ORB-18548] — phase 4: owner-host placement hold for granted tasks.
+- [ORB-18549] — phase 5: mutation proposal artifacts and post-approval application.
+- [ORB-18550] — phase 6: surfaces, runbook notes, and this doc to Accepted.
+- [ORB-18641] — the preserved-worktree refusal in the grant change window.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
