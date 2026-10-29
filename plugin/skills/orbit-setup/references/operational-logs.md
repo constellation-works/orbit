@@ -186,7 +186,7 @@ through.
 | `[provider_capacity]` | The selected model was at capacity. | `held` (`provider_capacity`) | The run's crew, or, when the step ran on another provider or account, only the named account's crew (`account=<crew>`), or the provider's crews without their own credentials for a default-login failure. | 15 minutes |
 | `[provider_unavailable]` | Unusable on this host, such as a failed login. | `failed`; the task is still held | The run's crew, or, when the step ran on another provider or account, only the named account's crew (`account=<crew>`), or the provider's crews without their own credentials for a default-login failure. | 30 minutes |
 | `[provider_refusal]` | The provider's content policy refused the task. | `failed`; the task is still held | Every crew of the refusing provider. | 24 hours |
-| `[provider_limit]` | The account hit a usage limit. | `held` (`provider_limit`) | Every crew of the failing account; only crews whose model contains the named model when the failure names one. | Until the reported reset (below) |
+| `[provider_limit]` | The account hit a usage limit. | `held` (`provider_limit`) | The failing account's crews on that provider. If the failure names a model and at least one of them runs a model containing it (case-insensitive), only those crews; otherwise all of them. | Until the reported reset (below) |
 
 Capacity, unavailability, and refusal backoffs double for each earlier hold
 the task received in the last 24 hours, up to 24 hours. A usage-limit hold
