@@ -33,8 +33,9 @@ use crate::{HostLifetime, WorkspaceRuntimeBinding};
 use orbit_store::skill_store::SkillCatalog;
 
 /// Job-run partition used when an explicit `--root` data directory is opened
-/// without a selected checkout. Never written to `config.yaml` and never
-/// inserted as a `workspace_checkout_bindings` row.
+/// without a selected checkout, or a write-free read has no workspace binding.
+/// Never written to `config.yaml` and never inserted as a
+/// `workspace_checkout_bindings` row.
 ///
 /// Public because it is the one partition id no registry ever claims: host
 /// maintenance that decides whether a task-store partition is orphaned must
@@ -414,8 +415,8 @@ pub(crate) fn build_context_from_roots(
 /// (`workspace_bindings.workspace_id`, the directory name under
 /// `tasks/workspaces/`), not the workspace-registry `ws_*` id: a checkout
 /// bound before `workspace init` supplied an id keeps a minted
-/// `<slug>-<hash>` partition, and an unselected `--root` data directory lands
-/// in [`UNBOUND_DATA_DIR_PARTITION_ID`]. Only
+/// `<slug>-<hash>` partition, and an unselected `--root` data directory or
+/// unbound write-free read lands in [`UNBOUND_DATA_DIR_PARTITION_ID`]. Only
 /// `binding.logical_workspace_id` names a workspace-registry row.
 fn build_v2_task_backends(
     global_root: &Path,
@@ -495,11 +496,11 @@ fn build_v2_task_backends(
         },
     };
     if write_free {
-        let partition_id = partition_id.ok_or_else(|| {
-            OrbitError::WorkspaceError(
-                "read-only generation join needs an existing task-registry binding".to_string(),
-            )
-        })?;
+        // Host-scoped reads such as workspace listing need no cwd binding.
+        // The observational backend opens an absent partition without creating
+        // it, so retain write-free access without registering the checkout.
+        let partition_id =
+            partition_id.unwrap_or_else(|| UNBOUND_DATA_DIR_PARTITION_ID.to_string());
         return compose_task_backends(registry, partition_id, store, access);
     }
     let binding = registry.bind_workspace(BindWorkspaceParams {
