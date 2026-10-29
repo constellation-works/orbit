@@ -381,6 +381,55 @@ class EvalTests(unittest.TestCase):
                         "--manifest", str(self._dump(f"valid-human-manifest-{index}.json", valid_manifest)))
                 self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
+    def test_check_split_rejects_malformed_holdout_provenance_timestamps(self):
+        ds = self._load(self.ds)
+        case = next(c for c in ds["cases"] if c["case_id"] == "seed-fail-provider")
+        case["label"] = {
+            "provenance": "independent_human",
+            "labeler_id": "labeler-1",
+            "labeler_role": "incident investigator",
+            "labeled_at": "2026-01-10T00:00:00Z",
+            "intake_snapshot_at": ds["intake_snapshot_at"],
+            "second_label_or_adjudication": {
+                "kind": "adjudication",
+                "adjudicator_id": "adjudicator-1",
+                "adjudicator_role": "senior investigator",
+                "adjudicated_at": "2026-01-13T00:00:00Z",
+                "original_labels": [
+                    {"labeler_id": "labeler-1", "labeler_role": "investigator",
+                     "labeled_at": "2026-01-10T00:00:00Z", "value": case["expected"]},
+                    {"labeler_id": "labeler-2", "labeler_role": "investigator",
+                     "labeled_at": "2026-01-12T00:00:00Z", "value": case["expected"]},
+                ],
+                "rationale_category": "evidence_review",
+                "value": case["expected"],
+            },
+        }
+        manifest = self._manifest(ds, holdout_id="holdout-malformed-provenance")
+        manifest["assignments"][case["case_id"]] = "holdout"
+
+        for field in ("labeled_at", "intake_snapshot_at", "adjudicated_at"):
+            with self.subTest(field=field):
+                invalid_ds = json.loads(json.dumps(ds))
+                invalid_label = next(c for c in invalid_ds["cases"]
+                                     if c["case_id"] == "seed-fail-provider")["label"]
+                if field == "adjudicated_at":
+                    invalid_label["second_label_or_adjudication"][field] = "zzzz-zz-zz"
+                else:
+                    invalid_label[field] = "zzzz-zz-zz"
+                invalid_manifest = json.loads(json.dumps(manifest))
+                invalid_manifest["holdout_id"] = f"holdout-malformed-{field}"
+                result = self._run(
+                    "check-split", "--dataset",
+                    str(self._dump(f"malformed-{field}-ds.json", invalid_ds)),
+                    "--manifest",
+                    str(self._dump(f"malformed-{field}-manifest.json", invalid_manifest)))
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                report = json.loads(result.stdout)
+                self.assertFalse(report["ok"])
+                self.assertTrue(any(field in error and "must be ISO-8601" in error
+                                    for error in report["errors"]), report["errors"])
+
     def test_v1_second_label_cannot_hide_disagreement_after_expected_is_rewritten(self):
         # v1 records no first labeler value, so a second label equal to a rewritten
         # expected passed check-split before the fix (base evaluator returns 0).
