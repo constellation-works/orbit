@@ -184,7 +184,8 @@ lets the same foreground Node process own both server and checks. Its `finally` 
 the server whether a check passes or throws. Do not use `--background` for managed-agent
 validation. The API does not run npm's `prepreview` hook; `npm run build` runs the matching
 `prebuild` cleanup first. The current lockfile resolves Astro 7.4.2; `preview()` is exported
-from the package root and returns a public server object with `stop()`.
+from the package root and returns a public server object with the bound `port`
+and `stop()`.
 
 Run the smoke check in one command. It serves only on `127.0.0.1`, checks the selected routes
 at desktop and mobile widths, and stops preview even if Chromium cannot launch or a check
@@ -206,9 +207,15 @@ import { preview } from 'astro';
 
 const [playwrightEntry, repoRoot, portText, mode, ...args] = process.argv.slice(2);
 const port = Number(portText);
-const server = await preview({ root: process.cwd(), host: '127.0.0.1', port, open: false });
+const server = await preview({
+  root: process.cwd(),
+  server: { host: '127.0.0.1', port, open: false },
+});
 let browser;
 try {
+  if (server.port !== port) {
+    throw new Error(`PREVIEW_PORT ${port} is in use; Astro bound ${server.port}. Free that port or choose another.`);
+  }
   const baseUrl = `http://127.0.0.1:${server.port}`;
   if (mode === 'command') {
     const [command, ...commandArgs] = args;
@@ -262,7 +269,10 @@ run_foreground_preview_check smoke "${PAGES[@]}"
 Keep this shell session open to use `run_foreground_preview_check` for the task-specific
 browser scripts below. In `command` mode the wrapper waits for the child in the foreground
 inside the `try`; a nonzero exit or spawn error still reaches `finally` and stops Astro. The
-child is not detached and must not start its own preview.
+child is not detached and must not start its own preview. If Astro binds a port
+other than `PREVIEW_PORT`, which happens when that port is already in use, the wrapper
+throws before any check runs and `finally` stops the server it started. A command check
+therefore receives `$PREVIEW_URL` only for the server this run owns.
 
 Operators doing interactive inspection may use the background CLI flow instead. Keep it
 separate from a managed-agent validation run:
@@ -358,7 +368,8 @@ publish or access a live dashboard as part of this local regression check.
 ### Project overview card navigation
 
 After `npm run build`, run this browser check through the foreground wrapper above. The
-wrapper owns preview until the checker exits:
+wrapper owns preview on `PREVIEW_PORT` until the checker exits, and refuses to start the
+checker if that port is taken:
 
 ```bash
 run_foreground_preview_check command node "$REPO/website/scripts/check-project.mjs" \
@@ -372,8 +383,9 @@ It saves the visited URLs, response statuses, and headings under the evidence di
 ### Inline code layout checks
 
 After `npm run check` and `npm run build`, run this browser regression check through the
-foreground wrapper above. It keeps the built `dist/` served on loopback until the checker
-exits; the staged Playwright package from "Stage Playwright and Chromium" above satisfies
+foreground wrapper above. It keeps the built `dist/` served on loopback at
+`PREVIEW_PORT` until the checker exits, and refuses to start if that port is taken; the
+staged Playwright package from "Stage Playwright and Chromium" above satisfies
 the browser requirement:
 
 ```bash
