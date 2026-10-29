@@ -137,8 +137,9 @@ Every problem counts against exactly one role, or against none (**Not scored**).
 | Review verdict `accept_with_fixes` | review report | Implementer | the implementation run whose candidate was reviewed |
 | Regression with escape `spec_ambiguous` | `regression_from` classification | Orchestrator | the culprit task's orchestrator attribution |
 | Regression with escape `review_missed` | `regression_from` classification | Reviewer | the review run that accepted the culprit's landed candidate |
-| Regression with escape `no_test` | `regression_from` classification | Implementer | the culprit's final implementation run |
+| Regression with escape `no_test` | `regression_from` classification | Implementer (unscored context) | the culprit's final implementation run; shown as escaped regressions, without affecting its score |
 | Regression with escape `test_not_selected`, `platform_only`, `nondeterministic` or `unclassified` | `regression_from` classification | Not scored | — |
+| Regression with nature `merge_reintroduced` or `contract_drift`, regardless of escape | `regression_from` classification | Not scored | — |
 | Finding closed by an authorized decision (`Disposed`) | review report | Reviewer | the review run that raised it |
 | False reject (§5.3), counted instead of the implementer's reject | settlement comments, candidate commits | Reviewer | the review run that rejected |
 | Reviewer fix that failed owner revalidation | gate escalation | Reviewer | the review run that made the fix |
@@ -146,11 +147,11 @@ Every problem counts against exactly one role, or against none (**Not scored**).
 | Review verdict `incomplete` | review report | Reviewer | the review run; Not scored (`infrastructure`) when run failure classification names the block that followed as infrastructure |
 | Landed file outside every pilot selector that a base-conflict block or a refused lock request of the task named | codebase facts | Pilot | the pilot run behind the newest pilot receipt |
 | Lock wait on a path the holder reserved through a selector that covered none of its landed files | lock-wait episodes, pilot receipt | Pilot | the holder task's pilot run |
-| Rework with cause `infrastructure` or `other` | history | Not scored | — |
+| Rework with cause `infrastructure`, `other` or no recorded cause | history | Not scored | — |
 
-A regression's **escape** decides its owner, because the escape records which safeguard failed. Its **nature** decides only whether it is a regression the scorecards count at all. Every nature is counted except `merge_reintroduced` and `contract_drift`, which are not scored in v1. Two consequences follow:
+A regression's **escape** decides its owner, because the escape records which safeguard failed. Its **nature** takes precedence: `merge_reintroduced` and `contract_drift` go to Not scored regardless of escape. Every other nature follows the escape's owner. Ownership does not by itself make a problem a scored term: `no_test` remains owned by Implementers in the strip and shown as escaped regressions in their unscored stats (§5.2), but it contributes nothing to their score. Two consequences follow:
 
-- Orchestrator spec regressions become escape `spec_ambiguous` only. Today's scorecard also counts nature `incomplete` against the orchestrator. Under this design, an incomplete delivery whose escape is not `spec_ambiguous` counts against whichever role its escape names.
+- Orchestrator spec regressions use escape `spec_ambiguous` only. An incomplete delivery whose escape is not `spec_ambiguous` follows whichever owner its escape names.
 - An implementer is not charged for a defect review should have seen (`review_missed`). The reviewer is.
 
 ### 3.2 Which run
@@ -164,11 +165,15 @@ A problem counts against the run responsible for it, not the task's latest crew,
 
 ### 3.3 The attribution strip
 
-`GET /api/agents/attribution` counts the window's problems by owner: `orchestrators`, `implementers`, `reviewers`, `pilots` and `not_scored`, with `not_scored` broken down by reason. Its totals are the sums of the problems behind the four scorecards, so the strip and the rankings always agree. It also lists each role's charged rows (crew, model, problems), including roles not yet computed.
+`GET /api/agents/attribution` counts the window's problems by owner: `orchestrators`, `implementers`, `reviewers`, `pilots` and `not_scored`, with `not_scored` broken down by reason. Each problem contributes once to an owner total and, for a role owner, once to that role's charged rows (crew, model, problems), including roles not yet computed. These are ownership counts, not score contributions: rankings use only their role's scored terms, weights and denominators. In particular, `no_test` escapes increase the Implementers strip count and escaped-regression stats while leaving the Implementers score unchanged. The strip explains that ownership counts include unscored context and Implementers' escaped regressions do not affect scores.
+
+The Not scored bucket covers problems without a role owner; it is not a total of every unscored stat. An Implementers-owned `no_test` escape is unscored context within Implementers, not a Not scored reason (unless attribution is unavailable or the attempt is `no-diff-expected`, as below).
 
 The Not scored reasons are:
-- `infrastructure` and `no_cause`: rework with those causes;
-- each unscored escape, and the unscored natures `merge_reintroduced` and `contract_drift`;
+- `infrastructure`: infrastructure-caused rework or an infrastructure-caused incomplete review;
+- `no_cause`: rework with cause `other` or no recorded cause;
+- `test_not_selected`, `platform_only`, `nondeterministic` and `unclassified`: regressions with those escapes;
+- `merge_reintroduced` and `contract_drift`: regressions with those natures, regardless of escape;
 - `unattributed`: an orchestrator problem on a task with no orchestrator attribution;
 - `no_run`: an implementer problem on a task with no implementation attempt;
 - `no_diff_expected`: an implementer problem on an attempt admitted as `no-diff-expected` work, which is not implementation (§5.2);

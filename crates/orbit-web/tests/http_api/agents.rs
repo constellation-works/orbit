@@ -393,8 +393,8 @@ fn implementers_report_cost_duration_tiers_and_first_reviews_without_scoring_cos
 /// charges each crew only for its own attempt and credits the final run; a
 /// pulled attempt with no local run charges the crew its history assigned;
 /// the orchestrator ranking keeps an incomplete, untested regression off the
-/// orchestrator; and every selection after the first scan is served from the
-/// cached scan.
+/// orchestrator and the implementer score while retaining its implementer
+/// ownership; and every selection after the first scan is served from the cached scan.
 #[test]
 fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_scan() {
     isolated(
@@ -648,13 +648,6 @@ fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_sc
             );
 
             // Regressions, each owned by the safeguard its escape names.
-            rated_regression(
-                &fixture,
-                &shared,
-                RegressionNature::Incomplete,
-                RegressionEscape::NoTest,
-                DefectSeverity::High,
-            );
             regression(
                 &fixture,
                 &edited,
@@ -672,6 +665,28 @@ fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_sc
                 &edited,
                 RegressionNature::BrokeExisting,
                 RegressionEscape::Nondeterministic,
+            );
+
+            let query =
+                orbit_core::application::agents::AgentQuery::parse(Some("30d"), Some(1)).unwrap();
+            let before_no_test = fixture.runtime.agent_scan().unwrap();
+            let implemented_before = orbit_core::application::agents::agent_scorecard(
+                &before_no_test,
+                AgentRole::Implementers,
+                &query,
+                std::time::Duration::ZERO,
+            );
+            let strip_before = orbit_core::application::agents::agent_attribution(
+                &before_no_test,
+                &query,
+                std::time::Duration::ZERO,
+            );
+            rated_regression(
+                &fixture,
+                &shared,
+                RegressionNature::Incomplete,
+                RegressionEscape::NoTest,
+                DefectSeverity::High,
             );
 
             // The runtime API: one owner per problem.
@@ -793,8 +808,6 @@ fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_sc
                 "only the final run is credited"
             );
 
-            let query =
-                orbit_core::application::agents::AgentQuery::parse(Some("30d"), Some(1)).unwrap();
             let implemented = orbit_core::application::agents::agent_scorecard(
                 &facts,
                 AgentRole::Implementers,
@@ -802,6 +815,32 @@ fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_sc
                 std::time::Duration::ZERO,
             );
             assert_eq!(implemented["status"], "ok");
+            assert!(
+                implemented["terms"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|term| term["key"] != "escaped_regressions"),
+                "escaped regressions remain unscored context"
+            );
+            assert_eq!(
+                implemented["fleet_average"],
+                implemented_before["fleet_average"]
+            );
+            for row in implemented["rows"].as_array().unwrap() {
+                let before = implemented_before["rows"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|before| before["crew"] == row["crew"] && before["model"] == row["model"])
+                    .unwrap();
+                for field in ["counts", "expected", "raw", "score", "rank"] {
+                    assert_eq!(
+                        row[field], before[field],
+                        "a no_test regression changes ownership context, not {field}: {row}"
+                    );
+                }
+            }
             let sol = implemented["rows"]
                 .as_array()
                 .unwrap()
@@ -926,7 +965,7 @@ fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_sc
                 "the mid-run edit and the spec_ambiguous regression; not the untested one"
             );
 
-            // Attribution totals are the problems behind the four roles.
+            // Attribution retains unscored implementer context, independently of scores.
             let strip = json_ok(server.get(&format!("/api/agents/attribution?{WS}&window=30d")));
             let owners = &strip["owners"];
             assert_eq!(
@@ -944,6 +983,17 @@ fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_sc
                 "{strip}"
             );
             assert_eq!(strip["total"], 11);
+            assert_eq!(strip_before["owners"]["implementers"], 4);
+            assert_eq!(
+                owners["implementers"],
+                strip_before["owners"]["implementers"].as_u64().unwrap() + 1,
+                "the no_test escape adds one Implementers-owned problem, regardless of severity"
+            );
+            let implemented_http = json_ok(server.get(&format!(
+                "/api/agents/implementers/scorecard?{WS}&window=30d&min_support=1"
+            )));
+            assert_eq!(implemented_http["rows"], implemented["rows"]);
+            assert_eq!(implemented_http["terms"], implemented["terms"]);
             for role in ["orchestrators", "implementers", "reviewers", "pilots"] {
                 let charged: u64 = strip["charged"][role]
                     .as_array()

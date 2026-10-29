@@ -438,6 +438,7 @@ function stripNode() {
     ]),
     total ? bar : el("p", { class: "agents-strip-none", text: "No problem was recorded in this window." }),
     legend,
+    el("p", { id: "agents-strip-context", class: "agents-strip-reasons", role: "note", text: "Ownership counts include unscored context. Implementers’ escaped regressions do not affect scores." }),
   ];
   if (reasons.length) children.push(el("p", { class: "agents-strip-reasons", text: `Not scored: ${reasons.join(" · ")}.` }));
   if (role === "implementers") {
@@ -465,7 +466,7 @@ function stripNode() {
           : "Fleet comparison on each row's tier mix." }),
     ]));
   }
-  const node = el("section", { class: "agents-strip", "aria-label": "Who each problem counts against" }, children);
+  const node = el("section", { class: "agents-strip", "aria-label": "Who each problem counts against", "aria-describedby": "agents-strip-context" }, children);
   node.dataset.key = "strip";
   node.dataset.hash = JSON.stringify([attribution && attribution.owners, total, role, agentWindow(), implementerTier, Boolean(implementerMatrix)]);
   return node;
