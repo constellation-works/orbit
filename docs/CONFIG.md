@@ -100,11 +100,11 @@ built-in defaults. Unknown fields in either table are rejected.
 |---|---|---|
 | `limits.concurrency` | `2` | Active claims across the host store (1–64). |
 | `limits.queue_capacity` / `max_records` | `128` / `1024` | Pending work / all retained work; overflow records a coverage-gap counter. |
-| `limits.queue_age_seconds` / `timeout_seconds` | `300` / `15` | Maximum queue age and per-attempt deadline (timeout at most 120s). |
+| `limits.queue_age_seconds` / `timeout_seconds` | `300` / `15` | Maximum queue age for queued work and per-attempt deadline (timeout at most 120s). Queue age does not expire a completed result. |
 | `limits.retry_delay_seconds` / `max_attempts` | `5` / `2` | Delayed retries, at most five attempts including the first. |
 | `limits.max_request_bytes` / `max_response_bytes` | `16384` / `65536` | Serialized outbound request and received response bounds. Oversize is explicit, never silently clipped. |
 | `limits.max_input_tokens` | `32768` | Conservative reservation per attempt; body bytes plus framing must fit. |
-| `limits.retention_seconds` | `604800` | Terminal payload/attempt retention after the queue deadline; at most 30 days. |
+| `limits.retention_seconds` | `604800` | Terminal payload/attempt retention after the queue deadline; at most 30 days. A completed result stays readable until this retention ends or it is superseded. |
 | `budget.epoch` | `unfunded` | Host allocation identity. Its cumulative counters survive payload retention. |
 | `budget.token_ceiling` / `spend_ceiling_microusd` | `0` / `0` | Cumulative reserved input tokens / micro-USD for that allocation. |
 | `budget.input_microusd_per_million_tokens` / `pricing_version` | absent / absent | Operator-verified uncached Decisions input price ceiling and provenance version. Missing pricing refuses calls; it never means free. |

@@ -66,6 +66,11 @@ secret values. It returns `Disabled`, `Enqueued`, `Existing` or `QueueFull`.
 the owner controls when to call it. `assistance_assessment(id, current_digest)`
 is the operator/history view, including pending work and shadow results.
 `assistance_advisory` returns nothing in off/shadow mode or for a stale identity.
+A completed result stays current and readable while its source digest and
+policy still match, until retention ends or a fresher snapshot supersedes it;
+queue age expires queued work only and never relabels a completed result
+`Superseded`. That label is reserved for a moved slot or a changed
+policy/source identity.
 Consumers must pass the latest semantic digest on every read and reconcile
 creation/edit events durably. Atomic task-event publication is a collector duty,
 not an implied side effect of this service.
@@ -190,7 +195,8 @@ scripts/build-budget.py -- cargo run -p orbit-core --example assistance_fixture 
 It covers off with no credential/queue/call, value redaction and scope, strict
 answer translation, missing/extra/invalid/refused answers, probability bounds,
 choice abstention and choice confidence/distribution consistency,
-unavailable budgets/pricing, overflow/queue expiry,
+unavailable budgets/pricing, overflow/queue expiry, completed results
+outliving queue age until retention or real supersession,
 restart/claim/retry identities, retained outcome-unknown charges, pre-send refusal releases, retention,
 shadow/advisory changes, disabled/superseded/late results, lock release before
 I/O, workspace config refusal, child credential exclusion and v71/v72 writer

@@ -137,6 +137,93 @@ fn fixture_service_boundaries(root: &Path, schema: &Value) -> FixtureResult {
     Ok(())
 }
 
+fn fixture_completed_result_outlives_queue_age(root: &Path, schema: &Value) -> FixtureResult {
+    // A completed result is not queued work: queue age must not expire it or
+    // relabel it Superseded. It stays readable until retention maintenance
+    // removes it or a real supersession (digest change, fresher snapshot)
+    // replaces it.
+    let f = AssistanceFixture::open_fixture(root, schema, "task_quality")?;
+    let request = f.request("completed")?;
+    let source = request.source_digest.clone();
+    let id = f.enqueue(request.clone())?;
+    f.respond(f.good_response())?;
+    f.process()?;
+    let limits = f.record(&id)?.work.limits;
+    assert_eq!(
+        f.record(&id)?
+            .result
+            .as_ref()
+            .ok_or("missing completed result")?
+            .disposition,
+        AssistanceDisposition::Suggested
+    );
+    f.advance(i64::from(limits.queue_age_seconds) + 1)?;
+    let advisory = f
+        .service
+        .assistance_advisory(&id, &source)?
+        .ok_or("completed result expired at queue age")?;
+    assert_eq!(advisory.disposition, AssistanceDisposition::Suggested);
+    assert!(!advisory.answers.is_empty());
+    let assessment = f
+        .service
+        .assistance_assessment(&id, &source)?
+        .ok_or("missing assessment after queue age")?;
+    assert!(assessment.current);
+    assert_eq!(
+        assessment
+            .result
+            .as_ref()
+            .ok_or("missing result after queue age")?
+            .disposition,
+        AssistanceDisposition::Suggested
+    );
+    // A changed source digest is real supersession and still hides it.
+    assert!(
+        f.service
+            .assistance_advisory(&id, &assistance::assistance_digest(b"edited"))?
+            .is_none()
+    );
+    let superseded_by_digest = f
+        .service
+        .assistance_assessment(&id, &assistance::assistance_digest(b"edited"))?
+        .ok_or("missing digest assessment")?;
+    assert!(!superseded_by_digest.current);
+    assert_eq!(
+        superseded_by_digest
+            .result
+            .as_ref()
+            .ok_or("missing superseded result")?
+            .reason,
+        AssistanceReason::Superseded
+    );
+    // A fresher snapshot for the same subject also supersedes it.
+    let mut newer = request;
+    newer.source_digest = assistance::assistance_digest(b"new semantic revision");
+    newer.evidence_packet.collected_at = f.now()?;
+    let new_id = f.enqueue(newer)?;
+    assert_ne!(id, new_id);
+    assert!(f.service.assistance_advisory(&id, &source)?.is_none());
+    let superseded_by_snapshot = f
+        .service
+        .assistance_assessment(&id, &source)?
+        .ok_or("missing snapshot assessment")?;
+    assert!(!superseded_by_snapshot.current);
+    assert_eq!(
+        superseded_by_snapshot
+            .result
+            .as_ref()
+            .ok_or("missing snapshot-superseded result")?
+            .reason,
+        AssistanceReason::Superseded
+    );
+    // Retention ends at created + queue age + retention; maintenance removes it.
+    f.advance(i64::from(limits.retention_seconds))?;
+    f.store.assistance_maintain(f.now()?)?;
+    assert!(f.store.assistance_record(&id)?.is_none());
+    assert!(f.service.assistance_advisory(&id, &source)?.is_none());
+    Ok(())
+}
+
 fn fixture_send_failure_reconciliation(root: &Path, schema: &Value) -> FixtureResult {
     let f = AssistanceFixture::open_fixture(root, schema, "task_quality")?;
     let id = f.enqueue(f.request("lost-response")?)?;
@@ -839,6 +926,7 @@ fn main() -> FixtureResult {
             serde_json::from_slice(&std::fs::read(args.get(2).ok_or("schema path required")?)?)?;
         let root = Path::new(args.get(3).ok_or("isolated root required")?);
         fixture_service_boundaries(&root.join("service"), &schema)?;
+        fixture_completed_result_outlives_queue_age(&root.join("completed"), &schema)?;
         fixture_send_failure_reconciliation(&root.join("send-failure"), &schema)?;
         fixture_credential_refusal_releases_reservation(&root.join("credential"), &schema)?;
         fixture_deadline_before_send_is_not_unknown(&root.join("deadline"), &schema)?;
