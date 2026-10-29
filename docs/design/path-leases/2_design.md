@@ -1,7 +1,7 @@
 ---
 title: Path Leases — Design
 owner: claude
-last_updated: 2026-10-26
+last_updated: 2026-10-29
 last_validated: 2026-10-26
 status: Draft
 feature: path-leases
@@ -67,7 +67,7 @@ lock index sees it without a second index ([4_decisions.md](./4_decisions.md#out
 | `tags` | Free-form, for filtering and for path policy that keys on tags. |
 | `principal` | Who holds it (§7), plus the calling machine for attribution. |
 | `base` and `branch` | The base branch it works against, and optionally the branch or pull request whose landing releases it (§4). |
-| `state` | `queued`, `granted`, `released`, `expired`, `preempted`. |
+| `state` | `queued`, `granted`, `released` or `expired`. Preemption is later work (§9). |
 | `ttl_seconds`, `expires_at`, `heartbeat_at` | Lifetime (§4). |
 | `notice_cursor` | The newest notice the holder has acknowledged (§5). |
 
@@ -82,7 +82,7 @@ default, or `lease`) and `mode` (`hard` by default, or `advisory`) to `task_rese
 store inserts (refusing a hard lease that overlaps a task reservation or hard lease), renews,
 releases, reads and lists leases, and lazy expiry ends them as it ends reservations. `state` is
 derived: `queued` while an active request waits, `granted` while active otherwise, `released` or
-`expired` from `release_reason`; `preempted` arrives with its phase. Schema v67
+`expired` from `release_reason`. Schema v67
 (`task_reservation_lease_queue`) adds `queued_files_json`, `queued_at` and `queue_kind`
 (`request` or `expansion`). A queued request keeps `files_json` empty, so every overlap reader
 skips it without a new filter; a queued expansion keeps its held selectors there and its waiting
@@ -137,11 +137,9 @@ aged `low` request until its TTL expires.
 
 **Precedence with drains.** Drain admission treats a granted hard lease exactly like a held task
 context lock: an overlapping candidate is deferred and the denial names the lease. A queued lease
-holds nothing. A lease never preempts an in-progress or review task; when a task holds the
-paths, the lease waits for the task to settle or for its own TTL. A higher-priority hard request
-may preempt a lower-priority hard *lease* only when `lease.preemption` is on and the requester's
-ceiling allows it; the preempted holder gets a `preempted` notice and its lease drops to
-advisory rather than vanishing.
+holds nothing. A hard lease never preempts a task or another hard lease. When a task or hard lease
+holds the paths, a new request waits in the queue or, with `wait = false`, is refused. Lease
+preemption remains later work (§9).
 
 **Expansion.** `expand` adds selectors to a granted lease. Free paths are added at once; for
 blocked ones the expansion queues while the lease keeps what it holds. Two leases each waiting on
@@ -166,7 +164,7 @@ notice.
 ## 4. Lifetime
 
 - **TTL and heartbeat.** A lease carries `ttl_seconds` (same bounds as reservations) and expires
-  unless renewed. `renew` (or any call that names the lease) moves `expires_at` forward. An
+  unless renewed. `renew` moves `expires_at` forward. An
   `expiring` notice goes out at 80% of the TTL.
 - **Explicit release.** `release` ends it; this is the normal path for interactive work.
 - **Release on landing.** A lease bound to a branch or pull request is released when that work
@@ -205,7 +203,7 @@ Every lease has a durable notice stream on the owner. A notice has a monotonical
 | `overlap` | Another holder (lease or task) took paths that overlap this lease. |
 | `overlap_landed` | A landed commit on the lease's base changed paths this lease holds; payload names the commit, the paths and the task or lease that landed it. |
 | `expiring`, `expired` | TTL warnings and expiry. |
-| `preempted`, `deadlock` | §3. |
+| `deadlock` | §3. |
 | `released` | Explicit, on landing, or by the operator. |
 
 `overlap_landed` is computed when codebase facts record a landed commit's paths, which is the same
@@ -674,7 +672,6 @@ no surface reimplements a check.
 | `lease.hard` | `{ human = "allow", agent = "allow" }` | Per principal class: `allow` or `never` (granted as advisory). |
 | `lease.max_priority` | `{ human = "high", agent = "normal" }` | Priority ceiling per principal class; tokens carry their own. |
 | `lease.aging_minutes` | `30` | Queue age after which a request or expansion moves up one priority level (1–10080). |
-| `lease.preemption` | `false` | Allow a higher-priority hard request to downgrade a lower-priority hard lease. |
 | `lease.intake.peer_user` | unset | The listener user allowed on the intake socket; unset means no socket (§7.2). |
 | `lease.listener.bind` | unset | Address for the lease listener; unset means no listener. |
 | `lease.listener.tls` | unset | Certificate and key paths, required for a non-loopback bind unless `behind_proxy`. |
