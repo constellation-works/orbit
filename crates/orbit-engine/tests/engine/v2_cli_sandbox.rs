@@ -569,6 +569,69 @@ fn auth_probe_obeys_leaf_sandbox_and_requires_a_successful_model_response() {
     );
 }
 
+/// A provider configured with a custom-named executable probes through its
+/// declared provider identity, with that provider's fixed environment. Before
+/// the repair, `run_auth_probe` inferred the provider from the executable
+/// basename and returned `UnsupportedAgentProvider("claude-wrapper")` before
+/// spawn, while ordinary leaf dispatch already selected the declared provider
+/// [ORB-19862].
+#[test]
+fn auth_probe_uses_declared_provider_for_custom_named_launcher() {
+    use orbit_engine::activity_job::cli_runner::run_auth_probe;
+    use orbit_types::workflow::{AuthProbe, AuthProbeSuccess};
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    for binary in ["claude", "claude-wrapper"] {
+        let command = root.join(binary);
+        fs::write(
+            &command,
+            "#!/bin/sh\n\
+             cat > /dev/null\n\
+             [ \"$CLAUDE_CODE_DISABLE_BACKGROUND_TASKS\" = 1 ] || exit 23\n\
+             printf '%s\\n' \"$2\"\n\
+             exit \"$3\"\n",
+        )
+        .unwrap();
+        fs::set_permissions(&command, fs::Permissions::from_mode(0o755)).unwrap();
+        let host = RecordingHost {
+            command,
+            worktree: root.clone(),
+            sandbox: None,
+            broker_runs: Mutex::new(vec![]),
+            denial_activities: Mutex::new(vec![]),
+            refuse_registration_after: None,
+            panic_on_registration: false,
+        };
+        let mut probe = AuthProbe {
+            args: vec!["plain".into(), "ORBIT_AUTH_OK".into(), "0".into()],
+            stdin: "Minimal model call".into(),
+            timeout_seconds: 5,
+            success: AuthProbeSuccess::StdoutContains {
+                text: "ORBIT_AUTH_OK".into(),
+            },
+            relogin_hint: "Run `claude login`.".into(),
+        };
+        for (response, exit, passed) in [
+            ("ORBIT_AUTH_OK", "0", true),
+            ("unrelated response", "0", false),
+            ("ORBIT_AUTH_OK", "1", false),
+        ] {
+            probe.args = vec!["plain".into(), response.into(), exit.into()];
+            assert_eq!(
+                run_auth_probe(&host, "claude", &[], &probe, "auth-fixture", &root)
+                    .unwrap_or_else(|error| panic!("{binary} probe failed: {error:?}"))
+                    .passed,
+                passed,
+                "{binary} keeps the success-marker contract"
+            );
+        }
+        assert!(
+            host.broker_runs.lock().unwrap().is_empty(),
+            "{binary} probes grant no activity broker"
+        );
+    }
+}
+
 /// A provider that forks a grandchild and then has its registration refused.
 /// The refused child and the grandchild share a process group, and the
 /// grandchild is not in the worker registry, so only the group kill ends it.

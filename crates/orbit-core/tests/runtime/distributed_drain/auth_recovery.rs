@@ -20,9 +20,9 @@ model = "claude-sonnet"
 pass = ["HOME", "PATH", "AUTH_FIXTURE_ALLOWED", "CLAUDE_CODE_OAUTH_TOKEN"]
 "#;
 
-fn provider(pair: &Pair, probe: bool, timeout: u64) -> PathBuf {
+fn provider(pair: &Pair, binary: &str, probe: bool, timeout: u64) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
-    let bin = pair.follower_repo.join("claude");
+    let bin = pair.follower_repo.join(binary);
     std::fs::write(&bin, r#"#!/bin/sh
 [ "$AUTH_FIXTURE_ALLOWED" = permitted ] || exit 21
 [ -z "$AUTH_FIXTURE_NOT_ALLOWED" ] || exit 22
@@ -125,11 +125,22 @@ fn auth_probe_backoff_recovery_and_later_leaf_run_in_the_same_drain() {
     let clock = std::time::Instant::now();
     orbit_core::test_support::with_cli_supervision_clock(
         move || clock,
-        auth_probe_backoff_recovery_fixture,
+        || auth_probe_backoff_recovery_fixture("claude"),
     );
 }
 
-fn auth_probe_backoff_recovery_fixture() {
+/// The same backoff, re-admission and later-leaf recovery through a
+/// custom-named launcher: the probe selects the declared provider, and the
+/// recovered leaf dispatches through it [ORB-19862].
+fn auth_probe_backoff_recovery_with_custom_named_launcher() {
+    let clock = std::time::Instant::now();
+    orbit_core::test_support::with_cli_supervision_clock(
+        move || clock,
+        || auth_probe_backoff_recovery_fixture("claude-wrapper"),
+    );
+}
+
+fn auth_probe_backoff_recovery_fixture(binary: &str) {
     let _env = orbit_common::test_env::scoped([
         ("AUTH_FIXTURE_ALLOWED", Some("permitted")),
         ("AUTH_FIXTURE_NOT_ALLOWED", Some("private")),
@@ -142,7 +153,7 @@ fn auth_probe_backoff_recovery_fixture() {
         CONFIG,
         &[Some("opus"), Some("sonnet"), Some("opus")],
     );
-    provider(&pair, true, 5);
+    provider(&pair, binary, true, 5);
     let drain = pair.run_drain();
     let leaf = pair.running_leaf(&drain, 1);
     assert!(
@@ -325,7 +336,7 @@ fn only_declared_auth_exclusions_probe_and_timeout_keeps_them_excluded() {
         ),
     ] {
         let pair = Pair::with_configs(CONFIG, CONFIG, &[Some("opus")]);
-        provider(&pair, declared, 1);
+        provider(&pair, "claude", declared, 1);
         let drain = pair.run_drain();
         let leaf = pair.running_leaf(&drain, 1);
         pair.leaf_fails_with(&leaf, diagnostic);
@@ -495,6 +506,7 @@ fn a_crew_account_auth_failure_excludes_and_recovers_only_that_crew() {
 crate::scenario_table!(
     auth_probe_backoff_recovery_and_later_leaf_run_in_the_same_drain_scenarios,
     auth_probe_backoff_recovery_and_later_leaf_run_in_the_same_drain,
+    auth_probe_backoff_recovery_with_custom_named_launcher,
     only_declared_auth_exclusions_probe_and_timeout_keeps_them_excluded,
     a_crew_account_auth_failure_excludes_and_recovers_only_that_crew
 );
