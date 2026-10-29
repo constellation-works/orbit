@@ -320,11 +320,13 @@ as the shared-daemon control's expected compilation failure. Termination allows
 one second for SIGTERM, escalates to SIGKILL, and allows one more second to
 reap. Failure cleanup uses the same supervision. An owned group anchor ignores
 SIGTERM and stays unreaped through the final group signal, so transport exit
-cannot release the group identity early. The independent Linux fixture watchdog
-observes exit without reaping its leader until its own last group signal.
-Deterministic API models check both identity lifetimes without PID churn or
-signaling unrelated processes. On Linux the supervisor adopts
-and reaps orphaned descendants, including processes that start new sessions;
+cannot release the group identity early. If anchor startup fails, supervision
+reports the error with participant status 125 and cleans up with the transport
+leader unreaped until the final group signal. The independent Linux fixture
+watchdog observes exit without reaping its leader until its own last group signal.
+Deterministic API models check both identity lifetimes and failed anchor forks
+and preexec startup without PID churn or signaling unrelated processes. On Linux
+the supervisor adopts and reaps orphaned descendants, including processes that start new sessions;
 status 125 reports failure to reap within the grace. The public-entrypoint
 fixtures exercise TERM-ignoring trees, warm reuse, both shared-daemon modes,
 owner readiness failure and early failure cleanup without real compilation.

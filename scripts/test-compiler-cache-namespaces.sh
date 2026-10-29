@@ -282,16 +282,17 @@ def descendants(pid):
 
 deadline = time.monotonic() + int(sys.argv[1])
 process = subprocess.Popen(sys.argv[2:], process_group=0)
-# An owned, unreaped anchor reserves the group even if polling reaps the
-# transport. Ignore TERM so the group has a live member until the final KILL
-# (Darwin refuses signals to a group containing only zombies). This supervisor
-# is single-threaded, so setting the inherited disposition before exec is safe.
-anchor = subprocess.Popen(
-    [sys.executable, "-c", "import sys; sys.stdin.buffer.read()"],
-    stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, process_group=process.pid,
-    preexec_fn=lambda: signal.signal(signal.SIGTERM, signal.SIG_IGN))
+anchor = None
 status = None
 try:
+    # An owned, unreaped anchor reserves the group even if polling reaps the
+    # transport. Ignore TERM so the group has a live member until the final KILL
+    # (Darwin refuses signals to a group containing only zombies). This supervisor
+    # is single-threaded, so setting the inherited disposition before exec is safe.
+    anchor = subprocess.Popen(
+        [sys.executable, "-c", "import sys; sys.stdin.buffer.read()"],
+        stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, process_group=process.pid,
+        preexec_fn=lambda: signal.signal(signal.SIGTERM, signal.SIG_IGN))
     while status is None and not cancelled and time.monotonic() < deadline:
         status = process.poll()
         if status is None:
@@ -303,9 +304,13 @@ try:
         print("namespace participant timed out", file=sys.stderr, flush=True)
     elif status < 0:
         status = 128 - status
+except (OSError, subprocess.SubprocessError) as error:
+    status = 125
+    print(f"namespace participant supervision failed: {error}", file=sys.stderr, flush=True)
 finally:
     # A successful leader may also leave daemons behind. Terminate the whole
     # tree on every outcome, then adopt and reap orphans before returning.
+    anchor_pid = anchor.pid if anchor is not None else None
     grace_end = time.monotonic() + 1
     reap_end = grace_end + 1
     terminated = set()
@@ -317,7 +322,7 @@ finally:
             os.killpg(process.pid, sig)
             group_killed = sig == signal.SIGKILL
         for pid in reversed(owned):
-            if pid == anchor.pid:
+            if pid == anchor_pid:
                 continue
             if sig == signal.SIGTERM and pid in terminated:
                 continue
@@ -326,29 +331,34 @@ finally:
                 terminated.add(pid)
             except ProcessLookupError:
                 pass
-        # Reap specific descendants only; the anchor keeps the identity
-        # reserved until all group signals are finished.
+        # Reap specific descendants only; keep the anchor (or, if its startup
+        # failed, the original leader) unreaped until all group signals finish.
         for pid in reversed(owned):
-            if pid in (process.pid, anchor.pid):
+            if pid in (process.pid, anchor_pid):
                 continue
             try:
                 os.waitpid(pid, os.WNOHANG)
             except ChildProcessError:
                 pass
-        remaining = [pid for pid in descendants(os.getpid()) if pid not in (process.pid, anchor.pid)]
-        if process.poll() is not None and not remaining:
+        if anchor is None:
+            leader_exited = os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None
+        else:
+            leader_exited = process.poll() is not None
+        remaining = [pid for pid in descendants(os.getpid()) if pid not in (process.pid, anchor_pid)]
+        if leader_exited and not remaining:
             break
         if time.monotonic() >= reap_end:
             print("namespace descendants did not reap after SIGKILL", file=sys.stderr)
             status = 125
             break
         time.sleep(0.02)
-    # Kill the still-reserved anchor with the final group signal. Never signal
-    # this numeric group again, even if a wait or a cleanup assertion fails.
+    # Send the final group signal while its identity is still reserved. Never
+    # signal this numeric group again, even if a wait or a cleanup assertion fails.
     if not group_killed:
         os.killpg(process.pid, signal.SIGKILL)
     process.wait(timeout=1)
-    anchor.wait(timeout=1)
+    if anchor is not None:
+        anchor.wait(timeout=1)
 
 sys.exit(status)
 PYSUPERVISOR
