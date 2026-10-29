@@ -82,6 +82,28 @@ class UnitTestRatchetTests(unittest.TestCase):
         self.assertEqual(self.run_inventory("--write-baseline", str(self.baseline)).returncode, 0)
         self.assertEqual(self.run_inventory("--check", str(self.baseline)).returncode, 0)
 
+    def test_raw_test_attribute_survives_print_check_and_baseline(self):
+        self.write("crates/alpha/src/lib.rs", "#[r#test]\nfn real_test() {}\n")
+        source = self.root / "crates/alpha/src/lib.rs"
+        formatted = subprocess.run(["rustfmt", str(source)], capture_output=True, text=True)
+        self.assertEqual(formatted.returncode, 0, formatted.stderr)
+        printed = self.run_inventory()
+        self.assertEqual(printed.returncode, 0, printed.stderr)
+        self.assertEqual(json.loads(printed.stdout)["crates"]["alpha"]["test_functions"], 1)
+        expected = {"test_function_paths": ["lib.rs::real_test"]}
+        self.assertEqual(json.loads(printed.stdout)["crates"]["alpha"]["test_function_paths"],
+                         expected["test_function_paths"])
+        self.baseline.write_text(json.dumps({"schema_version": 2, "crates": {"alpha": {
+            "test_function_paths": [],
+        }}}))
+        refused = self.run_inventory("--check", str(self.baseline))
+        self.assertEqual(refused.returncode, 1, refused.stderr)
+        self.assertIn("lib.rs::real_test", refused.stderr)
+        written = self.run_inventory("--write-baseline", str(self.baseline))
+        self.assertEqual(written.returncode, 0, written.stderr)
+        self.assertEqual(json.loads(self.baseline.read_text())["crates"]["alpha"], expected)
+        self.assertEqual(self.run_inventory("--check", str(self.baseline)).returncode, 0)
+
     def test_fixture_literals_and_comments_do_not_consume_admissions(self):
         phantom = "\n#[test]\nfn fixture_only() {}\n"
         fixtures = [

@@ -1,5 +1,6 @@
 """Command-boundary regressions for selection, execution and retained QA bytes."""
 
+import copy
 import hashlib
 import json
 import os
@@ -23,7 +24,7 @@ qa.__file__ = str(repo / "scripts/test-qa-full-sweep.py")
 qa.validate_inventory = lambda *_: ([], {"cli": []})
 qa.candidate_source = lambda *_: {"candidate_id": "fixture-candidate", "head": "a" * 40,
                                 "status": [], "diff_sha256": "fixture"}
-if json.loads((repo / "mode.json").read_text()) != "builtin-skip":
+if not json.loads((repo / "mode.json").read_text()).startswith("builtin-"):
     qa.run_builtins = lambda *_: ([], None)
 qa.platform.system = lambda: "Darwin"
 qa.inspect_browser_capability = lambda *_: ({"command": ["probe"], "exit_code": 0,
@@ -207,6 +208,7 @@ def self_test():
     native_recorder_prefix_self_test(harness, scratch)
     retired_cases_orphan_proof_self_test(harness, scratch)
     scratch_cleanup_race_self_test(harness, scratch)
+    builtin_refusal_self_test(harness, scratch)
     with tempfile.TemporaryDirectory(prefix="qa-evidence-regression-", dir=scratch) as tmp:
         repo = Path(tmp)
         for directory in ["bin", "scripts", ".orbit/tmp", "browsers"]:
@@ -245,7 +247,7 @@ def self_test():
                   "command": ["./scripts/check-ci-macos.sh"],
                   "assertions": ["macos-required-workflow-is-current", "macos-check-ran-on-matching-revision"]}
         browsers = [{"id": name, "required": True, "capability": "browser", "kind": "command",
-                     "command": [sys.executable, str(browser), name, "{evidence_dir}"], "assertions": [name]}
+                     "command": [sys.executable, str(browser), name, "{evidence_dir}", "{playwright_module}"], "assertions": [name]}
                     for name in ["first", "second"]]
 
         def sweep(scenarios, mode, extra=()):
@@ -547,6 +549,70 @@ def self_test():
             for item in result["retained_evidence"]["files"]:
                 path = Path(result["retained_evidence"]["directory"]) / item["path"]
                 assert hashlib.sha256(path.read_bytes()).hexdigest() == item["sha256"], result
+        # Re-import the unchanged producer report with browser execution disabled.
+        # Keep the declared local provenance row: it is emitted even when the
+        # external fixture binary has no source-build attestation.
+        provenance = {"id": "source-binary-provenance", "required": False,
+                      "capability": "local", "kind": "builtin", "assertions": []}
+        report = sweep([*browsers, provenance], "complete", browser_args)
+        imported_path = repo / ".orbit/tmp/reimport.json"
+        def reimport(body, scenarios):
+            imported_path.write_text(json.dumps(body))
+            return sweep([*scenarios, provenance], "complete",
+                         ["--platform-evidence", str(imported_path)])
+
+        replay = reimport(report, browsers)
+        assert replay["decision"] == "PASS", replay
+        assert all(row(replay, name).get("imported_from") for name in ["first", "second"]), replay
+        for mode in ["candidate", "row-candidate", "unknown", "command", "module-command", "directory-command", "assertions",
+                     "missing-manifest", "empty-manifest", "missing-bytes", "tampered-bytes"]:
+            altered = copy.deepcopy(report)
+            result = row(altered, "first")
+            if mode == "candidate":
+                altered["candidate"]["id"] = "stale-candidate"
+            elif mode == "row-candidate":
+                result["candidate_id"] = "stale-candidate"
+            elif mode == "unknown":
+                altered["results"].append({**result, "scenario": "undeclared-behavior"})
+            elif mode == "command":
+                result["command"][2] = "different-behavior"
+            elif mode == "module-command":
+                result["command"][-1] = "different-browser-module"
+            elif mode == "directory-command":
+                result["command"][-2] = "different-evidence-directory"
+            elif mode == "assertions":
+                result["assertions"] = ["different-guarantee"]
+            elif mode == "missing-manifest":
+                result.pop("retained_evidence")
+            elif mode == "empty-manifest":
+                result["retained_evidence"]["files"] = []
+            else:
+                retained = result["retained_evidence"]
+                target = Path(retained["directory"]) / retained["files"][0]["path"]
+                original = target.read_bytes()
+                if mode == "missing-bytes":
+                    target.unlink()
+                else:
+                    target.write_text("tampered retained bytes")
+            replay = reimport(altered, browsers)
+            assert replay["decision"] == "INCOMPLETE", (mode, replay)
+            assert not any(item["outcome"] == "PASS" and item["scenario"] == "first"
+                           for item in replay["results"]), (mode, replay)
+            if mode in ["missing-bytes", "tampered-bytes"]:
+                target.write_bytes(original)
+        # Native schema-v2 rows retain the schema-v1 provenance validation.
+        native_report = sweep([native, provenance], "hosted-complete")
+        replay = reimport(native_report, [native])
+        assert replay["decision"] == "PASS" and row(replay, "macos-platform")["imported_from"], replay
+        for mode in ["wrong-command", "missing-provenance"]:
+            altered = copy.deepcopy(native_report)
+            result = row(altered, "macos-platform")
+            if mode == "wrong-command":
+                result["command"] = ["./wrong-command"]
+            else:
+                result["native_evidence"]["producer"]["run_id"] = ""
+            replay = reimport(altered, [native])
+            assert replay["decision"] == "INCOMPLETE", (mode, replay)
         for mode in ["overwrite", "missing"]:
             report = sweep(browsers, mode, browser_args)
             assert report["decision"] == "INCOMPLETE" and row(report, "first")["retained_evidence_error"], report
@@ -555,6 +621,119 @@ def self_test():
         # Repeated invocations also retain earlier report bytes.
         assert all(Path(directory).is_dir() for directory in directories), directories
 
+
+
+def builtin_refusal_self_test(harness, scratch):
+    """Public main must never credit incomplete built-in refusal commands."""
+    with tempfile.TemporaryDirectory(prefix="qa-builtin-refusal-", dir=scratch) as tmp:
+        repo = Path(tmp)
+        for directory in ["bin", "scripts", ".orbit/tmp"]:
+            (repo / directory).mkdir(parents=True, exist_ok=True)
+        driver = repo / "driver.py"
+        hook = """
+from unittest import mock
+real_run = qa.run
+mode = json.loads((repo / "mode.json").read_text())
+def injected_run(argv, **kwargs):
+    refusal = (("task" in argv and "show" in argv and "--workspace" in argv
+                and Path(argv[argv.index("--workspace") + 1]).name == "other-workspace")
+               or ("config" in argv and "set" in argv
+                   and any(value in argv for value in ["not-a-real-mode", "hm_forged", "ZZ",
+                                                       "workspace-scoped", "invalid/name"])))
+    if refusal:
+        if mode == "builtin-timeout":
+            return real_run(argv, **{**kwargs, "timeout": 0})
+        if mode == "builtin-lost-result":
+            with mock.patch.object(qa, "_PROCESS_SUPERVISOR",
+                                   "import os, sys; os.close(int(sys.argv[1]))"):
+                return real_run(argv, **kwargs)
+        if mode == "builtin-unverified-cleanup":
+            with mock.patch("os.killpg", side_effect=PermissionError("fixture cleanup refusal")):
+                return real_run(argv, **kwargs)
+    return real_run(argv, **kwargs)
+qa.run = injected_run
+"""
+        driver.write_text(DRIVER.replace("qa.main()", hook + "\nqa.main()", 1))
+        cargo = repo / "bin/cargo"
+        cargo.write_text(f"#!{sys.executable}\n" + CARGO)
+        cargo.chmod(0o755)
+        git = repo / "bin/git"
+        git.write_text(f"#!{sys.executable}\nprint('" + "a" * 40 + "')\n")
+        git.chmod(0o755)
+        orbit = repo / "bin/orbit"
+        orbit.write_text(f"#!{sys.executable}\n" + r"""
+import json, os, sys
+from pathlib import Path
+args = sys.argv[1:]
+mode = json.loads(Path(os.environ["QA_REFUSAL_REPO"]).joinpath("mode.json").read_text())
+root = Path(args[args.index("--root") + 1]) if "--root" in args else Path.home() / ".orbit"
+work = Path(args[args.index("--workspace") + 1]) if "--workspace" in args else Path.cwd()
+refusal = (("task" in args and "show" in args and work.name == "other-workspace")
+           or ("config" in args and "set" in args and any(value in args for value in
+               ["not-a-real-mode", "hm_forged", "ZZ", "workspace-scoped", "invalid/name"])))
+if refusal:
+    print("fixture refusal", file=sys.stderr)
+    raise SystemExit(0 if mode == "builtin-zero" else 7)
+body = {}
+if "init" in args and "workspace" not in args:
+    if root.name == "migration-root":
+        raise SystemExit(1)  # Stop after all shared refusal callers under test.
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "config.toml").write_text("identity")
+    (root / "workspaces.json").write_text("registry")
+elif "workspace" in args and "show" in args:
+    body = {"checkout": {"repo_root": str(work)}}
+elif "task" in args:
+    if "artifact" in args and "get" in args:
+        print("qa evidence payload")
+        raise SystemExit(0)
+    body = {"id": "QAF-1", "title": "QA behavioral fixture", "acceptance_criteria": ["fixture round trip"]}
+    if "list" in args:
+        body = [body]
+elif "config" in args:
+    if "set" in args and "workflow.base_branch" in args:
+        path = work / ".orbit/config.toml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("base_branch = 'qa-candidate'")
+    elif "get" in args:
+        body = {"key": "workflow.base_branch", "value": "qa-candidate", "scope": "workspace",
+                "path": str(work / ".orbit/config.toml")}
+    elif "set" in args and "qa-renamed" in args:
+        (root / "renamed").write_text("renamed")
+    elif "show" in args:
+        body = {"settings": {"machine.id": "hm_fixture", "machine.task_prefix": "QAF",
+                             "machine.name": "qa-renamed" if (root / "renamed").exists() else "qa-machine"}}
+elif "log" in args:
+    if "orbit.qa.absent" not in args:
+        print(Path(args[args.index("--path") + 1]).read_text().splitlines()[-1])
+    raise SystemExit(0)
+print(json.dumps(body))
+""")
+        orbit.write_text(orbit.read_text().replace('os.environ["QA_REFUSAL_REPO"]', repr(str(repo))))
+        orbit.chmod(0o755)
+        (repo / "scripts/test-qa-full-sweep.py").write_bytes(harness.read_bytes())
+        inventory = json.loads(harness.with_name("qa-full-sweep-inventory.json").read_text())
+        names = {"workspace-boundary", "config-transaction", "machine-identity-transaction"}
+        scenarios = [item for item in inventory["scenarios"] if item["id"] in names]
+        (repo / "scripts/qa-full-sweep-inventory.json").write_text(json.dumps({"scenarios": scenarios}))
+        for mode in ["complete", "timeout", "lost-result", "unverified-cleanup", "zero"]:
+            (repo / "mode.json").write_text(json.dumps("builtin-" + mode))
+            child = subprocess.run([sys.executable, str(driver), str(harness), str(repo), "--build-candidate"],
+                                   cwd=repo, env={**os.environ,
+                                                 "PATH": f"{cargo.parent}:{os.environ['PATH']}"},
+                                   capture_output=True, text=True, timeout=60)
+            assert child.returncode == 0, (mode, child.stdout, child.stderr)
+            report = json.loads((repo / ".orbit/tmp/report.json").read_text())
+            refusals = [item for item in report["results"] if "fixture refusal" in item.get("stderr", "")
+                        or item.get("exit_code") is None and item["scenario"] in names]
+            assert len(refusals) == 6, (mode, report)
+            assert (report["decision"] == "PASS") == (mode == "complete"), (mode, report)
+            for result in refusals:
+                assert result["outcome"] == ("PASS" if mode == "complete" else "FAIL"), (mode, result)
+                assert bool(result["assertions"]) == (mode == "complete"), (mode, result)
+                assert result["exit_code"] == (7 if mode == "complete" else 0 if mode == "zero" else None), (mode, result)
+            positives = [item for item in report["results"] if item["scenario"] in names and item not in refusals]
+            assert positives and all(item["outcome"] == "PASS" and item["assertions"] for item in positives), (mode, positives)
 
 def candidate_build_report_self_test(harness, scratch):
     """Failed builds and unavailable binaries retain reports without running built-ins."""

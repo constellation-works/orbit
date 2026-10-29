@@ -584,15 +584,18 @@ def finalize_result(evidence, assertions, candidate_id, failure=None, accept_non
 
     An exit-zero command whose evidence is otherwise valid is NOT_RUN when it
     only lacks a capability. A nonzero exit (unless the caller accepts that
-    exit), a validation failure, or truncated output is FAIL. Notices and the
-    original diagnostics stay on the row in either case.
+    exit), an unknown exit status, unverified cleanup, a validation failure, or
+    truncated output is FAIL. Notices and the original diagnostics stay on the
+    row in either case.
     """
     evidence["assertions"] = assertions
     evidence["candidate_id"] = candidate_id
     notices = execution_notices(evidence)
     if evidence.get("output_truncated"):
         failure = (failure + "; " if failure else "") + "command output was truncated; execution evidence is incomplete"
-    failed = (evidence["exit_code"] != 0 and not accept_nonzero) or bool(failure)
+    failed = (type(evidence["exit_code"]) is not int
+              or (evidence["exit_code"] != 0 and not accept_nonzero)
+              or evidence.get("cleanup_verified") is False or bool(failure))
     if notices:
         evidence["missing_capabilities"] = notices
     if notices and not failed:
@@ -1072,8 +1075,8 @@ updated_at: 2026-01-01T00:00:00Z
             work, ["task-list-contains-created-task"], listed)
 
     def refused(evidence):
-        if evidence["exit_code"] == 0:
-            raise ValueError("cross-workspace task show was not refused")
+        if type(evidence["exit_code"]) is not int or evidence["exit_code"] == 0:
+            raise ValueError("command did not complete with a nonzero refusal status")
 
     checked("workspace-boundary",
             [orbit_bin, "--root", str(root), "--workspace", str(other), "task", "show", task_id, "--json"],
@@ -2269,6 +2272,12 @@ def self_test():
             raise AssertionError("hosted evidence passed for a dirty candidate")
 
 
+def expand_scenario_command(command, playwright_module, evidence_dir):
+    """Expand only the declared runtime paths, identically on execution and import."""
+    return [part.replace("{playwright_module}", str(playwright_module))
+            .replace("{evidence_dir}", str(evidence_dir)) for part in command]
+
+
 def import_platform_evidence(paths, inventory, candidate, repo):
     imported = []
     candidate_id = candidate["candidate_id"]
@@ -2293,12 +2302,23 @@ def import_platform_evidence(paths, inventory, candidate, repo):
         if body.get("schema_version") != 2 or body.get("candidate", {}).get("id") != candidate_id:
             raise ValueError(f"{path}: evidence is for a different or unsupported candidate")
         for result in body.get("results", []):
+            # These are harness diagnostics, never behavioral scenario evidence.
+            if result.get("scenario") in {"inventory-guard", "platform-evidence-import"}:
+                continue
             scenario = scenarios.get(result.get("scenario"))
             if not scenario:
                 raise ValueError(f"{path}: imported scenario is not declared")
             if scenario.get("capability") == "local" or result.get("outcome") != "PASS":
                 continue
-            if result.get("command") != scenario.get("command"):
+            expected_command = scenario.get("command")
+            if scenario.get("capability") == "browser":
+                module = body.get("browser", {}).get("playwright_module")
+                retained = result.get("retained_evidence") or {}
+                directory = retained.get("directory")
+                if not isinstance(module, str) or not module or not isinstance(directory, str) or not directory:
+                    raise ValueError(f"{path}: browser evidence lacks its recorded runtime paths")
+                expected_command = expand_scenario_command(expected_command, module, directory)
+            if result.get("command") != expected_command:
                 raise ValueError(f"{path}: imported command does not match the required check")
             if result.get("candidate_id") != candidate_id:
                 raise ValueError(f"{path}: result candidate does not match report candidate")
@@ -2497,9 +2517,8 @@ def main():
                 continue
             if args.run_commands and capabilities.get(scenario["capability"], False):
                 scenario_evidence_dir = browser_run_dir / scenario["id"] if browser_run_dir else browser_evidence_dir
-                command = [part.replace("{playwright_module}", str(args.playwright_module))
-                           .replace("{evidence_dir}", str(scenario_evidence_dir))
-                           for part in scenario["command"]]
+                command = expand_scenario_command(scenario["command"], args.playwright_module,
+                                                  scenario_evidence_dir)
                 scenario_env = browser_env if scenario["capability"] == "browser" else env
                 if scenario["id"] == "website-build":
                     evidence = website_build_evidence(repo, temp, env, command)
