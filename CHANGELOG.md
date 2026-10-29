@@ -14,7 +14,7 @@
 - **Optional decision assistance**: a bounded, host-owned assistance foundation with budgets, a persisted queue and evaluation contracts ships off unless a host configures a policy, and makes no production utility claim. ([ORB-19720])
 - **Bounded operations views**: Auto-task, Forecast and Reliability views bound and filter large tables, and phone navigation keeps delivery and fleet status reachable. ([ORB-19692])
 - **Delivery and CI hardening**: source-repair plans are preflighted before admission, CI reruns are bounded before candidate failures are attributed, and worker metadata reads stay within the owner transport budget. ([ORB-19873])
-- **macOS worker containment**: worker limits are enforced on the tracked process tree, bounding what sandboxed workers can spawn on Mac hosts. ([ORB-19251])
+- **macOS worker limits**: a watchdog enforces `machine.worker_memory_max` and `machine.worker_tasks_max` over each worker's tracked process tree and fails a breaching run as `worker_resource_limit`. It is not kernel containment. ([ORB-19251])
 - **Prompt-size pricing**: model prices gain prompt-size tiers and per-request long-prompt usage, improving cost estimates and usage visibility for model-assisted work. ([ORB-19680])
 
 ## 0.38.0 — 2026-10-29
