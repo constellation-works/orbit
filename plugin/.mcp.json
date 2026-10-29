@@ -2,7 +2,7 @@
   "mcpServers": {
     "orbit": {
       "command": "npx",
-      "args": ["-y", "@orbit-tools/cli@0.37.0", "mcp", "serve"]
+      "args": ["-y", "@orbit-tools/cli@0.38.0", "mcp", "serve"]
     }
   }
 }
