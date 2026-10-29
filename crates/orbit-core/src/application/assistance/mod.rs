@@ -22,6 +22,10 @@ pub(crate) use preparation::prepare_assistance_evidence;
 /// Implementations must honor the claim's timeout and bounded response size,
 /// never log request/response/credential values, and return fixed error codes.
 pub trait AssistanceAdapter: Send + Sync {
+    /// Stable identity recorded on every admitted work item. The
+    /// provider-neutral service must not name a concrete adapter; each
+    /// implementation reports its own.
+    fn assistance_adapter_identity(&self) -> &str;
     /// Resolve credentials only within the adapter and redact their values
     /// along with supplied secrets before any persistence or transmission.
     fn prepare_assistance_request(

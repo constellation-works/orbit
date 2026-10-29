@@ -30,6 +30,10 @@ struct SyntheticAdapter {
 }
 
 impl AssistanceAdapter for SyntheticAdapter {
+    fn assistance_adapter_identity(&self) -> &str {
+        "synthetic-assistance/1"
+    }
+
     fn prepare_assistance_request(
         &self,
         request: AssistanceRequest,

@@ -3,12 +3,13 @@
 mod fixture;
 use chrono::Duration;
 use fixture::{
-    AssistanceFixture, CREDENTIAL, FixtureResult, SUPPLIED,
+    AssistanceFixture, CREDENTIAL, FixtureResult, SUPPLIED, SecondAssistanceAdapter,
     ambiguous_non_timeout_send_failure_reason, builder_send_failure_reason,
     connect_send_failure_reason, timeout_send_failure_reason,
 };
 use orbit_common::OrbitError;
-use orbit_core::adapter::decisions::AssistanceHttpResponse;
+use orbit_core::adapter::decisions::{AssistanceHttpResponse, OPENAI_DECISIONS_ADAPTER_IDENTITY};
+use orbit_core::application::assistance::AssistanceAdapter;
 use orbit_store::Store;
 use orbit_store::contracts::assistance::{AssistanceAdmission, AssistanceStoreBackend};
 use orbit_types::assistance::{
@@ -18,7 +19,10 @@ use serde_json::{Value, json};
 use std::io::Write;
 use std::path::Path;
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 fn fixture_service_boundaries(root: &Path, schema: &Value) -> FixtureResult {
     let f = AssistanceFixture::open_fixture(root, schema, "task_quality")?;
@@ -1128,6 +1132,47 @@ fn fixture_modes_and_late_results(root: &Path, schema: &Value) -> FixtureResult 
     Ok(())
 }
 
+fn fixture_adapter_identity(root: &Path, schema: &Value) -> FixtureResult {
+    // The recorded adapter identity must come from the injected adapter, not
+    // from a service-owned literal, so a second adapter is never recorded
+    // under the OpenAI identity.
+    let f = AssistanceFixture::open_fixture(root, schema, "task_quality")?;
+    let id = f.enqueue(f.request("adapter-identity")?)?;
+    let record = f.record(&id)?;
+    assert_eq!(
+        record.work.adapter,
+        f.adapter.assistance_adapter_identity(),
+        "recorded adapter identity must equal the injected adapter's identity"
+    );
+    assert_eq!(
+        record.work.adapter, OPENAI_DECISIONS_ADAPTER_IDENTITY,
+        "OpenAI Decisions adapter identity must stay stable"
+    );
+    // A second adapter must be recorded under its own identity, never the
+    // OpenAI identity.
+    let second = Arc::new(SecondAssistanceAdapter::with_identity(
+        f.adapter.clone(),
+        "synthetic-assistance/1",
+    ));
+    let service = f.service_with_assistance_adapter(second.clone());
+    let second_id =
+        match service.enqueue_assistance(f.request("second-adapter")?, &[SUPPLIED.into()])? {
+            AssistanceAdmission::Enqueued(id) | AssistanceAdmission::Existing(id) => id,
+            _ => return Err("second adapter fixture was not admitted".into()),
+        };
+    let second_record = f.record(&second_id)?;
+    assert_eq!(
+        second_record.work.adapter,
+        second.assistance_adapter_identity(),
+        "second adapter must be recorded under its own identity"
+    );
+    assert_ne!(
+        second_record.work.adapter, OPENAI_DECISIONS_ADAPTER_IDENTITY,
+        "second adapter must not be recorded under the OpenAI identity"
+    );
+    Ok(())
+}
+
 fn main() -> FixtureResult {
     let args: Vec<_> = std::env::args_os().collect();
     if args.get(1).is_some_and(|s| s == "--fixture-child") {
@@ -1135,6 +1180,7 @@ fn main() -> FixtureResult {
             serde_json::from_slice(&std::fs::read(args.get(2).ok_or("schema path required")?)?)?;
         let root = Path::new(args.get(3).ok_or("isolated root required")?);
         fixture_service_boundaries(&root.join("service"), &schema)?;
+        fixture_adapter_identity(&root.join("adapter-identity"), &schema)?;
         fixture_completed_result_outlives_queue_age(&root.join("completed"), &schema)?;
         fixture_send_failure_reconciliation(&root.join("send-failure"), &schema)?;
         fixture_http_status_retry(&root.join("http-status"), &schema)?;
