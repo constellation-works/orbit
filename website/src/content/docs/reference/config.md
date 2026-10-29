@@ -94,15 +94,16 @@ calls retain their full token/spend reservations; retries reserve again under
 the same logical assessment. Late, stale, refused and unavailable results are
 explicit gaps rather than clean assessments.
 
-`budget` requires a named `epoch`, cumulative `token_ceiling` and
-`spend_ceiling_microusd`, and a verified
-`input_microusd_per_million_tokens` with `pricing_version`. Defaults are
-`unfunded`, zero ceilings and unknown pricing, which refuses calls. Reservation
-counters survive payload retention; the owner integration must keep maintenance
-running to expire retained payloads. A provider model change requires a new
-`model_revision` epoch. Live evaluation and advisory activation need a separate
-operator decision identifying the evaluated contract, evidence permissions and
-budget; they are not enabled by default.
+`budget` sets a named `epoch` and cumulative `token_ceiling` and
+`spend_ceiling_microusd`. `input_microusd_per_million_tokens` and
+`pricing_version` are optional; without verified pricing, calls are refused
+because their charge is unknown. Defaults are `unfunded`, zero ceilings and
+unknown pricing, which refuses calls. Reservation counters survive payload
+retention; the owner integration must keep maintenance running to expire
+retained payloads. A provider model change requires a new `model_revision`
+epoch. Live evaluation and advisory activation need a separate operator
+decision identifying the evaluated contract, evidence permissions and budget;
+they are not enabled by default.
 
 Read the whole table with `orbit config get assistance`; replace it with
 `orbit config set --global assistance '<table>'`. Its nested fields are not
