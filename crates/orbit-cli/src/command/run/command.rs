@@ -20,36 +20,10 @@ use super::show::RunShowArgs;
 use super::task_pilot;
 use super::trace::RunTraceArgs;
 
-const RUN_AFTER_HELP: &str = "\
-Workflow entrypoints:
-  orbit run auto [--for 30m] [--concurrency <N>] [--complete]
-  orbit run auto --stop
-  orbit run ship [task_id ...] [--complete]
-  orbit run task-pilot [task_id ...]
-  orbit run job <job_id> [--input key=value] [--json]
-  orbit run agent <prompt> [--cwd DIR] [--crew NAME] [--timeout SECONDS] [--provider-sandbox MODE]
-
-Run history:
-  orbit run history [--task <id>] [--state failed,held] [--since 24h] [--limit 50] [--failures]
-  orbit run history -j <job_id>
-  orbit run show [run_id] [-s step_id] [--json]
-  orbit run logs [run_id] [-s step_id] [--json]
-  orbit run events [run_id] [-s step_id] [--type event_type] [--json]
-  orbit run trace [run_id] [--json]
-  orbit run settlements [--since 7d] [--json]
-
-Maintenance:
-  orbit run cancel <run_id> --confirm
-  orbit run concurrency <run_id> --set 7
-  orbit run extend <run_id> --for 2h [--concurrency <N>]
-  orbit run profiles [--accuracy] [--json]
-
-Owner/local drains count every in-flight child against N. Pull drains grant capped replacement
-credit for leaves in before-landing review: admission counts occupied - min(reviewing, N)
-against N. Reviewing leaves can exceed N as replacements reach review; with an unchanged N and
-no pre-existing excess, total occupied is at most 2N and implementing at most N. Lowering N
-preserves running leaves, so existing excess can remain temporarily. orbit run show reports
-stage counts, and review rebuilds still use repository build-budget slots.
+const RUN_AFTER_LONG_HELP: &str = "\
+Owner/local drains count every in-flight child against --concurrency. A replica's pull drain
+uses it as an admission ceiling with capped before-landing review credit, so it is not a hard
+total live-task cap. Details: the orbit-orchestrate skill, references/orchestration.md.
 ";
 
 #[derive(Args)]
@@ -58,7 +32,7 @@ stage counts, and review rebuilds still use repository build-budget slots.
     arg_required_else_help = true,
     subcommand_required = true,
     override_usage = "orbit run <COMMAND>",
-    after_help = RUN_AFTER_HELP,
+    after_long_help = RUN_AFTER_LONG_HELP,
     help_template = "\
 {about}
 
@@ -85,6 +59,8 @@ Maintenance:
   extend       Lengthen a running drain's window, and optionally retune it
   readiness    Explain why backlog tasks are waiting in auto-drain
   profiles     Show what each kind of delivery costs on this host, minute by minute
+
+Run 'orbit run <command> --help' for flags and examples.
 
 Options:
 {options}
