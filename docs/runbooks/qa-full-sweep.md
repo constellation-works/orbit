@@ -168,7 +168,13 @@ dependencies and generated files are preserved. This flag never deploys.
 
 Hosted evidence can be combined with `--platform-evidence <report.json>`. A
 schema-version 2 full-sweep report must name the exact candidate ID and exact
-inventory command. The macOS workflow also uploads a bounded
+inventory command. An unchanged report can be imported again: harness
+bookkeeping rows are ignored, declared local scenarios are not imported, and
+unknown behavioral scenarios are rejected. Browser commands are compared after
+expanding only the inventory's `{playwright_module}` and `{evidence_dir}`
+placeholders from the report's browser module and retained evidence directory.
+All other arguments and assertion sets must match exactly, and retained browser
+files must still exist with their recorded hashes. The macOS workflow also uploads a bounded
 `macos-platform-evidence-<run>-<attempt>` artifact after all of its required
 tests pass. That report records the physical checkout commit, exact required
 command, assertion set, workflow/run identity, and hashes of the workflow,
@@ -183,6 +189,10 @@ checkout revision, exit status and complete output under
 `.orbit/tmp/macos-native-execution/`. A timeout, lost supervisor result or
 unverified cleanup keeps `FAIL` with a null exit status in that evidence and
 returns shell status 1; numeric command statuses are returned unchanged.
+Built-in negative controls likewise require a completed, nonzero command status:
+a timeout, lost result or unverified cleanup stays `FAIL` with no refusal
+assertions. A completed refusal can earn its assertions only after its additional
+checks, such as unchanged configuration bytes, succeed.
 The emitter and importer both require
 all exact workflow commands, nonzero completed test counts, and no skip or
 deferral notices. Artifacts emitted by the older listing-only contract lack

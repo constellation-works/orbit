@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Inventory unit tests per crate and ratchet them against a checked-in baseline.
 
-A unit test is a `#[test]` or `#[<path>::test]` attribute (such as
-`#[tokio::test]`) under `crates/<crate>/src/**`, whether it sits inline or in a
-sibling `tests/` directory. This is the measure the boundary-first retirement
-used (see docs/design-patterns/test_strategy.md), so the numbers stay comparable.
+A unit test is a `#[test]` (including `#[r#test]`) or `#[<path>::test]`
+attribute (such as `#[tokio::test]`) under `crates/<crate>/src/**`, whether it
+sits inline or in a sibling `tests/` directory. This is the measure the
+boundary-first retirement used (see docs/design-patterns/test_strategy.md),
+so the numbers stay comparable.
 
   unit-test-inventory.py                          print the inventory as JSON
   unit-test-inventory.py --check BASELINE         fail when a test is not admitted
@@ -19,7 +20,7 @@ from collections import Counter
 from pathlib import Path
 
 SCHEMA_VERSION = 2
-TEST_ATTRIBUTE = re.compile(r"^\s*#\[(?:[A-Za-z_][A-Za-z0-9_]*::)*test\b")
+TEST_ATTRIBUTE = re.compile(r"^\s*#\[(?:(?:r#)?[A-Za-z_][A-Za-z0-9_]*::)*(?:r#)?test\b")
 FUNCTION = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+(r#)?([A-Za-z_][A-Za-z0-9_]*)\b")
 RUST_TOKEN = re.compile(
     r'''(?P<comment>//[^\n]*|/\*)|(?P<raw>(?:br|cr|r)(?P<hashes>\#*)")|'''
