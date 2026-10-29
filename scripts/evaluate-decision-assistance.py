@@ -600,7 +600,7 @@ def check_targets(doc, holdout_opened_at):
     for t in doc.get("targets", []):
         if type(t.get("min_samples")) is not int or t["min_samples"] <= 0: errs.append(f"target {t.get('question')}: min_samples must be positive int")
         for k in ("min_precision", "min_recall"):
-            if k in t and (not isinstance(t[k], (int, float)) or not 0 <= t[k] <= 1): errs.append(f"target {t.get('question')}: {k} must be in [0,1]")
+            if k in t and (isinstance(t[k], bool) or not isinstance(t[k], (int, float)) or not 0 <= t[k] <= 1): errs.append(f"target {t.get('question')}: {k} must be in [0,1]")
     return errs
 
 # ---- synthetic seed set (provenance=synthetic; NOT human ground truth) ----

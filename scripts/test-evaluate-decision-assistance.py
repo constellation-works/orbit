@@ -609,6 +609,19 @@ class EvalTests(unittest.TestCase):
                 self.assertFalse(report["ok"])
                 self.assertTrue(any("min_samples must be positive int" in error for error in report["errors"]))
 
+    def test_target_precision_and_recall_must_not_be_booleans(self):
+        for key in ("min_precision", "min_recall"):
+            for value in (True, False):
+                with self.subTest(key=key, value=value):
+                    targets = self._targets()
+                    targets["targets"][0][key] = value
+                    result = self._run("check-targets", "--targets",
+                                       str(self._dump(f"invalid-{key}-{str(value).lower()}.json", targets)))
+                    self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                    report = json.loads(result.stdout)
+                    self.assertFalse(report["ok"])
+                    self.assertTrue(any(f"{key} must be in [0,1]" in error for error in report["errors"]))
+
     def test_targets_before_holdout_only(self):
         t = self._targets()
         p = self._dump("t.json", t)
