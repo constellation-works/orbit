@@ -370,6 +370,163 @@ the recorded assignments and work records. For the list and readouts, use
 `orbit experiment readout <id>`, or open the dashboard's **Analytics ›
 Experiments** page for per-arm enrollment and readouts.
 
+## Decision assistance
+
+Decision assistance is an optional, host-owned foundation for bounded model
+annotations. It ships off. The whole `assistance` table is one advanced setting
+and is **global-only**: workspace files and workspace-scoped writes refuse it,
+including an empty table, and `orbit config set --seed-from-global` never copies
+it into a workspace file.
+
+Nothing installs a task or report consumer or a background worker that uses the
+table. Assisted calls happen only when an application integrates the library
+service explicitly, and a configured grant does not activate any consumer. No
+mode grants workflow authority: an annotation never approves, blocks, lands or
+dispatches work.
+
+### Inspect the off state
+
+These commands read local configuration only. None of them contacts the
+provider or resolves a credential.
+
+```bash
+orbit config keys | grep '^assistance'      # registered in this build
+orbit config get assistance --scope global  # the global file; built-in defaults fill omissions
+orbit config get assistance                 # effective value
+orbit config show --all                     # text view, including unset advanced keys
+orbit config show --json                    # effective JSON, including the assistance table
+```
+
+If `orbit config keys` does not list `assistance`, this build predates the table.
+Upgrade first, following [maintenance](maintenance.md), before applying anything
+in this section.
+
+The off state is an empty policy list. With `policies` at `[]`, the host enqueues
+nothing and reads no credential. The defaults are `budget.epoch = "unfunded"`
+with zero ceilings and no pricing.
+
+### Set the table
+
+Only `--global` can write the table. A set replaces the whole table, and any
+field you omit returns to its built-in default, including every limit and
+`budget.epoch`. Read the current table first and carry forward each field you
+keep.
+
+```bash
+orbit config get assistance                               # read the current table
+orbit config set --global assistance '{ policies = [] }'  # explicit off state; limits and budget revert to defaults unless you include them
+orbit config get assistance                               # confirm policies is []
+```
+
+- A set without `--global` is refused, and the error names `--global` as the
+  flag that targets the global file.
+- Nested dotted keys are not registered. `orbit config get
+  assistance.limits.concurrency` and `orbit config set --global
+  assistance.limits.concurrency 4` both fail with an unknown-key error. Limits,
+  budget and policies are fields of the one table.
+
+### Modes
+
+| Mode | Effect |
+|---|---|
+| `off` (default) | Enqueues nothing and reads no credential. |
+| `shadow` | Retains results privately for operator comparison; the advisory read returns nothing. |
+| `advisory` | Permits annotations for the matching current source and policy version. |
+
+Moving a grant from `shadow` to `advisory` changes its cache identity. Setting a
+grant's `mode` to `off` stops it without removing the grant.
+
+### Policy grants
+
+`policies` lists exact grants, at most 128, unique by `workspace_id` and
+`use_case`. Lookups match both exactly, so a grant for one workspace does nothing
+in another. Each grant binds one consumer's frozen question and evidence
+contract. An identifier below is 1 to 128 characters of letters, digits, `_`,
+`-`, `.`, `/` or `:`.
+
+| Field | Rule |
+|---|---|
+| `workspace_id`, `use_case` | Identifiers supplied by the owning application. |
+| `mode` | `off`, `shadow` or `advisory`. Optional; defaults to `off`. |
+| `model` | Must be `gpt-6-luna`. Any other model is refused. |
+| `model_revision` | Identifier. An operator-maintained cache epoch; advance it when the provider model changes. |
+| `policy_version` | Identifier for the consumer policy, including its thresholds. |
+| `contract_digest` | `sha256:` followed by 64 lowercase hex digits. Uppercase or a bare digest is refused. The consumer computes it from its serialized contract; do not hand-write it. |
+| `evidence_fields` | Non-empty list of identifiers, at most 128. Only these packet fields may leave the host; others are omitted. |
+| `evidence_ref_prefixes` | Up to 128 prefixes of 1 to 256 characters with no control characters. References are provenance strings only and are never fetched. |
+| `credential_env` | Host environment variable name: starts with `ORBIT_ASSISTANCE_`, uses only uppercase letters, digits and `_`, at most 128 characters. Config holds this name, never the value. |
+
+Calls go only to the provider's fixed Decisions endpoint. No endpoint, redirect,
+proxy or agent-crew route is configurable. Explicit secret-value and shared
+credential-pattern redaction run before anything is stored or sent. The agent
+subprocess environment builder refuses the `ORBIT_ASSISTANCE_` namespace, even
+through passthrough or crew `env` mappings, so agents cannot receive the
+credential.
+
+### Limits
+
+Every limit has a built-in default. Out-of-range values refuse the whole table.
+
+| Key | Default | Allowed |
+|---|---|---|
+| `limits.concurrency` | `2` | 1–64 active claims across the host store |
+| `limits.queue_capacity` | `128` | 1–10000 pending items |
+| `limits.max_records` | `1024` | `queue_capacity`–100000 retained items; overflow records a coverage-gap counter |
+| `limits.queue_age_seconds` | `300` | `timeout_seconds`–86400 maximum age of queued work, including retry-pending work |
+| `limits.timeout_seconds` | `15` | 1–120 per attempt |
+| `limits.retry_delay_seconds` | `5` | 1–300 |
+| `limits.max_attempts` | `2` | 1–5, including the first attempt |
+| `limits.max_request_bytes` | `16384` | 1024–65536 serialized outbound request |
+| `limits.max_response_bytes` | `65536` | 1024–1048576 received response; oversize is reported, never clipped |
+| `limits.max_input_tokens` | `32768` | 1024–262144 conservative reservation per attempt |
+| `limits.retention_seconds` | `604800` | 1–2592000 terminal payload and attempt retention |
+
+Queue age does not expire a completed result. A claim refused before any request
+is sent releases its reservation. A claim whose request entered the transport
+keeps its full reservation, even when the attempt fails.
+
+### Budget and pricing
+
+| Key | Default | Meaning |
+|---|---|---|
+| `budget.epoch` | `unfunded` | Host allocation identity. Its cumulative counters survive payload retention. |
+| `budget.token_ceiling` | `0` | Cumulative reserved input tokens for the allocation. |
+| `budget.spend_ceiling_microusd` | `0` | Cumulative reserved spend for the allocation, in micro-USD. |
+| `budget.input_microusd_per_million_tokens` | absent | Uncached input price ceiling, 1 to 1000000000. Absent pricing refuses paid calls; it never means free. |
+| `budget.pricing_version` | absent | Identifier recording the price source the operator verified. |
+
+Pricing is an external prerequisite. Before a paid call can run, the operator
+checks the current uncached input price on the provider's published price list
+and records it with a `pricing_version` that names the source and the date
+checked. Do not copy a rate from documentation, an earlier setup or memory.
+Orbit takes the price from this table and does not fetch it. The field covers
+uncached input tokens only.
+
+### Evaluation and activation prerequisites
+
+Writing configuration does not evaluate or activate anything. Live evaluation or
+advisory activation needs a separate operator decision that records:
+
+- the consumer and its question and policy versions;
+- the mode, with `shadow` before `advisory`;
+- the workspace scope, the evidence destination and the owner of redaction;
+- per-run and total budget caps, with a pricing version;
+- timeout and retry limits;
+- the targets the consumer must meet on fresh held-out data;
+- who owns the off switch.
+
+A grant does not authorize paid or live calls by itself.
+
+### Verify the effective policy
+
+```bash
+orbit config get assistance   # policies lists exactly the intended grants, with each mode
+orbit config show --json      # the same table in effective JSON
+```
+
+The table shows configuration only. It does not report that a consumer is
+running, because none ships with Orbit.
+
 ## Review finding verification and owed host evidence
 
 These settings govern review findings and the checks an owner may owe after a
