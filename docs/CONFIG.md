@@ -93,6 +93,9 @@ for operator comparison while the advisory read returns nothing. `advisory`
 permits annotations for the matching current source and policy; no mode grants
 workflow authority. Moving from shadow to advisory changes the cache identity.
 
+Fields omitted from `[assistance.limits]` or `[assistance.budget]` use their
+built-in defaults. Unknown fields in either table are rejected.
+
 | Field | Built-in default | Meaning |
 |---|---|---|
 | `limits.concurrency` | `2` | Active claims across the host store (1–64). |

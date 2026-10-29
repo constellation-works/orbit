@@ -23,6 +23,10 @@ impl Roots {
         self.workspace.path().join("config.toml")
     }
 
+    fn global_config(&self) -> PathBuf {
+        self.global.path().join("config.toml")
+    }
+
     fn config_roots(&self) -> ConfigRoots {
         ConfigRoots::new(self.global.path(), self.workspace.path())
     }
@@ -357,5 +361,57 @@ fn review_timing_writes_remain_readable_by_previous_readers() {
                 "idempotent save"
             );
         }
+    }
+}
+
+#[test]
+fn partial_assistance_limits_and_budget_tables_use_defaults_and_validate() {
+    let roots = Roots::new();
+    std::fs::write(
+        roots.global_config(),
+        "[assistance.limits]\nconcurrency = 4\n\
+         [assistance.budget]\nepoch = \"allocation_1\"\ntoken_ceiling = 500\n",
+    )
+    .expect("write partial assistance tables");
+
+    let config = roots.load();
+    let settings = &config.snapshot.assistance_settings;
+    let expected_limits = orbit_types::assistance::AssistanceLimits {
+        concurrency: 4,
+        ..Default::default()
+    };
+    assert_eq!(settings.limits, expected_limits);
+
+    let expected_budget = orbit_types::assistance::AssistanceBudget {
+        epoch: "allocation_1".into(),
+        token_ceiling: 500,
+        ..Default::default()
+    };
+    assert_eq!(settings.budget, expected_budget);
+    settings
+        .validate_assistance_settings()
+        .expect("partial settings with built-in defaults remain valid");
+}
+
+#[test]
+fn partial_assistance_tables_still_reject_unknown_fields() {
+    let roots = Roots::new();
+    for (unknown_key, table) in [
+        (
+            "future_limit",
+            "[assistance.limits]\nconcurrency = 4\nfuture_limit = 1\n",
+        ),
+        (
+            "future_budget",
+            "[assistance.budget]\nepoch = \"allocation_1\"\ntoken_ceiling = 500\nfuture_budget = 1\n",
+        ),
+    ] {
+        std::fs::write(roots.global_config(), table).expect("write unknown assistance field");
+        let error = ResolvedConfig::load(&roots.config_roots())
+            .expect_err("unknown assistance fields must be refused");
+        assert!(
+            error.to_string().contains(unknown_key),
+            "the unknown field should cause the refusal: {error}"
+        );
     }
 }
