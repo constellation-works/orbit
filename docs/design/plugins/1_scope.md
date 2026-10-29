@@ -743,6 +743,14 @@ a read a refused command offered requests the serving tool instead:
 Reaching another machine through a federated destination still needs a `network` grant and
 `ssh` in `requires.programs`.
 
+**Workspace addressing.** A callback addresses a workspace with the same `workspace` selector as any `orbit tool run`, and the session does not narrow it. The session carries a tool ceiling, not a workspace ceiling, so a callback may name any workspace the local registry lists (by name, `ws_*` ID or checkout path), not only its plugin's own. Narrowing callbacks to the plugin's own workspace is not implemented. A `hm_*/ws_*` selector is decided by the host it names:
+
+- This machine's own ID runs locally.
+- A host registered with `orbit host add` is reached over the federated route. That route needs the `network` grant and `ssh` in `requires.programs`, as stated above; without them the call fails with `unreachable_destination`.
+- A host this machine does not list is refused before the selected workspace is opened, with `invalid_input` naming the host.
+
+MCP `tools/call` takes the same selectors. A host-qualified selector there goes through the MCP server's federated router, which refuses a machine it does not list with `unknown_host`, a host that does not answer with `unreachable_destination`, a host that answers without the workspace with `stale_route`, and an ambiguous workspace name with `unknown_selector`.
+
 **Credential binding.** The descriptor must hold a current session record whose token names
 the same device and inode in the host-owned session directory; a forged file is no credential.
 The descriptor survives `setsid`, `exec` and a cleared environment when the backend keeps it
