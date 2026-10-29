@@ -39,6 +39,9 @@ chmod +x "$TMP/bin/rustc"
 cat > "$TMP/sccache" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$@" > "${FAKE_SCCACHE_LOG}"
+if [[ -n "${FAKE_SCCACHE_ARGS0:-}" ]]; then
+  printf '%s\0' "$@" > "$FAKE_SCCACHE_ARGS0"
+fi
 {
   printf 'SCCACHE_DIR=%s\n' "${SCCACHE_DIR-}"
   printf 'SCCACHE_CACHE_SIZE=%s\n' "${SCCACHE_CACHE_SIZE-}"
@@ -53,6 +56,8 @@ printf '%s' "${CACHE_ENV_SPACES-}" > "${FAKE_SCCACHE_SPACES:-/dev/null}"
 printf '%s' "${CACHE_ENV_EQUALS-}" > "${FAKE_SCCACHE_EQUALS:-/dev/null}"
 printf '%s' "${CACHE_ENV_MULTILINE-}" > "${FAKE_SCCACHE_MULTILINE:-/dev/null}"
 printf '%s' "${CACHE_ENV_EMPTY-}" > "${FAKE_SCCACHE_EMPTY:-/dev/null}"
+printf '%s' "${CACHE_ENV_TRAILING_ONE-}" > "${FAKE_SCCACHE_TRAILING_ONE:-/dev/null}"
+printf '%s' "${CACHE_ENV_TRAILING_MANY-}" > "${FAKE_SCCACHE_TRAILING_MANY:-/dev/null}"
 printf '%s' "${CACHE_ENV_BOUNDARY-}" > "${FAKE_SCCACHE_BOUNDARY:-/dev/null}"
 printf '%s' "${CACHE_ENV_SOURCE_BOUNDARY-}" > "${FAKE_SCCACHE_SOURCE_BOUNDARY:-/dev/null}"
 case "${1:-}" in
@@ -305,6 +310,47 @@ cmp "$TMP/env-empty.expected" "$FAKE_SCCACHE_EMPTY" || fail "empty environment v
 cmp "$TMP/env-boundary.expected" "$FAKE_SCCACHE_BOUNDARY" || fail "target path-prefix boundary was rewritten unexpectedly"
 cmp "$TMP/env-source-boundary.expected" "$FAKE_SCCACHE_SOURCE_BOUNDARY" || fail "source path-prefix boundary was rewritten unexpectedly"
 
+# The public wrapper must retain non-path bytes when either stable mount aliases
+# the checkout. A NUL-delimited fake-sccache capture distinguishes trailing LF
+# bytes and empty argv entries without changing the wrapper's real argv shape.
+run_rewrite_input_probe() {
+  local label="$1" target_arg="$2" expected_target="$3"
+  local trailing_one=$'argument\n' trailing_many=$'argument\n\n'
+  export CACHE_ENV_TRAILING_ONE="$trailing_one"
+  export CACHE_ENV_TRAILING_MANY="$trailing_many"
+  export CACHE_ENV_EMPTY=''
+  export FAKE_SCCACHE_ARGS0="$TMP/${label}.args0"
+  export FAKE_SCCACHE_TRAILING_ONE="$TMP/${label}-env-one.actual"
+  export FAKE_SCCACHE_TRAILING_MANY="$TMP/${label}-env-many.actual"
+  export FAKE_SCCACHE_EMPTY="$TMP/${label}-env-empty.actual"
+  export FAKE_SCCACHE_LOG="$TMP/${label}.log"
+  printf '%s' "$trailing_one" > "$TMP/${label}-env-one.expected"
+  printf '%s' "$trailing_many" > "$TMP/${label}-env-many.expected"
+  : > "$TMP/${label}-env-empty.expected"
+
+  "$WRAPPER" "$TMP/bin/rustc" --out-dir "$target_arg/debug" \
+    --cache-probe-one "$trailing_one" --cache-probe-many "$trailing_many" \
+    --cache-probe-empty '' "$ROOT/crates/orbit-types/src/lib.rs"
+
+  printf '%s\0' "$(source_rewrite_expected "$TMP/bin/rustc")" \
+    --out-dir "$expected_target/debug" \
+    --cache-probe-one "$trailing_one" --cache-probe-many "$trailing_many" \
+    --cache-probe-empty '' "$stable_src/crates/orbit-types/src/lib.rs" \
+    > "$TMP/${label}.args0.expected"
+  cmp "$TMP/${label}.args0.expected" "$FAKE_SCCACHE_ARGS0" \
+    || fail "$label: argv trailing LF bytes or empty value changed"
+  cmp "$TMP/${label}-env-one.expected" "$FAKE_SCCACHE_TRAILING_ONE" \
+    || fail "$label: one trailing LF in exported value changed"
+  cmp "$TMP/${label}-env-many.expected" "$FAKE_SCCACHE_TRAILING_MANY" \
+    || fail "$label: multiple trailing LFs in exported value changed"
+  cmp "$TMP/${label}-env-empty.expected" "$FAKE_SCCACHE_EMPTY" \
+    || fail "$label: empty exported value changed"
+  unset FAKE_SCCACHE_ARGS0 FAKE_SCCACHE_EMPTY FAKE_SCCACHE_TRAILING_ONE FAKE_SCCACHE_TRAILING_MANY
+  unset CACHE_ENV_TRAILING_ONE CACHE_ENV_TRAILING_MANY
+}
+
+run_rewrite_input_probe source-and-target-alias "$fake_tgt" "$stable_tgt"
+
 # Relative compiler inputs stay relative so they resolve after the stable chdir
 # instead of being expanded to a unique worktree prefix.
 export FAKE_SCCACHE_LOG="$TMP/sccache-relative.log"
@@ -354,6 +400,7 @@ custom_tgt="$TMP/custom-target"
 mkdir -p "$custom_tgt"
 expected_custom_tgt="$(source_rewrite_expected "$custom_tgt")"
 export CARGO_TARGET_DIR="$custom_tgt"
+run_rewrite_input_probe source-only-alias "$custom_tgt" "$custom_tgt"
 export FAKE_SCCACHE_LOG="$TMP/sccache-custom-tgt.log"
 export FAKE_SCCACHE_ENV="$TMP/sccache-custom-tgt.env"
 export FAKE_SCCACHE_CWD="$TMP/sccache-custom-tgt.cwd"
