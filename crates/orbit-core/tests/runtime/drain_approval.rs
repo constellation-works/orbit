@@ -22,6 +22,7 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 mod advisory;
+mod landed_creation;
 mod pilot_mutations;
 #[cfg(unix)]
 mod required_tools;
