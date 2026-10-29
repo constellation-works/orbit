@@ -233,8 +233,9 @@ def schema_facts(schema, path, facts):
     if "required" in schema and isinstance(schema["required"], list):
         facts.setdefault("required", {})[path] = set(schema["required"])
     properties = schema.get("properties")
+    facts.setdefault("properties", {})[path] = set(properties) if isinstance(properties, dict) else set()
     if isinstance(properties, dict):
-        facts.setdefault("properties", {})[path] = set(properties)
+        facts.setdefault("properties_keywords", set()).add(path)
         for name, child in properties.items():
             schema_facts(child, f"{path}.{name}", facts)
     for key in ("items", "additionalProperties"):
@@ -640,8 +641,15 @@ def detect_mcp_changes(git, parent, commit, changed):
         after_enums = translated_facts(after.get("enum", {}), path_map, unmatched)
         after_nodes = translated_facts(
             {path: True for path in after.get("schema_nodes", set())}, path_map, unmatched)
+        after_properties_keywords = translated_facts(
+            {path: True for path in after.get("properties_keywords", set())}, path_map, unmatched)
         for path, names in sorted(before.get("properties", {}).items()):
             if path not in after_properties:
+                continue
+            if path not in after_properties_keywords:
+                if names and inside_oneof(path):
+                    report(f"`{name}` `{path}` properties constraint removed "
+                           "inside oneOf alternative")
                 continue
             for prop in sorted(names - after_properties[path]):
                 report(f"`{name}` property `{path}.{prop}` removed or renamed")

@@ -45,7 +45,11 @@ an opt-in `--format-version` for `/2` synthetic fixtures.
 - **Evidence packet.** `packet_id`, `subject_id`, `collected_at`,
   `source_revision`, `evidence_refs`, `excerpts`, `typed_errors`, explicit
   `omissions` and `truncated`, plus criteria for task-quality packets.
-  Evidence is untrusted data, never instructions.
+  Evidence is untrusted data, never instructions. Every contract timestamp
+  must be ISO-8601 with an explicit timezone. Intake, label snapshot equality,
+  time splits and target deadlines compare instants: equivalent offsets mean
+  the same time. Evidence may equal intake; time holdouts must be strictly
+  later than train/dev evidence, and targets strictly earlier than access.
 - **Typed answers.** Exactly the requested question names, allowed values,
   boolean predicates, finite probabilities in `[0,1]`. Dispositions:
   `suggested`, `uncertain`, `refused`, `unavailable`, `invalid`, `stale`.

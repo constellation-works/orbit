@@ -179,6 +179,65 @@ class EvalTests(unittest.TestCase):
              "intake_snapshot_at": ds["intake_snapshot_at"], "assignments": {c["case_id"]: "train" for c in ds["cases"]}}
         m.update(over); return m
 
+    def test_offset_intake_ordering(self):
+        ds = self._load(self.ds)
+        for stamp, accepted in (("2026-01-31T23:30:00-02:00", False),
+                                ("2026-02-01T01:00:00+01:00", True)):
+            with self.subTest(stamp=stamp):
+                ds["cases"][0]["evidence_packet"]["collected_at"] = stamp
+                path = self._dump("offset-ds.json", ds)
+                result = self._run("validate", "--dataset", str(path))
+                self.assertEqual(result.returncode, 0 if accepted else 2, result.stdout + result.stderr)
+                report = self._score(path, self.ans)
+                self.assertEqual(bool(report["validation_errors"]), not accepted)
+                # A later dataset intake isolates the manifest's own guard.
+                ds["intake_snapshot_at"] = "2026-03-01T00:00:00Z"
+                manifest = self._manifest(ds, intake_snapshot_at="2026-02-01T00:00:00Z",
+                                          holdout_id=f"offset-{accepted}")
+                result = self._run("check-split", "--dataset", str(self._dump("offset-split-ds.json", ds)),
+                                   "--manifest", str(self._dump("offset-manifest.json", manifest)))
+                self.assertEqual(result.returncode, 0 if accepted else 2, result.stdout + result.stderr)
+                ds["intake_snapshot_at"] = "2026-02-01T00:00:00Z"
+
+    def test_time_split_orders_instants_and_equivalent_label_snapshot(self):
+        ds = self._load(self.ds)
+        ds["format_version"] = "decision-assistance-eval/2"
+        ds["cases"] = ds["cases"][:2]
+        train, hold = ds["cases"]
+        train["evidence_packet"]["collected_at"] = "2026-01-01T23:00:00-02:00"
+        hold["label"] = {
+            "provenance": "independent_human", "labeler_id": "first",
+            "labeler_role": "investigator", "labeled_at": "2026-01-10T00:00:00Z",
+            "intake_snapshot_at": "2026-02-01T01:00:00+01:00", "value": hold["expected"],
+            "second_label_or_adjudication": {
+                "kind": "second_independent_label", "labeler_id": "second",
+                "labeler_role": "investigator", "labeled_at": "2026-01-11T00:00:00Z",
+                "value": hold["expected"]}}
+        for stamp, accepted in (("2026-01-02T00:30:00Z", False),
+                                ("2026-01-02T01:00:00Z", False),
+                                ("2026-01-01T23:30:00-02:00", True)):
+            with self.subTest(stamp=stamp):
+                hold["evidence_packet"]["collected_at"] = stamp
+                manifest = self._manifest(ds, format_version=ds["format_version"],
+                                          holdout_id=f"time-{stamp}", split_strategy_time=True)
+                manifest["assignments"][hold["case_id"]] = "holdout"
+                result = self._run("check-split", "--dataset", str(self._dump("time-ds.json", ds)),
+                                   "--manifest", str(self._dump("time-manifest.json", manifest)))
+                self.assertEqual(result.returncode, 0 if accepted else 2, result.stdout + result.stderr)
+                if not accepted:
+                    self.assertIn("earliest holdout", result.stdout)
+
+    def test_target_offsets_and_equivalent_deadline(self):
+        targets = self._targets()
+        for stamp, accepted in (("2026-01-31T23:30:00-02:00", False),
+                                ("2026-02-01T01:00:00+01:00", False),
+                                ("2026-02-01T00:30:00+01:00", True)):
+            with self.subTest(stamp=stamp):
+                targets["registered_at"] = stamp
+                result = self._run("check-targets", "--targets", str(self._dump("offset-targets.json", targets)),
+                                   "--holdout-opened-at", "2026-02-01T00:00:00Z")
+                self.assertEqual(result.returncode, 0 if accepted else 2, result.stdout + result.stderr)
+
     def test_split_guards(self):
         ds = self._load(self.ds)
         # family overlap + synthetic holdout

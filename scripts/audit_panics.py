@@ -16,14 +16,16 @@ matches every Rust convention used in this repo today:
   any nested ``#[cfg(test)]`` (or ``#[cfg(any(test, ...))]`` /
   ``#[cfg(all(test, ...))]``) scope.
 
-This is a heuristic, not a parser; the doc that consumes the script
-spot-checks the buckets against ``cargo expand`` to keep us honest.
+Workspace membership comes from Cargo.toml, including extracted crates;
+the execution-critical blast-radius set remains explicit. Pattern and test
+scope classification is heuristic, not a Rust parser.
 """
 from __future__ import annotations
 
 import json
 import re
 import sys
+import tomllib
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -40,24 +42,21 @@ PATTERN = re.compile(
 CFG_TEST_ATTR = re.compile(
     r"^\s*#\[\s*cfg\((?:[^()]|\([^()]*\))*?\btest\b(?:[^()]|\([^()]*\))*\)\s*\]")
 
-ALL_CRATES = [
-    "orbit-agent",
-    "orbit-cli",
-    "orbit-cmd",
-    "orbit-common",
-    "orbit-core",
-    "orbit-web",
-    "orbit-engine",
-    "orbit-exec",
-    "orbit-mcp",
-    "orbit-policy",
-    "orbit-registry",
-    "orbit-search",
-    "orbit-store",
-    "orbit-tools",
-]
-
 EXEC_CRITICAL_CRATES = {"orbit-engine", "orbit-agent", "orbit-tools", "orbit-exec"}
+
+
+def workspace_crates() -> dict[str, Path]:
+    """Read crate names and roots from the workspace's member manifests."""
+    workspace = tomllib.loads((REPO_ROOT / "Cargo.toml").read_text())["workspace"]
+    excluded = {path.resolve() for pattern in workspace.get("exclude", [])
+                for path in REPO_ROOT.glob(pattern)}
+    members = {path.resolve() for pattern in workspace["members"]
+               for path in REPO_ROOT.glob(pattern)} - excluded
+    crates = {}
+    for member in sorted(members):
+        manifest = tomllib.loads((member / "Cargo.toml").read_text())
+        crates[manifest["package"]["name"]] = member
+    return dict(sorted(crates.items()))
 
 
 def is_test_only_path(path: Path) -> bool:
@@ -168,8 +167,8 @@ def classify_lines(text: str) -> list[bool]:
     return flags
 
 
-def audit_crate(crate: str) -> dict:
-    src = REPO_ROOT / "crates" / crate / "src"
+def audit_crate(crate: str, crate_root: Path) -> dict:
+    src = crate_root / "src"
     total = 0
     in_test = 0
     non_test = 0
@@ -228,9 +227,7 @@ def main(argv: list[str]) -> int:
     json_mode = "--json" in argv
     sites_mode = "--sites" in argv
 
-    per_crate: dict[str, dict] = {}
-    for crate in ALL_CRATES:
-        per_crate[crate] = audit_crate(crate)
+    per_crate = {name: audit_crate(name, root) for name, root in workspace_crates().items()}
 
     totals = {
         "total": sum(c["total"] for c in per_crate.values()),
@@ -265,7 +262,7 @@ def main(argv: list[str]) -> int:
     header = ("crate", "total", "in_cfg_test", "non_test", "blast_radius")
     print(f"{header[0]:<18} {header[1]:>8} {header[2]:>12} {header[3]:>10} {header[4]:>14}")
     print(f"{'-'*18} {'-'*8} {'-'*12} {'-'*10} {'-'*14}")
-    for crate in ALL_CRATES:
+    for crate in per_crate:
         d = per_crate[crate]
         print(
             f"{crate:<18} {d['total']:>8} {d['in_cfg_test']:>12} "
@@ -283,7 +280,7 @@ def main(argv: list[str]) -> int:
     )
     if sites_mode:
         print("\nBlast-radius sites:")
-        for crate in ALL_CRATES:
+        for crate in per_crate:
             sites = per_crate[crate]["sites"]
             if not sites:
                 continue
