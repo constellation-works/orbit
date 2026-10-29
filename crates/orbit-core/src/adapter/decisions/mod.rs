@@ -22,6 +22,9 @@ use send_error::{DecisionsSendFailureClass, decisions_send_failure_reason};
 
 pub const DECISIONS_ENDPOINT: &str = "https://api.openai.com/v1/decisions";
 
+/// Stable identity this adapter reports for every admitted work item.
+pub const OPENAI_DECISIONS_ADAPTER_IDENTITY: &str = "openai-decisions/1";
+
 /// Secret source injected separately from evidence. Never implement Debug or
 /// Serialize for credential-bearing implementations or transport requests.
 pub trait AssistanceCredentialSource: Send + Sync {
@@ -158,6 +161,10 @@ impl OpenAiDecisionsAdapter {
 }
 
 impl AssistanceAdapter for OpenAiDecisionsAdapter {
+    fn assistance_adapter_identity(&self) -> &str {
+        OPENAI_DECISIONS_ADAPTER_IDENTITY
+    }
+
     fn prepare_assistance_request(
         &self,
         request: AssistanceRequest,

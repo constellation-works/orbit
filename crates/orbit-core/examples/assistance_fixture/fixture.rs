@@ -7,14 +7,14 @@ use orbit_config::assistance::{AssistancePolicy, AssistanceSettings};
 use orbit_core::adapter::decisions::{
     AssistanceCredentialSource, AssistanceHttpResponse, DecisionsTransport, OpenAiDecisionsAdapter,
 };
-use orbit_core::application::assistance::AssistanceService;
+use orbit_core::application::assistance::{AssistanceAdapter, AssistanceService};
 use orbit_store::Store;
 use orbit_store::contracts::assistance::{
-    AssistanceAdmission, AssistanceRecord, AssistanceStoreBackend,
+    AssistanceAdmission, AssistanceClaim, AssistanceRecord, AssistanceStoreBackend,
 };
 use orbit_types::assistance::{
     self, AssistanceContract, AssistanceEvidencePacket, AssistanceLimits, AssistanceMode,
-    AssistanceQuestion, AssistanceReason, AssistanceRequest,
+    AssistanceQuestion, AssistanceReason, AssistanceRequest, AssistanceResult,
 };
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, VecDeque};
@@ -100,6 +100,47 @@ impl DecisionsTransport for FixtureTransport {
     }
 }
 
+/// Second adapter proving the recorded identity follows the injected
+/// adapter. It delegates every behavior to the wrapped OpenAI adapter and
+/// differs only in the identity it reports.
+pub(super) struct SecondAssistanceAdapter {
+    inner: Arc<OpenAiDecisionsAdapter>,
+    identity: &'static str,
+}
+
+impl SecondAssistanceAdapter {
+    pub(super) fn with_identity(
+        inner: Arc<OpenAiDecisionsAdapter>,
+        identity: &'static str,
+    ) -> Self {
+        Self { inner, identity }
+    }
+}
+
+impl AssistanceAdapter for SecondAssistanceAdapter {
+    fn assistance_adapter_identity(&self) -> &str {
+        self.identity
+    }
+
+    fn prepare_assistance_request(
+        &self,
+        request: AssistanceRequest,
+        supplied_secrets: &[String],
+        policy: &AssistancePolicy,
+    ) -> Result<AssistanceRequest, AssistanceReason> {
+        self.inner
+            .prepare_assistance_request(request, supplied_secrets, policy)
+    }
+
+    fn evaluate_assistance(
+        &self,
+        claim: &AssistanceClaim,
+        policy: &AssistancePolicy,
+    ) -> AssistanceResult {
+        self.inner.evaluate_assistance(claim, policy)
+    }
+}
+
 pub(super) struct AssistanceFixture {
     pub(super) store: Arc<Store>,
     pub(super) settings: Arc<Mutex<AssistanceSettings>>,
@@ -107,6 +148,7 @@ pub(super) struct AssistanceFixture {
     pub(super) clock: Arc<Mutex<DateTime<Utc>>>,
     pub(super) credential: Arc<FixtureCredential>,
     pub(super) transport: Arc<FixtureTransport>,
+    pub(super) adapter: Arc<OpenAiDecisionsAdapter>,
     pub(super) service: AssistanceService,
     pub(super) contract: AssistanceContract,
 }
@@ -181,16 +223,17 @@ impl AssistanceFixture {
             bodies: Mutex::new(vec![]),
             on_send: Mutex::new(None),
         });
+        let adapter = Arc::new(OpenAiDecisionsAdapter::with_assistance_transport(
+            credential.clone(),
+            transport.clone(),
+        ));
         let loader = settings.clone();
         let settings_reads_until_failure = Arc::new(AtomicUsize::new(0));
         let fail_read = settings_reads_until_failure.clone();
         let time = clock.clone();
         let service = AssistanceService::new(
             store.clone(),
-            Arc::new(OpenAiDecisionsAdapter::with_assistance_transport(
-                credential.clone(),
-                transport.clone(),
-            )),
+            adapter.clone(),
             Arc::new(move || {
                 if fail_read.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
                     == Ok(1)
@@ -214,9 +257,32 @@ impl AssistanceFixture {
             clock,
             credential,
             transport,
+            adapter,
             service,
             contract,
         })
+    }
+
+    /// Service sharing this fixture's store, settings and clock but
+    /// recording a different injected adapter.
+    pub(super) fn service_with_assistance_adapter(
+        &self,
+        adapter: Arc<dyn AssistanceAdapter>,
+    ) -> AssistanceService {
+        let loader = self.settings.clone();
+        let time = self.clock.clone();
+        AssistanceService::new(
+            self.store.clone(),
+            adapter,
+            Arc::new(move || {
+                loader.lock().map(|s| s.clone()).map_err(|_| {
+                    orbit_common::OrbitError::InvalidInput("fixture settings lock".into())
+                })
+            }),
+        )
+        .with_assistance_clock(Arc::new(move || {
+            *time.lock().unwrap_or_else(|e| e.into_inner())
+        }))
     }
 
     pub(super) fn request(&self, subject: &str) -> FixtureResult<AssistanceRequest> {

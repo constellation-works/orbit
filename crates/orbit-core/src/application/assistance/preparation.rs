@@ -115,7 +115,7 @@ pub(super) fn prepare_assistance_work(
         policy_digest,
         evidence_digest,
         request,
-        adapter: "openai-decisions/1".into(),
+        adapter: adapter.assistance_adapter_identity().into(),
         requested_model: policy.model.clone(),
         model_revision: policy.model_revision.clone(),
         mode: policy.mode,
