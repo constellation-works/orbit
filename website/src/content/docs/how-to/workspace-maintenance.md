@@ -100,6 +100,48 @@ If migrations are pending, `orbit migrate` lists them and exits with a nonzero s
 orbit migrate --confirm
 ```
 
+### Repair historical crew attribution
+
+Tasks admitted by recent Orbit releases record the crew their delivery selected, and analytics that group by crew read that stored value. Tasks admitted before the write-back landed carry a stale or missing crew. `orbit migrate --backfill-task-crews` repairs them in place. Run it once, on the owner's checkout, after upgrading.
+
+To inspect what a task currently records, show the task and its delivery runs:
+
+```bash
+orbit task show <id>
+orbit run history --task <id>
+```
+
+`task show` reports the stored crew in its `Execution Crew` row; `run history` lists the delivery runs the repair would copy from. To target a workspace other than the current checkout, add `--workspace`:
+
+```bash
+orbit migrate --backfill-task-crews --workspace my-project
+```
+
+`--workspace` accepts a registered name, a `ws_*` ID, or an absolute checkout path. The backfill applies pending migrations first, exactly like `--confirm`: it opens the runtime, so unlike plain `orbit migrate` or `--dry-run` there is no inspection-only preview of the repair.
+
+For each task, the backfill copies the crew from the newer of two sources: the latest local delivery run's crew selection (or, for work a claimed leaf executed, the selection frozen in pipeline state), and the latest claimed-leaf settlement's recorded crew. A run and a settlement stamped alike keep the run. Terminal tasks are included, since analytics read them.
+
+A task is left alone when any of these hold:
+
+- It has no delivery crew selection to copy from.
+- Its latest local run was cancelled before implementing, so its crew never ran — unless a claimed-leaf settlement is newer than that run.
+- Its stored crew already matches the delivery's crew.
+- Its crew was explicitly assigned after the delivery ran; a newer explicit choice stands over an older delivery.
+
+Each change sets `crew_source` to `backfill:admission` and appends a `crew_assigned` history entry naming the previous and new crew. Running the backfill again changes nothing.
+
+The report names the workspace, how many tasks had a delivery crew selection (`examined`), how many changed (`changed`), and each change:
+
+```text
+task crew backfill in workspace ws_0123456789abcdef: 2 changed of 9 tasks with a delivery crew selection
+  ABC-1: (none) -> night-shift
+  ABC-2: day-crew -> night-shift
+```
+
+`(none)` means the task had no recorded crew. `--json` carries the same report under `task_crew_backfill` with `workspace`, `examined`, `changed`, and `tasks` (`task_id`, `from`, `to` per change).
+
+This is a different repair from `--backfill-diff-stats`, which records landed line counts for done tasks and takes `--limit`. The two flags cannot be combined with each other, and neither combines with `--dry-run`; `--limit` only applies to the diff-stats backfill. There is no built-in undo for the crew repair beyond the per-task history entries it appends, and only runs and settlements visible in this workspace's store count: deliveries whose records live on another host are not repaired from here.
+
 ### Forward compatibility and upgrades
 
 If a workspace was created or migrated by a newer Orbit binary:
