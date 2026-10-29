@@ -320,8 +320,3 @@ pub(super) fn pull_settlement_lines(entries: &[orbit_core::PullSettlementEntry])
     }
     lines
 }
-
-/// The JSON form of [`pull_settlement_lines`].
-pub(super) fn pull_settlements_json(entries: &[orbit_core::PullSettlementEntry]) -> Value {
-    serde_json::to_value(entries).unwrap_or_else(|_| Value::Array(Vec::new()))
-}

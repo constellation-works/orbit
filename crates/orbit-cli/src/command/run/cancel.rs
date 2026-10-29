@@ -2,8 +2,7 @@
 
 use clap::Args;
 use orbit_core::OrbitRuntime;
-use orbit_core::application::job::JobRunCancelOutcome;
-use serde_json::json;
+use orbit_core::application::job::{JobRunCancelOutcome, JobRunCancelResultProfile};
 
 use crate::command::{CommandOut, Execute, Payload, require_confirmation};
 
@@ -45,20 +44,7 @@ impl Execute for RunCancelArgs {
             self.force,
             self.block,
         )?;
-        let doc = json!({
-            "run_id": result.run_id,
-            "outcome": result.outcome,
-            "previous_state": result.previous_state,
-            "final_state": result.final_state,
-            "signal_attempted": result.signal_attempted,
-            "signal_outcome": result.signal_outcome,
-            "provider_processes_stopped": result.provider_processes_stopped,
-            "pull_settlements": super::support::pull_settlements_json(&result.pull_settlements),
-            "waiting_leaves": result.waiting_leaves,
-            "forced_runs": result.forced_runs,
-            "unstopped_leaves": result.unstopped_leaves,
-            "unstopped_children": result.unstopped_children,
-        });
+        let doc = result.to_json(JobRunCancelResultProfile::Cli);
         let mut lines = Vec::new();
         if result.outcome == JobRunCancelOutcome::Cancelling {
             lines.push(format!(

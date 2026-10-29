@@ -70,8 +70,8 @@ pub use root_cause::{
     RunFailureEvidence, RunFailureRead, RunIncident, fold_run_incidents,
 };
 pub use types::{
-    JobRunCancelOutcome, JobRunCancelResult, JobRunListParams, JobRunOrder, UnstoppedChild,
-    UnstoppedLeaf,
+    JobRunCancelOutcome, JobRunCancelResult, JobRunCancelResultProfile, JobRunListParams,
+    JobRunOrder, UnstoppedChild, UnstoppedLeaf,
 };
 pub use window_extension::{
     DrainWindowExtensionChange, DrainWindowExtensionOutcome, DrainWindowExtensionRequest,
