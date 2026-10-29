@@ -22,15 +22,20 @@ use crate::OrbitRuntime;
 /// mint a fresh attempt. The snapshot keeps its content-derived identity — and
 /// with it its completed results, annotations and dismissal identities — while
 /// the old work ID (whose assistance slot moved on to superseding content)
-/// must never be mistaken for current coverage.
+/// must never be mistaken for current coverage. Expiry or retention alone is
+/// a bounded coverage gap, not evidence that semantic content was restored.
 fn refresh_restored_snapshot(
     service: &AssistanceService,
     snapshot: &mut ledger::TaskQualitySnapshot,
+    semantic_restoration: bool,
 ) -> Result<(), OrbitError> {
-    let Some(work) = snapshot.work_id.clone() else {
+    let Some(work) = snapshot.work_id.as_deref() else {
         return Ok(());
     };
-    let stale = match service.assistance_assessment(&work, &snapshot.source_digest)? {
+    if !semantic_restoration && !service.assistance_work_was_superseded(work)? {
+        return Ok(());
+    }
+    let stale = match service.assistance_assessment(work, &snapshot.source_digest)? {
         None => true,
         Some(record) => {
             !record.current
@@ -114,6 +119,13 @@ impl OrbitRuntime {
                     .map_err(ledger::quality_json_error)?,
                 );
                 let mut history = ledger::read_quality_history(&path)?;
+                // A missing current projection can mean expiry, retention or
+                // an off switch. Only a different selected snapshot proves a
+                // semantic restoration; otherwise require a displaced slot.
+                let semantic_restoration = history
+                    .current_id
+                    .as_ref()
+                    .is_some_and(|current| current != &snapshot_id);
                 if !history.snapshots.iter().any(|s| s.id == snapshot_id) {
                     history.snapshots.push(TaskQualitySnapshot {
                         id: snapshot_id.clone(),
@@ -137,7 +149,7 @@ impl OrbitRuntime {
                     // slot moved on when the superseding content was admitted.
                     // Refresh the stale receipt so the owner tick mints a
                     // fresh attempt instead of waiting on superseded work.
-                    refresh_restored_snapshot(service, snapshot)?;
+                    refresh_restored_snapshot(service, snapshot, semantic_restoration)?;
                 }
                 history.current_id = Some(snapshot_id);
                 ledger::write_quality_history(&path, &history)
@@ -170,11 +182,17 @@ impl OrbitRuntime {
                             stale_ids.push(snapshot.id.clone());
                             continue;
                         };
+                        // Queue age settles still-queued work as an explicit gap.
+                        // That row stays readable, but it is not current coverage.
+                        let queue_expired = record
+                            .result
+                            .as_ref()
+                            .is_some_and(|result| result.reason == AssistanceReason::QueueExpired);
                         if !record.current
-                            || record
-                                .result
-                                .as_ref()
-                                .is_some_and(|r| r.disposition == AssistanceDisposition::Stale)
+                            || queue_expired
+                            || record.result.as_ref().is_some_and(|result| {
+                                result.disposition == AssistanceDisposition::Stale
+                            })
                         {
                             stale_ids.push(snapshot.id.clone());
                         }
@@ -337,11 +355,10 @@ impl OrbitRuntime {
                     {
                         return Ok(());
                     }
-                    // A restored snapshot reuses its identity but not its
-                    // stale receipt: revalidate before skipping admission, or
-                    // the tick would wait on work whose slot already moved to
-                    // superseding content.
-                    refresh_restored_snapshot(service, snapshot)?;
+                    // Recover a displaced receipt even after a history read
+                    // cleared its current projection. Age/retention gaps keep
+                    // the immutable receipt and never restart admission.
+                    refresh_restored_snapshot(service, snapshot, false)?;
                     if snapshot.work_id.is_some()
                         || snapshot.coverage_gap == Some(AssistanceReason::InvalidRequest)
                     {

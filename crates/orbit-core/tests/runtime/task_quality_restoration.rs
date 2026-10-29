@@ -4,13 +4,16 @@
 //! APIs: after B supersedes A, restoring A must yield a current assessment or
 //! a fresh bounded pending attempt, and repeated ticks must not leave the
 //! subject permanently without current coverage. Superseded history and
-//! dismissal identities stay attached to their original snapshots.
+//! dismissal identities stay attached to their original snapshots. Expiry of
+//! unchanged content must retain its original receipt. Queued expiry is a
+//! coverage gap; a completed result stays current until retention.
 
 use std::sync::{
-    Arc,
+    Arc, Mutex,
     atomic::{AtomicUsize, Ordering},
 };
 
+use chrono::{DateTime, Duration, Utc};
 use orbit_config::assistance::{AssistancePolicy, AssistanceSettings};
 use orbit_core::OrbitRuntime;
 use orbit_core::application::assistance::{AssistanceAdapter, AssistanceService};
@@ -74,6 +77,7 @@ struct Fixture {
     runtime: OrbitRuntime,
     service: AssistanceService,
     adapter: Arc<SyntheticAdapter>,
+    clock: Arc<Mutex<Option<DateTime<Utc>>>>,
 }
 
 impl Fixture {
@@ -112,16 +116,22 @@ impl Fixture {
         let adapter = Arc::new(SyntheticAdapter {
             calls: AtomicUsize::new(0),
         });
+        let clock = Arc::new(Mutex::new(None));
+        let service_clock = clock.clone();
         let service = AssistanceService::new(
             orbit_store::compose::assistance_store_from_store(runtime.sqlite_store().unwrap()),
             adapter.clone(),
             Arc::new(move || Ok(settings.clone())),
-        );
+        )
+        .with_assistance_clock(Arc::new(move || {
+            service_clock.lock().unwrap().unwrap_or_else(Utc::now)
+        }));
         Self {
             _root: root,
             runtime,
             service,
             adapter,
+            clock,
         }
     }
 
@@ -150,7 +160,12 @@ fn criteria() -> Vec<String> {
     ]
 }
 
-#[test]
+crate::scenario_table!(
+    task_quality_receipt_lifecycle,
+    restored_semantic_content_regains_current_coverage,
+    unchanged_completed_and_queued_expiry_stays_a_gap,
+);
+
 fn restored_semantic_content_regains_current_coverage() {
     let f = Fixture::open();
 
@@ -307,4 +322,145 @@ fn restored_semantic_content_regains_current_coverage() {
     assert_eq!(task.title, "Content A");
     assert_eq!(task.description, DESCRIPTION);
     assert_eq!(task.acceptance_criteria, criteria());
+}
+
+fn unchanged_completed_and_queued_expiry_stays_a_gap() {
+    let f = Fixture::open();
+    let tasks = ["Unchanged content A", "Unchanged content B"].map(|title| {
+        f.runtime
+            .add_task(TaskAddParams {
+                title: title.into(),
+                description: DESCRIPTION.into(),
+                acceptance_criteria: criteria(),
+                ..Default::default()
+            })
+            .unwrap()
+    });
+    // One tick admits both subjects and processes only one. Queue age makes
+    // still-queued work a coverage gap. A completed result stays current until
+    // retention. Neither case may mint a replacement receipt.
+    f.tick();
+    assert_eq!(f.calls(), 1);
+    let store =
+        orbit_store::compose::assistance_store_from_store(f.runtime.sqlite_store().unwrap());
+    let admitted = tasks.map(|task| {
+        let history = f.history(&task.id);
+        let snapshot = history.snapshots.into_iter().next().unwrap();
+        let record = store
+            .assistance_record(snapshot.work_id.as_ref().unwrap())
+            .unwrap()
+            .unwrap();
+        (task.id, snapshot, record)
+    });
+    assert_eq!(
+        admitted
+            .iter()
+            .filter(|(_, _, r)| r.result.is_some())
+            .count(),
+        1,
+        "the expiry regression covers completed and queued receipts"
+    );
+    let expires_at = admitted
+        .iter()
+        .map(|(_, _, r)| {
+            r.work.created_at + Duration::seconds(r.work.limits.queue_age_seconds.into())
+        })
+        .max()
+        .unwrap();
+    // Advance the service clock to the exact admission deadline. New consumer
+    // packets would still be within queue age, so accidental refreshes would
+    // enqueue new logical work rather than merely fail timestamp validation.
+    *f.clock.lock().unwrap() = Some(expires_at);
+    for (id, original, record) in &admitted {
+        let history = f.history(id);
+        if record.result.is_some() {
+            assert_eq!(
+                history.current_id.as_deref(),
+                Some(original.id.as_str()),
+                "a completed result stays current until retention"
+            );
+        } else {
+            assert!(
+                history.current_id.is_none(),
+                "queued expiry is a coverage gap"
+            );
+        }
+    }
+
+    for _ in 0..3 {
+        f.tick();
+        for (id, original, record) in &admitted {
+            let history = f.history(id);
+            if record.result.is_some() {
+                assert_eq!(
+                    history.current_id.as_deref(),
+                    Some(original.id.as_str()),
+                    "a completed result stays current through queue age"
+                );
+            } else {
+                assert!(
+                    history.current_id.is_none(),
+                    "queued expiry remains a coverage gap"
+                );
+            }
+            assert_eq!(history.snapshots.len(), 1);
+            let snapshot = &history.snapshots[0];
+            assert_eq!(snapshot.id, original.id);
+            assert_eq!(
+                snapshot.work_id, original.work_id,
+                "unchanged expired content must not mint fresh logical work"
+            );
+            assert_eq!(snapshot.collected_at, original.collected_at);
+            assert!(snapshot.admission_started);
+        }
+        assert_eq!(f.calls(), 1, "expiry must not cause another provider call");
+        assert_eq!(
+            store
+                .assistance_accounting("synthetic-only/1")
+                .unwrap()
+                .attempts,
+            1,
+            "expiry must not allocate another provider attempt"
+        );
+    }
+    for (_, original, before) in &admitted {
+        let after = store
+            .assistance_record(original.work_id.as_ref().unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.attempts.len(), before.attempts.len());
+        if before.result.is_none() {
+            assert_eq!(after.result.unwrap().reason, AssistanceReason::QueueExpired);
+        }
+    }
+
+    // Retention is also not a semantic restoration: losing the service record
+    // must not turn subsequent owner ticks into fresh admissions.
+    let retained_until = admitted
+        .iter()
+        .map(|(_, _, r)| {
+            r.work.created_at
+                + Duration::seconds(
+                    i64::from(r.work.limits.queue_age_seconds)
+                        + i64::from(r.work.limits.retention_seconds),
+                )
+        })
+        .max()
+        .unwrap();
+    *f.clock.lock().unwrap() = Some(retained_until);
+    store.assistance_maintain(retained_until).unwrap();
+    f.tick();
+    for (id, original, _) in &admitted {
+        assert!(
+            store
+                .assistance_record(original.work_id.as_ref().unwrap())
+                .unwrap()
+                .is_none()
+        );
+        let history = f.history(id);
+        assert!(history.current_id.is_none());
+        assert_eq!(history.snapshots[0].work_id, original.work_id);
+        assert_eq!(history.snapshots[0].collected_at, original.collected_at);
+    }
+    assert_eq!(f.calls(), 1);
 }
