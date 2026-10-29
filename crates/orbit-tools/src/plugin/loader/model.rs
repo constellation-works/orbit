@@ -62,6 +62,7 @@ pub struct ResolvedPluginTool {
     pub verb: String,
     pub description: String,
     pub execution_kind: PluginExecutionKind,
+    pub agent_callable: bool,
     pub mcp_scope: PluginMcpScope,
     pub input_schema: Value,
     /// Whether the manifest declared `input_schema` (as opposed to the

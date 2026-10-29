@@ -134,13 +134,43 @@ subcommand; `cli.positional` lists top-level input properties to promote to
 positionals. Those properties remain available as flags.
 
 Set `execution_kind` to `read_only` or `mutating` to describe the operation.
-A mutating plugin tool is callable by an operator or a sanctioned run on both
-the CLI and MCP, and an agent reaches it only when the task's `required_tools` or
-the activity allowlist names it. This classification does not grant filesystem
-access. `mcp_scope` defaults to `workspace`; `global` allows calls without a
-workspace, while `none` keeps the tool available through `orbit tool run` but
-excludes it from MCP advertisement. A global tool cannot assume a workspace
-exists.
+Read-only tools admit agents, operators and runners. Mutating tools require
+operator or runner capability by default.
+
+For an append-only or proposal-only tool that an interactive agent may safely
+call, request agent access on that individual tool:
+
+```yaml
+- name: capture
+  description: Append an approved decision to the session log.
+  execution_kind: mutating
+  agent_callable: true
+  mcp_scope: workspace
+```
+
+`agent_callable` defaults to false and is valid only with `mutating`. The
+operator must review the backend and explicitly grant `agent_tools` when
+enabling the plugin; Orbit does not prove that a backend is append-only.
+Include other requested grants in the same complete grant list, or use
+`--grant requested` after reviewing all requests. Missing consent makes the
+plugin inactive. Enable output names the requested tools and consent status;
+`plugin list` names them, and `plugin show` displays declarations and grants.
+An upgrade that adds another agent-callable tool widens permissions, disables
+the plugin and clears grants unless the operator explicitly re-consents.
+Removing or reordering declared tools does not widen permissions. Older hosts
+reject manifests using this field or grant; upgrade Orbit first.
+
+With consent, an agent session can call the tool through `orbit mcp serve`
+without `--operator`, `orbit tool run`, or its derived CLI command. Calls keep
+the agent caller in the audit trail. Unmarked mutations retain their existing
+requirement. Activity allowlists and denials still apply; a task requirement or
+allowlist entry alone grants no capability. `ORBIT_OPERATOR` and `--operator`
+keep their existing behavior. This declaration grants no filesystem access,
+callback permissions or operator capability.
+
+`mcp_scope` defaults to `workspace`; `global` allows calls without a workspace,
+while `none` keeps the tool available through `orbit tool run` but excludes it
+from MCP advertisement. A global tool cannot assume a workspace exists.
 
 ## Backend contracts
 

@@ -75,6 +75,7 @@ pub fn load_plugin_dir(root: &Path) -> Result<LoadedPlugin, PluginLoadError> {
             verb: tool.name.clone(),
             description: tool.description.clone(),
             execution_kind: tool.execution_kind,
+            agent_callable: tool.agent_callable,
             mcp_scope: tool.mcp_scope,
             parameters: params_from_input_schema(&input_schema),
             input_schema,

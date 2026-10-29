@@ -197,7 +197,7 @@ orbit plugin add <git+url#commit> --allow-build
                                               →  installed   (spec.build ran in the build sandbox; build recorded)
 orbit plugin upgrade <ns> <source> [--grant …] [--allow-build]
                                               →  upgraded    (permission diff printed; widening requires re-consent)
-orbit plugin enable <ns> [--grant fs,network,orbit_tools,unsandboxed] [--workspace]
+orbit plugin enable <ns> [--grant fs,network,orbit_tools,unsandboxed,agent_tools] [--workspace]
                                               →  active      (tools Active; definitions seeded; skills linked)
 orbit plugin disable <ns>                     →  installed   (tools Inactive; seeded definitions skipped with a warning)
 orbit plugin enable|disable <ns> --scope workspace
@@ -476,19 +476,40 @@ links, refuse the enable without writing schedule files or plugin provenance in 
 
 ### 4.1 Placement, never permission
 
-The manifest says *where* a tool appears (`mcp_scope`, `execution_kind`, CLI shape), never
-*who* may call it. Plugin tools resolve to one of two generic governed rows
-(`PLUGIN_TOOL_READ_ONLY`, `PLUGIN_TOOL_MUTATING` in
-`orbit-common/src/governance/authorization/mod.rs`): `read_only` tools are callable by `Agent |
-Operator | Runner`; `mutating` tools by `Operator | Runner`, and by `Agent` only when the
-task's `required_tools` or the activity allowlist names them.
+The manifest declares where a tool appears (`mcp_scope`, CLI shape) and its execution
+kind. Three generic governed rows in `orbit-common/src/governance/authorization/catalog.rs`
+set the capability floor:
+
+| Declaration | Governed row | Caller capabilities |
+|---|---|---|
+| `execution_kind: read_only` | `PLUGIN_TOOL_READ_ONLY` | `Agent`, `Operator`, `Runner` |
+| `execution_kind: mutating`, `agent_callable` omitted or false | `PLUGIN_TOOL_MUTATING` | `Operator`, `Runner` |
+| `execution_kind: mutating`, `agent_callable: true`, with recorded `agent_tools` consent | `PLUGIN_TOOL_AGENT_CALLABLE` | `Agent`, `Operator`, `Runner` |
+
+**Decision: per-tool declaration plus explicit consent.** A plugin author may mark an
+append-only or proposal-only mutation `agent_callable: true`. The default is false, and
+true is rejected on a read-only tool. The host does not prove append-only behavior; the
+operator reviews the backend and grants `agent_tools` for the declared tool verbs at the
+installed manifest digest. Missing consent makes the plugin inactive. This admits interactive
+agent sessions over `orbit mcp serve` without `--operator`, `orbit tool run`, and the derived
+CLI group. It grants no operator authority, filesystem access or callback permissions.
+Activity allowlists and deny policies remain separate restrictions; `required_tools` or
+allowlist membership alone never grants a capability. `ORBIT_OPERATOR` and `--operator`
+keep their existing behavior. Calls retain the ordinary audit trail and caller identity.
+
+`orbit plugin enable` and `add --enable` show the agent-callable mutating tool names and
+whether `agent_tools` was granted. `list` names those tools, and `show` reports each declaration
+beside requested versus granted permissions. Adding a declared verb on upgrade is permission
+widening, even when `agent_tools` was already granted for other verbs. Removing or reordering
+verbs does not widen permissions. Older hosts reject manifests using this new field or grant;
+upgrade Orbit before enabling them.
 
 An unmanaged local CLI invocation with no declared agent or operator identity
 gets no capability for ordinary governed operations, including the owner's
 read-only drain tools. Only plugin tool authorization resolves it to `Agent`.
 This applies to both `orbit <ns> <verb>` and `orbit tool run <ns>.<verb>`:
-`read_only` succeeds without `ORBIT_OPERATOR=1`, while `mutating` retains its
-operator, runner, or sanctioned-run requirement. Session grants, an explicit
+`read_only` and consented `agent_callable` mutations succeed without `ORBIT_OPERATOR=1`;
+other mutations require operator or runner capability. Session grants, an explicit
 operator override, an agent envelope, and an interactive terminal keep their
 precedence over this fallback. MCP callers use their session capabilities;
 the local CLI fallback does not raise an unidentified MCP session.
@@ -504,14 +525,14 @@ set that fails its witness (§3) grants nothing on every surface.
   preserves recorded grants, so disable/re-enable needs no restatement.
 - A narrower list revokes down to it; `--grant none` records an explicit empty set.
 - `--grant all` (every grant this build knows) and `--grant requested` (exactly what
-  `permissions`/`backend.sandbox` ask for) are the other reserved spellings. None of the three
+  `permissions`/`backend.sandbox`/`tools[].agent_callable` ask for) are the other reserved spellings. None of the three
   mixes with a literal list; each replaces the witness like a literal list does.
 - Grants are validated identically whether fresh or read back from storage: an unrecognized
   name (retired, renamed, or from a newer Orbit) refuses the row rather than being dropped.
 - `orbit plugin add --grant …` without `--enable` is rejected.
 
 **Upgrade and widening.** On a manifest digest change, `add` and `upgrade` compare filesystem
-roots, network mode, env names, Orbit-tool allowlist and sandbox mode. Filesystem roots are
+roots, network mode, env names, Orbit-tool allowlist, sandbox mode and agent-callable tool verbs. Filesystem roots are
 compared after `{{config.<key>}}` renders against global `[plugins.<ns>]` over that manifest's
 `spec.config.defaults` (a workspace override is not host-wide, so it cannot hide a default
 another workspace would open) and each root is physically resolved the way the sandbox opens
@@ -1194,7 +1215,7 @@ All landed. Extension points the standard opened: `PluginLoader` registers manif
 `register_mcp(scope)` / `register_inactive` and the MCP surface advertises them;
 `PluginBackend::{Exec,Mcp}` replaces the unsandboxed `ExternalTool` path for plugins; one
 skipped `PluginGroup` `Commands` variant carries the derived clap tree; dynamic
-`plugins.<ns>.<key>` config admission; two generic `GOVERNED_OPERATIONS` rows (§4.1);
+`plugins.<ns>.<key>` config admission; three generic `GOVERNED_OPERATIONS` rows (§4.1);
 `plugin.tool_call` in `DeterministicAction`, with the `ToolCaller` kind on `ToolContext` that
 bounds a deterministic step's declared programs by the call-time grant (§4.3); a
 provenance-aware disabled-plugin skip beside `RETIRED_ROUTINE_JOBS`;

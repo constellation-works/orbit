@@ -193,6 +193,7 @@ fn register_plugin_tool_refuses_to_overwrite_a_builtin_name() {
             grants: Vec::new(),
         },
         execution_kind: PluginExecutionKind::ReadOnly,
+        agent_callable: false,
         diagnostic: None,
     });
     registry.register_plugin_tool(
@@ -271,6 +272,7 @@ fn plugin_tools_advertise_only_the_read_only_fact_their_kind_proves() {
             grants: Vec::new(),
         },
         execution_kind: PluginExecutionKind::ReadOnly,
+        agent_callable: false,
         diagnostic: None,
     });
     registry.register_plugin_tool(

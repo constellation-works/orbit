@@ -4,6 +4,8 @@ use orbit_core::{OrbitError, OrbitRuntime};
 
 use crate::command::{CommandOut, Execute, Payload};
 
+use super::support;
+
 use super::support::{PluginScope, append_enable_report_text, enable_report_json, plugin_record};
 
 #[derive(Args)]
@@ -11,7 +13,7 @@ pub struct PluginEnableArgs {
     /// Plugin namespace
     pub name: String,
     /// Complete permission grant set to record (repeatable, comma-separated):
-    /// fs, network, env_pass, orbit_tools, unsandboxed — or one of the
+    /// fs, network, env_pass, orbit_tools, unsandboxed, agent_tools — or one of the
     /// reserved words `none` (revoke every grant), `all` (every grant) or
     /// `requested` (exactly what the manifest asks for). Replaces the
     /// recorded set when present; omitting --grant preserves it. A tool whose
@@ -71,6 +73,7 @@ impl Execute for PluginEnableArgs {
             }
         };
         let summary = &result.summary;
+        support::append_agent_tool_consent_text(&mut text, summary);
         if self.scope == PluginScope::Host
             && summary.disabled_by == Some(orbit_types::plugin::PluginDisabledLayer::Workspace)
         {

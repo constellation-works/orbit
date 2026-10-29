@@ -26,6 +26,8 @@ pub struct PluginToolSummary {
     /// MCP-advertised name, absent when `mcp_scope: none`.
     pub advertised_name: Option<String>,
     pub execution_kind: PluginExecutionKind,
+    /// Whether the manifest requests consented agent-session mutation.
+    pub agent_callable: bool,
     pub mcp_scope: String,
     pub active: bool,
 }
@@ -264,6 +266,7 @@ pub(in crate::application::plugin) fn summary_for_installed(
                         name,
                         advertised_name: advertised,
                         execution_kind: tool.execution_kind,
+                        agent_callable: tool.agent_callable,
                         mcp_scope: mcp_scope_label(tool.mcp_scope).to_string(),
                         active: status == PluginStatus::Active,
                     }

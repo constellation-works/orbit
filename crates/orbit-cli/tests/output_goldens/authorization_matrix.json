@@ -1766,6 +1766,21 @@
   },
   {
     "surface": "tool",
+    "operation": "plugin.tool.agent_callable",
+    "required_any": [
+      "agent",
+      "operator",
+      "runner"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
     "operation": "plugin.tool.mutating",
     "required_any": [
       "operator",

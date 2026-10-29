@@ -1,6 +1,6 @@
 use clap::ValueEnum;
 use orbit_core::adapter::command::{PluginSeedOutcome, PluginSkillLink, PluginSummary};
-use orbit_types::plugin::{PluginDisabledLayer, PluginStatus};
+use orbit_types::plugin::{PluginDisabledLayer, PluginGrant, PluginStatus};
 use serde_json::{Value, json};
 
 /// Which enable state `orbit plugin enable|disable` writes.
@@ -116,11 +116,39 @@ pub(super) fn plugin_record(summary: &PluginSummary) -> Value {
                 "name": tool.name,
                 "advertised_name": tool.advertised_name,
                 "execution_kind": tool.execution_kind.as_str(),
+                "agent_callable": tool.agent_callable,
                 "mcp_scope": tool.mcp_scope,
                 "active": tool.active,
             }))
             .collect::<Vec<_>>(),
     })
+}
+
+/// The individual manifest declarations shown beside agent consent.
+pub(super) fn declared_agent_tool_names(summary: &PluginSummary) -> String {
+    summary
+        .tools
+        .iter()
+        .filter(|tool| tool.agent_callable)
+        .map(|tool| tool.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Show the agent mutation request and the host's recorded answer at enable.
+pub(super) fn append_agent_tool_consent_text(text: &mut String, summary: &PluginSummary) {
+    let tools = declared_agent_tool_names(summary);
+    if tools.is_empty() {
+        return;
+    }
+    let granted = summary
+        .permissions
+        .iter()
+        .any(|permission| permission.grant == PluginGrant::AgentTools && permission.granted);
+    text.push_str(&format!(
+        "\nAgent-callable mutating tools (agent_tools {}): {tools}",
+        if granted { "granted" } else { "not granted" },
+    ));
 }
 
 /// The seeded-schedule / skill-link / warning report `orbit plugin enable`

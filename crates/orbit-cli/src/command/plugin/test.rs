@@ -18,7 +18,7 @@ pub struct PluginTestArgs {
     #[arg(long)]
     pub first_party: bool,
     /// Consent to these grants for this run (repeatable, comma-separated):
-    /// fs, network, env_pass, orbit_tools, unsandboxed. Same names as
+    /// fs, network, env_pass, orbit_tools, unsandboxed, agent_tools. Same names as
     /// `orbit plugin enable --grant`. Required when the manifest asks for an
     /// unconfined backend, a write root that resolves outside the run's temp
     /// directory, `network: any`, or `env_pass`, unless `--accept-requested`

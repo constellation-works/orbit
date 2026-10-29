@@ -114,6 +114,7 @@ Review the requests before you grant any of them.
 | `env_pass` | Receive the environment variables its manifest names. |
 | `orbit_tools` | Call the Orbit tools its manifest lists, and no others. |
 | `unsandboxed` | Run with no confinement. Grant it only for a plugin you have reviewed. |
+| `agent_tools` | Let agent sessions call individual mutating tools marked `agent_callable: true`. Review their append-only or proposal-only behavior before consenting; this grants no operator authority. |
 
 Grant only the entries the plugin needs. The `notes` manifest requests two grants, so
 grant those two and nothing else:
@@ -239,7 +240,8 @@ orbit plugin upgrade notes ./my-plugin-v0.2
   widened one `(widened)`.
 - A widened request disables the plugin and clears its grants. The widened requests are
   filesystem roots, network mode, environment names, Orbit tool callbacks and the
-  sandbox. Orbit then prints the `orbit plugin enable --grant …` command to re-consent.
+  sandbox, or agent-callable tool verbs. Adding a verb needs fresh consent even when
+  `agent_tools` was already granted. Orbit then prints the `orbit plugin enable --grant …` command to re-consent.
   To re-consent in the same step, pass the complete set you reviewed:
 
   ```bash

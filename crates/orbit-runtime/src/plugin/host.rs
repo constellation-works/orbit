@@ -650,6 +650,7 @@ fn register_installed_plugin(
         let binding = Arc::new(PluginToolBinding {
             provenance: provenance.clone(),
             execution_kind: tool.execution_kind,
+            agent_callable: tool.agent_callable,
             diagnostic: None,
         });
         let scope = match tool.mcp_scope {
@@ -785,6 +786,7 @@ fn register_inactive_tools(
         let binding = Arc::new(PluginToolBinding {
             provenance: provenance.clone(),
             execution_kind: tool.execution_kind,
+            agent_callable: tool.agent_callable,
             diagnostic: Some(message.clone()),
         });
         registry.register_inactive_plugin_tool(
