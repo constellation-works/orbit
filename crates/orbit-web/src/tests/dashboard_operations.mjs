@@ -1741,7 +1741,7 @@ assert(readyLink?.tagName === 'A' && readyLink.getAttribute('href')?.includes('#
 // tooltip and the accessible text.
 assert(readyLink.querySelector('.drain-backlog-forecast-figures')?.textContent === '6.5h – 20h · $13 – $40', `ready figures: ${readyText}`);
 assert(readyText.includes('p50 – p90') && readyText.includes('18 backlog · 2 in progress') && readyText.includes('Tokens 1.5M – 4.8M'), `ready accessible text: ${readyText}`);
-assert(readyLink.title.includes('18 backlog · 2 in progress') && readyLink.title.includes('Tokens 1.5M – 4.8M') && readyLink.title.includes('Cost $12.50 – $40.00'), `ready tooltip: ${readyLink.title}`);
+assert(readyLink.title.includes('18 backlog · 2 in progress') && readyLink.title.includes('Tokens 1.5M – 4.8M') && readyLink.title.includes('Exact cost $12.50 – $40.00'), `ready tooltip: ${readyLink.title}`);
 const built = forecastCard()?.querySelector('.drain-forecast-built');
 assert(built && readyLink && readyLink.parentElement === forecastCard() && readyLink === forecastCard().lastElementChild && (built.compareDocumentPosition(readyLink) & Node.DOCUMENT_POSITION_FOLLOWING), 'the summary follows the admission forecast');
 let summaryActivated = false;
