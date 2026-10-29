@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Command Pattern"
-last_validated: 2026-10-26
+last_validated: 2026-10-29
 ---
 # Command Pattern
 
