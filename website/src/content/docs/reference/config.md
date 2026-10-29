@@ -382,7 +382,7 @@ remaps an unsupported value onto a nearby one. `orbit config set` refuses to
 write a value that loading would drop. A missing `provider` or `model`, a
 retired backend, or an unknown pool reference still fails config loading.
 
-The narrower sets follow each CLI. `agy --effort` defines no `xhigh` or `max`.
+The narrower sets follow Orbit's validation policy for each provider. For Antigravity, Orbit accepts `low`, `medium` or `high` only, even though `agy --effort` advertises `xhigh` and `max`.
 Grok effort is verified only for `grok-4.5`, `grok-4.6`, and
 `grok-4.7`; on any other Grok model it is ignored with a warning. The provider
 can still reject a value for a particular model.
