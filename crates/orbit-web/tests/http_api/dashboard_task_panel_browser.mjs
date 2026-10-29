@@ -227,10 +227,10 @@ const server = http.createServer((req, res) => {
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const origin = `http://127.0.0.1:${server.address().port}`;
 const browser = await chromium.launch({ headless: true });
-const results = {};
+const results = { taskPaneCleanup: [] };
 
-async function openPage({ width = 1440, height = 900, url = '/?workspace=one#tasks', storage = 'ok', context = null, clock = false } = {}) {
-  const owner = context || await browser.newContext({ viewport: { width, height } });
+async function openPage({ width = 1440, height = 900, url = '/?workspace=one#tasks', storage = 'ok', context = null, clock = false, touch = false } = {}) {
+  const owner = context || await browser.newContext({ viewport: { width, height }, hasTouch: touch });
   // A viewer whose storage refuses every read and write still gets a pane.
   if (storage === 'refuses') await owner.addInitScript(() => {
     for (const method of ['getItem', 'setItem', 'removeItem']) {
@@ -269,7 +269,7 @@ const waitShown = async (page, id) => {
 async function checkTaskPanel() {
   // Scheduling lives in the metadata card; editing still sets and clears it.
   for (const width of [1440, 375]) {
-    const { page, errors, context } = await openPage({ width, height: width === 375 ? 812 : 900 });
+    const { page, errors, context } = await openPage({ width, height: width === 375 ? 812 : 900, touch: true });
     const scheduledRow = row(page, 'PANEL-6');
     assert.match(await scheduledRow.locator('.scheduled-chip').innerText(), /^Scheduled\s/);
     assert.equal(await row(page, 'PANEL-5').locator('.scheduled-chip').count(), 0, 'Running work has no scheduled hold chip');
@@ -283,6 +283,17 @@ async function checkTaskPanel() {
     assert.equal(await schedule.count(), 1, 'Scheduled belongs in the metadata card');
     assert.equal(await schedule.locator('.label').textContent(), 'Scheduled');
     assert.equal(await pane(page).locator('.task-schedule, .task-started-at').count(), 0, 'A task that has not started has no Actual start line');
+    const scheduleGeometry = [];
+    const recordScheduleLine = async () => {
+      const boxes = await schedule.locator('.field-editor').evaluate(node => {
+        const value = node.firstElementChild.getBoundingClientRect();
+        const edit = node.querySelector('.field-edit').getBoundingClientRect();
+        return { value: value.toJSON(), edit: edit.toJSON() };
+      });
+      assert.ok(Math.abs(boxes.value.top - boxes.edit.top) <= 2, `Schedule value and Edit share a line: ${JSON.stringify(boxes)}`);
+      scheduleGeometry.push(boxes);
+    };
+    await recordScheduleLine();
     await schedule.getByRole('button', { name: 'Edit scheduled time for PANEL-6', exact: true }).click();
     const input = schedule.getByRole('textbox', { name: 'Edit scheduled time for PANEL-6', exact: true });
     await input.fill('2099-02-02T11:00:00+01:00');
@@ -300,6 +311,7 @@ async function checkTaskPanel() {
     assert.deepEqual(await page.evaluate(() => globalThis.panelFixture.patches[1].body), { not_before: '' });
     await schedule.locator('.field-edit').waitFor({state: 'visible'});
     assert.match(await schedule.innerText(), /not scheduled/);
+    await recordScheduleLine();
     await capture(page, `task-detail-unscheduled-dark-${width}.png`);
     assert.equal(await row(page, 'PANEL-6').locator('.scheduled-chip').count(), 0, 'Clearing the schedule removes its hold chip');
     await pane(page).getByRole('button', { name: width === 375 ? 'Back' : 'Close task detail', exact: true }).click();
@@ -308,65 +320,88 @@ async function checkTaskPanel() {
       worktree_path: '/home/operator/workspace/constellation/codebases/orbit/.orbit/state/worktrees/orbit-jrun-20261028-0113-c9',
     };
     await page.evaluate(worktree => {
-      panelFixture.tasks.find(task => task.id === 'PANEL-5').job_run_worktree = worktree;
+      Object.assign(panelFixture.tasks.find(task => task.id === 'PANEL-5'), {
+        status: 'review', job_run_worktree: worktree,
+        external_refs: [{ system: 'github-pr', id: '42', url: 'https://github.com/o/r/pull/42' }],
+        job_run_stage: { run_state: 'success', stages: ['Setup', 'Implement', 'Validate', 'Review', 'Publish', 'Review', 'Merge', 'Re-review'].map((label, i) => ({ id: String(i), label, state: 'past' })) },
+      });
     }, worktree);
     await row(page, 'PANEL-5').locator('.title').click();
     await waitShown(page, 'PANEL-5');
-    const riskBreakdown = pane(page).locator('.task-risk');
-    await riskBreakdown.locator('summary').click();
-    assert.equal(await riskBreakdown.locator('.task-risk-lead').textContent(), 'Regression risk 23% · 23 declared files');
-    const riskLines = await riskBreakdown.locator('.task-risk-line').allTextContents();
-    assert.equal(riskLines[0], 'Of the 412 recent done tasks this size or larger, 61 regressed (15%)', 'The breakdown shows the size-band calibration evidence');
+    const riskChip = pane(page).locator('.task-chip-risk');
+    const tooltip = pane(page).getByRole('tooltip');
+    assert.equal(await pane(page).locator('.task-risk').count(), 0, 'There is no risk disclosure under the pills');
+    assert.equal(await riskChip.getAttribute('aria-describedby'), await tooltip.getAttribute('id'), 'The pill has an accessible description');
+    assert.equal(await riskChip.getAttribute('title'), null, 'Only the accessible tooltip presents risk detail');
+    const riskLines = (await tooltip.textContent()).split('\n');
+    assert.equal(riskLines[0], 'Regression risk 23% · 23 declared files');
+    assert.equal(riskLines[1], 'Of the 412 recent done tasks this size or larger, 61 regressed (15%)', 'The tooltip retains the calibration evidence');
     assert.ok(!riskLines.some(line => /crew|Driving files/i.test(line)), `Riskiness attributes no file or crew: ${riskLines}`);
-    await capture(page, `task-risk-breakdown-dark-${width}.png`);
-    const started = pane(page).locator('.task-started-at');
-    assert.equal(await started.count(), 1, 'A task with started_at shows its Actual start beside Scheduled (scheduled-tasks scope: the started-at time must be shown beside the scheduled time once known)');
-    assert.equal(await started.locator('.label').textContent(), 'Actual start');
-    assert.match(await started.innerText(), /12:00/, 'Actual start shows the task started_at time');
-    assert.deepEqual(
-      await pane(page).locator('.task-delivery-card .property-row').evaluateAll(rows => rows.slice(0, 2).map(r => r.querySelector('.label')?.textContent)),
-      ['Scheduled', 'Actual start'],
-      'Actual start sits immediately beside Scheduled in the metadata card',
-    );
-    await capture(page, `task-detail-actual-start-dark-${width}.png`);
-    await riskBreakdown.locator('summary').click();
-    // Real clipboard permission checks the full value, beyond the clipped label.
-    await context.grantPermissions(['clipboard-read', 'clipboard-write']);
-    for (const [kind, recorded] of [['run-branch', worktree.branch], ['run-worktree', worktree.worktree_path]]) {
-      const button = pane(page).locator(`.${kind} .run-worktree-copy`);
-      assert.equal(await button.getAttribute('title'), recorded);
-      const geometry = await button.evaluate((n, recorded) => {
-        const s = getComputedStyle(n);
-        const box = n.getBoundingClientRect();
-        const text = n.firstChild;
-        const start = text.textContent.indexOf(recorded);
-        const range = document.createRange();
-        range.setStart(text, start);
-        range.setEnd(text, start + 1);
-        const prefix = range.getBoundingClientRect();
-        range.setStart(text, start + recorded.length - 1);
-        range.setEnd(text, start + recorded.length);
-        const suffix = range.getBoundingClientRect();
-        return { height: box.height, lineHeight: parseFloat(s.lineHeight), width: n.clientWidth, fullWidth: n.scrollWidth,
-          whiteSpace: s.whiteSpace, overflow: s.overflowX, ellipsis: s.textOverflow, direction: s.direction,
-          prefixHidden: prefix.right <= box.left, suffixVisible: suffix.left >= box.left && suffix.right <= box.right + 1 };
-      }, recorded);
-      assert.equal(geometry.whiteSpace, 'nowrap');
-      assert.equal(geometry.overflow, 'hidden');
-      assert.equal(geometry.ellipsis, 'ellipsis');
-      assert.equal(geometry.direction, 'rtl', 'The beginning is elided so the distinctive end stays visible');
-      assert.ok(geometry.height <= geometry.lineHeight + 1, JSON.stringify(geometry));
-      assert.ok(geometry.fullWidth > geometry.width, 'The long fixture value needs truncation');
-      assert.equal(geometry.prefixHidden, true, 'The leading slash or branch prefix stays at the elided start');
-      assert.equal(geometry.suffixVisible, true, 'The final path or branch characters stay visible');
-      await button.click();
-      await page.waitForFunction(() => document.querySelector('.run-worktree-copy[data-copy-label]')?.textContent === 'copied!');
-      assert.equal(await page.evaluate(() => navigator.clipboard.readText()), recorded);
-      await page.waitForFunction(() => !document.querySelector('.run-worktree-copy[data-copy-label]'));
+    await riskChip.hover();
+    assert.equal(await tooltip.evaluate(n => getComputedStyle(n).clipPath), 'none', 'Hover reveals the tooltip');
+    await page.mouse.move(0, 0);
+    await riskChip.focus();
+    await page.keyboard.press('Tab');
+    await page.keyboard.press('Shift+Tab');
+    assert.equal(await riskChip.evaluate(n => n === document.activeElement), true, 'The pill is keyboard reachable');
+    assert.equal(await tooltip.evaluate(n => getComputedStyle(n).clipPath), 'none', 'Keyboard focus reveals the tooltip');
+    await capture(page, `task-risk-tooltip-dark-${width}.png`);
+    await page.keyboard.press('Escape');
+    assert.notEqual(await tooltip.evaluate(n => getComputedStyle(n).clipPath), 'none', 'Escape dismisses the tooltip');
+    assert.equal(await pane(page).isVisible(), true, 'Dismissing the tooltip keeps the task open');
+    await riskChip.blur();
+    // Touch has no hover: tap focuses the same pill and reveals its description.
+    await riskChip.tap();
+    assert.equal(await tooltip.evaluate(n => getComputedStyle(n).clipPath), 'none', 'Tap reveals the tooltip');
+    const tooltipBounds = await tooltip.boundingBox();
+    assert.ok(tooltipBounds.x >= 0 && tooltipBounds.x + tooltipBounds.width <= width, 'The tooltip fits the viewport');
+    await page.keyboard.press('Escape');
+    const started = pane(page).locator('.task-delivery-card .schedule');
+    assert.equal(await pane(page).locator('.task-started-at, .run-branch, .run-worktree').count(), 0, 'The redundant delivery rows are absent');
+    assert.equal(await started.locator('.field-edit').count(), 0, 'Started work has no schedule editor');
+    assert.match(await started.innerText(), /scheduled 2026-10-18 10:00 UTC · started 2026-10-18 12:00 UTC/);
+    assert.equal(await pane(page).locator('.task-delivery-card .run').count(), 1, 'Run stays in the delivery card');
+    assert.equal(await pane(page).locator('.task-delivery-card .pr').count(), 1, 'Pull request stays in the delivery card');
+    await capture(page, `task-pane-dark-${width}-after.png`);
+    const strips = [];
+    for (const steps of [9, 8]) {
+      if (steps === 8) {
+        await pane(page).getByRole('button', { name: width === 375 ? 'Back' : 'Close task detail', exact: true }).click();
+        await page.evaluate(() => {
+          const task = panelFixture.tasks.find(t => t.id === 'PANEL-5');
+          task.job_run_stage.run_state = 'running';
+          task.job_run_stage.stages[7].state = 'current';
+          task.not_before = null;
+        });
+        await page.locator('#refresh-btn').click();
+        await row(page, 'PANEL-5').locator('.title').click();
+        await waitShown(page, 'PANEL-5');
+        await page.waitForFunction(() => document.querySelectorAll('.task-stage-step').length === 8);
+        assert.match(await started.innerText(), /not scheduled · started 2026-10-18 12:00 UTC/);
+      }
+      const geometry = await pane(page).evaluate(node => {
+        const box = selector => node.querySelector(selector).getBoundingClientRect().toJSON();
+        return { lifecycle: box('.task-lifecycle'), lifecycleFirst: box('.task-lifecycle-bar'),
+          lifecycleLast: box('.task-lifecycle-step:last-child .task-lifecycle-bar'),
+          stage: box('.task-stage'), first: box('.task-stage-bar'),
+          last: box('.task-stage-step:last-child .task-stage-bar'), card: box('.task-delivery-card'),
+          count: node.querySelectorAll('.task-stage-step').length,
+          lifecycleGap: getComputedStyle(node.querySelector('.task-lifecycle')).columnGap,
+          stageGap: getComputedStyle(node.querySelector('.task-stage')).columnGap };
+      });
+      assert.equal(geometry.count, steps);
+      const left = geometry.first.left - geometry.card.left;
+      const right = geometry.card.right - geometry.last.right;
+      assert.ok(Math.abs(left - right) <= 1, `Strip ends match: ${JSON.stringify(geometry)}`);
+      assert.ok(Math.abs(geometry.first.left - geometry.lifecycleFirst.left) <= 1);
+      assert.ok(Math.abs(geometry.last.right - geometry.lifecycleLast.right) <= 1);
+      assert.equal(geometry.stageGap, geometry.lifecycleGap);
+      strips.push({ steps, leftInset: left, rightInset: right, ...geometry });
+      await capture(page, `task-stage-${steps}-dark-${width}.png`);
     }
+    results.taskPaneCleanup.push({ width, scheduleGeometry, riskLines, tooltipBounds, strips });
     assert.equal(await pane(page).evaluate(n => n.scrollWidth <= n.clientWidth), true, 'The pane has no horizontal overflow');
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'The page has no horizontal scroll');
-    await capture(page, `task-detail-worktree-dark-${width}.png`);
     // No run, people, relations or readiness: Scheduled alone retains its card.
     await pane(page).getByRole('button', { name: width === 375 ? 'Back' : 'Close task detail', exact: true }).click();
     await page.evaluate(() => Object.assign(panelFixture.tasks.find(task => task.id === 'PANEL-4'), { job_run_id: null, created_by: null }));
@@ -394,7 +429,7 @@ async function checkTaskPanel() {
     const riskDetail = page.locator('#detail-PANEL-4');
     const riskChip = riskDetail.locator('.task-chip-risk');
     assert.equal(await riskChip.locator('.risk-value').textContent(), 'No estimate', 'Task detail retains its no-estimate risk chip');
-    assert.match(await riskChip.getAttribute('title'), /No estimate: The task declares no context files/);
+    assert.match(await riskDetail.getByRole('tooltip').textContent(), /No estimate: The task declares no context files/);
     assert.equal(await riskDetail.locator('.task-risk').count(), 0, 'An unestimated task has no Regression risk breakdown');
     await capture(page, `task-detail-unestimated-dark-${width}.png`);
     await pane(page).getByRole('button', { name: width === 375 ? 'Back' : 'Close task detail', exact: true }).click();
@@ -1307,24 +1342,32 @@ async function checkTaskPanel() {
     const muted = entries.nth(1).locator('.regression-label.regression-unclassified');
     assert.equal(await muted.count(), 1, 'Unclassified renders muted');
     assert.equal(await muted.innerText(), 'unclassified');
+    results.taskPaneCleanup.find(result => result.width === width).sites = [];
+    const disclosure = entries.nth(1).locator('details.regression-sites');
+    assert.equal(await disclosure.getAttribute('open'), null, 'Sites start folded');
+    assert.equal(await disclosure.locator('summary').textContent(), '2 sites');
+    await disclosure.locator('summary').focus();
+    await page.keyboard.press('Enter');
+    assert.notEqual(await disclosure.getAttribute('open'), null, 'The dropdown opens by keyboard');
     const sites = entries.nth(1).locator('.regression-site');
     assert.equal(await sites.count(), 2, 'Each site lists under its own target');
     for (const expected of ['file:crates/orbit-web/assets/dashboard/js/tasks.js', 'symbol:crates/orbit-web/assets/dashboard/js/tasks.js#relationTargets:function']) {
       const site = sites.filter({ hasText: expected });
       assert.equal(await site.count(), 1, `Site ${expected} renders once`);
-      assert.equal(await site.getAttribute('title'), expected, 'The full selector stays in the title');
+      assert.equal(await site.textContent(), expected, 'The complete selector is preserved');
       const geometry = await site.evaluate(node => {
-        const s = getComputedStyle(node);
-        const box = node.getBoundingClientRect();
-        return { height: box.height, lineHeight: parseFloat(s.lineHeight), whiteSpace: s.whiteSpace,
-          overflow: s.overflowX, ellipsis: s.textOverflow, direction: s.direction, fontFamily: s.fontFamily };
+        const style = getComputedStyle(node);
+        return { box: node.getBoundingClientRect().toJSON(), whiteSpace: style.whiteSpace,
+          overflow: style.overflowX, ellipsis: style.textOverflow, direction: style.direction,
+          clientWidth: node.clientWidth, scrollWidth: node.scrollWidth, fontFamily: style.fontFamily };
       });
-      assert.equal(geometry.whiteSpace, 'nowrap', 'A site stays on one line');
-      assert.equal(geometry.overflow, 'hidden');
-      assert.equal(geometry.ellipsis, 'ellipsis');
-      assert.equal(geometry.direction, 'rtl', 'The start is elided so the distinctive end stays visible');
-      assert.ok(geometry.height <= geometry.lineHeight + 1, `A site is one line: ${JSON.stringify(geometry)}`);
+      assert.equal(geometry.whiteSpace, 'normal', 'Full symbols wrap across lines');
+      assert.equal(geometry.overflow, 'visible');
+      assert.equal(geometry.ellipsis, 'clip');
+      assert.equal(geometry.direction, 'ltr');
+      assert.ok(geometry.scrollWidth <= geometry.clientWidth + 1, `Full site stays unclipped: ${JSON.stringify(geometry)}`);
       assert.match(geometry.fontFamily, /mono/i, 'Sites render monospace');
+      results.taskPaneCleanup.find(result => result.width === width).sites.push({ expected, ...geometry });
     }
     const thirdHead = entries.nth(2).locator('.regression-head');
     assert.equal(await thirdHead.locator('.task-delivery-relation').textContent(), 'PANEL-3', 'A bare link keeps only its id');
@@ -1338,6 +1381,22 @@ async function checkTaskPanel() {
     assert.equal(await pane(page).evaluate(n => n.scrollWidth <= n.clientWidth), true, 'The pane has no horizontal overflow');
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'The page has no horizontal scroll');
     await capture(page, `task-detail-regression-sites-dark-${width}.png`);
+    await pane(page).getByRole('button', { name: width === 375 ? 'Back' : 'Close task detail', exact: true }).click();
+    await page.evaluate(() => {
+      panelFixture.tasks.find(t => t.id === 'PANEL-10').relations[1].regression.sites = ['symbol:crates/orbit-engine/src/executor/automation/vcs/commit/finding_invalid.rs#claims_run:function'];
+    });
+    await page.locator('#refresh-btn').click();
+    await row(page, 'PANEL-10').locator('.title').click();
+    await waitShown(page, 'PANEL-10');
+    await page.waitForFunction(() => document.querySelector('.regression-sites summary')?.textContent === '1 site');
+    const single = pane(page).locator('details.regression-sites');
+    assert.equal(await single.locator('summary').textContent(), '1 site');
+    await single.locator('summary').click();
+    const singleSite = single.locator('.regression-site');
+    assert.equal(await singleSite.textContent(), 'symbol:crates/orbit-engine/src/executor/automation/vcs/commit/finding_invalid.rs#claims_run:function');
+    assert.equal(await singleSite.evaluate(n => n.scrollWidth <= n.clientWidth), true, 'A single full symbol also wraps without clipping');
+    await capture(page, `task-detail-regression-single-dark-${width}.png`);
+
     await pane(page).getByRole('button', { name: width === 375 ? 'Back' : 'Close task detail', exact: true }).click();
     await pane(page).waitFor({ state: 'hidden' });
     await row(page, 'PANEL-11').scrollIntoViewIfNeeded();

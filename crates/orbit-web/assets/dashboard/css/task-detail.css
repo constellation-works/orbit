@@ -440,6 +440,7 @@
   gap: 18px;
 }
 .task-levers {
+  position: relative;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -596,14 +597,16 @@
 .task-levers .field-empty { font-style: normal; }
 
 /* Where the status sits on the way to done. */
-.task-lifecycle {
+.task-lifecycle,
+.task-stage {
   list-style: none;
   margin: 0;
   padding: 0;
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 4px;
+  min-width: 0;
 }
+.task-lifecycle { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 .task-lifecycle-step { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
 .task-lifecycle-bar { height: 3px; border-radius: 2px; background: var(--border); }
 .task-lifecycle-step.past .task-lifecycle-bar { background: var(--state-success); }
@@ -620,14 +623,10 @@
 /* The delivery stage closes the detail band above the tabs, using the same
    past/current/future language and spacing as the lifecycle strip, but thinner. */
 .task-stage {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  gap: 4px;
-  min-width: 0;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
 }
-.task-stage-step { flex: 1 1 0; display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+.task-stage-step { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
 .task-stage-bar { height: 2px; border-radius: 2px; background: var(--border); }
 .task-stage-step.past .task-stage-bar { background: var(--state-success); }
 .task-stage-step.current .task-stage-bar { background: var(--state-running); }
@@ -678,6 +677,14 @@
 .task-delivery-card .property-row.fact .value { padding: 0; }
 .task-delivery-card .schedule > .field-editor-cell { min-width: 0; width: 100%; }
 .task-delivery-card .schedule .field-editor { overflow-wrap: anywhere; }
+.task-delivery-card .schedule .field-editor:has(> .field-edit) {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 10px;
+  line-height: 20px;
+}
+.task-delivery-card .schedule .field-editor > :first-child { min-width: 0; }
+.task-delivery-card .schedule .field-edit { flex: none; line-height: 20px; }
 .task-delivery-card .property-row.readiness { align-items: start; }
 .task-delivery-card .readiness-list { min-width: 0; overflow-wrap: anywhere; }
 .task-delivery-card .readiness-drain-head strong { font-weight: 500; }
@@ -724,23 +731,16 @@
 }
 .regression-label { color: var(--fg-soft); font-size: 12.5px; }
 .regression-label.regression-unclassified { color: var(--fg-mute); font-style: italic; }
-/* Defect sites sit under their target, one per line in mono. The start is
-   elided so the distinctive end stays visible; the full selector is the title. */
-.regression-sites {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin-top: 4px;
-}
+/* Each target discloses its full defect sites, wrapping even long symbols. */
+.regression-sites { margin-top: 4px; }
+.regression-sites > summary { cursor: pointer; color: var(--fg-dim); font-size: 12px; }
+.regression-sites > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.regression-site-list { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
 .regression-site {
-  display: block;
-  max-width: 100%;
+  min-width: 0;
   font-size: 12px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  direction: rtl;
-  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .task-delivery-card .property-row.relation .label::first-letter { text-transform: uppercase; }
 .task-hands { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
@@ -810,20 +810,6 @@
 }
 .property-row.fact .fact-note { color: var(--fg-mute); }
 .property-row.fact .run-value .exec-origin { font-size: 12px; color: var(--fg-dim); }
-/* Keep the distinctive end of a long worktree path or branch on one line.
-   Direction controls the ellipsis edge; the full value stays in the title
-   and the copy handler. */
-.property-row.fact .run-worktree-value { width: 100%; }
-.property-row.fact .run-worktree-copy {
-  display: block;
-  max-width: 100%;
-  font-size: 12px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  direction: rtl;
-  text-align: left;
-}
 .detail-tag-row .chip {
   cursor: default;
 }
@@ -1903,15 +1889,38 @@ input.field-editor-input {
 .decision-consequence { flex: 1 1 200px; min-width: 0; color: var(--fg-dim); font-size: 12px; overflow-wrap: anywhere; }
 .decision-pending { color: var(--fg-mute); font-size: 12px; }
 
-/* Regression risk breakdown under the levers: closed by default, its summary
-   repeating the chip's value so a phone reads it without a tooltip. */
-.task-risk { font-size: 12.5px; color: var(--fg-dim); }
-.task-risk > summary { display: flex; align-items: center; gap: 8px; cursor: pointer; color: var(--fg-soft); }
-.task-risk > summary::-webkit-details-marker { display: none; }
-.task-risk > summary::before { content: "▸"; width: 8px; color: var(--fg-mute); }
-.task-risk[open] > summary::before { content: "▾"; }
-.task-risk-value { font-variant-numeric: tabular-nums; color: var(--fg-dim); }
-.task-risk-value.risk-elevated { color: var(--warn-fg); }
-.task-risk-body { margin: 6px 0 0 16px; }
-.task-risk-body > p { margin: 2px 0; overflow-wrap: anywhere; }
-.task-risk-lead { color: var(--fg-soft); }
+/* The Risk pill describes itself with the complete estimate. The tooltip
+   spans the lever row so it fits a narrow pane regardless of the pill's position. */
+.task-risk-hint { display: inline-flex; }
+.task-chip-risk { cursor: help; font-family: inherit; }
+.task-chip-risk:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.task-risk-tooltip {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.task-risk-hint:not(.dismissed):hover > .task-risk-tooltip,
+.task-risk-hint:not(.dismissed):focus-within > .task-risk-tooltip {
+  left: 0;
+  right: 0;
+  top: 100%;
+  z-index: 10;
+  width: auto;
+  height: auto;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: visible;
+  clip-path: none;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  color: var(--fg-soft);
+  font: 400 12px/1.45 var(--font-sans);
+}
