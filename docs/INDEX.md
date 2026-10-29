@@ -123,7 +123,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Explore Brief](./design/explore-brief/1_scope.md) | Finish the remaining trial prerequisites before starting the three-arm trial | claude |
 | [Human Decision Channel](./design/human-decision-channel/1_scope.md) | Mail transport in the orbit-decision-mail plugin (a stub today); polish ORB-18446 | claude |
 | [Operations as Data](./design/operations-as-data/1_overview.md) | Restore ORB-15934 after 2026-11-12 to refuse unknown fields | claude |
-| [Path Leases](./design/path-leases/1_overview.md) | Land native TLS and the listener's full rate limits (ORB-18413, ORB-18421) | claude |
+| [Path Leases](./design/path-leases/1_overview.md) | Preemption and signed webhooks remain later work | claude |
 | [Web Terminal](./design/web-terminal/1_scope.md) | Phase 2: ORB-18489 PTY sessions and local terminal routes; phase 1 landed | claude |
 
 ### Designing (6)
@@ -223,7 +223,7 @@ a conservative title/status fallback.
 | [Operations as Data](./design/operations-as-data/1_overview.md) | One spec per operation drives the CLI, MCP, and runtime adapters; dashboard routes remain separately wired. Kernel v2 serves friction, auto-task, drain, workspace claim, task, workflow-run, search, codebase operations, and agent scorecards; deprecated orchestrator scorecard aliases share the registry. | Accepted | claude |
 | [Orbit Core](./design/orbit-core/1_overview.md) | Directional runtime, application, adapter, bootstrap, and composition boundaries across orbit-runtime and orbit-core. | Accepted | codex |
 | [Task Search](./design/orbit-search/1_overview.md) | Lexical task search using SQLite FTS5 BM25. | Accepted | codex |
-| [Path Leases](./design/path-leases/1_overview.md) | Implemented lease storage and request, renew, release, show, list and check operations over MCP, CLI and loopback REST, with Orbit Web notices/SSE, lease-token administration, orbit-auth credentials, the authenticated Unix intake socket and the token-authenticated lease listener. Native TLS and the full listener limits remain proposed. | Draft | claude |
+| [Path Leases](./design/path-leases/1_overview.md) | Implemented lease storage and request, renew, release, show, list and check operations over MCP, CLI and loopback REST, with Orbit Web notices/SSE, lease-token administration, orbit-auth credentials, the authenticated Unix intake socket and the token-authenticated lease listener. Native TLS and the listener's configured request and rate limits are implemented. | Draft | claude |
 | [Plugins](./design/plugins/1_scope.md) | Scope: a plugin standard and contract for extending Orbit with tools, CLI groups, dashboard panels, routines, auto-tasks, activities, jobs and skills from one manifest | Implemented | claude |
 | [Policy & Sandboxing](./design/policy-sandbox/1_overview.md) | Policy & Sandboxing is Orbit's safety surface for filesystem access and process execution. | Draft | claude |
 | [Process Supervision](./design/process-supervision/1_overview.md) | Record of converging Orbit's child-process supervisors (orbit-common's bounded runner, orbit-exec's SupervisedChild, the engine CLI runner, and two ad-hoc loops) onto one kill-on-drop supervisor in orbit-common, with the caller inventory and the seven-step migration, now landed. | Draft | claude |

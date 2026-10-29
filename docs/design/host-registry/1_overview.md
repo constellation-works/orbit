@@ -3,8 +3,8 @@ summary: "Host Registry — Overview"
 type: design
 title: "Host Registry — Overview"
 owner: codex
-last_updated: 2026-10-26
-last_validated: 2026-10-26
+last_updated: 2026-10-29
+last_validated: 2026-10-29
 status: Implemented
 stage: shipped
 next: "—"
@@ -42,7 +42,7 @@ orbit-types does not read machine files. orbit-registry does not dispatch Core t
   `orbit init` creates it. A legacy `~/.orbit/host.toml` is migrated into
   `[machine]` on first identity load and removed once that write succeeds.
 - ~/.orbit/workspaces.json is schema v1. It separates logical workspace records from this machine's checkout paths and owner or replica role.
-- `~/.orbit/hosts.toml` lists operator-registered remote hosts by name, SSH target, `machine_id` and `task_prefix`. It replaces the hand-edited `~/.orbit/mcp-destinations.toml`, which is still read for one release while it is the only file ([specs/host-commands.md](./specs/host-commands.md)).
+- `~/.orbit/hosts.toml` lists operator-registered remote hosts by name, SSH target, `machine_id` and `task_prefix`. When it is absent, Orbit still reads `~/.orbit/mcp-destinations.toml` as legacy routes; the next `orbit host` mutation migrates those routes and removes the legacy file. If both files exist, Orbit refuses to choose between them ([specs/host-commands.md](./specs/host-commands.md)).
 - A workspace runtime is opened only from a local checkout binding. A checkoutless logical catalog entry can be listed but cannot execute.
 
 The accepting machine is authoritative for its files and runtime. Remote MCP simply carries MCP stdio over SSH to that machine; it does not copy or interpret registry state locally.
