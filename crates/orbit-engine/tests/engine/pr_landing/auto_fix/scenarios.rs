@@ -2770,17 +2770,179 @@ fn plant_older_green_base(fx: &Fixture) {
     fx.script_checks(&["failure"]);
 }
 
+/// Reproduce the hosted API capture overflow with 100 ordinary run/job rows.
+/// Long commit messages and step metadata are unused by classification. The
+/// decisive newest run and same-check job are last, beyond a smaller first page.
+fn plant_oversized_base_ci(fx: &Fixture, collection: &str) {
+    let dir = fx.forge.join("commit-ci").join(&fx.base_sha);
+    let mut runs: Value =
+        serde_json::from_slice(&fs::read(dir.join("runs.json")).unwrap()).unwrap();
+    let run_id = 1021;
+    let mut latest = runs["workflow_runs"][0].clone();
+    latest["id"] = json!(run_id);
+    latest["head_commit"] = json!({
+        "id": fx.base_sha,
+        "message": "Describe the source change and its validation.\n".repeat(400),
+        "author": {"name":"Contributor", "email":"contributor@example.invalid"}
+    });
+    runs["workflow_runs"][0] = latest.clone();
+    fs::write(dir.join("runs.json"), runs.to_string()).unwrap();
+    fs::write(dir.join("run_id"), run_id.to_string()).unwrap();
+    let mut history = (1..100)
+        .map(|id| {
+            let mut older = latest.clone();
+            older["id"] = json!(id);
+            older
+        })
+        .collect::<Vec<_>>();
+    history.push(latest);
+    let response = json!({"total_count":100,"workflow_runs":history}).to_string();
+    assert!(
+        response.len() > 1024 * 1024,
+        "raw workflow response exceeds the default process cap"
+    );
+    if collection == "runs" {
+        fx.write_forge("base-push-runs.json", response);
+    } else {
+        fx.write_forge("base-push-runs.json", runs.to_string());
+    }
+
+    let mut jobs = jobs_listing(run_id, &[("test", "success")]);
+    let mut decisive = jobs["jobs"][0].clone();
+    decisive["steps"] = json!(
+        (0..80)
+            .map(|number| json!({
+                "name":format!("Build phase {number}"), "number":number,
+                "status":"completed", "conclusion":"success",
+                "started_at":"2026-10-27T04:58:00Z", "completed_at":"2026-10-27T04:59:00Z"
+            }))
+            .collect::<Vec<_>>()
+    );
+    decisive["started_at"] = json!("2026-10-27T04:58:00Z");
+    decisive["completed_at"] = json!("2026-10-27T04:59:00Z");
+    let mut listed = (1..100)
+        .map(|index| {
+            let mut other = decisive.clone();
+            other["id"] = json!(run_id + 1 + index);
+            other["name"] = json!(format!("matrix sibling {index}"));
+            other
+        })
+        .collect::<Vec<_>>();
+    listed.push(decisive);
+    jobs["jobs"] = json!(listed);
+    jobs["total_count"] = json!(100);
+    let response = jobs.to_string();
+    assert!(
+        response.len() > 1024 * 1024,
+        "raw job response exceeds the default process cap"
+    );
+    if collection == "jobs" {
+        fs::write(dir.join("jobs.json"), response).unwrap();
+    }
+}
+
+/// Projected provider failures must remain errors and cannot spend a repair.
+#[test]
+fn auto_fix_refuses_unreadable_or_incomplete_projected_ci() {
+    isolated(
+        "auto_fix::auto_fix_refuses_unreadable_or_incomplete_projected_ci",
+        |sandbox| {
+            for case in [
+                "missing_runs",
+                "malformed_runs",
+                "incomplete_runs",
+                "unreadable_jobs",
+                "incomplete_jobs",
+                "object_jobs",
+            ] {
+                in_fresh_row(sandbox, |row| {
+                    let (fx, host) = docs_only_pr(row);
+                    plant_older_green_base(&fx);
+                    let dir = fx.forge.join("commit-ci").join(&fx.base_sha);
+                    match case {
+                        "missing_runs" => {
+                            fx.write_forge("base-push-runs.json", "{\"total_count\":1}")
+                        }
+                        "malformed_runs" => {
+                            let runs: Value =
+                                serde_json::from_slice(&fs::read(dir.join("runs.json")).unwrap())
+                                    .unwrap();
+                            fx.write_forge("base-push-runs.json", json!({
+                                "total_count":1, "workflow_runs":{"run":runs["workflow_runs"][0]}
+                            }).to_string());
+                        }
+                        "incomplete_runs" => {
+                            let mut runs: Value =
+                                serde_json::from_slice(&fs::read(dir.join("runs.json")).unwrap())
+                                    .unwrap();
+                            runs["total_count"] = json!(2);
+                            fs::write(dir.join("runs.json"), runs.to_string()).unwrap();
+                            // Exact-tip evidence requires a complete listing. The ancestry
+                            // window deliberately remains bounded and may have a larger count.
+                            let error = host.run_private_vcs_operation("ci.commit_jobs", json!({
+                                "workspace_path":fx.repo, "commit":fx.base_sha, "latest_push_branch":BASE
+                            })).unwrap_err();
+                            assert!(
+                                error.to_string().contains("base push runs were incomplete"),
+                                "{error}"
+                            );
+                        }
+                        "unreadable_jobs" => {
+                            fs::write(dir.join("jobs.json"), "unreadable").unwrap()
+                        }
+                        "incomplete_jobs" | "object_jobs" => {
+                            let mut jobs = jobs_listing(21, &[("test", "success")]);
+                            if case == "object_jobs" {
+                                jobs["jobs"] = json!({"job":jobs["jobs"][0]});
+                            } else {
+                                jobs["total_count"] = json!(2);
+                            }
+                            fs::write(dir.join("jobs.json"), jobs.to_string()).unwrap();
+                        }
+                        _ => unreachable!(),
+                    }
+                    if case != "incomplete_runs" {
+                        let read = host.run_private_vcs_operation(
+                            "ci.commit_jobs",
+                            json!({
+                                "workspace_path":fx.repo, "commit":fx.base_sha,
+                                "latest_push_branch":BASE, "base_push_tip":fx.base_sha
+                            }),
+                        );
+                        assert!(
+                            read.is_err(),
+                            "{case}: invalid evidence must not become a passing base: {read:?}"
+                        );
+                    }
+                    let error = action(&host, "pr_complete", &auto_fix_input(&fx)).unwrap_err();
+                    assert!(!is_check_repair(&error.to_string()), "{case}: {error}");
+                    assert!(
+                        repair_attempts(&host).is_empty(),
+                        "{case}: unread evidence spends no repair"
+                    );
+                    assert_nothing_landed(&fx, &host, TaskStatus::Review, case);
+                });
+            }
+        },
+    );
+}
+
 /// An older green base permits a PR rerun, but cannot by itself admit either
-/// the auto-fix repair or completion's independent final recovery.
+/// the auto-fix repair or completion's independent final recovery. Oversized
+/// workflow and job payloads exercise the normal 1 MiB process capture bound;
+/// only the same-PR later attempt may reach final recovery.
 #[test]
 fn older_green_base_holds_recovery_until_matching_pr_rerun() {
     isolated(
         "auto_fix::older_green_base_holds_recovery_until_matching_pr_rerun",
         |sandbox| {
-            for auto_fix in [false, true] {
+            for (auto_fix, oversized) in [(false, ""), (true, ""), (true, "runs"), (true, "jobs")] {
                 in_fresh_row(sandbox, |row| {
                     let (fx, host) = docs_only_pr(row);
                     plant_older_green_base(&fx);
+                    if !oversized.is_empty() {
+                        plant_oversized_base_ci(&fx, oversized);
+                    }
                     let context = host.task(TASK_ID).context_files;
                     host.script(
                         "test_checkpoint",

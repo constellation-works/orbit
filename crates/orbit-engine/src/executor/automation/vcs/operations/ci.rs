@@ -23,6 +23,14 @@ use super::process::execute_with_transient_retry;
 /// Largest failed-job log excerpt one read returns.
 const MAX_JOB_LOG_BYTES: usize = 64 * 1024;
 
+// Project inside gh, before the process supervisor captures stdout. A page of
+// repository metadata, commit messages or job-step timestamps can exceed its
+// normal capture bound. Keep the original 100-row window and total_count so
+// exact-tip completeness checks and bounded ancestry selection stay unchanged.
+// Do not default a missing list to []: a malformed read must still fail.
+const COMMIT_RUN_FIELDS: &str = "{total_count, workflow_runs: (.workflow_runs | if type != \"array\" then error(\"workflow_runs must be an array\") else map({id, name, workflow_id, status, conclusion, run_started_at, run_attempt, event, head_branch, head_sha, pull_requests}) end)}";
+const RUN_JOB_FIELDS: &str = "{total_count, jobs: (.jobs | if type != \"array\" then error(\"jobs must be an array\") else map({id, name, status, conclusion, started_at, completed_at, steps: (.steps | if type == \"array\" then map({name, conclusion}) else . end)}) end)}";
+
 /// Every job of the newest attempt of each workflow run GitHub recorded for
 /// `commit`, with its conclusion and first failed step. Base ancestry reads
 /// retain completed successful pushes on the accepted base or its descendants;
@@ -66,7 +74,7 @@ pub(super) fn ci_commit_jobs(input: &Value) -> Result<Value, OrbitError> {
             format!("branch={branch}"),
         ]);
     }
-    let runs = gh_json(args, workspace_path, "commit runs")?;
+    let runs = projected_ci_json(args, workspace_path, "commit runs", COMMIT_RUN_FIELDS)?;
     let listed = runs["workflow_runs"]
         .as_array()
         .ok_or_else(|| OrbitError::Execution("commit runs carried no workflow run list".into()))?;
@@ -137,7 +145,7 @@ pub(super) fn ci_commit_jobs(input: &Value) -> Result<Value, OrbitError> {
         let Some(run_id) = run["id"].as_u64() else {
             continue;
         };
-        let listing = gh_json(
+        let listing = projected_ci_json(
             vec![
                 "api".to_string(),
                 "--method".to_string(),
@@ -148,6 +156,7 @@ pub(super) fn ci_commit_jobs(input: &Value) -> Result<Value, OrbitError> {
             ],
             workspace_path,
             "run jobs",
+            RUN_JOB_FIELDS,
         )?;
         let listed_jobs = listing["jobs"]
             .as_array()
@@ -330,7 +339,13 @@ pub(super) fn ci_rerun_failed(input: &Value) -> Result<Value, OrbitError> {
     Ok(json!({ "stdout": result.stdout, "stderr": result.stderr }))
 }
 
-fn gh_json(args: Vec<String>, workspace_path: &Path, label: &str) -> Result<Value, OrbitError> {
+fn projected_ci_json(
+    mut args: Vec<String>,
+    workspace_path: &Path,
+    label: &str,
+    fields: &str,
+) -> Result<Value, OrbitError> {
+    args.extend(["--jq".into(), fields.into()]);
     let result =
         execute_with_transient_retry("gh", &args, Some(workspace_path), DEFAULT_TIMEOUT_MS, label)?;
     serde_json::from_str(&result.stdout).map_err(|error| {
