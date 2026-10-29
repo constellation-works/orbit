@@ -145,7 +145,14 @@ fn supported_retry_refuses_unbound_grants_receipts_and_checkpoints() {
         // A changed host record must invalidate the previously inspected binding
         // even when it still proves that this retry had no source effects.
         let mut changed = member.clone();
-        changed.duration_ms = Some(42);
+        changed.duration_ms = match member.duration_ms {
+            Some(_) => None,
+            None => Some(42),
+        };
+        assert_ne!(
+            changed, *member,
+            "host proof mutation must change the record"
+        );
         save_run(&f, &changed);
         let error = refused_without_effects(&f, stale.clone(), "stale inspected lineage");
         assert!(error.contains("binding"), "{error}");
