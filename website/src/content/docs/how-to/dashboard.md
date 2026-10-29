@@ -1019,10 +1019,11 @@ The **Rework by cause** panel shows where each orchestrator's rework went.
 
 The **Implementers** tab ranks each crew and model separately. It credits
 weighted landed work and first-pass accepts, and counts review rejects,
-reviewer repairs, crew-caused rework, and regressions that escaped because
-there was no test. A review reject is counted once; regressions the reviewer
-missed count against Reviewers. Each task counts once per crew and model
-that started an implementation run in the window.
+reviewer repairs, and crew-caused rework. A review reject is counted once;
+regressions the reviewer missed count against Reviewers. Regressions that
+escaped because there was no test do not change the score; they appear as
+unscored context in the detail column. Each task counts once per crew and
+model that started an implementation run in the window.
 
 The tab has no role panel: the ranking, the detail column and **How the
 score works** are the whole view. Cost per weighted landed task, median
