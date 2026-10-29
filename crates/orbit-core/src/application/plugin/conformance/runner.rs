@@ -355,6 +355,7 @@ fn run_case(
     let binding = Arc::new(PluginToolBinding {
         provenance: backend.spec().provenance.clone(),
         execution_kind: resolved.execution_kind,
+        agent_callable: resolved.agent_callable,
         diagnostic: None,
     });
     let tool = PluginTool {

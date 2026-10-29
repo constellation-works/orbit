@@ -33,6 +33,8 @@ use crate::{Tool, ToolContext, ToolExecutionKind};
 pub struct PluginToolBinding {
     pub provenance: PluginProvenance,
     pub execution_kind: PluginExecutionKind,
+    /// Manifest declaration, active only after the host verifies consent.
+    pub agent_callable: bool,
     /// Set on an inactive entry: why the plugin is not on the active surface
     /// and what would fix it.
     pub diagnostic: Option<String>,

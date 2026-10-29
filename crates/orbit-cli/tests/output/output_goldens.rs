@@ -30,7 +30,8 @@ use std::sync::OnceLock;
 use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::governance::authorization::{
     CallerCapabilities, CallerEnvelope, GOVERNED_OPERATIONS, OperationSurface,
-    PLUGIN_TOOL_MUTATING, PLUGIN_TOOL_READ_ONLY, authorize, governed_tool,
+    PLUGIN_TOOL_AGENT_CALLABLE, PLUGIN_TOOL_MUTATING, PLUGIN_TOOL_READ_ONLY, authorize,
+    governed_tool,
 };
 use orbit_common::test_env;
 use orbit_tools::ToolRegistry;
@@ -705,6 +706,7 @@ fn authorization_matrix_matches_live_registry() {
             op.surface == OperationSurface::Tool
                 && op.id != PLUGIN_TOOL_READ_ONLY.id
                 && op.id != PLUGIN_TOOL_MUTATING.id
+                && op.id != PLUGIN_TOOL_AGENT_CALLABLE.id
         })
         .map(|op| {
             let placement = if advertised.contains(op.id) {

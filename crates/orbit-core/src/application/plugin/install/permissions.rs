@@ -226,6 +226,10 @@ fn request_widened(
             previous.spec.backend.sandbox != requested.spec.backend.sandbox
                 && requested.spec.backend.sandbox == orbit_types::plugin::PluginSandbox::None
         }
+        PluginGrant::AgentTools => contains_added(
+            &previous.agent_callable_tool_verbs(),
+            &requested.agent_callable_tool_verbs(),
+        ),
     }
 }
 

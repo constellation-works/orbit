@@ -235,6 +235,7 @@ pub(in crate::adapter::command) fn execute_global_plugin_dispatch(
             enforce_plugin_callback_allowlist_from_root(&global_root, name)?;
             authorize_plugin_tool(
                 binding.execution_kind == orbit_types::plugin::PluginExecutionKind::Mutating,
+                binding.agent_callable,
                 entry_point,
                 &tool_context.session_context,
             )?;
@@ -249,6 +250,7 @@ pub(in crate::adapter::command) fn execute_global_plugin_dispatch(
 /// Decide a plugin tool call that has no workspace runtime behind it.
 fn authorize_plugin_tool(
     mutating: bool,
+    agent_callable: bool,
     entry_point: ToolEntryPoint,
     session_context: &ToolSessionContext,
 ) -> Result<(), OrbitError> {
@@ -262,7 +264,7 @@ fn authorize_plugin_tool(
         ToolEntryPoint::Mcp => CallerEnvelope::mcp_session(session_context),
         ToolEntryPoint::Cli => CallerEnvelope::from_process_env(session_context),
     };
-    let operation = governed_plugin_tool(mutating);
+    let operation = governed_plugin_tool(mutating, agent_callable);
     let caller = CallerCapabilities::resolve_for_operation(&envelope, operation);
     authorize(operation, &caller).map_err(|denial| OrbitError::CapabilityDenied(denial.to_string()))
 }

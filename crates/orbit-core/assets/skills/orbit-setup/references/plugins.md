@@ -230,7 +230,7 @@ lands after rendering with the effective `[plugins.<ns>]` config and resolving r
 against the plugin directory, so a `{{config.<key>}}` default or `../` path naming a host
 directory needs consent just like an absolute one. Re-run with `--accept-requested` to
 test under that requested profile, or with `--grant` using the same names as `orbit plugin
-enable --grant` (`fs`, `network`, `env_pass`, `orbit_tools`, `unsandboxed`). The `--grant`
+enable --grant` (`fs`, `network`, `env_pass`, `orbit_tools`, `unsandboxed`, `agent_tools`). The `--grant`
 list has to name each of those requests. Either flag applies only to this run and does not
 record a host grant; `orbit plugin enable --grant` is still what authorizes the installed
 plugin.
@@ -322,12 +322,38 @@ Closing the descriptor is a refusal; changing environment variables or using
 `setsid` cannot expand access. The retired environment token and process
 ancestry never authorize callbacks; backends must preserve the descriptor.
 
-Who may *call* a plugin tool is decided by its `execution_kind`, not by the
-manifest: a `read_only` tool is callable by any caller Orbit can identify, and
-a `mutating` tool by an operator or a sanctioned run — an agent reaches one
-only when the task's `required_tools` or the activity's allowlist names it. A
-scripted call with no identity at all is refused; `ORBIT_OPERATOR=1` is the
-documented escape hatch, and its use is audited.
+A `read_only` plugin tool is callable by an identified agent, operator or runner.
+A `mutating` tool requires operator or runner capability unless its manifest
+sets `agent_callable: true` and the operator has granted `agent_tools`:
+
+```yaml
+- name: capture
+  execution_kind: mutating
+  agent_callable: true
+  mcp_scope: workspace
+```
+
+Use the declaration only for append-only or proposal-only tools whose writes
+are appropriate for an agent session. It defaults to false; true on a read-only
+tool is invalid. Review the backend before granting it: Orbit checks consent,
+not whether the implementation is append-only.
+
+`orbit plugin enable <ns> --grant agent_tools` consents to the declared verbs
+at that manifest digest. Include every other needed grant in the same list,
+or use `--grant requested` after reviewing the requests. Missing consent keeps
+the plugin inactive. Enable output names these tools and the grant's status;
+`plugin list` names them and `plugin show` displays their declarations and
+requested versus granted permissions. Adding another agent-callable verb on
+upgrade widens permissions and requires fresh consent, even when `agent_tools`
+was already granted. Older Orbit hosts reject the new field or grant.
+
+A consented tool is callable over `orbit mcp serve` without `--operator`,
+through `orbit tool run`, and through its derived CLI command, with the caller
+recorded in the audit trail. The declaration grants no operator authority,
+filesystem access or callback permission. Activity allowlists and denials still
+apply; `required_tools` and allowlist membership alone grant no capability.
+Unmarked mutations keep their existing operator/runner requirement.
+`ORBIT_OPERATOR=1` and `--operator` keep their existing behavior.
 
 Treat an installed plugin as code the user has chosen to run on their machine,
 and say so when proposing one: the sandbox bounds what a backend can reach, it

@@ -196,8 +196,9 @@ impl Execute for PluginShowArgs {
             return Ok(Payload::blocks(doc, blocks).into());
         }
         blocks.push(Block::text(bold("Tools:")));
-        let mut table = crate::output::table::build_table(&["NAME", "MCP", "KIND", "STATUS"])
-            .keep_all_columns();
+        let mut table =
+            crate::output::table::build_table(&["NAME", "MCP", "KIND", "AGENT CALLABLE", "STATUS"])
+                .keep_all_columns();
         for tool in &plugin.tools {
             table.add_row(vec![
                 tool.name.clone(),
@@ -205,6 +206,12 @@ impl Execute for PluginShowArgs {
                     .clone()
                     .unwrap_or_else(|| "(not advertised)".to_string()),
                 tool.execution_kind.as_str().to_string(),
+                if tool.agent_callable {
+                    "yes (requires agent_tools)"
+                } else {
+                    "no"
+                }
+                .to_string(),
                 if tool.active { "active" } else { "inactive" }.to_string(),
             ]);
         }

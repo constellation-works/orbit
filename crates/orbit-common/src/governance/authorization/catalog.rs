@@ -322,12 +322,13 @@ pub const DASHBOARD_CLAIM_RECOVER: GovernedOperation = GovernedOperation {
 /// Generic row for a `read_only` plugin tool.
 ///
 /// Plugin tools are not enumerable at compile time, so they enter the
-/// registry through one row per execution kind rather than one row per tool
+/// registry through generic rows rather than one row per tool
 /// (design `docs/design/plugins/1_scope.md` §4.1). The manifest chooses the
-/// execution kind; it never chooses who may call.
+/// execution kind and requests agent access; recorded operator consent is
+/// required before that declaration can activate.
 ///
 /// Its `id` is not a tool name and is never matched by [`governed_tool`]: the
-/// tool chokepoint resolves a plugin call to one of these two rows through
+/// tool chokepoint resolves a plugin call to one of these rows through
 /// [`governed_plugin_tool`].
 pub const PLUGIN_TOOL_READ_ONLY: GovernedOperation = GovernedOperation {
     id: "plugin.tool.read_only",
@@ -342,14 +343,26 @@ pub const PLUGIN_TOOL_READ_ONLY: GovernedOperation = GovernedOperation {
 
 /// Generic row for a `mutating` plugin tool.
 ///
-/// An agent reaches one only through the ordinary activity/`required_tools`
-/// allowlist, which is applied separately at the same chokepoint: this row is
-/// the capability floor, not the allowlist.
+/// Activity allowlists never confer this row's capability. A consented
+/// `agent_callable` declaration selects a separate row instead.
 pub const PLUGIN_TOOL_MUTATING: GovernedOperation = GovernedOperation {
     id: "plugin.tool.mutating",
     surface: OperationSurface::Tool,
     allowed: &[McpCapability::Operator, McpCapability::Runner],
-    rationale: "a mutating plugin tool runs an installed backend that changes state, so it is an                 operator or sanctioned-run operation unless the task's `required_tools` or the                 activity allowlist names it",
+    rationale: "a mutating plugin tool requires operator or runner capability unless its agent_callable declaration has operator consent; an activity allowlist alone confers no capability",
+};
+
+/// An append-only or proposal-only mutating plugin tool whose manifest
+/// requests agent access and whose `agent_tools` grant the host verified.
+pub const PLUGIN_TOOL_AGENT_CALLABLE: GovernedOperation = GovernedOperation {
+    id: "plugin.tool.agent_callable",
+    surface: OperationSurface::Tool,
+    allowed: &[
+        McpCapability::Agent,
+        McpCapability::Operator,
+        McpCapability::Runner,
+    ],
+    rationale: "an agent_callable mutating plugin tool has explicit operator consent through the agent_tools grant; activity allowlists, denials and sandbox restrictions still apply",
 };
 
 /// Guarded task edits require an identified caller, as distinct from the
@@ -376,10 +389,13 @@ pub const DESKTOP_TASK_COMPLETE: GovernedOperation = GovernedOperation {
 
 /// The generic row a plugin tool of this execution kind is authorized by.
 ///
-/// `mutating: true` selects [`PLUGIN_TOOL_MUTATING`]; a read-only tool gets
-/// [`PLUGIN_TOOL_READ_ONLY`].
-pub fn governed_plugin_tool(mutating: bool) -> &'static GovernedOperation {
-    if mutating {
+/// A mutating tool selects [`PLUGIN_TOOL_AGENT_CALLABLE`] only with the
+/// consented declaration; otherwise it selects [`PLUGIN_TOOL_MUTATING`].
+/// A read-only tool gets [`PLUGIN_TOOL_READ_ONLY`].
+pub fn governed_plugin_tool(mutating: bool, agent_callable: bool) -> &'static GovernedOperation {
+    if mutating && agent_callable {
+        &PLUGIN_TOOL_AGENT_CALLABLE
+    } else if mutating {
         &PLUGIN_TOOL_MUTATING
     } else {
         &PLUGIN_TOOL_READ_ONLY
@@ -872,12 +888,13 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
     DASHBOARD_PLUGIN_DISABLE,
     PLUGIN_TOOL_READ_ONLY,
     PLUGIN_TOOL_MUTATING,
+    PLUGIN_TOOL_AGENT_CALLABLE,
 ];
 
 /// Look up the governed tool operation for `tool_name`, if any.
 ///
-/// The two generic plugin rows are deliberately unreachable here: they are
-/// keyed on a manifest's execution kind, not on a tool name, and the
+/// The generic plugin rows are keyed on a manifest's execution kind and
+/// consented agent access, not on a tool name, and the
 /// chokepoint selects them with [`governed_plugin_tool`].
 pub fn governed_tool(tool_name: &str) -> Option<&'static GovernedOperation> {
     GOVERNED_OPERATIONS

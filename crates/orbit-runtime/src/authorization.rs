@@ -98,6 +98,7 @@ impl RuntimeKernel {
         let operation = match self.tool_registry().plugin_binding(tool_name) {
             Some(binding) => governed_plugin_tool(
                 binding.execution_kind == orbit_types::plugin::PluginExecutionKind::Mutating,
+                binding.agent_callable,
             ),
             None => match governed_tool(tool_name) {
                 Some(operation) => operation,

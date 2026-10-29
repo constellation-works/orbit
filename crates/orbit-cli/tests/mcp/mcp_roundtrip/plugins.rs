@@ -3,6 +3,10 @@
 use super::*;
 
 #[cfg(unix)]
+#[path = "plugins_agent_callable.rs"]
+mod agent_callable;
+
+#[cfg(unix)]
 use std::os::unix::net::UnixListener;
 
 /// Write a plugin outside the workspace checkout — installs are global, and a

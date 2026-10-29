@@ -146,6 +146,7 @@ fn caller_credentials_require_a_plugin_env_pass_request_and_grant_for_both_trans
                 binding: Arc::new(PluginToolBinding {
                     provenance: spec.provenance.clone(),
                     execution_kind: PluginExecutionKind::ReadOnly,
+                    agent_callable: false,
                     diagnostic: None,
                 }),
                 backend,
