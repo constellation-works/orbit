@@ -851,4 +851,6 @@ fi
 # Live mount-namespace compile lives in the sibling script and is invoked as
 # a separate CI process after this unit process exits.
 
+python3 "$ROOT/scripts/test-bench-compiler-cache.py"
+
 printf 'test-compiler-cache: ok\n'
