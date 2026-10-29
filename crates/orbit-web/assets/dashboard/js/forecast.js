@@ -85,15 +85,20 @@ const WAITS = [
 ];
 // The schedule table lists this many tasks in dispatch order.
 const SCHEDULE_ROWS = 50;
+// Stored forecasts are newest first. Keep calibration history to one bounded
+// page so its column headings stay close to the rows being inspected.
+const CALIBRATION_HISTORY_PAGE_SIZE = 10;
 
 const view = { history: "default", arrivals: "off" };
 let lastPayload = null;
 let requestScope = null;
 let liveRefresh = null;
+let calibrationHistoryPage = 0;
 
 function clearForecast() {
   lastPayload = null;
   liveRefresh = null;
+  calibrationHistoryPage = 0;
   const count = $(COUNT);
   if (count) count.textContent = "—";
 }
@@ -174,7 +179,7 @@ export function renderForecast() {
   const nodes = [forecastCard(), waitsCard(), scheduleCard(), byComplexityCard(), coverageCard(), calibrationCard()];
   const root = el("div", { class: "fc-view" }, nodes);
   root.dataset.key = "forecast-view";
-  root.dataset.hash = JSON.stringify([view, lastPayload]);
+  root.dataset.hash = JSON.stringify([view, lastPayload, calibrationHistoryPage]);
   syncNodes(body, [root]);
 }
 
@@ -731,7 +736,11 @@ function calibrationCard() {
     el("td", { class: "num", text: versionHits(row.task_level?.hours) }),
     el("td", { class: "num", text: versionHits(row.forecast_level?.time_to_drain_hours) }),
   ])), "Earlier models, under p50 · under p90 (scored).") : null;
-  const rows = forecasts.map((row) => el("tr", {}, [
+  const pageCount = Math.ceil(forecasts.length / CALIBRATION_HISTORY_PAGE_SIZE);
+  calibrationHistoryPage = Math.min(calibrationHistoryPage, pageCount - 1);
+  const firstRow = calibrationHistoryPage * CALIBRATION_HISTORY_PAGE_SIZE;
+  const lastRow = Math.min(firstRow + CALIBRATION_HISTORY_PAGE_SIZE, forecasts.length);
+  const rows = forecasts.slice(firstRow, lastRow).map((row) => el("tr", {}, [
     el("th", { scope: "row", text: formatDateTime(row.forecast_at) }),
     el("td", { class: "num", text: row.model_version != null ? `v${row.model_version}` : "—" }),
     el("td", { class: "num", text: `${row.done}/${row.tasks}` }),
@@ -742,12 +751,30 @@ function calibrationCard() {
     el("td", { class: "fc-state", text: row.scored_whole ? "scored" : row.settled ? "settled, not scored" : `${row.pending} pending` }),
   ]));
   const excluded = calibration.excluded || {};
-  const history = table("Stored forecasts", [["Recorded"], ["Model", true], ["Done", true], ["Left out"], ["Drain p50 – p90 → actual", true], ["Cost", true], ["Tokens", true], ["State"]], rows);
+  const history = table("Stored forecasts", [["Recorded"], ["Model", true], ["Done", true], ["Left out"], ["Drain p50 – p90 → actual", true], ["Cost", true], ["Tokens", true], ["State"]], rows, "Stored forecasts, newest first");
+  history.classList.add("fc-history-table-wrap");
+  const newer = el("button", { class: "mx-seg-btn", type: "button", text: "Newer forecasts" });
+  newer.disabled = calibrationHistoryPage === 0;
+  newer.addEventListener("click", () => {
+    calibrationHistoryPage = Math.max(0, calibrationHistoryPage - 1);
+    renderForecast();
+  });
+  const olderButton = el("button", { class: "mx-seg-btn", type: "button", text: "Older forecasts" });
+  olderButton.disabled = calibrationHistoryPage >= pageCount - 1;
+  olderButton.addEventListener("click", () => {
+    calibrationHistoryPage = Math.min(pageCount - 1, calibrationHistoryPage + 1);
+    renderForecast();
+  });
+  const pagination = pageCount > 1 ? el("nav", { class: "fc-history-pagination", "aria-label": "Stored forecast history pages" }, [
+    el("span", { class: "fc-history-page-status", role: "status", "aria-live": "polite", text: `Showing ${firstRow + 1}–${lastRow} of ${forecasts.length} stored forecasts · Page ${calibrationHistoryPage + 1} of ${pageCount} · newest first` }),
+    el("div", { class: "mx-seg", role: "group", "aria-label": "Stored forecast history" }, [newer, olderButton]),
+  ]) : null;
   return card("Calibration", meta, [
     blurb,
     summary,
     byVersion,
     el("p", { class: "mx-blurb", text: `Left out across stored forecasts: ${excludedText(excluded)}.` }),
     history,
+    pagination,
   ]);
 }
