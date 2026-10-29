@@ -842,11 +842,12 @@ main.tasks-layout.task-pane-open > .tasks-dock > #side-dock { display: none; }
   .tasks-dock > #side-dock { display: none; }
 }
 .tasks-dock #side-dock { flex: 1 1 auto; gap: 12px; }
-/* The dock starts level with the first task block, and the list and dock end
-   together: log-tail.js sets `--tasks-dock-lead` to the room above the dock,
-   which the message area fills (with a 12px gap above the tabs). Its height is
-   that room, never its content, so a notice moves neither the dock nor the
-   list; more notices than fit scroll inside it. */
+/* The active tab's first card starts level with the first task block, and
+   the list and dock end together: log-tail.js sets `--tasks-dock-lead` to the
+   room above the dock, which the message area fills (with a 12px gap above the
+   tabs, which sit above that line). Its height is that room, never its
+   content, so a notice moves neither the dock nor the list; more notices than
+   fit scroll inside it. */
 .tasks-dock { --tasks-dock-lead: 0px; }
 .tasks-messages {
   box-sizing: border-box;

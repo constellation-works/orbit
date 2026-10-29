@@ -331,10 +331,13 @@ It stays beside the task list, gives way to an open task, and is hidden below
 1000px so the list keeps its width. Drain contains the Auto-drain status card
 and a simple **Start a window** card. Locks held has By file (default) and
 By task views, remembered for Tasks, and a task-ID filter. Log is the live,
-filterable tail; its tab names the worst level present. The dock, tabs
-included, starts level with the first task block and ends with the list, so
-the two share top and bottom edges (`alignTasksDock` in `log-tail.js` measures
-the list's top and sets `--tasks-dock-lead` on `#tasks-dock`). The status
+filterable tail; its tab names the worst level present. The active tab's
+first card (Auto-drain on Drain, Locks held, or the log) starts level with the
+first task block, with the tab bar above that line, and the dock ends with the
+list, so cards and list share top and bottom edges. `alignTasksDock` in
+`log-tail.js` measures the list's top and the card's depth inside the dock,
+sets `--tasks-dock-lead` on `#tasks-dock`, and re-levels on a tab switch or
+when the tab bar or anything above the list resizes. The status
 chips sit 12px above the first block. The room above the dock is the **Tasks
 message area** (`#tasks-messages`), as tall as that room whatever it holds, so
 passing notices move neither the list nor the dock: task-ID lookup feedback,
