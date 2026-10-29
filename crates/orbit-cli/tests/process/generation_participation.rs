@@ -6,6 +6,9 @@
 //! checkout it inspected, and the dashboard did the same for every
 //! `/api/routines` computation, so routine status took tens of seconds. The
 //! count is read from the registration's own debug event.
+//!
+//! Host-scoped reads also work without a cwd binding when joining a live
+//! generation with a different executable digest.
 
 #![allow(missing_docs)]
 // Integration fixtures use expect/unwrap for concise failure diagnostics.
@@ -125,6 +128,87 @@ fn routine_list_registers_once_across_every_registered_checkout() {
         registrations(&stderr),
         1,
         "one registration for the command, none per opened checkout: {stderr}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn workspace_list_from_unregistered_cwd_joins_foreign_generation_without_writes() {
+    if crate::isolated_test::run_in_child(
+        "generation_participation::workspace_list_from_unregistered_cwd_joins_foreign_generation_without_writes",
+    ) {
+        return;
+    }
+
+    use orbit_common::fs::generation::{Access, GenerationGuard, Participant, ParticipantRole};
+
+    let host = Host::new();
+    // Registration alone does not initialize the runtime's databases. A live
+    // dashboard would already have opened them before a foreign reader joins.
+    host.orbit(&host.temp.path().join("alpha"), &["task", "list", "--json"]);
+    let cwd = host.temp.path().join("unregistered");
+    fs::create_dir(&cwd).expect("unregistered cwd");
+    let root = host.home.join(".orbit");
+    let identity = orbit_core::composition::compiled_compatibility();
+    let digest = "a".repeat(64);
+    let _record = GenerationGuard::acquire(&root, &digest).expect("record foreign digest");
+    let _generation = GenerationGuard::join(
+        &root,
+        &Participant {
+            digest: &digest,
+            identity: &identity,
+            role: ParticipantRole::Dashboard,
+            access: Access::Write,
+            handover: None,
+            in_activity: false,
+        },
+        Duration::ZERO,
+        || Ok(identity.store_schema.version),
+    )
+    .expect("hold live compatible foreign generation");
+    let generation_before = fs::read(root.join(".generation.lock")).expect("generation record");
+    let partitions = || {
+        let mut entries = fs::read_dir(root.join("tasks/workspaces"))
+            .expect("task partitions")
+            .map(|entry| entry.expect("partition entry").file_name())
+            .collect::<Vec<_>>();
+        entries.sort();
+        entries
+    };
+    let partitions_before = partitions();
+
+    let output = host
+        .command(&cwd)
+        .args(["workspace", "list", "--json"])
+        .output()
+        .expect("run orbit workspace list");
+    assert!(
+        output.status.success(),
+        "workspace list must read the host registry without a cwd binding: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let workspaces: Value = serde_json::from_slice(&output.stdout).expect("workspace list JSON");
+    let mut names = workspaces
+        .as_array()
+        .expect("workspace array")
+        .iter()
+        .map(|workspace| workspace["name"].as_str().expect("workspace name"))
+        .collect::<Vec<_>>();
+    names.sort();
+    assert_eq!(names, ["alpha", "beta", "gamma"]);
+    assert!(
+        !cwd.join(".orbit").exists(),
+        "listing must not bind the cwd"
+    );
+    assert_eq!(
+        partitions(),
+        partitions_before,
+        "listing must not mint a partition"
+    );
+    assert_eq!(
+        fs::read(root.join(".generation.lock")).expect("generation record after listing"),
+        generation_before,
+        "listing must retain the live foreign generation"
     );
 }
 
