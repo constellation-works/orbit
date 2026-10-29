@@ -137,6 +137,7 @@ pub(crate) use pilot::{
     operator_validation_requirements, pilot_blocker_task_ids, warning_hold_findings,
 };
 pub(crate) use post_deploy::owed_criteria_json;
+pub use post_deploy::{PostDeployOperatorRecord, PostDeployRecordRefusal};
 pub use provider_limit::{
     CrewProviderLimit, CrewUsagePressure, PressureWindow, ProviderLimitReading,
     ProviderLimitThreshold, ProviderLimitsView, ProviderUsageStatus, UngatedLaneLimit,

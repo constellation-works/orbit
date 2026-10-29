@@ -14,7 +14,10 @@ use orbit_common::governance::authorization::{
     DASHBOARD_TASK_PILOT_ADMISSION, DASHBOARD_TASK_POST_DEPLOY,
 };
 use orbit_core::OrbitRuntime;
-use orbit_core::application::task::TaskUpdateParams;
+use orbit_core::application::task::{
+    PostDeployOperatorRecord, PostDeployRecordRefusal, TaskUpdateParams,
+};
+use orbit_types::workflow::PostDeployOutcome;
 use serde_json::json;
 use std::sync::Arc;
 
@@ -129,7 +132,8 @@ pub(in crate::api) async fn pilot_admission_task_action(
     }
 }
 
-/// Shared implementation for the two post-deploy route shapes.
+/// Shared implementation for the two post-deploy route shapes: core
+/// normalizes the record and checks the owed criterion.
 async fn record_post_deploy_met(
     state: DashboardState,
     runtime: Arc<OrbitRuntime>,
@@ -140,45 +144,32 @@ async fn record_post_deploy_met(
     if let Err(denial) = authorized_caller(&DASHBOARD_TASK_POST_DEPLOY, state.operator_session()) {
         return authorization_denied(denial);
     }
-    // Index 0 names no criterion, so it is refused as not owed (409) below,
-    // not as a malformed request.
-    let Some(criterion) = criterion else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({
-                "error": "post-deploy record needs a 1-based criterion index",
-                "code": "post_deploy_criterion_required"
-            })),
-        )
-            .into_response();
-    };
-    let Some(evidence) = evidence.as_deref().and_then(non_empty_string) else {
-        return evidence_required(
-            "post_deploy_evidence_required",
-            "post-deploy record needs evidence; it is recorded with the measurement",
-        );
-    };
-    let comment = format!("post-deploy: met {criterion}\n{evidence}");
-    let task_id = id;
-    let result = tokio::task::spawn_blocking(move || {
-        let history = runtime.get_task_history(&task_id)?;
-        let owes = orbit_types::workflow::PostDeployRecord::read(&history).is_some_and(|record| {
-            record
-                .owed
-                .criteria
-                .iter()
-                .any(|owed| owed.criterion == criterion)
-        });
-        if !owes {
-            return Err(orbit_core::OrbitError::InvalidInput(format!(
-                "task {task_id} owes no criterion {criterion} after deploy"
-            )));
+    let record = match PostDeployOperatorRecord::from_operator_input(
+        criterion,
+        PostDeployOutcome::Met,
+        evidence.as_deref(),
+    ) {
+        Ok(record) => record,
+        Err(PostDeployRecordRefusal::CriterionRequired) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "error": "post-deploy record needs a 1-based criterion index",
+                    "code": "post_deploy_criterion_required"
+                })),
+            )
+                .into_response();
         }
-        let params = TaskUpdateParams {
-            comment: Some(comment),
-            ..TaskUpdateParams::default()
-        };
-        runtime.update_task_as_human(&task_id, params, DASHBOARD_ACTOR.to_string())
+        Err(PostDeployRecordRefusal::EvidenceRequired) => {
+            return evidence_required(
+                "post_deploy_evidence_required",
+                "post-deploy record needs evidence; it is recorded with the measurement",
+            );
+        }
+    };
+    let criterion = record.criterion();
+    let result = tokio::task::spawn_blocking(move || {
+        runtime.record_post_deploy_as_human(&id, &record, DASHBOARD_ACTOR.to_string())
     })
     .await;
     match result {
