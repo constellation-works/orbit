@@ -135,6 +135,36 @@ class EvalTests(unittest.TestCase):
                 self.assertEqual(report["totals"]["abstained"], 1)
                 self.assertEqual(report["totals"]["coverage"], 0.5)
 
+    def test_failure_category_abstention_tolerates_missing_expected_label(self):
+        ds = self._load(self.ds)
+        case = next(c for c in ds["cases"] if c["case_id"] == "seed-fail-provider")
+        case["expected"].pop("failure_category")
+        malformed = self._dump("missing-failure-category-ds.json", ds)
+        control = self._score(self.ds, self.ans)
+
+        rejected_answers = {
+            "refused": {"disposition": "refused", "answers": {}},
+            "unavailable": {"disposition": "unavailable", "answers": {}},
+            "uncertain": {"disposition": "uncertain", "answers": {"failure_category": {"value": "provider"}}},
+            "stale": {"disposition": "stale", "answers": {"failure_category": {"value": "provider"}}},
+            "invalid": {"disposition": "invalid", "answers": {"failure_category": {"value": "not-a-category"}}},
+            "absent": None,
+        }
+        for name, rejected in rejected_answers.items():
+            with self.subTest(answer=name):
+                ans = self._load(self.ans)
+                ans["answers"] = [a for a in ans["answers"] if a["case_id"] != "seed-fail-provider"]
+                if rejected is not None:
+                    ans["answers"].append({"case_id": "seed-fail-provider", **rejected})
+                report = self._score(malformed, self._dump(f"missing-failure-category-{name}-ans.json", ans))
+
+                self.assertTrue(any("seed-fail-provider" in error for error in report["validation_errors"]),
+                                report["validation_errors"])
+                self.assertEqual(set(report["questions"]), set(control["questions"]))
+                self.assertEqual(report["totals"]["cases"], control["totals"]["cases"])
+                self.assertEqual(report["totals"]["answered"], control["totals"]["answered"] - 1)
+                self.assertEqual(report["totals"]["abstained"], control["totals"]["abstained"] + 1)
+
     def test_task_quality_abstentions_count_true_predicates_as_false_negatives(self):
         seed_ds = self._load(self.ds)
         seed_ans = self._load(self.ans)
