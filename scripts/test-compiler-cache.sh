@@ -827,6 +827,48 @@ assert_ns_diagnostics client-side-shared-tcp 37 0 0
 assert_ns_diagnostics client-side-shared-tcp 0 41 0
 assert_ns_diagnostics client-side-shared-tcp 37 41 0
 
+# Python 3.10 on the applicable path: the supervisor's process_group needs 3.11,
+# so the entrypoint must refuse before any participant starts and before WORKDIR
+# exists. The shim answers only the version probe as 3.10.0 and runs everything
+# else with the real python3. The stub bwrap accepts the /bin/true probe and
+# writes no events there, so an event or a TMPDIR entry means the refusal came late.
+ns_refuse_bin="$TMP/ns-refuse-bin"
+ns_refuse_scratch="$ns_fixture_root/ns-refuse-scratch"
+ns_refuse_events="$ns_fixture_root/ns-refuse-events"
+mkdir -p "$ns_refuse_bin" "$ns_refuse_scratch"
+cat > "$ns_refuse_bin/python3" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+  *sys.version_info*) printf '3.10.0\n' ;;
+  *) exec "$NS_REAL_PYTHON" "$@" ;;
+esac
+EOF
+chmod +x "$ns_refuse_bin/python3"
+set +e
+env -i HOME="$ns_home" PATH="$ns_refuse_bin:$ns_diagnostic_bin:/usr/bin:/bin" \
+  TMPDIR="$ns_refuse_scratch" NS_REAL_PYTHON="$NS_REAL_PYTHON" \
+  NS_REAL_CARGO="$NS_REAL_CARGO" NS_REAL_HOME="$NS_REAL_HOME" \
+  ORBIT_COMPILER_CACHE_BIN="$ns_sccache" ORBIT_COMPILER_CACHE_REQUIRE_NS=1 \
+  NS_DIAGNOSTIC_EVENTS="$ns_refuse_events" \
+  "$ROOT/scripts/test-compiler-cache-namespaces.sh" \
+  >"$ns_fixture_root/refuse.out" 2>"$ns_fixture_root/refuse.err"
+ns_refuse_status=$?
+set -e
+[[ "$ns_refuse_status" -eq 1 ]] || fail "Python 3.10 must refuse the applicable namespace path, got exit $ns_refuse_status"
+grep -Fq "Python >= 3.11 is required" "$ns_fixture_root/refuse.err" \
+  || fail "Python 3.10 refusal should name the required version, got: $(tr '\n' ' ' <"$ns_fixture_root/refuse.err")"
+grep -Fq "found python3 3.10.0 at $ns_refuse_bin/python3" "$ns_fixture_root/refuse.err" \
+  || fail "Python 3.10 refusal should name the interpreter, got: $(tr '\n' ' ' <"$ns_fixture_root/refuse.err")"
+[[ ! -e "$ns_refuse_events" ]] || fail "a namespace participant started before the Python refusal"
+[[ -z "$(ls -A "$ns_refuse_scratch")" ]] || fail "namespace WORKDIR was created before the Python refusal"
+
+# Python 3.10 must not add a requirement to the not-applicable path: with
+# namespaces refused, the probe still skips (exit 0) before any interpreter check.
+rm -f "$NS_BWRAP_LOG"
+run_live_ns "$ns_home" "$ns_refuse_bin:$ns_bwrap_dir:/usr/bin:/bin" "$ns_out" "$ns_err" \
+  ORBIT_COMPILER_CACHE_BIN="$ns_sccache"
+assert_ns_skip "namespaces refused with Python 3.10"
+
 # Model immediate PID/PGID reuse after reaping, without creating/signaling any
 # process. Execute both embedded owners, including the independent watchdog.
 # Failed anchor forks and preexec startup also exercise cleanup while the
