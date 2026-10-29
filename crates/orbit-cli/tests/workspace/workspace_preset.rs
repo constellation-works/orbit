@@ -685,3 +685,78 @@ fn preset_repairs_plugin_config_and_enables_routine_in_one_application() {
         "provenance must name the applied preset:\n{provenance}"
     );
 }
+
+fn workspace_config_has_crew_env(work: &Path) -> bool {
+    let text = fs::read_to_string(work.join(".orbit/config.toml")).expect("workspace config.toml");
+    let document: toml::Value = toml::from_str(&text).expect("workspace config.toml parses");
+    document
+        .get("crews")
+        .and_then(toml::Value::as_table)
+        .is_some_and(|crews| crews.values().any(|crew| crew.get("env").is_some()))
+}
+
+/// A global `[crews.<name>] env` is admitted only in the global file. Seeding a
+/// new workspace config from global used to copy it, and the workspace loader
+/// then refused the file it had just written, so every config-writing preset
+/// failed on such a host.
+#[test]
+fn preset_and_seed_from_global_succeed_when_the_global_config_sets_a_crew_env() {
+    let machine = Machine::new();
+    let setup = machine.repo("crew-env-setup");
+    let set_env = machine.run(
+        &setup,
+        &[
+            "config",
+            "set",
+            "--global",
+            "crews.opus.env",
+            "[\"ANTHROPIC_API_KEY=PROBE_CREDITS_KEY\"]",
+        ],
+    );
+    assert!(set_env.status.success(), "{}", output_text(&set_env));
+
+    let preset = machine.repos.join("seeding-only.toml");
+    fs::write(
+        &preset,
+        "name = \"seeding-only\"\n\n[seeding]\nroutines = \"none\"\nauto_tasks = \"none\"\n",
+    )
+    .expect("write preset");
+    let work = machine.repo("crew-env-preset");
+    let init = machine.run(
+        &work,
+        &[
+            "workspace",
+            "init",
+            "--preset",
+            preset.to_str().expect("utf-8 path"),
+        ],
+    );
+    assert!(init.status.success(), "{}", output_text(&init));
+    assert!(
+        !workspace_config_has_crew_env(&work),
+        "a seeded workspace config must not carry a global-only crew env"
+    );
+
+    let seeded = machine.repo("crew-env-seed");
+    let register = machine.run(&seeded, &["workspace", "init"]);
+    assert!(register.status.success(), "{}", output_text(&register));
+    let config = seeded.join(".orbit/config.toml");
+    if config.exists() {
+        fs::remove_file(&config).expect("start from a missing workspace config");
+    }
+    let set = machine.run(
+        &seeded,
+        &[
+            "config",
+            "set",
+            "--seed-from-global",
+            "review.minutes",
+            "33",
+        ],
+    );
+    assert!(set.status.success(), "{}", output_text(&set));
+    assert!(
+        !workspace_config_has_crew_env(&seeded),
+        "--seed-from-global must not copy a global-only crew env"
+    );
+}
