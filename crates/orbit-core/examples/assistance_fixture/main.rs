@@ -536,6 +536,59 @@ fn fixture_credential_refusal_releases_reservation(root: &Path, schema: &Value) 
     Ok(())
 }
 
+fn fixture_settings_read_failure_releases_reservation(
+    root: &Path,
+    schema: &Value,
+) -> FixtureResult {
+    let f = AssistanceFixture::open_fixture(root, schema, "task_quality")?;
+    let id = f.enqueue(f.request("settings-read-failure")?)?;
+    let before = f.store.assistance_accounting("synthetic-only/1")?;
+    let credential_reads = f.credential.0.load(Ordering::SeqCst);
+    // Processing reads settings before claiming, then rechecks with the claim
+    // held. Fail only that second read; the loader recovers on the next read.
+    f.settings_reads_until_failure.store(2, Ordering::SeqCst);
+    assert!(matches!(
+        f.service.process_next_assistance("ws_fixture", "task_quality"),
+        Err(OrbitError::InvalidInput(message)) if message == "fixture settings read failure"
+    ));
+    let record = f.record(&id)?;
+    assert_eq!(record.attempts.len(), 1, "settings failed before the claim");
+    assert_eq!(f.credential.0.load(Ordering::SeqCst), credential_reads);
+    assert!(
+        f.transport
+            .bodies
+            .lock()
+            .map_err(|_| "body lock")?
+            .is_empty()
+    );
+
+    // Maintenance used to expire the abandoned claim as outcome-unknown and
+    // keep both reservations. Advance the fixture clock without a wall wait.
+    f.advance(i64::from(record.work.limits.timeout_seconds) + 1)?;
+    f.store.assistance_maintain(f.now()?)?;
+    let after = f.store.assistance_accounting("synthetic-only/1")?;
+    assert_eq!(
+        after.outcome_unknown_attempts, before.outcome_unknown_attempts,
+        "settings read failure became unknown; tokens={}, charge={}",
+        after.reserved_tokens, after.reserved_charge_microusd
+    );
+    assert_eq!(after.reserved_tokens, before.reserved_tokens);
+    assert_eq!(
+        after.reserved_charge_microusd,
+        before.reserved_charge_microusd
+    );
+    assert_eq!(after.attempts, before.attempts);
+    let attempt = &record.attempts[0];
+    assert!(!attempt.outcome_unknown);
+    assert_eq!(attempt.reserved_tokens, 0);
+    assert_eq!(attempt.reserved_charge_microusd, 0);
+    assert_eq!(
+        record.result.ok_or("missing settings refusal")?.reason,
+        AssistanceReason::ConfigurationChanged
+    );
+    Ok(())
+}
+
 fn fixture_deadline_before_send_is_not_unknown(root: &Path, schema: &Value) -> FixtureResult {
     // A deadline reached before send is a local refusal, not an outcome-unknown
     // attempt. The clock passes the claim deadline between claim and deadline check.
@@ -1047,6 +1100,7 @@ fn main() -> FixtureResult {
         fixture_send_failure_reconciliation(&root.join("send-failure"), &schema)?;
         fixture_http_status_retry(&root.join("http-status"), &schema)?;
         fixture_credential_refusal_releases_reservation(&root.join("credential"), &schema)?;
+        fixture_settings_read_failure_releases_reservation(&root.join("settings-read"), &schema)?;
         fixture_deadline_before_send_is_not_unknown(&root.join("deadline"), &schema)?;
         fixture_restart_retry(&root.join("restart"), &schema)?;
         fixture_validation(&root.join("validation"), &schema)?;

@@ -188,7 +188,19 @@ impl AssistanceService {
         };
         // A claim may have waited for a store lock. Recheck off/configuration
         // and deadline at the final local boundary before outbound I/O.
-        let before = (self.settings)()?;
+        let before = match (self.settings)() {
+            Ok(settings) => settings,
+            Err(error) => {
+                // Nothing reached outbound I/O. Settle now so maintenance
+                // cannot turn this local read failure into an unknown charge.
+                self.store.assistance_finish_unattempted(
+                    &claim,
+                    AssistanceResult::assistance_gap(AssistanceReason::ConfigurationChanged),
+                    (self.clock)(),
+                )?;
+                return Err(error);
+            }
+        };
         let before_matches = before
             .assistance_policy(workspace, use_case)
             .is_some_and(|p| {

@@ -103,6 +103,7 @@ impl DecisionsTransport for FixtureTransport {
 pub(super) struct AssistanceFixture {
     pub(super) store: Arc<Store>,
     pub(super) settings: Arc<Mutex<AssistanceSettings>>,
+    pub(super) settings_reads_until_failure: Arc<AtomicUsize>,
     pub(super) clock: Arc<Mutex<DateTime<Utc>>>,
     pub(super) credential: Arc<FixtureCredential>,
     pub(super) transport: Arc<FixtureTransport>,
@@ -181,6 +182,8 @@ impl AssistanceFixture {
             on_send: Mutex::new(None),
         });
         let loader = settings.clone();
+        let settings_reads_until_failure = Arc::new(AtomicUsize::new(0));
+        let fail_read = settings_reads_until_failure.clone();
         let time = clock.clone();
         let service = AssistanceService::new(
             store.clone(),
@@ -189,6 +192,13 @@ impl AssistanceFixture {
                 transport.clone(),
             )),
             Arc::new(move || {
+                if fail_read.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                    == Ok(1)
+                {
+                    return Err(orbit_common::OrbitError::InvalidInput(
+                        "fixture settings read failure".into(),
+                    ));
+                }
                 loader.lock().map(|s| s.clone()).map_err(|_| {
                     orbit_common::OrbitError::InvalidInput("fixture settings lock".into())
                 })
@@ -200,6 +210,7 @@ impl AssistanceFixture {
         Ok(Self {
             store,
             settings,
+            settings_reads_until_failure,
             clock,
             credential,
             transport,

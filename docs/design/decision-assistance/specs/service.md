@@ -145,6 +145,10 @@ A claim refused before any outbound request is entered releases its reservation
 and records no outcome-unknown attempt; that is not a refund, because nothing was
 requested. Connect and client-build failures entered the transport and keep the
 reservation. This is conservative reservation accounting, not a vendor billing receipt.
+If the settings recheck fails after claiming but before outbound I/O, the service
+settles the claim as an unattempted configuration-change gap, releases its
+reservation and returns the settings error. Later maintenance cannot charge it
+as an expired outcome-unknown claim.
 
 ## Direct Decisions adapter and data boundary
 
@@ -197,7 +201,8 @@ answer translation, missing/extra/invalid/refused answers, probability bounds,
 choice abstention and choice confidence/distribution consistency,
 unavailable budgets/pricing, overflow/queue expiry, completed results
 outliving queue age until retention or real supersession,
-restart/claim/retry identities, retained outcome-unknown charges, pre-send refusal releases, retention,
+restart/claim/retry identities, retained outcome-unknown charges, pre-send refusal
+releases (including a settings-loader failure after claiming), retention,
 shadow/advisory changes, disabled/superseded/late results, lock release before
 I/O, workspace config refusal, child credential exclusion and v71/v72 writer
 compatibility. The existing store schema-prefix and compatibility fixtures
