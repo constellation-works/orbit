@@ -121,6 +121,7 @@ fn create_task_with_crew(
             orchestrator: None,
             orchestrator_model: None,
             orchestrator_model_source: None,
+            created_by_model: None,
             origin: None,
             comments: Vec::new(),
             context_creation: Vec::new(),

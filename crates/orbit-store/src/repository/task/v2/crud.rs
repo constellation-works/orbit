@@ -218,6 +218,7 @@ impl TaskV2Store {
                 context_files: params.context_files,
                 external_refs: params.external_refs,
                 created_by: params.created_by,
+                created_by_model: params.created_by_model,
                 planned_by: params.planned_by,
                 implemented_by: params.implemented_by,
                 created_at: now,

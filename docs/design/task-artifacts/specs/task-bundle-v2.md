@@ -105,6 +105,7 @@ tags: []
 context_files: []
 external_refs: []
 created_by: codex:gpt-5.5
+created_by_model: gpt-5.5   # only when the create named a full model
 planned_by: null
 implemented_by: null
 created_at: 2026-05-11T00:00:00Z
@@ -113,7 +114,7 @@ updated_at: 2026-05-11T00:00:00Z
 
 The envelope must not contain `description`, `acceptance_criteria`, `plan`, `execution_summary`, `history`, `comments`, or `review_threads`.
 The envelope must not contain local-only `workspace_path` or `repo_root`; those live in the local registry workspace binding.
-The envelope must not contain the old `batch_id` name or internal execution-routing fields such as `agent` and `model`; job-run membership is stored as `job_run_id`, while durable task attribution uses `created_by`, `planned_by`, `implemented_by`, and the explicit `orchestrator` named-crew alias. `crew` is execution selection only; `orchestrator` is read-only orchestration attribution, never a model/provider selector. It is mutable only in `proposed` and `backlog`, and a missing field in a schema-v1 bundle reads as `null`. `orchestrator_model` is the orchestrator's model, written once when the task is created with an orchestrator and never updated: an explicit `orchestrator_model` create input (`orchestrator_model_source: explicit`), else that crew's configured model at creation (`crew_config`). Both are absent on a task created without an orchestrator and read as `null` on older bundles; nothing backfills them. A legacy writer can omit this additive field, so schema-v1 compatibility guarantees readability rather than preservation across legacy writes.
+The envelope must not contain the old `batch_id` name or internal execution-routing fields such as `agent` and `model`; job-run membership is stored as `job_run_id`, while durable task attribution uses `created_by`, `planned_by`, `implemented_by`, and the explicit `orchestrator` named-crew alias. `crew` is execution selection only; `orchestrator` is read-only orchestration attribution, never a model/provider selector. It is mutable only in `proposed` and `backlog`, and a missing field in a schema-v1 bundle reads as `null`. `orchestrator_model` is the orchestrator's model, written once when the task is created with an orchestrator and never updated: an explicit `orchestrator_model` create input (`orchestrator_model_source: explicit`), else that crew's configured model at creation (`crew_config`). Both are absent on a task created without an orchestrator and read as `null` on older bundles; nothing backfills them. `created_by_model` is likewise write-once: the creator's full model id when the `orbit.task.add` `model` input names one rather than a bare family (`created_by` still records the family), absent otherwise and on older bundles, never updated or backfilled. A legacy writer can omit this additive field, so schema-v1 compatibility guarantees readability rather than preservation across legacy writes.
 Task-only relation types must target valid task IDs matching the configured-prefix grammar (including non-ORB task IDs, such as `DANI-00001` or `SHR-00001`). `produces` and `resolves` may target task IDs or friction (`FYYYY-MM-NNN`) and ADR (`ADR-NNNN+`) IDs. `covered_by` targets a task ID or GitHub PR external key.
 
 ## Documents

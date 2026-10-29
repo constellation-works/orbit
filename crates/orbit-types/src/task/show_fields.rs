@@ -25,7 +25,7 @@ use crate::task::{
 #[macro_export]
 macro_rules! task_show_projection_fields_csv {
     () => {
-        "id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, granted_tools, requires_labels, not_before, started_at, scheduled_hold, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, os_requirement, placement_wait, experiments, readiness, pilot_warnings, open_decisions, orchestrator, orchestrator_model, orchestrator_model_source, origin, created_at, updated_at, comments, history, artifacts"
+        "id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, granted_tools, requires_labels, not_before, started_at, scheduled_hold, plan, execution_summary, context_files, created_by, created_by_model, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, os_requirement, placement_wait, experiments, readiness, pilot_warnings, open_decisions, orchestrator, orchestrator_model, orchestrator_model_source, origin, created_at, updated_at, comments, history, artifacts"
     };
 }
 
@@ -49,6 +49,7 @@ pub const TASK_SHOW_PROJECTION_FIELDS: &[&str] = &[
     "execution_summary",
     "context_files",
     "created_by",
+    "created_by_model",
     "planned_by",
     "implemented_by",
     "status",
@@ -103,6 +104,7 @@ pub const TASK_SHOW_PUBLIC_DTO_FIELDS: &[&str] = &[
     "execution_summary",
     "context_files",
     "created_by",
+    "created_by_model",
     "planned_by",
     "implemented_by",
     "status",
@@ -194,6 +196,7 @@ pub fn task_show_record_field_json(task: &Task, field: &str) -> Option<Value> {
         "execution_summary" => Some(json!(task.execution_summary)),
         "context_files" => Some(json!(task.context_files)),
         "created_by" => Some(json!(task.created_by)),
+        "created_by_model" => Some(json!(task.created_by_model)),
         "planned_by" => Some(json!(task.planned_by)),
         "implemented_by" => Some(json!(task.implemented_by)),
         "type" => Some(json!(task.task_type.to_string())),

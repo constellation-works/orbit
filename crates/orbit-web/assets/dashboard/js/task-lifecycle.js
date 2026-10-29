@@ -155,28 +155,135 @@ export function buildStageStrip(task) {
   }
   return list;
 }
-// The verb each recorded hand did, in the order the task met them.
+// The verb each recorded hand did. The stored fields keep today's order:
+// created, planned, implemented, then the orchestrator, who oversees it all.
 const TASK_HAND_VERBS = {
   created_by: "created",
   planned_by: "planned",
   implemented_by: "implemented",
   orchestrator: "orchestrated",
 };
-const AGENT_FAMILIES = ["claude", "codex", "gemini", "grok"];
+const AGENT_FAMILIES = ["claude", "codex", "gemini", "grok", "muse"];
+// What a derived recovered hand's record was, and a review's verdict, as the
+// hand's tooltip names them.
+const RECOVERY_VIA = {
+  final_recovery: "final recovery",
+  blocked_task_triage: "blocked-task triage",
+  claim_recovery: "claim recovery",
+  operator_requeue: "operator requeue",
+};
+const REVIEW_VERDICTS = {
+  accept: "accept",
+  accept_with_fixes: "accept with fixes",
+  reject: "reject",
+  incomplete: "incomplete",
+};
+
+const present = (value) => value != null && value !== "";
+
+// The stored hands, each at the time it is known by: the creator and a
+// planner at creation, the implementer at the task's first start. The
+// creator merges with the orchestrator when they are one actor: the same
+// model, since no creator crew is recorded.
+function storedHands(task) {
+  const created = Date.parse(task.created_at);
+  const hands = [];
+  const people = Object.fromEntries(TASK_PEOPLE_FIELDS);
+  const merged = present(task.created_by_model) && present(task.orchestrator)
+    && task.created_by_model === task.orchestrator_model;
+  if (present(task.created_by)) {
+    hands.push(merged
+      ? { verbs: [TASK_HAND_VERBS.created_by, TASK_HAND_VERBS.orchestrator], name: String(task.orchestrator), model: task.created_by_model, family: task.created_by, at: created,
+          title: `Created and orchestrated by ${task.orchestrator} (${task.created_by_model})` }
+      : { verbs: [TASK_HAND_VERBS.created_by], name: String(task.created_by_model || task.created_by), model: task.created_by_model, family: task.created_by, at: created,
+          title: `${people.created_by} ${task.created_by_model || task.created_by}` });
+  }
+  if (present(task.planned_by)) {
+    hands.push({ verbs: [TASK_HAND_VERBS.planned_by], name: String(task.planned_by), at: created, title: `${people.planned_by} ${task.planned_by}` });
+  }
+  if (present(task.implemented_by)) {
+    hands.push({ verbs: [TASK_HAND_VERBS.implemented_by], name: String(task.implemented_by), at: Date.parse(task.started_at), implemented: true,
+      title: `${people.implemented_by} ${task.implemented_by}` });
+  }
+  if (present(task.orchestrator) && !(merged && present(task.created_by))) {
+    const model = present(task.orchestrator_model) ? ` (${task.orchestrator_model})` : "";
+    hands.push({ verbs: [TASK_HAND_VERBS.orchestrator], name: String(task.orchestrator), model: task.orchestrator_model, at: Infinity,
+      title: `${people.orchestrator} ${task.orchestrator}${model}` });
+  }
+  return hands;
+}
+
+// The detail read's `handled_by`: who piloted, reviewed and recovered the
+// task, each from a durable record, oldest first.
+function derivedHands(task) {
+  const list = Array.isArray(task.handled_by) ? task.handled_by : [];
+  return list.map((hand) => ({
+    verbs: [hand.verb],
+    name: String(hand.crew || hand.model || hand.actor || "unrecorded"),
+    model: hand.model,
+    family: hand.family,
+    at: Date.parse(hand.at),
+    occurrence: hand,
+  }));
+}
+
+function handTime(at) {
+  return Number.isFinite(at) ? new Date(at).toISOString().slice(0, 16).replace("T", " ") + " UTC" : "";
+}
+
+function occurrenceLine(hand) {
+  const parts = [handTime(Date.parse(hand.at))];
+  if (hand.run_id) parts.push(`run ${hand.run_id}`);
+  if (hand.verdict) parts.push(REVIEW_VERDICTS[hand.verdict] || hand.verdict);
+  if (hand.fixed_findings) parts.push(`${hand.fixed_findings} finding(s) fixed`);
+  if (hand.via) parts.push(RECOVERY_VIA[hand.via] || hand.via);
+  return parts.filter(Boolean).join(" · ");
+}
+
+// Every hand in time order. An implementer with no recorded start goes just
+// before the first review or recovery; consecutive hands of one actor doing
+// one thing collapse into one with a count.
+function orderedHands(task) {
+  const derived = derivedHands(task);
+  const hands = [...storedHands(task), ...derived];
+  const later = derived.find((hand) => hand.verbs[0] !== "piloted");
+  for (const hand of hands) {
+    if (hand.implemented && Number.isNaN(hand.at)) hand.at = later ? later.at - 0.5 : Infinity;
+    if (Number.isNaN(hand.at)) hand.at = -Infinity;
+  }
+  const ordered = hands.map((hand, index) => ({ hand, index }))
+    .sort((a, b) => (a.hand.at === b.hand.at ? 0 : a.hand.at - b.hand.at) || (a.index - b.index))
+    .map(({ hand }) => hand);
+  const groups = [];
+  for (const hand of ordered) {
+    const last = groups[groups.length - 1];
+    if (last && hand.occurrence && last.occurrences.length && last.name === hand.name && last.verbs.join() === hand.verbs.join()) {
+      last.occurrences.push(hand.occurrence);
+      continue;
+    }
+    groups.push({ ...hand, occurrences: hand.occurrence ? [hand.occurrence] : [] });
+  }
+  return groups;
+}
 
 function buildHandsChain(task) {
-  const hands = TASK_PEOPLE_FIELDS
-    .filter(([key]) => task[key] != null && task[key] !== "")
-    .map(([key, label]) => {
-      const name = String(task[key]);
-      const family = AGENT_FAMILIES.find((agent) => name.toLowerCase().includes(agent));
-      const hand = el("span", { class: "task-hand", title: `${label} ${name}` }, [
-        el("span", { class: "task-hand-name", text: name }),
-        el("span", { class: "task-hand-verb", text: ` ${TASK_HAND_VERBS[key]}` }),
-      ]);
-      if (family) hand.dataset.agent = family;
-      return hand;
-    });
+  const hands = orderedHands(task).map((group) => {
+    const count = group.occurrences.length;
+    const verb = group.verbs.join(" · ") + (count > 1 ? ` ×${count}` : "");
+    const title = group.title || [
+      `${group.name}${present(group.model) && group.model !== group.name ? ` (${group.model})` : ""} ${group.verbs.join(" · ")}`,
+      ...group.occurrences.map(occurrenceLine),
+    ].join("\n");
+    const hand = el("span", { class: "task-hand", title }, [
+      el("span", { class: "task-hand-name", text: group.name }),
+      el("span", { class: "task-hand-verb", text: ` ${verb}` }),
+    ]);
+    const family = AGENT_FAMILIES.find((agent) => agent === group.family)
+      || AGENT_FAMILIES.find((agent) =>
+        [group.name, group.model].some((value) => present(value) && String(value).toLowerCase().includes(agent)));
+    if (family) hand.dataset.agent = family;
+    return hand;
+  });
   if (!hands.length) return null;
   const chain = hands.flatMap((hand, index) =>
     index ? [el("span", { class: "task-hand-sep", "aria-hidden": "true" }), hand] : [hand]);

@@ -42,6 +42,7 @@ fn task(status: TaskStatus, with_pr: bool) -> Task {
         orchestrator: None,
         orchestrator_model: None,
         orchestrator_model_source: None,
+        created_by_model: None,
         origin: None,
         created_at: Utc::now(),
         updated_at: Utc::now(),

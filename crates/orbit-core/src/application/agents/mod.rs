@@ -24,6 +24,7 @@ mod api;
 mod attribution;
 mod candidates;
 mod facts;
+mod hands;
 mod performance;
 mod query;
 mod records;

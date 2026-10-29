@@ -52,7 +52,7 @@ as a string or array of field names, or `field` as a single-field alias.
 id, parent_id, title, description, acceptance_criteria,
 dependencies, resolved_dependencies, tags, required_tools, granted_tools,
 requires_labels, not_before, plan, execution_summary, context_files,
-created_by, planned_by, implemented_by, status, terminal, priority,
+created_by, created_by_model, planned_by, implemented_by, status, terminal, priority,
 complexity, type, pr_status, external_refs, relations,
 source_task_id, job_run_id, job_run_machine, crew, resolved_crew,
 crew_model, crew_unresolved, os_requirement, placement_wait, experiments,
@@ -72,7 +72,10 @@ Write responses without a projection omit the append-heavy `comments` and
 use the same field catalogue above.
 
 `crew` selects execution; `orchestrator` records separate orchestration
-attribution. The derived, never-persisted `os_requirement` reports the task's
+attribution. `created_by` is the creator's agent family; `created_by_model` is
+the full model id (`claude-opus-5-5`) recorded once when `orbit.task.add` was
+given one as `model`. It is never rewritten, and it is `null` for family-only
+creates and tasks filed before it existed. The derived, never-persisted `os_requirement` reports the task's
 OS tags intersected with the stored crew executor `host_os`, its source, and
 unresolved/conflict states.
 

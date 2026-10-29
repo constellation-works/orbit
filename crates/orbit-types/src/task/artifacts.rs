@@ -156,6 +156,10 @@ pub struct TaskEnvelopeV2 {
     pub external_refs: Vec<ExternalRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_by: Option<String>,
+    /// Creator's full model id, recorded once at creation; see
+    /// [`crate::task::Task::created_by_model`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by_model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub planned_by: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

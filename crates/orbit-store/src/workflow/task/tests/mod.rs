@@ -48,6 +48,7 @@ fn make_bundle(id: &str, title: &str, relations: Vec<TaskRelation>) -> TaskBundl
             orchestrator: Some("archive-orchestrator".to_string()),
             orchestrator_model: None,
             orchestrator_model_source: None,
+            created_by_model: None,
             origin: None,
             relations,
             tags: vec!["migration".to_string()],

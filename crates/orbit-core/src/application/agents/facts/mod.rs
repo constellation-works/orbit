@@ -20,5 +20,6 @@ pub(in crate::application::agents) use model::{
     TaskFacts, filing_attempt,
 };
 pub(crate) use review::review_gate_verdicts;
+pub(in crate::application::agents) use review::settlement;
 
 pub(in crate::application::agents) use scan::scan;

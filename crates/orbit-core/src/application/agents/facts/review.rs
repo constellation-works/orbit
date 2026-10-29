@@ -59,7 +59,7 @@ pub(crate) fn review_gate_verdicts(comments: &[TaskComment]) -> Vec<ReviewVerdic
 
 /// A review gate settlement comment: its attempt, verdict, reviewer, the
 /// commits it names, its runtime and its findings.
-pub(super) fn settlement(comment: &TaskComment) -> Option<Review> {
+pub(in crate::application::agents) fn settlement(comment: &TaskComment) -> Option<Review> {
     let message = comment.message.trim_start();
     let rest = SETTLEMENT_LEADS
         .iter()

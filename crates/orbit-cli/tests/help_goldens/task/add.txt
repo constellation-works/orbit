@@ -102,7 +102,7 @@ Options:
           - automation:              Filed by automation: an auto-task, routine, sweep or other system filer
 
       --model <MODEL>
-          Explicit agent model to persist on the task artifact
+          Creator's agent family or full model id (e.g. claude-opus-5-5); created_by records the family and a full model id is also kept as created_by_model
 
   -h, --help
           Print help (see a summary with '-h')

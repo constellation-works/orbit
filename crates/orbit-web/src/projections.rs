@@ -110,8 +110,10 @@ pub(crate) fn task_riskiness_json(model: Option<&TaskRiskinessModel>, task: &Tas
 /// the details panel's Triage action may submit now, and why not. A blocked
 /// task, or a task whose latest delivery run is held, also carries
 /// `why_stuck`. A task with a linked run carries `job_run_worktree`: the
-/// run's recorded branch and worktree path on its execution machine. Every
-/// task carries `riskiness`, as its list row does.
+/// run's recorded branch and worktree path on its execution machine. A task
+/// that was piloted, reviewed or recovered carries `handled_by`: those hands
+/// in time order, each derived from a durable record. Every task carries
+/// `riskiness`, as its list row does.
 pub(crate) fn task_detail_json(
     runtime: &OrbitRuntime,
     row: &TaskRow,
@@ -134,6 +136,12 @@ pub(crate) fn task_detail_json(
         }
         if let Some(worktree) = runtime.job_run_worktree(row)? {
             object.insert("job_run_worktree".to_string(), worktree);
+        }
+        // Detail-only: the piloted, reviewed and recovered hands read pilot
+        // runs, the review ledger and recovery invocations.
+        let hands = runtime.task_handled_by(row);
+        if !hands.is_empty() {
+            object.insert("handled_by".to_string(), Value::Array(hands));
         }
         crate::why_stuck::attach_why_stuck(runtime, row, object)?;
     }

@@ -70,6 +70,16 @@ const WRITE_MODEL_PARAM: ParamSpec = both(
     "Explicit agent model to persist on the task artifact",
 );
 
+/// `orbit.task.add`'s attribution field: a create also keeps a full model
+/// string, as `created_by_model`.
+const ADD_MODEL_PARAM: ParamSpec = both(
+    "model",
+    ParamType::String,
+    "Preferred provenance field: the agent family (codex, claude, gemini, grok, or muse) or a full model string such as `claude-opus-5-5`. `created_by` records the family; a full model string is also recorded once as `created_by_model`. A value that names no known family is refused.",
+    CliArgKind::flag("model"),
+    "Creator's agent family or full model id (e.g. claude-opus-5-5); created_by records the family and a full model id is also kept as created_by_model",
+);
+
 /// The response projection a write takes.
 pub(super) const WRITE_PROJECTION_PARAMS: &[ParamSpec] = &[
     mcp_only(
@@ -332,7 +342,7 @@ pub(super) const ADD: TaskOperation = TaskOperation {
                 ParamType::String,
                 "Optional retry-safe proposed creation. Requires explicit workspace and acceptance_criteria; accepts only title, description, acceptance_criteria, priority and crew. Reuse the identity with identical input to reconcile a lost reply. Returns a versioned snapshot.",
             ),
-            WRITE_MODEL_PARAM,
+            ADD_MODEL_PARAM,
             cli_only(
                 "parent_id",
                 ParamType::String,
