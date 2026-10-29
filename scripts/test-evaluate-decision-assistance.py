@@ -7,28 +7,32 @@ refusals, a deliberately poor classifier, split/target guards, unknown metrics.
 No external calls.
 """
 import json, subprocess, sys, tempfile, unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent
 TOOL = SCRIPTS / "evaluate-decision-assistance.py"
 
-def run(*args):
-    return subprocess.run([sys.executable, str(TOOL), *args], capture_output=True, text=True)
+def run(*args, cwd):
+    return subprocess.run([sys.executable, str(TOOL), *args], cwd=cwd, capture_output=True, text=True)
 
 class EvalTests(unittest.TestCase):
     def setUp(self):
         scratch = SCRIPTS.parent / ".orbit/tmp"; scratch.mkdir(parents=True, exist_ok=True)
         td = tempfile.TemporaryDirectory(prefix="decision-eval-", dir=scratch); self.addCleanup(td.cleanup)
         self.root = Path(td.name)
-        self.ds = self._dump("ds.json", json.loads(run("seed").stdout))
-        self.ans = self._dump("ans.json", json.loads(run("seed", "--answers").stdout))
+        self.ds = self._dump("ds.json", json.loads(self._run("seed").stdout))
+        self.ans = self._dump("ans.json", json.loads(self._run("seed", "--answers").stdout))
+
+    def _run(self, *args):
+        return run(*args, cwd=self.root)
 
     def _dump(self, name, obj):
         p = self.root / name; p.write_text(json.dumps(obj)); return p
 
     def _load(self, p): return json.loads(Path(p).read_text())
     def _score(self, ds, ans): 
-        r = run("score", "--dataset", str(ds), "--answers", str(ans)); self.assertEqual(r.returncode, 0, r.stderr); return json.loads(r.stdout)
+        r = self._run("score", "--dataset", str(ds), "--answers", str(ans)); self.assertEqual(r.returncode, 0, r.stderr); return json.loads(r.stdout)
 
     def test_seed_perfect_and_insufficient_abstains(self):
         rep = self._score(self.ds, self.ans)
@@ -77,7 +81,7 @@ class EvalTests(unittest.TestCase):
 
     def test_malformed_answers_rejected(self):
         ans = self._load(self.ans); ans["answers"][0]["answers"] = {"failure_category": {"value": "bogus", "probability": 1.5}, "extra": {"value": 1}}
-        p = self._dump("bad.json", ans); r = run("validate", "--dataset", str(self.ds), "--answers", str(p))
+        p = self._dump("bad.json", ans); r = self._run("validate", "--dataset", str(self.ds), "--answers", str(p))
         self.assertEqual(r.returncode, 2); self.assertFalse(json.loads(r.stdout)["ok"])
         rep = self._score(self.ds, p); self.assertGreaterEqual(rep["totals"]["invalid"], 1)
 
@@ -136,15 +140,15 @@ class EvalTests(unittest.TestCase):
         m = self._manifest(ds); first = ds["cases"][0]
         m["assignments"][first["case_id"]] = "holdout"
         # add a human twin sharing family to trigger synthetic-holdout (and not family overlap alone)
-        r = run("check-split", "--dataset", str(self.ds), "--manifest", str(self._dump("m1.json", m)))
+        r = self._run("check-split", "--dataset", str(self.ds), "--manifest", str(self._dump("m1.json", m)))
         self.assertEqual(r.returncode, 2)
         # reused holdout
-        r = run("check-split", "--dataset", str(self.ds), "--manifest", str(self._dump("m2.json", self._manifest(ds))), "--prior-holdout-ids", "holdout-1")
+        r = self._run("check-split", "--dataset", str(self.ds), "--manifest", str(self._dump("m2.json", self._manifest(ds))), "--prior-holdout-ids", "holdout-1")
         self.assertEqual(r.returncode, 2); self.assertIn("reused", r.stdout + json.dumps(json.loads(r.stdout)["errors"]))
         # post-snapshot evidence
         ds2 = self._load(self.ds); ds2["cases"][0]["evidence_packet"]["collected_at"] = "2027-01-01T00:00:00Z"; ds2["intake_snapshot_at"] = "2027-06-01T00:00:00Z"
         m3 = self._manifest(ds2); m3["intake_snapshot_at"] = "2026-02-01T00:00:00Z"
-        r = run("check-split", "--dataset", str(self._dump("ds2.json", ds2)), "--manifest", str(self._dump("m3.json", m3)))
+        r = self._run("check-split", "--dataset", str(self._dump("ds2.json", ds2)), "--manifest", str(self._dump("m3.json", m3)))
         self.assertEqual(r.returncode, 2)
 
     def test_family_overlap_specifically(self):
@@ -153,7 +157,7 @@ class EvalTests(unittest.TestCase):
         ds["cases"][1]["family_id"] = ds["cases"][0]["family_id"]
         ds["cases"][0]["label"] = {"provenance": "independent_human"}
         m = self._manifest(ds); m["assignments"][ds["cases"][0]["case_id"]] = "holdout"
-        r = run("check-split", "--dataset", str(self._dump("ds3.json", ds)), "--manifest", str(self._dump("m4.json", m)))
+        r = self._run("check-split", "--dataset", str(self._dump("ds3.json", ds)), "--manifest", str(self._dump("m4.json", m)))
         self.assertEqual(r.returncode, 2); self.assertIn("family_id", r.stdout)
 
     def test_holdout_requires_independent_human_import_fields(self):
@@ -162,7 +166,7 @@ class EvalTests(unittest.TestCase):
         case["label"] = {"provenance": "independent_human"}
         manifest = self._manifest(ds)
         manifest["assignments"][case["case_id"]] = "holdout"
-        r = run("check-split", "--dataset", str(self._dump("bare-human-ds.json", ds)),
+        r = self._run("check-split", "--dataset", str(self._dump("bare-human-ds.json", ds)),
                 "--manifest", str(self._dump("bare-human-manifest.json", manifest)))
         self.assertEqual(r.returncode, 2, r.stdout)
         errors = json.loads(r.stdout)["errors"]
@@ -205,20 +209,60 @@ class EvalTests(unittest.TestCase):
                     "intake_snapshot_at": valid_ds["intake_snapshot_at"],
                     "second_label_or_adjudication": record,
                 }
-                valid_manifest = self._manifest(valid_ds)
+                valid_manifest = self._manifest(valid_ds, holdout_id=f"holdout-human-{index}")
                 valid_manifest["assignments"][valid_case["case_id"]] = "holdout"
-                r = run("check-split", "--dataset",
+                r = self._run("check-split", "--dataset",
                         str(self._dump(f"valid-human-ds-{index}.json", valid_ds)),
                         "--manifest", str(self._dump(f"valid-human-manifest-{index}.json", valid_manifest)))
                 self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
+    def test_default_split_rejects_previously_accepted_holdout(self):
+        manifest = self._dump("manifest.json", self._manifest(self._load(self.ds)))
+        args = ("check-split", "--dataset", str(self.ds), "--manifest", str(manifest))
+        first = self._run(*args)
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        for path in (manifest, self._dump("copied-manifest.json", self._load(manifest))):
+            with self.subTest(manifest=path.name):
+                repeated = self._run("check-split", "--dataset", str(self.ds), "--manifest", str(path))
+                self.assertEqual(repeated.returncode, 2, repeated.stdout + repeated.stderr)
+                self.assertFalse(json.loads(repeated.stdout)["ok"])
+                self.assertIn("reused", repeated.stdout)
+
+    def test_default_targets_reject_registration_after_recorded_holdout(self):
+        manifest = self._dump("manifest.json", self._manifest(self._load(self.ds)))
+        opened = self._run("check-split", "--dataset", str(self.ds), "--manifest", str(manifest))
+        self.assertEqual(opened.returncode, 0, opened.stdout + opened.stderr)
+        targets = self._targets()
+        targets["registered_at"] = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+        # Exercise the existing no-identifier form as well as explicit holdout binding.
+        for holdout_id in (None, "holdout-1"):
+            with self.subTest(holdout_id=holdout_id):
+                if holdout_id is not None:
+                    targets["holdout_id"] = holdout_id
+                p = self._dump("late-targets.json", targets)
+                late = self._run("check-targets", "--targets", str(p))
+                self.assertEqual(late.returncode, 2, late.stdout + late.stderr)
+                self.assertFalse(json.loads(late.stdout)["ok"])
+                self.assertIn("before holdout access", late.stdout)
+                # A supplied later timestamp cannot weaken the recorded deadline.
+                override = self._run("check-targets", "--targets", str(p),
+                                     "--holdout-opened-at", "9999-01-01T00:00:00Z")
+                self.assertEqual(override.returncode, 2, override.stdout + override.stderr)
+        targets["registered_at"] = "2026-01-15T00:00:00Z"
+        early = self._run("check-targets", "--targets", str(self._dump("early-targets.json", targets)))
+        self.assertEqual(early.returncode, 0, early.stdout + early.stderr)
+
+    def _targets(self):
+        return {"format_version": "decision-assistance-eval/1", "registered_at": "2026-01-15T00:00:00Z",
+                "baseline": {"name": "existing-workflow", "version": "1"},
+                "targets": [{"question": q, "min_precision": 0.8, "min_recall": 0.5, "min_samples": 20}
+                            for q in ["failure_category", "outcome_unclear", "criterion_not_observable",
+                                      "requirements_conflict", "scope_clarification"]]}
+
     def test_targets_before_holdout_only(self):
-        t = {"format_version": "decision-assistance-eval/1", "registered_at": "2026-01-15T00:00:00Z",
-             "baseline": {"name": "existing-workflow", "version": "1"},
-             "targets": [{"question": q, "min_precision": 0.8, "min_recall": 0.5, "min_samples": 20}
-                         for q in ["failure_category", "outcome_unclear", "criterion_not_observable", "requirements_conflict", "scope_clarification"]]}
+        t = self._targets()
         p = self._dump("t.json", t)
-        self.assertEqual(run("check-targets", "--targets", str(p), "--holdout-opened-at", "2026-02-01T00:00:00Z").returncode, 0)
-        self.assertEqual(run("check-targets", "--targets", str(p), "--holdout-opened-at", "2026-01-01T00:00:00Z").returncode, 2)
+        self.assertEqual(self._run("check-targets", "--targets", str(p), "--holdout-opened-at", "2026-02-01T00:00:00Z").returncode, 0)
+        self.assertEqual(self._run("check-targets", "--targets", str(p), "--holdout-opened-at", "2026-01-01T00:00:00Z").returncode, 2)
 
 if __name__ == "__main__": unittest.main()

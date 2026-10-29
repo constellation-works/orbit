@@ -87,6 +87,20 @@ A split manifest (`check-split`) assigns each case to `train`, `dev` or
 - with `split_strategy_time`, the earliest holdout evidence is not after the
   latest train/dev evidence.
 
+Run all split and target checks for an evaluation from the same working
+directory. A successful `check-split` **opens** its `holdout_id`: it writes
+the ID and current UTC `opened_at` to
+`.decision-assistance-eval/holdouts/<sha256-of-holdout-id>.json` beneath that
+directory. Every later check of that ID is refused, including
+a re-check of the identical manifest or a copy at another input path. Invalid
+manifests do not open a holdout. Records are created exclusively, so
+concurrent split checks cannot both accept the same ID; a write failure makes
+the check fail and may leave a reservation that later checks refuse. Preserve
+these records with the evaluation evidence. History is local to this
+directory; another directory or machine must retain the same
+records to enforce the same history. The optional `--prior-holdout-ids` and
+manifest `previously_opened_holdout_ids` remain additional rejection lists.
+
 ## Targets before holdout access
 
 Before a holdout is opened, register a target file (`check-targets`). The file
@@ -96,9 +110,16 @@ assistance) and holds one target entry per question with `min_precision`,
 
 `check-targets` enforces that every question has an entry, that `min_samples`
 is a positive integer, that `min_precision`/`min_recall` lie in `[0,1]` when
-present, and that `baseline.name` is non-empty. When `--holdout-opened-at` is
-passed, it also rejects a registration timestamp at or after holdout access;
-without that flag the late-registration check is skipped.
+present, and that `baseline.name` is non-empty. It reads the recorded opening
+time automatically and rejects `registered_at` at or after holdout access.
+Opening and registration times are compared as ISO 8601 instants with explicit
+timezones. A target file can name its `holdout_id`; before that ID has been
+opened, registration is allowed. Without an ID, the sole recorded holdout is
+used; if several holdouts have been opened, the target file must name one.
+Before any holdout has opened, targets can be checked without an ID.
+Unreadable or malformed records fail the check. The optional
+`--holdout-opened-at` adds a deadline for externally recorded access; a later
+supplied time cannot override an earlier recorded opening.
 
 Manual steps. No command checks these; the operator records them with the
 registration and the readout:
