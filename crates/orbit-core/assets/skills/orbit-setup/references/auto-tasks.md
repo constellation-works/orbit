@@ -326,6 +326,18 @@ They do not replace the list or bypass runtime capability, policy, filesystem,
 subprocess, or authentication checks. Invalid, inactive, wildcard, or
 non-agent-facing names fail dispatch before the provider starts.
 
+The shipped `backlog-hygiene`, `delivery-code-review`, and `friction-curation`
+defaults require `orbit.task.update` to persist their report or maintain task
+relations; `friction-curation` also requires `orbit.friction.update`, never the
+operator-only `orbit.friction.resolve`. These declarations can hold follower
+placement because task updates are denied in claimed mode and friction updates
+are outside the closed claimed-owner bridge. Required-tool metadata grants no
+authority over either restriction. `qa-sweep` keeps its claimed path: its shared
+requirements are `orbit.task.add`, `orbit.task.artifact.put`, and
+`orbit.task.show`. It persists the execution summary with `orbit.task.update`
+only on the owner; a claimed worker returns that summary for owner import, so
+the template does not unconditionally require that tool.
+
 A template that declares exactly `github.auth.status`, `github.run.list`,
 `github.run.view`, `github.run.logs`, and `github.pr.list` is the worked
 example. A minted instance therefore runs under

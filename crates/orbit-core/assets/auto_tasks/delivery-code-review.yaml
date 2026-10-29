@@ -133,6 +133,8 @@ template:
   required_tools:
   - orbit.task.add
   - orbit.task.artifact.put
+  - orbit.search
+  - orbit.task.update
   priority: medium
   complexity: hard
   status: backlog
