@@ -170,6 +170,33 @@ fn unparseable_report_naming_this_run_still_refuses_with_parse_error() {
     assert_eq!(git_head(temp.path()), head);
 }
 
+fn valid_json_without_run_id_naming_this_run_does_not_shadow_no_diff() {
+    let temp = tempdir().expect("create tempdir");
+    init_git_repo(temp.path());
+    let head = git_head(temp.path());
+    let host = VerifierHost::new(temp.path(), fixture_task());
+    let (no_diff, log) = valid_no_diff(&head);
+    let finding_invalid = json!({
+        "note": format!("stale report mentions {RUN_ID}"),
+    });
+    host.set_artifacts(
+        TASK_ID,
+        vec![
+            TaskArtifact::from_text("finding-invalid.json", finding_invalid.to_string()),
+            artifact("no-diff.json", no_diff),
+            artifact("validation.json", log),
+        ],
+    );
+
+    let result = action(&host, &commit_input(temp.path(), &head))
+        .expect("valid JSON without a run_id must not shadow this run's no-diff evidence");
+    assert_eq!(result["decision"], "verified_no_diff", "{result}");
+    assert_eq!(result["committed"], false);
+    assert_eq!(result["skipped_no_diff_expected"], true);
+    assert!(host.rejected_findings.lock().unwrap().is_empty());
+    assert_eq!(git_head(temp.path()), head);
+}
+
 fn unverifiable_or_claimed_reports_record_nothing() {
     for (case, location, claimed) in [
         ("past end of file", "README.md:2", false),
@@ -234,6 +261,10 @@ fn finding_invalid_contracts() {
             (
                 "unparseable_report_naming_this_run_still_refuses_with_parse_error",
                 unparseable_report_naming_this_run_still_refuses_with_parse_error,
+            ),
+            (
+                "valid_json_without_run_id_naming_this_run_does_not_shadow_no_diff",
+                valid_json_without_run_id_naming_this_run_does_not_shadow_no_diff,
             ),
         ]);
     });

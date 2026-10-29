@@ -92,13 +92,13 @@ impl Verifier for FindingInvalid {
 }
 
 /// Whether the task's report claims this run: it names this run or one in
-/// its retry lineage. An unreadable report claims this run only when its
-/// `run_id` still decodes and names this run or its lineage, or — when the
-/// bytes are not valid JSON at all — when the raw text still names this run
-/// or its lineage; a report from an earlier, unrelated run — or text that
-/// names no run — never shadows this run's no-diff or already-landed
-/// evidence. A report that does name this run still fails verification,
-/// and the refusal names the parse error.
+/// its retry lineage. A report that fails strict parsing claims this run when
+/// a non-empty string `run_id` still decodes and names this run or its
+/// lineage. Only when the bytes are not valid JSON at all does raw-text
+/// matching claim this run; valid JSON without a usable `run_id` never
+/// shadows this run's no-diff or already-landed evidence. A report that does
+/// name this run still fails verification, and the refusal names the parse
+/// error.
 pub(super) fn claims_run<H: RuntimeHost + ?Sized>(
     host: &H,
     task: &Task,
@@ -115,17 +115,15 @@ pub(super) fn claims_run<H: RuntimeHost + ?Sized>(
     match serde_json::from_slice::<FindingInvalidReport>(&artifact.content) {
         Ok(report) => run_in_lineage(host, run_id, &report.run_id),
         Err(_) => {
-            if let Some(claimed) = serde_json::from_slice::<Value>(&artifact.content)
-                .ok()
-                .and_then(|value| {
-                    value
-                        .get("run_id")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned)
-                })
-                .filter(|claimed| !claimed.is_empty())
-            {
-                return run_in_lineage(host, run_id, &claimed);
+            if let Ok(value) = serde_json::from_slice::<Value>(&artifact.content) {
+                if let Some(claimed) = value
+                    .get("run_id")
+                    .and_then(Value::as_str)
+                    .filter(|claimed| !claimed.is_empty())
+                {
+                    return run_in_lineage(host, run_id, claimed);
+                }
+                return Ok(false);
             }
             // The bytes are not valid JSON at all (truncated, a stray comma,
             // prose), so no `run_id` decodes. Claim this run only when the
