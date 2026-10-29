@@ -167,7 +167,8 @@ pub use write_response::{
 
 pub(crate) use external_merge::settled_merge_commit;
 pub use external_merge::{
-    ExternalMergeBatchSettlement, ExternalMergeSettlement, ExternalMergeSkippedTask,
+    ExternalMergeBatchSettlement, ExternalMergeSettlement, ExternalMergeSettlementProfile,
+    ExternalMergeSkippedTask,
 };
 pub(crate) use helpers::{SYSTEM_ACTOR_LABEL, TaskAttributionInput, assemble_task_attribution};
 pub use lifecycle::{

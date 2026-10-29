@@ -14,7 +14,7 @@ use axum::response::{IntoResponse, Json, Response};
 use orbit_common::governance::authorization::{
     DASHBOARD_TASK_REQUEUE, DASHBOARD_TASK_SETTLE_MERGED,
 };
-use orbit_core::application::task::ScreenedTaskWrite;
+use orbit_core::application::task::{ExternalMergeSettlementProfile, ScreenedTaskWrite};
 use serde_json::json;
 
 pub(in crate::api) async fn approve_task_action(
@@ -129,15 +129,9 @@ pub(in crate::api) async fn settle_merged_task_action(
     })
     .await;
     match result {
-        Ok(Ok(settlement)) => Json(json!({
-            "task_id": settlement.task_id,
-            "previous_status": settlement.previous_status,
-            "status": "done",
-            "pr_number": settlement.pr_number,
-            "base_branch": settlement.base_branch,
-            "merge_commit": settlement.merge_commit,
-        }))
-        .into_response(),
+        Ok(Ok(settlement)) => {
+            Json(settlement.settlement_json(ExternalMergeSettlementProfile::Http)).into_response()
+        }
         Ok(Err(e)) => recovery_refusal(e, "settle_merged_refused"),
         Err(join_err) => server_error(orbit_core::OrbitError::Execution(format!(
             "task settle-merged panicked: {join_err}"
@@ -162,14 +156,9 @@ pub(in crate::api) async fn settle_merged_tasks_action(
     .await;
     match result {
         Ok(Ok(batch)) => Json(json!({
-            "settled": batch.settled.iter().map(|settlement| json!({
-                "task_id": settlement.task_id,
-                "previous_status": settlement.previous_status,
-                "status": "done",
-                "pr_number": settlement.pr_number,
-                "base_branch": settlement.base_branch,
-                "merge_commit": settlement.merge_commit,
-            })).collect::<Vec<_>>(),
+            "settled": batch.settled.iter().map(|settlement|
+                settlement.settlement_json(ExternalMergeSettlementProfile::Http)
+            ).collect::<Vec<_>>(),
             "skipped": batch.skipped.iter().map(|skipped| json!({
                 "task_id": skipped.task_id,
                 "code": "settle_merged_refused",

@@ -75,6 +75,7 @@ use crate::runtime::task_pr_forge::MergedPullRequest;
 use candidate::{RevokedHandoff, names_delivery};
 pub use model::ExternalMergeBatchSettlement;
 pub use model::ExternalMergeSettlement;
+pub use model::ExternalMergeSettlementProfile;
 pub use model::ExternalMergeSkippedTask;
 use model::SETTLEABLE_STATUSES;
 pub(crate) use persistence::settled_merge_commit;
