@@ -300,15 +300,44 @@ fn seed_metrics_invocation(
     at: DateTime<Utc>,
     partition: Option<&str>,
 ) {
+    seed_metrics_invocation_with_filters(
+        fixture,
+        run,
+        "implement",
+        "codex",
+        Some("fixture-a"),
+        task_id,
+        "read",
+        input_tokens,
+        output_tokens,
+        at,
+        partition,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn seed_metrics_invocation_with_filters(
+    fixture: &Fixture,
+    run: &str,
+    activity_id: &str,
+    agent: &str,
+    model: Option<&str>,
+    task_id: &str,
+    tool_name: &str,
+    input_tokens: u64,
+    output_tokens: u64,
+    at: DateTime<Utc>,
+    partition: Option<&str>,
+) {
     fixture
         .runtime
         .insert_invocation_trace_record(&InvocationInsertParams {
             job_run_id: run.into(),
-            activity_id: "implement".into(),
-            agent: "codex".into(),
+            activity_id: activity_id.into(),
+            agent: agent.into(),
             provider: None,
             account: None,
-            model: Some("fixture-a".into()),
+            model: model.map(str::to_string),
             task_ids: vec![task_id.into()],
             trace: InvocationTrace {
                 usage: TokenUsage {
@@ -318,7 +347,7 @@ fn seed_metrics_invocation(
                 },
                 tool_calls: vec![ToolCallTrace {
                     seq: 1,
-                    tool_name: "read".into(),
+                    tool_name: tool_name.into(),
                     result_bytes: 8,
                     result_payload: None,
                 }],
@@ -335,7 +364,7 @@ fn seed_metrics_invocation(
             tx.connection()
                 .execute(
                     "UPDATE invocations SET ts = ?1, workspace_id = COALESCE(?2, workspace_id)
-                     WHERE job_run_id = ?3",
+                     WHERE id = (SELECT id FROM invocations WHERE job_run_id = ?3 ORDER BY id DESC LIMIT 1)",
                     (at.to_rfc3339(), partition, run),
                 )
                 .map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
@@ -436,6 +465,162 @@ fn diagnostics_metrics_fallback_keeps_foreign_rows_out_of_the_limit() {
                 empty.as_array().unwrap().is_empty(),
                 "an invocation-empty workspace returns [] while another workspace still has history"
             );
+        },
+    );
+}
+
+#[test]
+fn invocation_metrics_scope_workspace_before_filters_and_limit() {
+    isolated(
+        "projections::invocation_metrics_scope_workspace_before_filters_and_limit",
+        || {
+            let fixture = Fixture::new();
+            assert_eq!(fixture.runtime.workspace_id().unwrap(), "ws_http_fixture");
+            let now = Utc::now();
+            let selected_at = now - Duration::minutes(2);
+            let foreign_at = now - Duration::minutes(1);
+            let run = "shared-run";
+
+            let seed = |activity_id: &str,
+                        agent: &str,
+                        model: Option<&str>,
+                        task_id: &str,
+                        tool_name: &str,
+                        at: DateTime<Utc>,
+                        partition: Option<&str>| {
+                seed_metrics_invocation_with_filters(
+                    &fixture,
+                    run,
+                    activity_id,
+                    agent,
+                    model,
+                    task_id,
+                    tool_name,
+                    1,
+                    1,
+                    at,
+                    partition,
+                );
+            };
+
+            // Every selected-workspace distractor misses exactly one filter.
+            seed(
+                "selected-activity",
+                "selected-agent",
+                Some("selected-model"),
+                "ORB-SELECTED",
+                "selected-tool",
+                selected_at,
+                None,
+            );
+            seed(
+                "other-activity",
+                "selected-agent",
+                Some("selected-model"),
+                "ORB-SELECTED",
+                "selected-tool",
+                selected_at,
+                None,
+            );
+            seed(
+                "selected-activity",
+                "other-agent",
+                Some("selected-model"),
+                "ORB-SELECTED",
+                "selected-tool",
+                selected_at,
+                None,
+            );
+            seed(
+                "selected-activity",
+                "selected-agent",
+                Some("other-model"),
+                "ORB-SELECTED",
+                "selected-tool",
+                selected_at,
+                None,
+            );
+            seed(
+                "selected-activity",
+                "selected-agent",
+                Some("selected-model"),
+                "ORB-OTHER",
+                "selected-tool",
+                selected_at,
+                None,
+            );
+            seed(
+                "selected-activity",
+                "selected-agent",
+                Some("selected-model"),
+                "ORB-SELECTED",
+                "other-tool",
+                selected_at,
+                None,
+            );
+            seed(
+                "selected-activity",
+                "selected-agent",
+                Some("selected-model"),
+                "ORB-SELECTED",
+                "selected-tool",
+                now - Duration::minutes(10),
+                None,
+            );
+            // A second workspace shares the run identity and matches every
+            // filter, but its newer row must not consume this workspace's limit.
+            seed(
+                "selected-activity",
+                "selected-agent",
+                Some("selected-model"),
+                "ORB-SELECTED",
+                "selected-tool",
+                foreign_at,
+                Some("ws_other"),
+            );
+
+            let server = fixture.server(false);
+            let unfiltered =
+                json_ok(server.get("/api/metrics/invocations?limit=1&workspace=ws_http_fixture"));
+            let unfiltered_rows = unfiltered.as_array().unwrap();
+            assert_eq!(unfiltered_rows.len(), 1);
+            assert_eq!(unfiltered_rows[0]["job_run_id"], run);
+            let unfiltered_at =
+                DateTime::parse_from_rfc3339(unfiltered_rows[0]["ts"].as_str().unwrap())
+                    .unwrap()
+                    .with_timezone(&Utc);
+            assert_eq!(unfiltered_at, selected_at);
+
+            let since = (now - Duration::minutes(3))
+                .to_rfc3339()
+                .replace("+00:00", "Z");
+            let until = (now - Duration::seconds(30))
+                .to_rfc3339()
+                .replace("+00:00", "Z");
+            let query = format!(
+                "/api/metrics/invocations?job_run_id={run}&activity_id=selected-activity&agent=selected-agent&model=selected-model&task_id=ORB-SELECTED&tool_name=selected-tool&since={since}&until={until}&limit=20&workspace=ws_http_fixture",
+            );
+            let filtered = json_ok(server.get(&query));
+            let filtered_rows = filtered.as_array().unwrap();
+            assert_eq!(
+                filtered_rows.len(),
+                1,
+                "all filters compose with workspace selection"
+            );
+            assert_eq!(filtered_rows[0]["job_run_id"], run);
+            assert_eq!(filtered_rows[0]["activity_id"], "selected-activity");
+            assert_eq!(filtered_rows[0]["agent"], "selected-agent");
+            assert_eq!(filtered_rows[0]["model"], "selected-model");
+            assert_eq!(filtered_rows[0]["task_ids"], json!(["ORB-SELECTED"]));
+            assert_eq!(
+                filtered_rows[0]["tool_calls"][0]["tool_name"],
+                "selected-tool"
+            );
+            let filtered_at =
+                DateTime::parse_from_rfc3339(filtered_rows[0]["ts"].as_str().unwrap())
+                    .unwrap()
+                    .with_timezone(&Utc);
+            assert_eq!(filtered_at, selected_at);
         },
     );
 }

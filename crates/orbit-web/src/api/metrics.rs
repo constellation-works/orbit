@@ -121,7 +121,7 @@ pub(super) async fn invocation_metrics(
         Err(e) => return map_runtime_error(e),
     };
     match blocking("invocation metrics", move || {
-        runtime.invocation_records(query)
+        runtime.workspace_invocation_records(query)
     })
     .await
     {
