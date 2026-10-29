@@ -79,6 +79,81 @@ globalThis.dockReview = {
   held: () => releasePost !== null,
   release: () => { delayPost = false; const resolve = releasePost; releasePost = null; resolve?.(); },
 };`;
+// ORB-19679: an always-fire definition is not held by its open instance, so its
+// row, the summary and the group must not say the scheduler skips it. A
+// skip-if-open definition is held, and those lines still say so. Manual mint
+// stays unconditional under both policies. Runs through the public renderer.
+const autoTaskPolicyHarness = `
+const { setWorkspace } = await import('/js/common.js');
+const shared = await import('/js/operations-shared.js');
+const { renderAutoTasks } = await import('/js/operations-auto-tasks.js');
+const allowed = { authorized: true, reason: null };
+const capabilities = { auto_task_toggle: allowed, auto_task_mint: allowed, auto_task_schedule: allowed };
+const definition = (name, dedupe) => ({
+  name, enabled: true, effective_enabled: true, dedupe,
+  template: { title: name, crew: 'fixture', priority: 'medium', status: 'backlog' },
+  template_summary: name, schedule: { cron: '0 9 * * *' }, schedule_summary: 'daily at 09:00',
+  may_create_open_duplicate: true, open_duplicate: true,
+  last_minted_task_id: 'ORB-2', last_minted_task_status: 'in_progress',
+  last_evaluation: { kind: 'fired', last_task_id: 'ORB-1', last_fired_at: '2026-10-28T09:00:00Z' },
+  next_evaluation: { state: 'scheduled', at: '2026-10-29T09:00:00Z' },
+});
+const render = (definitions) => renderAutoTasks({
+  cron_zone: { name: 'America/Los_Angeles', offset_seconds: -25200 }, capabilities,
+  unconditional_mint_warning: "Manual mint ignores this definition's schedule, enabled flag, and scheduler dedupe policy.",
+  definitions,
+});
+const body = () => document.getElementById('auto-tasks-body');
+const assert = (condition, message) => { if (!condition) throw new Error(message); };
+const card = (name) => Array.from(body().querySelectorAll('.auto-task-card')).find((node) => node.querySelector('strong')?.textContent === name);
+const lastMintedCell = (name) => Array.from(card(name).querySelectorAll('.operation-cell-sub')).find((node) => node.textContent.includes('still open'));
+const summaryNote = () => Array.from(body().querySelectorAll('.operation-stat'))
+  .find((node) => node.querySelector('.operation-field-label')?.textContent === 'Open duplicates')
+  ?.querySelector('.operation-stat-note')?.textContent ?? '';
+const scheduleGroupHint = () => Array.from(body().querySelectorAll('.operation-group'))
+  .find((node) => node.querySelector('.operation-group-title strong')?.textContent === 'On a schedule')
+  ?.querySelector('.operation-group-hint')?.textContent ?? '';
+const mintConfirm = (name) => {
+  const button = Array.from(card(name).querySelectorAll('button')).find((node) => node.textContent === 'Mint now');
+  assert(button && !button.disabled, name + ': manual mint must stay enabled under its dedupe policy');
+  let asked = '';
+  window.confirm = (text) => { asked = text; return false; };
+  button.click();
+  assert(asked.includes('Manual mint ignores'), name + ': manual mint must confirm the unconditional mint: ' + asked);
+};
+shared.initOperations({ getWorkspaces: () => [{ id: 'one', name: 'one', status: 'active' }] });
+setWorkspace('one');
+// Show the Operations pane, so the rows can be captured even when a check fails.
+for (let node = body(); node; node = node.parentElement) node.hidden = false;
+document.querySelector('.tab-pane[data-tab="operations"]')?.classList.add('active');
+try {
+  // Always-fire alone: an open instance is no hold, so nothing says there is one.
+  render([definition('always-chore', 'always')]);
+  const alone = lastMintedCell('always-chore');
+  assert(alone && !alone.textContent.includes('scheduler') && !alone.classList.contains('warn'), 'always-fire row claims the scheduler is held: ' + alone?.textContent);
+  assert(!summaryNote().includes('scheduler skips'), 'always-fire summary claims a hold: ' + summaryNote());
+  mintConfirm('always-chore');
+
+  // Skip-if-open alone: its open duplicate is a held slot, and says so.
+  render([definition('held-chore', 'skip_if_open')]);
+  const held = lastMintedCell('held-chore');
+  assert(held && held.textContent.includes('scheduler will skip') && held.classList.contains('warn'), 'skip-if-open row lost its hold explanation: ' + held?.textContent);
+  assert(summaryNote() === 'scheduler skips these slots', 'skip-if-open summary lost its hold explanation: ' + summaryNote());
+  mintConfirm('held-chore');
+
+  // Both: the summary counts the one held slot, and the group names each policy.
+  render([definition('always-chore', 'always'), definition('held-chore', 'skip_if_open')]);
+  assert(!lastMintedCell('always-chore').textContent.includes('scheduler'), 'always-fire row claims the scheduler is held beside a skip-if-open row');
+  assert(lastMintedCell('held-chore').textContent.includes('scheduler will skip'), 'skip-if-open row lost its hold beside an always-fire row');
+  assert(summaryNote().includes('scheduler skips 1') && summaryNote() !== 'scheduler skips these slots', 'summary must count only the held slot: ' + summaryNote());
+  assert(scheduleGroupHint().includes('skip-if-open') && !scheduleGroupHint().includes('no open instance exists'), 'group hint must describe each policy: ' + scheduleGroupHint());
+  mintConfirm('always-chore');
+  mintConfirm('held-chore');
+  globalThis.autoTaskPolicyTestsPassed = true;
+} catch (error) {
+  globalThis.autoTaskPolicyError = String(error && error.message ? error.message : error);
+}
+`;
 const server = http.createServer((req, res) => {
   const name = new URL(req.url, 'http://fixture').pathname;
   const served = name === '/test.mjs' ? { data: fs.readFileSync(test), type: 'text/javascript' }
@@ -108,6 +183,21 @@ let browser;
 let page;
 try {
   browser = await chromium.launch({headless:true, executablePath: process.env.ORBIT_CHROMIUM_PATH || undefined});
+  // ORB-19679: the auto-task policy lines get a page of their own, ahead of the
+  // main flow so this check does not wait on that flow's unrelated assertions.
+  const policyPage = await browser.newPage({ viewport: { width: 1440, height: 1000 }, timezoneId: 'America/Los_Angeles' });
+  const policyErrors = [];
+  policyPage.on('pageerror', error => { policyErrors.push(String(error)); console.error(error); });
+  await policyPage.goto(`http://127.0.0.1:${server.address().port}/#operations/auto-tasks`);
+  await policyPage.addScriptTag({ type: 'module', content: autoTaskPolicyHarness });
+  await policyPage.waitForFunction(() => globalThis.autoTaskPolicyTestsPassed || globalThis.autoTaskPolicyError, undefined, { timeout: 15000 });
+  await policyPage.locator('#auto-tasks-body').screenshot({ path: path.join(evidence, 'auto-task-policy-dark-1440.png'), animations: 'disabled' });
+  await policyPage.setViewportSize({ width: 375, height: 812 });
+  await policyPage.locator('#auto-tasks-body').screenshot({ path: path.join(evidence, 'auto-task-policy-dark-375.png'), animations: 'disabled' });
+  const policyError = await policyPage.evaluate(() => globalThis.autoTaskPolicyError);
+  if (policyError) throw new Error(`auto-task policy: ${policyError}`);
+  if (policyErrors.length) throw new Error(`page errors during the auto-task policy scenario: ${policyErrors.join(' | ')}`);
+  await policyPage.close();
   // A fixed zone away from UTC, so local times cannot pass as UTC.
   page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, timezoneId: 'America/Los_Angeles' });
   const sharedDrainDeadline = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
