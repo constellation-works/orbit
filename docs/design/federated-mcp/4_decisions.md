@@ -1,8 +1,8 @@
 ---
 title: Federated MCP — Decisions
 owner: grok
-last_updated: 2026-10-07
-last_validated: 2026-10-12
+last_updated: 2026-10-29
+last_validated: 2026-10-29
 status: Draft
 feature: federated-mcp
 doc_role: decisions
@@ -220,8 +220,14 @@ This is the same rationale as [ORB-12563] on the dashboard: an authorization sta
 - [ORB-11009] — recorded these standing rules as the contract home (PR #1139)
 - [ORB-11010] — closed the PR #1139 review holes (selector wording, tool class, error precedence, competing authorities)
 - [ORB-11044] — implicit local membership for federated serve
+- [ORB-11023] — routed delivery gets its own budget; a lost answer after
+  dispatch is `outcome_unknown`
 - [ORB-11052] — destination-side caller authorization, Tier 1 (the callers file)
 - [ORB-11053] — key-bound caller identity, Tier 2 (the `authorized_keys` forced command)
+- [ORB-11057] — corrected Tier 2: public accept-ssh flags let callers forge
+  key-bound identity
+- [ORB-11134] — corrected Tier 2: keep SSH MCP acceptance bearers out of
+  same-UID process metadata
 - [ORB-11184] — kernel-protected Tier 2 exec boundary before userspace startup
 - [ORB-12564] — argv-propagated remote operator; destination-side caller authorization removed
 - [ORB-12563] — the same rationale applied to the dashboard

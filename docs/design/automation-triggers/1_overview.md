@@ -1,8 +1,8 @@
 ---
 title: Automation Triggers — Overview
 owner: codex
-last_updated: 2026-10-27
-last_validated: 2026-10-27
+last_updated: 2026-10-29
+last_validated: 2026-10-29
 status: Draft
 stage: shipped
 next: "—"
@@ -51,7 +51,7 @@ generic event bus, user scripts, arbitrary transition subscriptions, cross-host
 failover, automatic engineering decisions, or a second job scheduler. User
 expressions were a non-goal too. [Condition triggers](../condition-triggers/1_scope.md)
 reverse that for type-checked, side-effect-free predicates only, as a `condition`
-kind beside the typed kinds; scripts and the other non-goals stand.
+kind beside the typed kinds [ORB-19288]; scripts and the other non-goals stand.
 Delivery-triggered review is not a replacement for required PR review or QA.
 
 ## 2. Core Concepts
@@ -83,6 +83,7 @@ review coverage remains uncovered.
 | Existing job scheduling | [Routines](../routines/2_design.md) | ORB-11315 inspection |
 | Existing task minting | [Auto-tasks](../auto-tasks/2_design.md) | ORB-11315 inspection |
 | Review-policy relationship | [Review gate](../review-gate/2_design.md) | ORB-11333 |
+| Condition predicates | [Condition triggers](../condition-triggers/1_scope.md) | ORB-19288 |
 
 Execution waited until the OpenCode prerequisite [ORB-11295] landed as
 `8da5a925f` (PR 1382), an ancestor of the inspected checkout `c286142bce`.
@@ -92,7 +93,13 @@ publication does not approve the proposed runtime behavior.
 ## Task References
 
 - [ORB-11315] — formulates the shared trigger proposal.
+- [ORB-11330] — implements delivery triggers on the sweep clock with durable
+  batches and coverage checkpoints.
+- [ORB-11331] — implements bounded state preparation and failure triage with
+  Store checkpoints.
 - [ORB-11295] — landed prerequisite before design execution.
 - [ORB-11333] — implements review timing, repair bounds, and delivery coverage.
+- [ORB-19288] — scopes the `condition` trigger kind beside the typed kinds,
+  reversing the user-expression non-goal.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

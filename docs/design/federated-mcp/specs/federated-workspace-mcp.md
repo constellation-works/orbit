@@ -1,7 +1,8 @@
 ---
 type: design
 summary: "Spec: Federated workspace MCP mux, selector, capabilities, list schema, and fail-closed routing"
-last_validated: 2026-10-19
+last_updated: 2026-10-29
+last_validated: 2026-10-29
 title: Spec — Federated workspace MCP
 owner: grok
 status: Draft
@@ -232,3 +233,20 @@ A disconnected or failed host therefore removes the affected route from useful s
 ## Agent Signature
 
 Specified by grok in [ORB-11009] (PR #1139), with contract holes closed in [ORB-11010], citing prior policy [ORB-11008]. Destination config, selector, and error identities implemented in [ORB-11013]; the federated list implemented by claude in [ORB-11014]; fail-closed routing of host-qualified selectors implemented in [ORB-11015]; federated workspace-param advertisement implemented in [ORB-11017]; implicit local membership implemented in [ORB-11044].
+
+## Task References
+
+- [ORB-11008] — recorded the federated multi-host MCP policy this spec implements
+- [ORB-11009] — specified this mux contract (PR #1139)
+- [ORB-11010] — closed the PR #1139 review contract holes
+- [ORB-11013] — destination config, selector type, and routing errors
+- [ORB-11014] — federated workspace list
+- [ORB-11015] — fail-closed workspace-scoped routing
+- [ORB-11017] — host-qualified federated `workspace` parameter
+- [ORB-11023] — routed delivery budget and `outcome_unknown`
+- [ORB-11044] — implicit local membership for federated serve
+- [ORB-12725] — renamed the discovery key from `host` to `machine_name`
+- [ORB-14448] — host file and `orbit host` commands (specified in host-registry)
+- [ORB-14449] — task-prefix routing and `--host` (host-registry)
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

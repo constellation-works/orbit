@@ -1,8 +1,8 @@
 ---
 title: Automation Triggers — Design
 owner: codex
-last_updated: 2026-10-23
-last_validated: 2026-10-20
+last_updated: 2026-10-29
+last_validated: 2026-10-29
 status: Draft
 feature: automation-triggers
 doc_role: design
@@ -823,7 +823,13 @@ to change; implementation scope and defaults still require approval.
 ## Task References
 
 - [ORB-11315] — specifies shared triggers, batch/coverage and pilot/triage semantics.
+- [ORB-11330] — establishes the automation crate, shared triggers, delivery
+  sweeps and artifact-based coverage.
+- [ORB-11331] — implements state-driven task preparation and failure triage.
 - [ORB-11333] — implements review timing and content-specific coverage exclusions.
+- [ORB-12118] — exempts `no-diff-expected` tasks from assessed-complexity admission.
+- [ORB-13638] — makes task-pilot freshness inputs configurable.
+- [ORB-14476] — retries a stale claim against its frozen source.
 - [ORB-15191] — bounds how long multi-slot admission waits for a task pilot to prepare empty-context backlog work.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -1,8 +1,8 @@
 ---
 title: Auto-tasks — Design
 owner: claude
-last_updated: 2026-10-28
-last_validated: 2026-10-28
+last_updated: 2026-10-29
+last_validated: 2026-10-29
 status: Accepted
 feature: auto-tasks
 doc_role: design
@@ -172,15 +172,17 @@ definition minted nothing — `orbit auto-task show <name>` renders it under
 `cursor`, and the dashboard carries it on `last_evaluation.last_skip`. A fire
 clears it.
 
-`orbit.auto_task.list` projects the same cursor into a bounded `last_fire`:
+`orbit.auto_task.list` projects the same cursor into a bounded `last_fire`
+[ORB-19112]:
 `{ kind: "fired", at, task_id, task_status }` for a fire,
 `{ kind: "skipped", at, skip_reason }` for the latest precondition skip, or
 `null` before either. The fired projection reads the task's current status by
 its ID. It exposes no run ID, logs, step output, or skip comparison metadata.
 
 Delivery schedules never write that cursor, so their `last_fire` reads
-scheduler-owned automation records instead: the active batch's latest minted
-task, including the preceding attempt while a retry waits for admission, or
+scheduler-owned automation records instead [ORB-19122]: the active batch's
+latest minted task, including the preceding attempt while a retry waits for
+admission [ORB-19131], or
 the newest accepted receipt's task, whichever was minted later. `at` is the minted task's creation time, falling back to the recorded
 batch or receipt time when the task is gone. A leftover cursor from an
 earlier time schedule never shadows a delivery fire, and a delivery
@@ -827,14 +829,28 @@ accurate.
 - [ORB-18557] — Adds design-sync with bounded reconciliation, intent safeguards and a cumulative ledger.
 
 - [ORB-11315] — proposes shared state-driven triggers and durable coverage semantics.
+- [ORB-11330] — implements delivery-trigger consumers on the sweep clock with
+  durable batches and coverage checkpoints.
+- [ORB-11331] — implements bounded state-preparation consumers with Store
+  checkpoints.
+- [ORB-13422] — confines auto-task show and mint to the definition path.
 
 - ORB-10876 — dashboard Operations inspection, toggle, and manual mint.
+- ORB-10800 — doctor check for stale, deprecated and faulty definition
+  artifacts plus `--fix-stale-artifacts`.
 - ORB-10149 — Auto-task primitive.
 - ORB-10439 — on-demand manual mint (renamed to `orbit auto-task mint <name>` by ORB-10446).
+- ORB-10446 — renamed `orbit auto-task generate` to `orbit auto-task mint`.
 - ORB-10441 — mint-time visible title provenance.
 - ORB-10472 — worktree-local, atomic definition refresh.
 - ORB-10583 — workspace-local weekly official model-price audit definition.
+- ORB-10798 — narrowed the auto-task MCP surface to list and mint.
 - ORB-11095 — centralized tag-derived title provenance and the canonical
   `code-review` auto-task name.
+- ORB-15663 — retired the system lane: system work routes through the
+  complexity pools instead.
+- ORB-19112 — `orbit.auto_task.list` reports each definition's last fire.
+- ORB-19122 — delivery auto-tasks report their actual last fire.
+- ORB-19131 — keeps the delivery `last_fire` visible while a retry backs off.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

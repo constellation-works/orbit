@@ -1,8 +1,8 @@
 ---
 title: Auto-tasks — Overview
 owner: claude
-last_updated: 2026-10-26
-last_validated: 2026-10-26
+last_updated: 2026-10-29
+last_validated: 2026-10-29
 status: Accepted
 stage: shipped
 next: "—"
@@ -149,7 +149,8 @@ definition of the same name.
   artifact. Parallel reading is used when the crew and execution rules permit
   it. Incomplete coverage reports `review_incomplete` with uncovered partitions
   in the artifact and task comment. Findings are `bug`s tagged `code-review` +
-  `full-code-review`, with source-file and matching test context selectors.
+  `full-code-review`, with source-file and matching test context selectors
+  [ORB-18948].
 - `qa-full-sweep` — disabled-by-default, minted on demand (its monthly cron
   stays off until enabled). It is the hands-on counterpart of
   `full-code-review`: where `qa-sweep` validates only the changes since its
@@ -265,7 +266,7 @@ definition of the same name.
   settlement's `leaf_run_id`, and the row's `task_ids` lists the settlement's
   `task_id`. Run ids come from each store's own sequence, so a same-id leaf
   seen on another host is a different run and is counted; a row with null
-  `executed_on` never dedupes. Parents
+  `executed_on` never dedupes [ORB-19455]. Parents
   that fail `pipeline_success_guard` fold into their child by `orbit run
   show`'s `root_cause`, and a parent of a `held` child is no failure. Review
   refusals are clustered by escalation category (`base_red`,
@@ -298,7 +299,8 @@ definition of the same name.
   [ORB-13992]; the deprecated `operation.review_policy = after-landing`
   enables a copy no operator has configured, which `list` and `show` report
   as `effective_enabled`. The dashboard groups and toggles by that effective
-  value and keeps the raw flag as the compare-and-set token. The former `delivery-qa` default is retired and is not seeded;
+  value and keeps the raw flag as the compare-and-set token. The former
+  `delivery-qa` default is retired and is not seeded;
   hands-on QA stays with `qa-sweep` (recent changes) and `qa-full-sweep`
   (the whole product at one commit).
 - `architecture-audit` — disabled-by-default audit every 14 days of the
@@ -521,7 +523,10 @@ encode this repository's branches and gates. Re-init preserves them:
 
 - ORB-10149 — Auto-task primitive.
 - ORB-10148 — qa-sweep V1 (first definition; depends on this).
+- ORB-10039 — the bespoke inline qa-sweep check sweep that auto-tasks generalize.
 - ORB-10439 — `orbit auto-task mint <name>`, the on-demand manual mint.
+- ORB-13432 — serializes manual mint with non-force deletion.
+- ORB-10798 — narrowed the auto-task MCP surface to list and mint.
 - ORB-10440 — Daily friction-curation definition.
 - ORB-10514 — Original workspace-authored CI-failure auto-task.
 - ORB-10549 — Embedded the portable, disabled friction-curation default and
@@ -535,6 +540,10 @@ encode this repository's branches and gates. Re-init preserves them:
   are no longer listed as if they were embedded defaults.
 - ORB-11095 — Added centralized finding-title provenance and established the
   shipped definition's canonical `code-review` name.
+- ORB-12237 — moved auto-task evaluation into the host clock tick and retired
+  the scheduler routine, job and activity.
+- ORB-14909 — settings-table migration when enabling or re-crewing a bundled
+  definition forks the template.
 - ORB-12931 — Added the disabled weekly `run-failure-patterns` default that
   mines unfiled recurring run failures.
 - ORB-14439 — `run-failure-patterns` files proposed fix tasks, reads follower
@@ -607,5 +616,11 @@ encode this repository's branches and gates. Re-init preserves them:
 - ORB-11115 / ORB-11383 — Retired the shipped CI-failure auto-task;
   runner workflows only emit fail-open run/job/commit provenance, while the
   host-owned `ci_failure_sweep` routine performs durable CI-failure filing.
+- ORB-13992 — made after-landing review the `delivery-code-review` definition's
+  own `enabled` flag and removed `operation.review_policy`.
+- ORB-18948 — corrected the `full-code-review` partition rules after a run
+  diverged from what the docs stated.
+- ORB-19455 — corrected the follower-settlement dedupe rule to the three-part
+  machine, run and task match.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

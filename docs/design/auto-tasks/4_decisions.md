@@ -1,8 +1,8 @@
 ---
 title: Auto-tasks — Decisions
 owner: claude
-last_updated: 2026-09-25
-last_validated: 2026-10-17
+last_updated: 2026-10-29
+last_validated: 2026-10-29
 status: Accepted
 feature: auto-tasks
 doc_role: decisions
@@ -167,10 +167,14 @@ The scheduler pass was already a stateless, cursor-driven due evaluator — the 
 
 ## Task References
 
+- [ORB-12950] — routes managed auto-task writes to the host definition root.
 - [ORB-12718] — auto-task definitions are per-user checkout state, not git-versioned records.
 - [ORB-12237] — moves auto-task evaluation into the host clock tick and retires the scheduler routine/job/activity.
+- [ORB-12698] — skips the mint on a quiet branch or an unanswerable precondition.
 - [ORB-10149] — Shipped the auto-task primitive (record, scheduler, CRUD, assets).
 - [ORB-10148] — Added the QA definition and no-diff workflow exemption.
+- ORB-10146 — qa-sweep v2 worker-invoked QA agent pass; set the wall-clock,
+  never turn-cap budget rule.
 - [ORB-10472] — Isolated auto-task definition refresh from the registered
   primary checkout.
 
