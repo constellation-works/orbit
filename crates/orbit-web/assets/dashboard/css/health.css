@@ -80,6 +80,17 @@ td .rel-rate { font-size: 12px; }
 }
 .rel-table { width: 100%; }
 .rel-card .card-body { padding: 0; overflow-x: auto; }
+/* ORB-19694 — bounded attribution tables. The footer states how many of the
+   ordered rows are visible and holds the Show all / Show top toggle, so the
+   initial card stays short while every row remains one gesture away. */
+.rel-table-wrap { min-width: 0; }
+.rel-table-footer {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: 8px 12px; padding: 10px 16px;
+  border-top: 1px solid var(--border); background: var(--bg-elev);
+}
+.rel-table-meta { font: 12px var(--font-sans); color: var(--fg-dim); }
+.rel-card button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .rel-role {
   font-family: var(--font-mono); font-size: 10px;
   padding: 1px 6px; border-radius: 3px; border: 1px solid var(--border);
