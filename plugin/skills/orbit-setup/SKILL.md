@@ -46,6 +46,7 @@ shared workspace. Preserve the user's installation method and existing config.
 | Upgrade, resource sync, doctor, worktree GC, workspace removal or teardown, or source-remote rebinding | [Maintenance](references/maintenance.md#removing-or-re-targeting-a-workspace) |
 | Inspect or compact admission receipt storage on an owner checkout | [Maintenance — Admission receipt storage](references/maintenance.md#admission-receipt-storage) |
 | Scheduler/service logs and host incidents | [Operational logs](references/operational-logs.md) |
+| A task held after a provider failure: which crews, accounts and hosts it excludes and when it clears | [Operational logs — Provider failure holds](references/operational-logs.md#provider-failure-holds) |
 
 Task tracking alone does not require a provider, PR credentials, a scheduler or
 remote hosts. Add those only for the requested workflow. Agent execution needs

@@ -170,6 +170,90 @@ Running work is left alone by the hold. Report the schedule and configured
 window; preserve the hold and operator capacity policy rather than raising
 concurrency, changing forecast thresholds, or cancelling a shutdown automatically.
 
+## Provider failure holds
+
+A local run can stop because its provider failed rather than the work. The
+step error then carries a typed marker followed by `provider=<name>`. Only
+the provider CLI's own stderr, terminal error, or failure frames set a
+marker; an agent transcript or tool output that merely mentions a rate limit
+does not. Treat this as read-only diagnosis: the hold lifts by itself, and
+the next run resumes the kept candidate. Do not clear state files, unblock
+or replay the task, file a duplicate, or dispatch repeatedly to force it
+through.
+
+| Marker | Meaning | Run outcome | Excluded crews | Base backoff |
+| --- | --- | --- | --- | --- |
+| `[provider_capacity]` | The selected model was at capacity. | `held` (`provider_capacity`) | The run's crew, or every crew of the failing step's provider when that step ran on another provider. | 15 minutes |
+| `[provider_unavailable]` | Unusable on this host, such as a failed login. | `failed`; the task is still held | As for capacity. | 30 minutes |
+| `[provider_refusal]` | The provider's content policy refused the task. | `failed`; the task is still held | Every crew of the refusing provider. | 24 hours |
+| `[provider_limit]` | The account hit a usage limit. | `held` (`provider_limit`) | Every crew of the failing account; only crews whose model contains the named model when the failure names one. | Until the reported reset (below) |
+
+Capacity, unavailability, and refusal backoffs double for each earlier hold
+the task received in the last 24 hours, up to 24 hours. A usage-limit hold
+lasts until the provider's reset, clamped between 5 minutes and 7 days;
+with no readable reset it starts at 30 minutes and doubles per earlier
+usage-limit hold on that provider account in the last 24 hours, up to
+6 hours.
+
+A crew that sets its own credentials is its own account: the marker then
+carries `account=<crew>` after the provider, and a limit, capacity, or
+unavailability failure excludes that crew alone. A failure without one is
+the provider's default login and excludes only the provider's crews without
+their own credentials. A refusal is the provider's content policy and still
+excludes every crew of that provider. An unavailability hold also names the
+host's machine: a failed login is that host's, so its crews are excluded
+only there, while crews an earlier still-standing capacity, limit, or
+refusal hold excluded stay excluded on every machine. A claimed run on
+another host that a provider refused releases its claim the same way, and
+the owner records the hold from its own crews.
+
+Until the release time, the drain gives the task to a crew the hold does
+not exclude: the task's own crew or pool first, then the other enabled
+members of its purpose or type pool, then its complexity pool, then the
+workspace default. The draw source names the hold. With no crew left, the
+task waits and `orbit run readiness` reports it with `reason:
+"provider_backoff"` and the release time. A run started with an explicit
+crew input ignores the hold. The hold ends at the release time or at any
+later status change; do not move the task just to lift it. The next run
+resumes the committed candidate: a held run commits it on the run's branch
+and pushes it to the candidate ref on the origin without opening a branch
+or a pull request, so there is nothing to re-run or rebuild by hand.
+
+Inspect the hold through these read-only surfaces:
+
+```bash
+orbit run show <run-id> --json
+orbit task show <task-id>
+orbit run readiness <task-id> --json
+```
+
+`orbit run show` names the marker (`provider=<name>`, with
+`account=<crew>` for a crew account), the diagnostic code, and whether the
+run ended `held` or `failed`. `orbit task show` leaves the task in
+`backlog` under a `provider_failure_hold` history event whose note names
+the class, provider, excluded crews, release time, and run. `orbit run
+readiness` reports the waiting task with `reason: "provider_backoff"` and a
+detail naming that run, class, excluded crews, and release time; eligibility
+commands alone never clear it. Check `orbit run readiness --help`,
+`orbit run show --help`, and `orbit task show --help` on the installed host
+for the exact output shape before scripting around it.
+
+Separate the hold from two lookalikes. A host outage from an
+unavailability failure is recorded for this host only: until its backoff
+lapses the local drain draws no task onto that crew, not only the held one,
+and moving the held task through another status does not lift that. Sign
+the provider in again on that host; tasks draw the crew once the outage
+lapses. An unavailability hold placed on another host excludes nothing
+here. A provider usage-budget wait instead reports `reason:
+"provider_limit"` with a `Provider limits:` line naming each gated window,
+its reset, and the skipped crews; `orbit doctor` warns on the provider's
+`provider-limits` row. Nothing failed and nothing needs repair there: the
+wait lifts by itself after the reset. Thresholds and budgets are in
+[configuration.md](configuration.md#common-settings). When the scheduled
+task pilot withholds its dispatch, its reason names the provider or crew,
+when the backoff ends, the failing run, and the skipped crews; the next
+tick after the hold lifts dispatches again with no operator action.
+
 ## Worker Resource Containment
 
 On Linux with a reachable systemd user manager, every detached pipeline worker
