@@ -50,7 +50,7 @@ set -e
 if [[ "$rg_status" -eq 0 ]]; then
   printf '%s\n' "$rg_output"
   cat >&2 <<'MSG'
-Artifact write redaction must flow through orbit_common::utility::redaction and the shared tool-host policy.
+Artifact write redaction must flow through orbit_common::security::redaction and the shared tool-host policy.
 Do not add surface-local `fn redact_*` helpers for task or friction tools.
 MSG
   exit 1
