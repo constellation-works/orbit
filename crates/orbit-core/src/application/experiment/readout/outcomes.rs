@@ -105,14 +105,14 @@ pub(super) const METRIC_SPECS: &[MetricSpec] = &[
         Kind::Mean,
         Better::Lower,
         "turns",
-        false,
+        true,
     ),
     spec(
         "result_bytes_before_first_edit",
         Kind::Mean,
         Better::Lower,
         "bytes",
-        false,
+        true,
     ),
     spec(
         "first_pass_acceptance",
@@ -371,6 +371,7 @@ impl OrbitRuntime {
         let spend = self.task_spend(&ids, since)?;
         let lines = self.landed_task_lines_changed(&ids, since)?;
         let (run_events, run_digests) = self.run_audit(experiment_id, &ids, since)?;
+        let first_edits = self.first_implement_edits(Some(since))?.by_task;
 
         let mut landed_at = BTreeMap::new();
         let mut histories = BTreeMap::new();
@@ -456,8 +457,15 @@ impl OrbitRuntime {
                         .map(|ms| ms as f64 / 60_000.0),
                 ),
             );
-            values.insert("turns_before_first_edit", Outcome::Unmeasured);
-            values.insert("result_bytes_before_first_edit", Outcome::Unmeasured);
+            let first_edit = first_edits.get(id).and_then(|edit| edit.score);
+            values.insert(
+                "turns_before_first_edit",
+                settled(first_edit.map(|(turns, _)| turns as f64)),
+            );
+            values.insert(
+                "result_bytes_before_first_edit",
+                settled(first_edit.map(|(_, bytes)| bytes as f64)),
+            );
             values.insert(
                 "first_pass_acceptance",
                 match first_judged {

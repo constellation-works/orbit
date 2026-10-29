@@ -11,7 +11,7 @@ use orbit_store::contracts::{
     ExperimentAssignment, ExperimentEventRow, ExperimentStoreBackend, ExperimentWrite,
     ExperimentWriteOutcome, InvocationInsertParams,
 };
-use orbit_types::telemetry::{InvocationTrace, TokenUsage};
+use orbit_types::telemetry::{InvocationTrace, TokenUsage, ToolCallTrace};
 use serde_json::json;
 
 #[test]
@@ -314,16 +314,16 @@ fn expired_readout_requires_a_primary_comparison_interval() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-fn enroll_primary_sample(
+/// Creates a backlog task of `complexity` and enrolls it in `arm_name`.
+fn enroll_arm_task(
     runtime: &OrbitRuntime,
     experiment_id: &str,
     arm_name: &str,
     complexity: TaskComplexity,
-    tokens: Option<u64>,
 ) -> String {
     let task = runtime
         .add_task(TaskAddParams {
-            title: format!("primary sample for {arm_name}"),
+            title: format!("experiment sample for {arm_name}"),
             complexity,
             task_type: Some(TaskType::Chore),
             status: Some(TaskStatus::Backlog),
@@ -351,16 +351,27 @@ fn enroll_primary_sample(
             }])
         })
         .unwrap();
+    task.id.to_string()
+}
+
+fn enroll_primary_sample(
+    runtime: &OrbitRuntime,
+    experiment_id: &str,
+    arm_name: &str,
+    complexity: TaskComplexity,
+    tokens: Option<u64>,
+) -> String {
+    let task_id = enroll_arm_task(runtime, experiment_id, arm_name, complexity);
     if let Some(tokens) = tokens {
         runtime
             .insert_invocation_trace_record(&InvocationInsertParams {
-                job_run_id: format!("fixture-{}", task.id),
+                job_run_id: format!("fixture-{task_id}"),
                 account: None,
                 activity_id: "agent_implement".into(),
                 agent: "codex".into(),
                 provider: None,
                 model: Some("gpt-6.1-sol".into()),
-                task_ids: vec![task.id.to_string()],
+                task_ids: vec![task_id.clone()],
                 trace: InvocationTrace {
                     usage: TokenUsage {
                         input: tokens,
@@ -370,9 +381,216 @@ fn enroll_primary_sample(
                 },
             })
             .unwrap();
-        runtime.archive_task(&task.id).unwrap();
+        runtime.archive_task(&task_id).unwrap();
     }
-    task.id.to_string()
+    task_id
+}
+
+/// Enrolls a task in `arm_name` whose first implement invocation made
+/// `calls`, each `(tool name, result bytes)` in order. `None` records no
+/// implement invocation. Archives the task when `terminal`, so its outcome
+/// settles.
+fn enroll_first_edit_sample(
+    runtime: &OrbitRuntime,
+    experiment_id: &str,
+    arm_name: &str,
+    calls: Option<&[(&str, u64)]>,
+    terminal: bool,
+) -> String {
+    let task_id = enroll_arm_task(runtime, experiment_id, arm_name, TaskComplexity::Low);
+    if let Some(calls) = calls {
+        let tool_calls: Vec<ToolCallTrace> = calls
+            .iter()
+            .enumerate()
+            .map(|(seq, &(tool_name, result_bytes))| ToolCallTrace {
+                seq: seq as u32,
+                tool_name: tool_name.into(),
+                result_bytes,
+                ..ToolCallTrace::default()
+            })
+            .collect();
+        runtime
+            .insert_invocation_trace_record(&InvocationInsertParams {
+                job_run_id: format!("fixture-{task_id}"),
+                account: None,
+                activity_id: "agent_implement".into(),
+                agent: "codex".into(),
+                provider: None,
+                model: Some("gpt-6.1-sol".into()),
+                task_ids: vec![task_id.clone()],
+                trace: InvocationTrace {
+                    tool_calls,
+                    ..InvocationTrace::default()
+                },
+            })
+            .unwrap();
+    }
+    if terminal {
+        runtime.archive_task(&task_id).unwrap();
+    }
+    task_id
+}
+
+/// What a first-edit case's treatment arm settles to.
+#[derive(Clone, Copy)]
+enum FirstEdit {
+    /// Settled and measured, with `(turns, result bytes)` before the edit.
+    Measured(f64, f64),
+    /// Settled, with no value in the records.
+    Unmeasured,
+    /// Still in flight.
+    Open,
+}
+
+#[test]
+fn first_edit_readout_scores_the_first_implement_invocation() {
+    if !super::dispatch_admission::isolated(
+        "experiment_readout::first_edit_readout_scores_the_first_implement_invocation",
+    ) {
+        return;
+    }
+
+    struct Case {
+        name: &'static str,
+        /// The first implement invocation's tool calls, or `None` for no
+        /// implement invocation.
+        calls: Option<&'static [(&'static str, u64)]>,
+        terminal: bool,
+        expected: FirstEdit,
+    }
+    let cases = [
+        Case {
+            name: "two-reads-then-editor",
+            calls: Some(&[("read", 10), ("read", 20), ("edit", 5)]),
+            terminal: true,
+            expected: FirstEdit::Measured(2.0, 30.0),
+        },
+        Case {
+            name: "mcp-editor-tail-after-reads",
+            calls: Some(&[("read", 10), ("mcp__fs__write_file", 0)]),
+            terminal: true,
+            expected: FirstEdit::Measured(1.0, 10.0),
+        },
+        Case {
+            name: "edit-at-first-call",
+            calls: Some(&[("edit", 40)]),
+            terminal: true,
+            expected: FirstEdit::Measured(0.0, 0.0),
+        },
+        Case {
+            name: "no-implement-invocation",
+            calls: None,
+            terminal: true,
+            expected: FirstEdit::Unmeasured,
+        },
+        Case {
+            name: "missing-trace",
+            calls: Some(&[]),
+            terminal: true,
+            expected: FirstEdit::Unmeasured,
+        },
+        Case {
+            name: "no-detectable-editor",
+            calls: Some(&[("command_execution", 12), ("shell", 3)]),
+            terminal: true,
+            expected: FirstEdit::Unmeasured,
+        },
+        Case {
+            name: "in-flight-with-edit",
+            calls: Some(&[("read", 10), ("edit", 5)]),
+            terminal: false,
+            expected: FirstEdit::Open,
+        },
+        Case {
+            name: "in-flight-without-invocation",
+            calls: None,
+            terminal: false,
+            expected: FirstEdit::Open,
+        },
+    ];
+    for case in cases {
+        let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+        let global = root.path().join("home/.orbit");
+        let workspace = root.path().join("repo/.orbit");
+        std::fs::create_dir_all(&global).unwrap();
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(
+            workspace.join("config.toml"),
+            "[experiments]\nenabled = true\n",
+        )
+        .unwrap();
+        let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+        let actor = ExperimentActor {
+            actor: "readout-test".into(),
+            reason: None,
+        };
+        let experiment = runtime
+            .create_experiment(
+                case.name,
+                ExperimentDefinitionInput {
+                    arms: Some(json!([
+                        { "name": "control", "control": true },
+                        { "name": "treatment" }
+                    ])),
+                    primary_metric: Some("turns_before_first_edit".into()),
+                    ..ExperimentDefinitionInput::default()
+                },
+                actor.clone(),
+            )
+            .unwrap();
+        runtime
+            .change_experiment(&experiment.id, ExperimentChange::Start, actor)
+            .unwrap();
+        enroll_first_edit_sample(
+            &runtime,
+            &experiment.id,
+            "treatment",
+            case.calls,
+            case.terminal,
+        );
+
+        let readout = runtime.experiment_readout(&experiment.id, None).unwrap();
+        // (n, mean, unmeasured, open) of the treatment arm for one metric.
+        let treatment = |metric_name: &str| {
+            let metric = readout
+                .metrics
+                .iter()
+                .find(|metric| metric.metric == metric_name)
+                .unwrap();
+            assert!(metric.measured, "{}: {metric_name}", case.name);
+            let arm = metric
+                .arms
+                .iter()
+                .find(|arm| arm.arm == "treatment")
+                .unwrap();
+            (arm.estimate.n, arm.estimate.mean, arm.unmeasured, arm.open)
+        };
+        let (want_n, want_turns, want_bytes, want_unmeasured, want_open) = match case.expected {
+            FirstEdit::Measured(turns, bytes) => (1, Some(turns), Some(bytes), 0, 0),
+            FirstEdit::Unmeasured => (0, None, None, 1, 0),
+            FirstEdit::Open => (0, None, None, 0, 1),
+        };
+        let turns = treatment("turns_before_first_edit");
+        assert_eq!(
+            turns,
+            (want_n, want_turns, want_unmeasured, want_open),
+            "{}: turns_before_first_edit",
+            case.name
+        );
+        let bytes = treatment("result_bytes_before_first_edit");
+        assert_eq!(
+            bytes,
+            (want_n, want_bytes, want_unmeasured, want_open),
+            "{}: result_bytes_before_first_edit",
+            case.name
+        );
+        assert_eq!(
+            readout.primary_observations.len(),
+            want_n,
+            "{}: primary observations",
+            case.name
+        );
+    }
 }
 
 #[test]

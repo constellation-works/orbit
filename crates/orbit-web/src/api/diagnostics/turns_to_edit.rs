@@ -2,22 +2,16 @@
 //! and tag cohort, for Analytics › Metrics.
 //!
 //! Each terminal task counts once, in the bucket of its index `updated_at`.
-//! The score comes from that task's first implement invocation: the earlier
-//! of `implement_one` and `agent_implement` by `(ts, id)`. Turns are the
-//! tool calls strictly before the first file-mutating call, after ordering
-//! by `seq`; result bytes are the saturating sum of those preceding calls.
-//! An edit at the first call scores zero. An invocation with no recorded
-//! tool call, or none whose name is a known editor tool, is excluded and
-//! counted — a shell such as `command_execution` is not an edit, and is
-//! never averaged as zero.
+//! Its score is the first-edit score of its first implement invocation, the
+//! same definition the experiment readout uses. A task whose first
+//! invocation has no scoreable edit is excluded and counted, never averaged
+//! as zero.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use axum::extract::Query;
 use axum::response::{IntoResponse, Json, Response};
-use chrono::{DateTime, Utc};
-use orbit_core::metrics::cost::IMPLEMENT_INVOCATION_IDS;
-use orbit_core::{InvocationQuery, OrbitRuntime};
+use orbit_core::OrbitRuntime;
 use orbit_types::task::{TaskStatus, UNSET_BUCKET, complexity_bucket_ord};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -40,34 +34,6 @@ const MAX_TAGS: usize = 8;
 const AVAILABLE_TAGS: usize = 200;
 /// How far before the oldest task's filing the invocation read starts.
 const READ_SLACK: chrono::Duration = chrono::Duration::days(1);
-/// Rows fetched per page. A limit of 0 is the store's silent cap of 100,
-/// so every page asks for an explicit size.
-const PAGE_LIMIT: usize = 10_000;
-/// Invocations kept per implement activity. Reaching it sets `truncated`.
-const MAX_RECORDS: usize = 100_000;
-/// Editor tool names, matched case-insensitively against the full name and
-/// against the tail after the last `__` (an MCP tool's own name). Shell
-/// tools are absent on purpose: a provider that edits only through a shell
-/// has no detectable first edit.
-const FILE_MUTATING: &[&str] = &[
-    "edit",
-    "write",
-    "multiedit",
-    "multi_edit",
-    "notebookedit",
-    "editnotebook",
-    "notebook_edit",
-    "apply_patch",
-    "applypatch",
-    "str_replace",
-    "strreplace",
-    "search_replace",
-    "edit_file",
-    "write_file",
-    "create_file",
-    "delete_file",
-    "replace",
-];
 
 #[derive(Deserialize, Default)]
 pub(in crate::api) struct TurnsToEditQuery {
@@ -188,120 +154,6 @@ pub(in crate::api) async fn diagnostics_turns_to_edit(
     }
 }
 
-/// True when `name` is a known file-editing tool, including the tool's own
-/// name on the tail of an MCP identifier.
-fn is_file_mutating(name: &str) -> bool {
-    let lower = name.to_ascii_lowercase();
-    let tail = match lower.rsplit_once("__") {
-        Some((_, tail)) => tail,
-        None => lower.as_str(),
-    };
-    FILE_MUTATING
-        .iter()
-        .any(|known| *known == tail || *known == lower.as_str())
-}
-
-/// Turns and result bytes before the first edit, or `None` when no call is
-/// a detectable edit. `None` is an exclusion, including an empty trace.
-/// Each item is `(seq, tool_name, result_bytes)`.
-fn turns_before_edit<'a>(
-    calls: impl IntoIterator<Item = (u64, &'a str, u64)>,
-) -> Option<(u64, u64)> {
-    let mut ordered: Vec<(u64, &str, u64)> = calls.into_iter().collect();
-    if ordered.is_empty() {
-        return None;
-    }
-    ordered.sort_by_key(|call| call.0);
-    let index = ordered.iter().position(|call| is_file_mutating(call.1))?;
-    let bytes = ordered[..index]
-        .iter()
-        .fold(0u64, |sum, call| sum.saturating_add(call.2));
-    Some((u64::try_from(index).unwrap_or(u64::MAX), bytes))
-}
-
-struct SlimInvocation {
-    id: i64,
-    ts: DateTime<Utc>,
-    agent: String,
-    task_ids: Vec<String>,
-    score: Option<(u64, u64)>,
-}
-
-struct FirstEdit {
-    ts: DateTime<Utc>,
-    id: i64,
-    agent: String,
-    score: Option<(u64, u64)>,
-}
-
-/// Page one activity newest-first. The store's default limit is 100, so
-/// each page sets [`PAGE_LIMIT`]. A full page of one timestamp that yields
-/// no new row stops the walk: older rows may remain, and `truncated` says so.
-fn load_activity_invocations(
-    runtime: &OrbitRuntime,
-    activity: &str,
-    since: Option<DateTime<Utc>>,
-) -> Result<(Vec<SlimInvocation>, bool), orbit_core::OrbitError> {
-    let mut seen = HashSet::new();
-    let mut out = Vec::new();
-    let mut until: Option<DateTime<Utc>> = None;
-    loop {
-        if out.len() >= MAX_RECORDS {
-            return Ok((out, true));
-        }
-        let page = runtime.workspace_invocation_records(InvocationQuery {
-            since,
-            until,
-            activity_id: Some(activity.to_string()),
-            limit: PAGE_LIMIT,
-            ..Default::default()
-        })?;
-        if page.is_empty() {
-            return Ok((out, false));
-        }
-        let Some(boundary) = page.last() else {
-            return Ok((out, false));
-        };
-        let oldest = boundary.ts;
-        let page_len = page.len();
-        let mut added = 0usize;
-        let mut hit_cap = false;
-        for record in page {
-            if !seen.insert(record.id) {
-                continue;
-            }
-            if out.len() >= MAX_RECORDS {
-                hit_cap = true;
-                break;
-            }
-            let score = turns_before_edit(
-                record
-                    .tool_calls
-                    .iter()
-                    .map(|call| (call.seq, call.tool_name.as_str(), call.result_bytes)),
-            );
-            out.push(SlimInvocation {
-                id: record.id,
-                ts: record.ts,
-                agent: record.agent,
-                task_ids: record.task_ids,
-                score,
-            });
-            added += 1;
-        }
-        if hit_cap {
-            return Ok((out, true));
-        }
-        if page_len < PAGE_LIMIT {
-            return Ok((out, false));
-        }
-        if added == 0 {
-            return Ok((out, true));
-        }
-        until = Some(oldest);
-    }
-}
-
 /// What one task adds to the points it falls in.
 #[derive(Clone, Copy)]
 enum Contribution {
@@ -405,36 +257,12 @@ fn turns_to_edit_trend(
         .and_then(|created| created.into_iter().min())
         .map(|oldest| oldest - READ_SLACK);
 
-    let mut first_by_task: HashMap<String, FirstEdit> = HashMap::new();
-    let mut truncated = false;
-    if !in_window.is_empty() {
-        for activity in IMPLEMENT_INVOCATION_IDS {
-            let (invocations, activity_truncated) =
-                load_activity_invocations(runtime, activity, read_since)?;
-            truncated |= activity_truncated;
-            for invocation in invocations {
-                for task_id in invocation.task_ids {
-                    let replace = match first_by_task.get(&task_id) {
-                        Some(existing) => {
-                            (invocation.ts, invocation.id) < (existing.ts, existing.id)
-                        }
-                        None => true,
-                    };
-                    if replace {
-                        first_by_task.insert(
-                            task_id,
-                            FirstEdit {
-                                ts: invocation.ts,
-                                id: invocation.id,
-                                agent: invocation.agent.clone(),
-                                score: invocation.score,
-                            },
-                        );
-                    }
-                }
-            }
-        }
-    }
+    let (first_by_task, truncated) = if in_window.is_empty() {
+        (HashMap::new(), false)
+    } else {
+        let edits = runtime.first_implement_edits(read_since)?;
+        (edits.by_task, edits.truncated)
+    };
 
     let cohorts: &[&str] = if filters.tags.is_empty() {
         &["all"]
