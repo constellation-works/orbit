@@ -1838,6 +1838,8 @@ input.field-editor-input {
 }
 
 .task-action-notice {
+  min-width: 0;
+  max-width: 100%;
   padding: 8px 12px;
   border-left: 3px solid var(--state-success);
   border-radius: 4px;
@@ -1845,6 +1847,7 @@ input.field-editor-input {
   font-family: var(--font-mono);
   font-size: 12px;
   white-space: pre-line;
+  overflow-wrap: anywhere;
   background: rgba(16, 185, 129, 0.1);
 }
 /* A folded status change whose task has no row on screen (its new status is
@@ -1860,6 +1863,17 @@ input.field-editor-input {
   font-family: var(--font-mono);
   font-size: 12px;
   background: var(--bg-elev);
+}
+.task-status-notice > .mono { flex: none; }
+/* Feedback beside a detail's status or crew pill, or in a folded status
+   notice, wraps a long refusal in its box instead of ellipsizing it on one
+   line past the pane edge (the list row's status cell keeps its ellipsis). */
+.task-levers .mutation-feedback,
+.task-status-notice > .mutation-feedback {
+  min-width: 0;
+  max-width: 100%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .pilot-warning-findings {
