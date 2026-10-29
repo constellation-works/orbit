@@ -196,6 +196,30 @@ class EvalTests(unittest.TestCase):
         r = self._run("check-split", "--dataset", str(self._dump("ds2.json", ds2)), "--manifest", str(self._dump("m3.json", m3)))
         self.assertEqual(r.returncode, 2)
 
+    def test_missing_or_invalid_manifest_snapshot_rejected(self):
+        ds = self._load(self.ds)
+        ds["cases"][0]["evidence_packet"]["collected_at"] = "2027-01-01T00:00:00Z"
+        ds["intake_snapshot_at"] = "2027-06-01T00:00:00Z"
+        ds_path = self._dump("late-snapshot-ds.json", ds)
+        for snapshot, suffix in ((None, "missing"), ("not-a-timestamp", "invalid")):
+            with self.subTest(snapshot=snapshot):
+                manifest = {"format_version": "decision-assistance-eval/1",
+                            "holdout_id": f"holdout-snapshot-{suffix}",
+                            "assignments": {c["case_id"]: "train" for c in ds["cases"]}}
+                if snapshot is not None:
+                    manifest["intake_snapshot_at"] = snapshot
+                r = self._run("check-split", "--dataset", str(ds_path),
+                              "--manifest", str(self._dump(f"manifest-{suffix}.json", manifest)))
+                self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                self.assertIn("intake_snapshot_at", r.stdout)
+                self.assertFalse(json.loads(r.stdout)["ok"])
+        valid = {"format_version": "decision-assistance-eval/1", "holdout_id": "holdout-snapshot-valid",
+                 "intake_snapshot_at": "2027-06-01T00:00:00Z",
+                 "assignments": {c["case_id"]: "train" for c in ds["cases"]}}
+        r = self._run("check-split", "--dataset", str(ds_path),
+                      "--manifest", str(self._dump("manifest-valid.json", valid)))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
     def test_family_overlap_specifically(self):
         ds = self._load(self.ds)
         # make two cases share a family, split across holdout/train, holdout human-labeled
