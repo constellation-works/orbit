@@ -210,10 +210,15 @@ the owner records the hold from its own crews.
 Until the release time, the drain gives the task to a crew the hold does
 not exclude: the task's own crew or pool first, then the other enabled
 members of its purpose or type pool, then its complexity pool, then the
-workspace default. The draw source names the hold. With no crew left, the
-task waits and `orbit run readiness` reports it with `reason:
-"provider_backoff"` and the release time. A run started with an explicit
-crew input ignores the hold. The hold ends at the release time or at any
+workspace default. One case differs. Under the default
+`workflow.provider_limit_explicit_crews = wait`, a usage-limit hold on the
+task's explicit crew (`crew_source` `explicit`, or a legacy pin) does not
+redraw it: the task waits in the backlog until the release time. Under
+`pool`, it is drawn from its complexity pool and then the workspace default,
+as above. The draw source names the hold. With no crew left, the task waits
+and `orbit run readiness` reports it with `reason: "provider_backoff"` and
+the release time. A run started with an explicit crew input ignores the
+hold. The hold ends at the release time or at any
 later status change; do not move the task just to lift it. The next run
 resumes the committed candidate: a held run commits it on the run's branch
 and pushes it to the candidate ref on the origin without opening a branch
