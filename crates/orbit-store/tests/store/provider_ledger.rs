@@ -175,6 +175,7 @@ fn an_existing_store_gains_the_provider_column_additively() {
     drop(Store::open(&path).unwrap());
     let conn = Connection::open(&path).unwrap();
     // Recreate schema v41, with a row the older binary wrote.
+    crate::support::drop_decision_assistance_tables(&conn).unwrap();
     conn.execute_batch(
         "ALTER TABLE invocations DROP COLUMN provider;
         DROP INDEX idx_v2_audit_events_ws_event_type_ts;

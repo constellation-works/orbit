@@ -1,5 +1,15 @@
 use std::process::Command;
 
+/// Remove tables introduced after a fixture's target schema before replaying migrations.
+pub fn drop_decision_assistance_tables(connection: &rusqlite::Connection) -> rusqlite::Result<()> {
+    connection.execute_batch(
+        "DROP TABLE IF EXISTS assistance_attempts;
+         DROP TABLE IF EXISTS assistance_slots;
+         DROP TABLE IF EXISTS assistance_budgets;
+         DROP TABLE IF EXISTS assistance_work;",
+    )
+}
+
 pub fn isolated(test: &str) -> bool {
     const MARKER: &str = "ORBIT_STORE_ADMISSION_CHILD";
     if std::env::var(MARKER).as_deref() == Ok(test) {

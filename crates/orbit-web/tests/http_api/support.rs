@@ -764,7 +764,11 @@ pub(super) fn rewind_retention_analytics(fixture: &Fixture) {
         .with_transaction(|tx| {
             tx.connection()
                 .execute_batch(
-                    "DELETE FROM schema_meta WHERE key LIKE 'migration.v%' AND key >= 'migration.v0054';
+                    "DROP TABLE IF EXISTS assistance_attempts;
+             DROP TABLE IF EXISTS assistance_slots;
+             DROP TABLE IF EXISTS assistance_budgets;
+             DROP TABLE IF EXISTS assistance_work;
+             DELETE FROM schema_meta WHERE key LIKE 'migration.v%' AND key >= 'migration.v0054';
              DROP TABLE landed_diff_stats;
              DROP TRIGGER job_run_tasks_insert;
              DROP TRIGGER job_run_tasks_update;

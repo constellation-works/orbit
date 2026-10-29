@@ -158,6 +158,7 @@ fn persisted_handoffs_upgrade_atomically_without_changing_receipts_or_authority(
         [],
     )
     .unwrap();
+    crate::support::drop_decision_assistance_tables(&conn).unwrap();
     conn.execute_batch(
         "DELETE FROM schema_meta WHERE key LIKE 'migration.v%' AND key >= 'migration.v0057';",
     )
@@ -319,6 +320,7 @@ fn already_open_inline_writers_are_refused_atomically_at_the_store_boundary() {
     let database = delivery.owner.root().join("state.sqlite");
     let stale_writer = Store::open(&database).unwrap();
     let conn = rusqlite::Connection::open(&database).unwrap();
+    crate::support::drop_decision_assistance_tables(&conn).unwrap();
     conn.execute_batch(
         "DROP TRIGGER handoff_settlement_insert_guard;
          DROP TRIGGER handoff_settlement_update_guard;
