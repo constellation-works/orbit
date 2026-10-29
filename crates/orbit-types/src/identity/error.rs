@@ -53,9 +53,9 @@ pub enum ProviderModelError {
     )]
     GrokModelMissing,
     #[error(
-        "Antigravity CLI supports effort values low, medium, high (`agy --effort`); '{effort}' is \
-         unsupported. Migrate xhigh/max to high, or choose a *-high model slug from `agy \
-         models`. Values are not remapped."
+        "Orbit accepts Antigravity effort only as low, medium or high (`agy --effort` advertises \
+         low|medium|high|xhigh|max); '{effort}' is unsupported. Migrate xhigh/max to high, or \
+         choose a *-high model slug from `agy models`. Values are not remapped."
     )]
     AntigravityEffort { effort: ReasoningEffort },
     /// `model` is a Gemini CLI id without the effort suffix `agy` requires.
