@@ -185,7 +185,7 @@ next: false
       <div class="orbit-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01"/><path d="M7 16.5h.01"/></svg></div>
       <div class="orbit-card-body">
         <h3>Local-first, your accounts</h3>
-        <p>Tasks and runs stay on your machine. Model traffic goes through the agent CLI and the account you already have, and Orbit sends no telemetry.</p>
+        <p>Tasks and runs stay on your machine. Model traffic goes through the agent CLI and the account you already have, and Orbit sends no telemetry. The only exception is optional decision assistance, off by default, which sends its allowed evidence fields and question text to the fixed OpenAI Decisions endpoint when you enable a policy.</p>
         <div class="orbit-card-cmd">ls .orbit/</div>
       </div>
     </div>
