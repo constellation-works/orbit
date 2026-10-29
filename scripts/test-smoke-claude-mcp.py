@@ -8,7 +8,6 @@ without claiming evidence about kernel confinement.
 import json
 import os
 from pathlib import Path
-import shutil
 import sqlite3
 import subprocess
 import sys
@@ -29,6 +28,112 @@ with sqlite3.connect(os.path.join(os.environ['HOME'], '.orbit/orbit.db')) as db:
         db.execute("INSERT INTO audit_events (timestamp, subcommand, tool_name, status, exit_code) VALUES ('now', ?, ?, ?, ?)",
                    (transport, tool, 'failed' if mode == 'failed' else 'success', 1 if mode == 'failed' else 0))
 print(json.dumps({'result': 'tasks_returned=0'}))
+'''
+
+# Fixture-local sqlite3 executable backed by Python's sqlite3 module.
+# Shadows any host binary via the fixture PATH prepend so the boundary
+# fixture never depends on an externally installed SQLite CLI. Supports
+# the SQL/output forms the smoke scripts use: scalar `sqlite3 DB SQL`
+# queries in default list mode and `sqlite3 -header -column DB SQL`
+# selects on the PASS path. Real SQL execution; SQL errors exit non-zero
+# like the native CLI instead of producing a skip or false pass.
+FAKE_SQLITE3 = '''import sqlite3, sys
+def main():
+    args = sys.argv[1:]
+    header = False
+    column = False
+    sep = '|'
+    nullvalue = ''
+    i = 0
+    while i < len(args) and args[i].startswith('-') and args[i] != '-':
+        opt = args[i]
+        if opt in ('-header', '-headers'):
+            header = True
+            i += 1
+        elif opt == '-column':
+            column = True
+            i += 1
+        elif opt == '-list':
+            column = False
+            i += 1
+        elif opt in ('-separator', '-sep'):
+            if i + 1 < len(args):
+                sep = args[i + 1]
+                i += 2
+            else:
+                i += 1
+        elif opt in ('-nullvalue', '-null-value'):
+            if i + 1 < len(args):
+                nullvalue = args[i + 1]
+                i += 2
+            else:
+                i += 1
+        elif opt in ('-version', '--version', '-v'):
+            print('3.46.1')
+            return 0
+        elif opt == '--':
+            i += 1
+            break
+        else:
+            i += 1
+    rest = args[i:]
+    if not rest:
+        print('Usage: sqlite3 [OPTIONS] FILENAME [SQL]', file=sys.stderr)
+        return 1
+    db_path = rest[0]
+    if len(rest) > 1:
+        sql = ' '.join(rest[1:])
+    else:
+        sql = sys.stdin.read()
+        if not sql.strip():
+            return 0
+    if not sql.strip():
+        return 0
+    stripped = sql.lstrip()
+    if stripped.startswith('.'):
+        print('Error: unknown command "%s"' % stripped.split()[0], file=sys.stderr)
+        return 1
+    try:
+        con = sqlite3.connect(db_path)
+        try:
+            cur = con.execute(sql)
+            if cur.description is None:
+                con.commit()
+                return 0
+            cols = [d[0] for d in cur.description]
+            rows = cur.fetchall()
+            str_rows = [[nullvalue if v is None else str(v) for v in r] for r in rows]
+            if column:
+                widths = []
+                for ci, h in enumerate(cols):
+                    w = len(h)
+                    for r in str_rows:
+                        if len(r[ci]) > w:
+                            w = len(r[ci])
+                    widths.append(w)
+                def _fmt(cells):
+                    return '  '.join(c.ljust(widths[ci]) for ci, c in enumerate(cells)).rstrip()
+                if header:
+                    print(_fmt(cols))
+                    print('  '.join('-' * w for w in widths))
+                for r in str_rows:
+                    print(_fmt(r))
+            else:
+                if header:
+                    print(sep.join(cols))
+                for r in str_rows:
+                    print(sep.join(r))
+            return 0
+        finally:
+            try:
+                con.close()
+            except Exception:
+                pass
+    except Exception as e:
+        print('Error: %s' % e, file=sys.stderr)
+        return 1
+if __name__ == '__main__':
+    sys.exit(main())
 '''
 
 
@@ -55,7 +160,7 @@ class McpSmokeTests(unittest.TestCase):
         self.executable('orbit', '#!/bin/sh\nexit 99\n')
         self.executable('jq', '#!/bin/sh\nexit 99\n')
         self.executable('sandbox-exec', '#!/bin/sh\nshift 2\nexec "$@"\n')
-        self.assertIsNotNone(shutil.which('sqlite3'), 'SQLite CLI is required for this boundary fixture')
+        self.executable('sqlite3', f'#!{sys.executable}\n' + FAKE_SQLITE3)
 
     def executable(self, name, text):
         path = self.bin / name
