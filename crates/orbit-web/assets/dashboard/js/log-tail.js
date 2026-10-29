@@ -170,6 +170,11 @@ export function chooseDockMode(mode) {
   params.set("dock", mode);
   url.hash = `tasks?${params}`;
   window.history.replaceState(null, "", url);
+  // ORB-19732: replaceState bypasses the router, so mirror its Tasks-branch
+  // dock-route sync here. Without it a desktop tab selection leaves
+  // `tasks-main` without `dock-route` until a reload routes the same hash,
+  // and a resize to phone width keeps the list instead of the selected dock.
+  setDockRouteShown(true);
 }
 
 // Legacy Start links reveal the existing Start card in the Drain view.
@@ -287,6 +292,11 @@ function wireDockBack() {
     params.delete("dock");
     const rest = params.toString();
     window.location.hash = rest ? `${route}?${rest}` : route;
+    // ORB-19732: a dock tab selected via chooseDockMode (replaceState) leaves
+    // the router's last-routed href on the list URL, so returning to it may
+    // not re-route. Mirror the list visibility here; a router run stays
+    // idempotent.
+    setDockRouteShown(false);
   });
 }
 

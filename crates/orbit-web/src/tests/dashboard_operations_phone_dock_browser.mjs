@@ -139,8 +139,97 @@ try {
     || returnedRoute.search !== 'phone' || returnedRoute.backlogActive !== 'true') {
     throw new Error(`Keyboard Back did not restore the filtered task list: ${JSON.stringify(returnedRoute)}`);
   }
+
+  // ORB-19732: a desktop tab selection must stay visible after a resize to
+  // phone width. chooseDockMode writes the Tasks hash with replaceState,
+  // which bypasses the router, so the test selects each tab through the
+  // shipped toggle at 1440px and resizes to 375px before any reload.
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.evaluate(() => { location.hash = '#tasks?status=backlog'; });
+  await page.evaluate(async () => {
+    const { setActiveTab } = await import('/js/router.js');
+    setActiveTab(location.hash, { refresh: false });
+  });
+  await page.locator('#tasks-main > .col-tasks').waitFor({ state: 'visible' });
+  const ordinaryDesktop = await page.evaluate(() => ({
+    hash: location.hash,
+    dockRoute: document.getElementById('tasks-main').classList.contains('dock-route'),
+    listVisible: document.querySelector('#tasks-main > .col-tasks').getClientRects().length > 0,
+    dockVisible: document.getElementById('side-dock').getClientRects().length > 0,
+  }));
+  if (ordinaryDesktop.hash.includes('dock=') || ordinaryDesktop.dockRoute
+    || !ordinaryDesktop.listVisible || !ordinaryDesktop.dockVisible) {
+    throw new Error(`Ordinary desktop Tasks list must show the list beside the dock with no dock route: ${JSON.stringify(ordinaryDesktop)}`);
+  }
+  const dockTabVisible = (mode) => page.evaluate((mode) => {
+    const main = document.getElementById('tasks-main');
+    const dock = document.getElementById('side-dock');
+    const seg = document.querySelector('#dock-mode-toggle .dock-seg.on');
+    return {
+      hash: location.hash,
+      dockRoute: main.classList.contains('dock-route'),
+      listVisible: document.querySelector('#tasks-main > .col-tasks').getClientRects().length > 0,
+      dockVisible: dock.getClientRects().length > 0,
+      backVisible: document.getElementById('dock-back-tasks').getClientRects().length > 0,
+      activeTab: seg ? seg.dataset.mode : null,
+      card: dock.dataset.card,
+    };
+  }, mode);
+  for (const mode of ['drain', 'locks', 'log']) {
+    await page.locator(`#dock-mode-toggle .dock-seg[data-mode="${mode}"]`).click();
+    const desktop = await dockTabVisible(mode);
+    if (!desktop.hash.includes(`dock=${mode}`) || !desktop.dockRoute
+      || !desktop.listVisible || !desktop.dockVisible || desktop.activeTab !== mode) {
+      throw new Error(`Desktop ${mode} tab selection must keep the side-by-side dock with an explicit route: ${JSON.stringify(desktop)}`);
+    }
+    await page.setViewportSize({ width: 375, height: 812 });
+    const phone = await dockTabVisible(mode);
+    if (!phone.hash.includes(`dock=${mode}`) || !phone.dockRoute
+      || phone.listVisible || !phone.dockVisible || !phone.backVisible || phone.activeTab !== mode) {
+      throw new Error(`Desktop ${mode} selection resized to phone must show the dock and Back control: ${JSON.stringify(phone)}`);
+    }
+    await page.screenshot({ path: path.join(evidence, `tasks-dock-resize-${mode}-dark-375.png`), animations: 'disabled' });
+    // Reloading the same URL routes through the router; it must show the
+    // same dock route as the replaceState tab-selection path above.
+    await page.evaluate(async () => {
+      const { setActiveTab } = await import('/js/router.js');
+      setActiveTab(location.hash, { refresh: false });
+    });
+    const rerouted = await dockTabVisible(mode);
+    if (!rerouted.hash.includes(`dock=${mode}`) || !rerouted.dockRoute
+      || rerouted.listVisible || !rerouted.dockVisible || rerouted.activeTab !== mode) {
+      throw new Error(`Reloaded ${mode} route must match the resized tab selection: ${JSON.stringify(rerouted)}`);
+    }
+    await page.setViewportSize({ width: 1440, height: 1000 });
+  }
+  // Ordinary phone navigation still returns to the list, and the desktop
+  // side-by-side dock remains usable afterwards.
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.evaluate(async () => {
+    const { chooseDockMode } = await import('/js/log-tail.js');
+    chooseDockMode('log');
+  });
+  await page.locator('#side-dock[data-mode="log"] #log-panel').waitFor({ state: 'visible' });
+  await page.locator('#dock-back-tasks').click();
+  await page.locator('#tasks-main > .col-tasks').waitFor({ state: 'visible' });
+  const backAfterResize = await page.evaluate(() => ({
+    hash: location.hash,
+    dockRoute: document.getElementById('tasks-main').classList.contains('dock-route'),
+    listVisible: document.querySelector('#tasks-main > .col-tasks').getClientRects().length > 0,
+  }));
+  if (backAfterResize.hash.includes('dock=') || backAfterResize.dockRoute || !backAfterResize.listVisible) {
+    throw new Error(`Back after a resized dock route must return to the phone list: ${JSON.stringify(backAfterResize)}`);
+  }
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  const desktopAfterBack = await page.evaluate(() => ({
+    listVisible: document.querySelector('#tasks-main > .col-tasks').getClientRects().length > 0,
+    dockVisible: document.getElementById('side-dock').getClientRects().length > 0,
+  }));
+  if (!desktopAfterBack.listVisible || !desktopAfterBack.dockVisible) {
+    throw new Error(`Desktop side-by-side dock must remain usable after phone navigation: ${JSON.stringify(desktopAfterBack)}`);
+  }
   if (pageErrors.length) throw new Error(`Browser page errors: ${pageErrors.join(' | ')}`);
-  console.log(`PASS: 375x812 phone dock Drain, Log, keyboard Back and retained status/search filters. Screenshots: ${evidence}`);
+  console.log(`PASS: 375x812 phone dock Drain, Log, keyboard Back and retained status/search filters; desktop tab selection resized to phone for drain/locks/log with matching reload route. Screenshots: ${evidence}`);
 } finally {
   await browser?.close();
   await new Promise(resolve => server.close(resolve));
