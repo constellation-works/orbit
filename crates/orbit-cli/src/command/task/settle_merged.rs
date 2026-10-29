@@ -1,6 +1,6 @@
 use clap::Args;
 use orbit_core::OrbitRuntime;
-use orbit_core::application::task::ExternalMergeSettlement;
+use orbit_core::application::task::{ExternalMergeSettlement, ExternalMergeSettlementProfile};
 use serde_json::{Value, json};
 
 use crate::command::{CommandOut, Execute, Payload};
@@ -49,15 +49,7 @@ impl Execute for TaskSettleMergedArgs {
         };
         let rows: Vec<Value> = settled
             .iter()
-            .map(|settlement| {
-                json!({
-                    "task_id": settlement.task_id,
-                    "previous_status": settlement.previous_status,
-                    "pr_number": settlement.pr_number,
-                    "base_branch": settlement.base_branch,
-                    "merge_commit": settlement.merge_commit,
-                })
-            })
+            .map(|settlement| settlement.settlement_json(ExternalMergeSettlementProfile::Cli))
             .collect();
         let doc = json!({ "settled": rows });
         let mut lines: Vec<String> = settled.iter().map(settled_line).collect();
