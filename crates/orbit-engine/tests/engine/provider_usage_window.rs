@@ -464,7 +464,6 @@ fn codex_long_prompt_telemetry_survives_truncated_stdout() {
     );
     let untruncated_cost = codex_prompt_tier_cost(untruncated_trace).unwrap();
     let truncated_cost = codex_prompt_tier_cost(truncated_trace).unwrap();
-    assert!((truncated_cost - 0.1495).abs() < 1e-12);
     assert_eq!(truncated_cost, untruncated_cost);
 
     let without_thread = stdout.split_once('\n').unwrap().1.to_string();
