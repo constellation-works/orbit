@@ -229,6 +229,90 @@ fn fixture_completed_result_outlives_queue_age(root: &Path, schema: &Value) -> F
     Ok(())
 }
 
+fn fixture_expired_queued_work_reads_match_maintenance(
+    root: &Path,
+    schema: &Value,
+) -> FixtureResult {
+    // Queue age expires queued work. The current flag and advisory must not
+    // depend on whether maintenance has yet recorded the QueueExpired gap, and
+    // a retry attempt's gap must not read as a current result.
+    let queued = AssistanceFixture::open_fixture(&root.join("queued"), schema, "task_quality")?;
+    let request = queued.request("expired-queued")?;
+    let source = request.source_digest.clone();
+    let id = queued.enqueue(request)?;
+    let queue_age = i64::from(queued.record(&id)?.work.limits.queue_age_seconds);
+    queued.advance(queue_age + 1)?;
+    assert!(expired_uncompleted_read(&queued, &id, &source)?.is_none());
+    queued.store.assistance_maintain(queued.now()?)?;
+    assert_eq!(
+        expired_uncompleted_read(&queued, &id, &source)?
+            .ok_or("missing queue-expiry gap after maintenance")?
+            .reason,
+        AssistanceReason::QueueExpired
+    );
+
+    let retrying =
+        AssistanceFixture::open_fixture(&root.join("retry-pending"), schema, "task_quality")?;
+    let request = retrying.request("expired-retry")?;
+    let source = request.source_digest.clone();
+    let id = retrying.enqueue(request)?;
+    let limits = retrying.record(&id)?.work.limits;
+    assert!(
+        limits.max_attempts > 1,
+        "retry-pending case needs a retry budget"
+    );
+    retrying
+        .transport
+        .replies
+        .lock()
+        .map_err(|_| "replies lock")?
+        .push_back(Ok(AssistanceHttpResponse {
+            status: 503,
+            body: br#"{"error":"overloaded"}"#.to_vec(),
+        }));
+    retrying.process()?;
+    assert_eq!(
+        retrying
+            .record(&id)?
+            .result
+            .ok_or("missing retry-pending gap")?
+            .reason,
+        AssistanceReason::Unavailable
+    );
+    retrying.advance(i64::from(limits.queue_age_seconds) + 1)?;
+    assert!(expired_uncompleted_read(&retrying, &id, &source)?.is_none());
+    retrying.store.assistance_maintain(retrying.now()?)?;
+    assert_eq!(
+        expired_uncompleted_read(&retrying, &id, &source)?
+            .ok_or("missing retry expiry gap after maintenance")?
+            .reason,
+        AssistanceReason::QueueExpired
+    );
+    Ok(())
+}
+
+/// Asserts that an expired record without a completed answer is not current
+/// and has no advisory, then returns the assessment's result for the caller.
+fn expired_uncompleted_read(
+    f: &AssistanceFixture,
+    id: &str,
+    source: &str,
+) -> FixtureResult<Option<AssistanceResult>> {
+    let assessment = f
+        .service
+        .assistance_assessment(id, source)?
+        .ok_or("missing expired assessment")?;
+    assert!(
+        !assessment.current,
+        "expired uncompleted work reads as current"
+    );
+    assert!(
+        f.service.assistance_advisory(id, source)?.is_none(),
+        "expired uncompleted work reads an advisory"
+    );
+    Ok(assessment.result)
+}
+
 fn fixture_send_failure_reconciliation(root: &Path, schema: &Value) -> FixtureResult {
     let f = AssistanceFixture::open_fixture(root, schema, "task_quality")?;
     let id = f.enqueue(f.request("lost-response")?)?;
@@ -1182,6 +1266,7 @@ fn main() -> FixtureResult {
         fixture_service_boundaries(&root.join("service"), &schema)?;
         fixture_adapter_identity(&root.join("adapter-identity"), &schema)?;
         fixture_completed_result_outlives_queue_age(&root.join("completed"), &schema)?;
+        fixture_expired_queued_work_reads_match_maintenance(&root.join("expired"), &schema)?;
         fixture_send_failure_reconciliation(&root.join("send-failure"), &schema)?;
         fixture_http_status_retry(&root.join("http-status"), &schema)?;
         fixture_credential_refusal_releases_reservation(&root.join("credential"), &schema)?;

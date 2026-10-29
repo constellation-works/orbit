@@ -98,12 +98,12 @@ impl AssistanceStoreBackend for Store {
 
     fn assistance_record(&self, id: &str) -> Result<Option<AssistanceRecord>, OrbitError> {
         let conn = self.read()?;
-        let row: Option<(String, Option<String>, bool)> = conn.query_row(
-            "SELECT w.payload_json, w.result_json, EXISTS(SELECT 1 FROM assistance_slots s WHERE s.request_id=w.id)
+        let row: Option<(String, Option<String>, bool, bool)> = conn.query_row(
+            "SELECT w.payload_json, w.result_json, EXISTS(SELECT 1 FROM assistance_slots s WHERE s.request_id=w.id), w.state='done'
              FROM assistance_work w WHERE w.id=?1", [id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         ).optional().map_err(sqlite_store_error)?;
-        let Some((payload, result, current)) = row else {
+        let Some((payload, result, current, settled)) = row else {
             return Ok(None);
         };
         let mut stmt = conn.prepare(
@@ -153,6 +153,7 @@ impl AssistanceStoreBackend for Store {
         Ok(Some(AssistanceRecord {
             work: assistance_decode(&payload)?,
             current,
+            settled,
             result,
             attempts,
         }))
