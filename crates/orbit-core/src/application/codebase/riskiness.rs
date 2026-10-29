@@ -48,7 +48,7 @@ use orbit_types::task::{Task, TaskStatus};
 use serde::Serialize;
 use serde_json::Value;
 
-use super::facts::{Anchor, CodebaseFacts};
+use super::facts::{Anchor, CodebaseFacts, HistoryCompleteness};
 use super::regression::RegressionFilter;
 use super::sections::{Params, Rollup};
 use crate::OrbitRuntime;
@@ -264,7 +264,8 @@ impl OrbitRuntime {
     pub fn task_riskiness_model(&self) -> Result<TaskRiskinessModel, OrbitError> {
         let settings = self.regression_risk_settings();
         let since = Utc::now() - Duration::days(i64::from(settings.window_days));
-        let facts = super::facts::scan_regressions(self, since)?;
+        let facts =
+            super::facts::scan_regressions(self, since, HistoryCompleteness::ExcludeUnreadable)?;
         let mut diff_lines: HashMap<String, u64> = self
             .landed_diff_stats(None)
             .unwrap_or_else(|error| {

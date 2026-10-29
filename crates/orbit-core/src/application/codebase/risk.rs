@@ -35,7 +35,7 @@ use orbit_types::task::{
 use regex::Regex;
 use serde_json::{Value, json};
 
-use super::facts::{Anchor, CodebaseFacts, TaskFacts};
+use super::facts::{Anchor, CodebaseFacts, HistoryCompleteness, TaskFacts};
 use super::regression::{RegressionFilter, RegressionLink, top_categories};
 use super::sections::{
     Params, ROW_LIMIT, Rollup, Tally, footprint_regression_rows, rank, rate_fields,
@@ -83,7 +83,7 @@ impl OrbitRuntime {
             return Ok(None);
         }
         let since = Utc::now() - Duration::days(i64::from(settings.window_days));
-        let facts = super::facts::scan_regressions(self, since)?;
+        let facts = super::facts::scan_regressions(self, since, HistoryCompleteness::Strict)?;
         let marks = marks(&facts, &paths, &settings, since);
         if marks.is_empty() {
             return Ok(None);
