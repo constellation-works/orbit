@@ -337,6 +337,36 @@ pub trait TaskStoreBackend: Send + Sync {
             })
             .collect())
     }
+    /// Bodyless scan identity inputs. Unlike the change watcher's compatibility
+    /// fallback, this must never hydrate task bodies. The caller first validates
+    /// the index in the same read section; an unavailable index fails closed.
+    fn task_metadata_scan_stamps(
+        &self,
+    ) -> Result<Vec<crate::contracts::TaskChangeStamp>, OrbitError> {
+        let keys = self
+            .task_candidate_keys(&crate::contracts::TaskListFilter::default(), usize::MAX)?
+            .ok_or_else(|| OrbitError::Store("bodyless task change stamps unavailable".into()))?;
+        let mut stamps = Vec::with_capacity(keys.items.len());
+        for chunk in keys.items.chunks(128) {
+            let ids = chunk.iter().map(|key| key.id.clone()).collect();
+            let envelopes = self.task_envelopes_for_ids(&ids)?;
+            if envelopes.len() != chunk.len() {
+                return Err(OrbitError::Store(
+                    "task change stamp population changed".into(),
+                ));
+            }
+            stamps.extend(
+                envelopes
+                    .into_iter()
+                    .map(|task| crate::contracts::TaskChangeStamp {
+                        id: task.id,
+                        status: task.status,
+                        updated_at: task.updated_at,
+                    }),
+            );
+        }
+        Ok(stamps)
+    }
     /// Which of `task_ids` carry `tag`, in any workspace on the host. Backends
     /// with a host-wide registry override this; the default answers from
     /// [`Self::list_tasks`].

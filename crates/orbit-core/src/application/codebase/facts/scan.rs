@@ -338,20 +338,19 @@ pub(in crate::application::codebase) fn scan_regressions(
     let mut facts: Vec<TaskFacts> = tasks
         .iter()
         .map(|task| {
-            let done_at = (task.status == TaskStatus::Done).then(|| {
-                if task.updated_at < since {
-                    return task.updated_at;
-                }
-                let id = task.id.to_string();
-                let history = runtime.get_task_history(&id).unwrap_or_else(|error| {
-                    tracing::warn!(task_id = %id, %error, "regression risk: task history unreadable");
-                    Vec::new()
-                });
-                entered(&history, TaskStatus::Done).unwrap_or(task.updated_at)
-            });
-            TaskFacts::from_envelope(task, done_at)
+            let done_at = if task.status != TaskStatus::Done {
+                None
+            } else if task.updated_at < since {
+                Some(task.updated_at)
+            } else {
+                // A failed history read cannot certify a time-window count.
+                // The prompt boundary logs the error and omits advisory marks.
+                let history = runtime.get_task_history(&task.id)?;
+                Some(entered(&history, TaskStatus::Done).unwrap_or(task.updated_at))
+            };
+            Ok(TaskFacts::from_envelope(task, done_at))
         })
-        .collect();
+        .collect::<Result<_, OrbitError>>()?;
     attach_regressions(&mut facts, pending_links);
     Ok(CodebaseFacts {
         computed_at,

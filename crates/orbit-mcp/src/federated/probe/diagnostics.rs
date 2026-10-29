@@ -20,6 +20,7 @@ impl OversizedContext {
                     *value,
                     "task"
                         | "tasks"
+                        | "task_metadata"
                         | "artifact"
                         | "artifacts"
                         | "steering"

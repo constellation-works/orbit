@@ -65,6 +65,7 @@ fn oversized_lines_retain_safe_uncorrelated_context_without_replay() {
         "peer-request",
         "unparseable",
         "bad-projection",
+        "metadata",
         "initialize",
         "normal",
     ] {
@@ -155,8 +156,9 @@ fn exercise(case: &str) {
             "orbit.task.show",
             json!({
                 "id": ARGUMENT_SECRET,
-                "_worker_read": if case == "bad-projection" { ARGUMENT_SECRET } else { "task" },
+                "_worker_read": if case == "bad-projection" { ARGUMENT_SECRET } else if case == "metadata" { "task_metadata" } else { "task" },
                 "fields": ["title", ARGUMENT_SECRET, "status"],
+                "metadata_page": {"ids": [ARGUMENT_SECRET], "scan_id": ARGUMENT_SECRET, "cursor": {"id": ARGUMENT_SECRET}},
                 ARGUMENT_SECRET: ARGUMENT_SECRET,
             }),
             ToolSessionContext::default(),
@@ -250,6 +252,8 @@ fn exercise(case: &str) {
         pending["projection"]["_worker_read"],
         if matches!(case, "initialize" | "bad-projection") {
             "unknown"
+        } else if case == "metadata" {
+            "task_metadata"
         } else {
             "task"
         }

@@ -86,6 +86,7 @@ mod host_os_executor;
 mod interrupted_review;
 mod landing_attribution;
 mod landing_repair;
+mod metadata;
 mod no_diff;
 mod ordering;
 #[cfg(unix)]
