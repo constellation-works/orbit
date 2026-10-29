@@ -481,6 +481,10 @@ fn legacy_db_adopts_versioned_ledger() {
                 "migration.v0070".to_string(),
                 "reopen_legacy_experiment_admissions".to_string(),
             ),
+            (
+                "migration.v0071".to_string(),
+                "invocation_long_prompt_requests".to_string(),
+            ),
         ]
     );
 }

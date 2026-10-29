@@ -119,10 +119,38 @@ fn stored_sol_costs_preserve_history_and_start_current_rates_at_verified_observa
         ("2026-10-23T03:09:14.111506999Z", None),
         ("2026-10-23T03:09:14.111507Z", Some(current_cost)),
         ("2026-10-23T03:09:14.111507001Z", Some(current_cost)),
-        ("2026-11-22T00:00:00Z", Some(current_cost)),
-        ("2027-01-01T00:00:00Z", Some(current_cost)),
+        // [ORB-19680] Before the prompt-size tier's observation boundary,
+        // totals keep their shipped pricing.
+        ("2026-10-29T04:23:09.999999999Z", Some(current_cost)),
+        // From it, totals over 272K input tokens without per-request usage
+        // cannot show which requests were long context: unknown, never
+        // estimated.
+        ("2026-10-29T04:23:10Z", None),
+        ("2027-01-01T00:00:00Z", None),
     ] {
-        cases.push((at, observed.clone(), expected));
+        cases.push((at, observed.clone(), None, expected));
+    }
+    // [ORB-19680] Per-request usage persists with the invocation and reaches
+    // both stored-cost readers. A request over 272K input tokens adds its
+    // long-context minus short-context cost; with none, the totals price at
+    // short-context rates.
+    let long_request = TokenUsage {
+        input: 400_000,
+        cache_read: 350_000,
+        output: 5_000,
+        ..Default::default()
+    };
+    let long_premium = (50_000.0 * 4.0 + 350_000.0 * 0.4 + 5_000.0 * 10.0) / 1e6;
+    for (requests, expected) in [
+        (Vec::new(), current_cost),
+        (vec![long_request], current_cost + long_premium),
+    ] {
+        cases.push((
+            "2026-11-22T00:00:00Z",
+            observed.clone(),
+            Some(requests),
+            Some(expected),
+        ));
     }
     let current = "2026-10-23T03:09:14.111507Z";
     for (usage, expected) in [
@@ -184,10 +212,10 @@ fn stored_sol_costs_preserve_history_and_start_current_rates_at_verified_observa
             None,
         ),
     ] {
-        cases.push((current, usage, expected));
+        cases.push((current, usage, None, expected));
     }
     let conn = Connection::open(&path).unwrap();
-    for (index, (at, usage, _)) in cases.iter().enumerate() {
+    for (index, (at, usage, requests, _)) in cases.iter().enumerate() {
         let activity = format!("sol-{index}");
         store
             .insert_invocation_trace_record(
@@ -203,6 +231,7 @@ fn stored_sol_costs_preserve_history_and_start_current_rates_at_verified_observa
                     trace: InvocationTrace {
                         usage: usage.clone(),
                         provider_cost_usd: Some(42.125),
+                        long_prompt_requests: requests.clone(),
                         ..Default::default()
                     },
                 },
@@ -223,7 +252,15 @@ fn stored_sol_costs_preserve_history_and_start_current_rates_at_verified_observa
         })
         .unwrap();
     assert_eq!(rows.len(), cases.len());
-    for (index, (at, usage, expected)) in cases.iter().enumerate() {
+    let facts = store
+        .list_invocation_accounting_facts(&InvocationAccountingQuery {
+            workspace_id: Some("ws_sol".to_string()),
+            since: None,
+            until: "2030-01-01T00:00:00Z".parse().unwrap(),
+        })
+        .unwrap();
+    assert_eq!(facts.len(), cases.len());
+    for (index, (at, usage, _, expected)) in cases.iter().enumerate() {
         let row = rows
             .iter()
             .find(|row| row.activity_id == format!("sol-{index}"))
@@ -238,6 +275,11 @@ fn stored_sol_costs_preserve_history_and_start_current_rates_at_verified_observa
                 "Sol stored-cost regression at {at}: {usage:?}"
             ),
         }
+        let fact = facts.iter().find(|fact| fact.id == row.id).unwrap();
+        assert_eq!(
+            fact.derived_cost_usd, row.derived_cost_usd,
+            "accounting facts and invocation listings must price a stored invocation alike"
+        );
         assert_eq!(row.ts, at.parse::<DateTime<Utc>>().unwrap());
         assert_eq!(row.input_tokens, usage.input);
         assert_eq!(row.cache_read_tokens, usage.cache_read);

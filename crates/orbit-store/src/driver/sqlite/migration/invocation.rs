@@ -250,3 +250,18 @@ pub(super) fn apply_provider_crew_accounts(conn: &Connection) -> Result<(), Orbi
     }
     Ok(())
 }
+
+/// v71 `invocation_long_prompt_requests` [ORB-19680]: the per-request usage
+/// of each model request whose prompt may reach a prompt-size price tier,
+/// as a JSON array of token buckets. Prompt-size tiers price one request by
+/// its own prompt, which the invocation totals cannot show.
+///
+/// A nullable column only: an older binary keeps inserting without it, and a
+/// reader treats such a row, and every row recorded before this migration, as
+/// one whose per-request usage was not captured.
+pub(super) fn apply_invocation_long_prompt_requests(conn: &Connection) -> Result<(), OrbitError> {
+    if !table_exists(conn, "invocations")? {
+        return Ok(());
+    }
+    add_column_if_missing(conn, "invocations", "long_prompt_requests_json", "TEXT")
+}

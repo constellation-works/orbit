@@ -416,7 +416,8 @@ fn cost_readout_excludes_partial_sums_and_identifies_estimated_tasks() {
         .change_experiment(&experiment.id, ExperimentChange::Start, actor)
         .unwrap();
 
-    let priced = (Some("gpt-6.1-sol"), None, 1_000_000, 0);
+    // Below the 272K prompt tier, so the totals alone fix the derived cost.
+    let priced = (Some("gpt-6.1-sol"), None, 200_000, 0);
     let reported = (Some("gpt-6.1-sol"), Some(5.0), 1_000_000, 0);
     let zero = (None, Some(0.0), 0, 0);
     let unpriced = (Some("unpriced-test-model"), None, 1_000_000, 0);
@@ -479,9 +480,10 @@ fn cost_readout_excludes_partial_sums_and_identifies_estimated_tasks() {
         "gpt-6.1-sol",
         Utc::now(),
         &TokenUsage {
-            input: 1_000_000,
+            input: 200_000,
             ..TokenUsage::default()
         },
+        None,
     )
     .unwrap();
     assert!(derived > 0.0);

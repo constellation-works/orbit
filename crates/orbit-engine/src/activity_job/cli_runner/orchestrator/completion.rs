@@ -8,7 +8,8 @@ use orbit_agent::{
     ParsedStdout, antigravity_background_task_diagnostic, antigravity_print_timeout_diagnostic,
     antigravity_terminal_error_diagnostic, muse_terminal_failure_diagnostic, normalize_cli_stdout,
     project_cli_response, provider_authentication_failure, provider_capacity_exhausted,
-    provider_content_refusal, provider_invocation_diagnostic, provider_usage_limit,
+    provider_content_refusal, provider_invocation_diagnostic, provider_long_prompt_requests,
+    provider_usage_limit,
 };
 use orbit_common::process::build_budget::BuildBudgetWaits;
 use orbit_common::security::redaction::{PatternRedactor, redact_all_json};
@@ -279,6 +280,19 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
             success,
         )
     };
+    // [ORB-19680] Prompt-size price tiers key on each request's own prompt,
+    // which the totals above cannot show.
+    let trace = trace.map(|mut trace| {
+        trace.long_prompt_requests = provider_long_prompt_requests(
+            &provider,
+            stdout.protocol_bytes(),
+            !stdout.truncated(),
+            usage_context.codex_home.as_deref(),
+            trace.provider_model.as_deref().or(model.as_deref()),
+            chrono::Utc::now(),
+        );
+        trace
+    });
     // [ORB-14695] The usage limit the failure reports, with the provider's
     // own words, for the host's provider-limit store.
     let mut observed_limit: Option<(ProviderLimitFailure, String)> = None;

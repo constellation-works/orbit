@@ -661,12 +661,21 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::super::apply_reopen_legacy_experiment_admissions,
     },
+    // Prompt-size pricing: the usage of each request whose prompt may reach a
+    // tier. One nullable column; an older binary never reads it, and the
+    // invocations it writes read here as having no per-request usage.
+    Migration {
+        version: 71,
+        name: "invocation_long_prompt_requests",
+        compat: MigrationCompatibility::Additive,
+        apply: super::super::apply_invocation_long_prompt_requests,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 70;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 71;
 
 /// A migration recorded as applied in the `schema_meta` ledger.
 #[derive(Debug, Clone, PartialEq, Eq)]

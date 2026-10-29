@@ -11,12 +11,16 @@
 //!   (ORB-10906 / F2026-08-031).
 //! - The usage windows are the last `rate_limit_event`'s `rate_limit_info`,
 //!   which the CLI emits when a window's rounded percentage or reset moves.
+//! - Assistant messages' own `usage` shows whether any request's prompt may
+//!   reach a prompt-size price tier; it carries no request's final output, so
+//!   the totals stay the `result` frame's alone.
 
 use chrono::{DateTime, Utc};
-use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
+use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource, TokenUsage};
 use serde_json::{Map, Value};
 
 use super::super::usage_window::{percent, top_level_frames};
+use crate::types::request_usage;
 
 /// Return the terminal `result` frame when `stdout` is a Claude message
 /// stream.
@@ -36,6 +40,66 @@ pub(crate) fn project_claude_response(stdout: &[u8]) -> Option<Vec<u8>> {
         }
     }
     saw_stream_message.then(|| terminal_result.unwrap_or_default().to_vec())
+}
+
+/// The usage of each API request on a Claude message stream whose prompt may
+/// reach a prompt-size price tier: empty when the stream shows none can, and
+/// `None` when that is unknown.
+///
+/// The CLI writes one `assistant` message per content block, each repeating
+/// its request's `usage` as of the request's start, so a message's
+/// `output_tokens` is not the request's final output (ORB-19680 measured 232
+/// streamed against 73,963 billed). The input-side buckets are final, so a
+/// stream whose requests all stay below the capture floor proves no request
+/// reached a tier; one that may reach it leaves the run's per-request usage
+/// unknown rather than underpriced. A stream without its `result` (cut off)
+/// or the single document of `--output-format json` is `None` too. A request
+/// on another model than `model` (a subagent's, say) is not priced at this
+/// invocation's tier and is left out; a context-window suffix such as `[1m]`
+/// does not make a model another one.
+pub(crate) fn claude_long_prompt_requests(
+    stdout: &[u8],
+    model: Option<&str>,
+) -> Option<Vec<TokenUsage>> {
+    let mut saw_result = false;
+    let mut saw_stream_message = false;
+    for (_, frame) in top_level_frames(stdout) {
+        match frame.get("type").and_then(Value::as_str) {
+            Some("result") => saw_result = true,
+            Some("assistant") => {
+                saw_stream_message = true;
+                let Some(message) = frame.get("message").and_then(Value::as_object) else {
+                    continue;
+                };
+                let request_model = message.get("model").and_then(Value::as_str);
+                if model
+                    .zip(request_model)
+                    .is_some_and(|(model, request)| base_model(model) != base_model(request))
+                {
+                    continue;
+                }
+                if message
+                    .get("usage")
+                    .and_then(Value::as_object)
+                    .and_then(request_usage)
+                    .is_some_and(|usage| usage.may_reach_long_prompt_floor())
+                {
+                    return None;
+                }
+            }
+            Some(_) => saw_stream_message = true,
+            None => {}
+        }
+    }
+    (saw_result && saw_stream_message).then(Vec::new)
+}
+
+/// `model` without a trailing context-window marker like `[1m]`.
+fn base_model(model: &str) -> &str {
+    model
+        .strip_suffix(']')
+        .and_then(|rest| rest.rfind('[').map(|open| rest[..open].trim_end()))
+        .unwrap_or(model)
 }
 
 /// Window length, in minutes, that a Claude window label names.

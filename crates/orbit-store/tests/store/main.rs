@@ -58,6 +58,7 @@ use orbit_store::contracts::FailureIncident;
 use orbit_store::contracts::HandoffObservation;
 use orbit_store::contracts::HandoffReviewObservation;
 use orbit_store::contracts::HandoffReviewRefusal;
+use orbit_store::contracts::InvocationAccountingQuery;
 use orbit_store::contracts::InvocationInsertParams;
 use orbit_store::contracts::InvocationQuery;
 use orbit_store::contracts::JobRunStepParams;
