@@ -514,6 +514,11 @@ try {
   assert.equal(await body.locator('.agents-tier-matrix').count(), 2, 'a row with nothing placed has no matrix');
   assert.deepEqual(await body.locator('.agents-tier-card').first().locator('.agents-tier-cell.is-on').allTextContents(), ['3', '4', '2']);
   assert.deepEqual(await body.locator('.agents-tier-card').first().locator('.agents-tier-counts dd').allTextContents(), ['9', '2', '2', '1']);
+  const pilotRow = crew => body.locator('.agents-row').filter({ has: page.locator('.agents-crew', { hasText: new RegExp(`^${crew}$`) }) });
+  assert.equal(await pilotRow('luna').locator('[data-term="tier_calibration"]').textContent(), '69.2');
+  assert.equal(await pilotRow('haiku').locator('[data-term="tier_calibration"]').textContent(), '50');
+  assert.match(await pilotRow('haiku').locator('[data-term="tier_calibration"]').getAttribute('title'), /per 100 placed tasks.*provisional/);
+  assert.equal(await body.locator('#agents-detail li[data-term="tier_calibration"] .agents-term-context').textContent(), '9 of 13 placed tasks');
   const pilotsDesktop = await assertPanelOccupiesItsRow('pilots');
   await shot('agents-pilots-dark-1440');
   await body.locator('.agents-role-panel h3').evaluate(node => node.scrollIntoView({ block: 'start' }));
@@ -535,6 +540,18 @@ try {
   await body.locator('.agents-role-panel h3').evaluate(node => node.scrollIntoView({ block: 'start' }));
   await page.evaluate(() => window.scrollBy(0, -80));
   await shot('agents-pilots-panel-dark-375');
+  await page.setViewportSize({ width: 1440, height: 1100 });
+  for (const width of [1440, 375]) {
+    await page.setViewportSize({ width, height: width === 375 ? 812 : 1100 });
+    for (const [crew, support, name] of [['haiku', '4 of 8', 'low-support'], ['crew unknown', '0 of 0', 'unmeasured']]) {
+      await pilotRow(crew).locator('.agents-row-select').click();
+      const calibration = body.locator('#agents-detail li[data-term="tier_calibration"]');
+      assert.equal(await calibration.locator('.agents-term-context').textContent(), `${support} placed tasks · provisional, not scored`);
+      assert.equal(await calibration.locator('.agents-term-value').textContent(), '+0');
+      await calibration.evaluate(node => node.scrollIntoView({ block: 'center' }));
+      await shot(`agents-pilots-${name}-dark-${width}`);
+    }
+  }
   await page.setViewportSize({ width: 1440, height: 1100 });
   pass('pilots ranking, detail and tier matrices at desktop and phone widths', { pilotsPhone, pilotsDesktop, pilotsPhonePanel });
 

@@ -623,7 +623,7 @@ fn calibrated(
     complexity: TaskComplexity,
     run: &str,
     files: &[&str],
-    cost: f64,
+    cost: Option<f64>,
     now: DateTime<Utc>,
 ) -> String {
     let id = fixture
@@ -678,7 +678,7 @@ fn calibrated(
             model: Some("implement-model".into()),
             task_ids: vec![id.clone()],
             trace: InvocationTrace {
-                provider_cost_usd: Some(cost),
+                provider_cost_usd: cost,
                 ..Default::default()
             },
         })
@@ -790,7 +790,7 @@ fn pilots_charge_wasted_reservations_costly_misses_and_calibrate_tiers() {
                 low,
                 "jrun-pilot-a",
                 &["src/t1.rs"],
-                1.0,
+                Some(1.0),
                 now,
             );
             calibrated(
@@ -800,7 +800,7 @@ fn pilots_charge_wasted_reservations_costly_misses_and_calibrate_tiers() {
                 low,
                 "jrun-pilot-b",
                 &["src/t2.rs"],
-                5.0,
+                Some(5.0),
                 now,
             );
             calibrated(
@@ -810,7 +810,7 @@ fn pilots_charge_wasted_reservations_costly_misses_and_calibrate_tiers() {
                 hard,
                 "jrun-pilot-b",
                 &["src/t3.rs"],
-                3.0,
+                Some(3.0),
                 now,
             );
             calibrated(
@@ -820,7 +820,7 @@ fn pilots_charge_wasted_reservations_costly_misses_and_calibrate_tiers() {
                 hard,
                 "jrun-pilot-a",
                 &["src/t4.rs"],
-                10.0,
+                Some(10.0),
                 now,
             );
 
@@ -914,6 +914,120 @@ fn pilots_charge_wasted_reservations_costly_misses_and_calibrate_tiers() {
             );
         },
     );
+}
+
+/// Missing implementation prices must not count as wrong tier assessments,
+/// and assessed-task support must not hide missing placement support.
+#[test]
+fn pilots_calibrate_only_placed_tasks() {
+    isolated("agents_pilots::pilots_calibrate_only_placed_tasks", || {
+        let fixture = Fixture::new();
+        let repo = init_repo(&fixture);
+        let now = Utc::now();
+        for crew in ["mixed", "peer", "unpriced", "full"] {
+            seed_pilot_run(
+                &fixture,
+                &format!("jrun-pilot-{crew}"),
+                crew,
+                "pilot-model",
+                now - Duration::hours(9),
+                now - Duration::hours(8),
+            );
+        }
+        // The peer's hard task falls between the mixed pilot's two low
+        // tasks by cost, leaving just one of that pilot's placements on tier.
+        for (title, crew, tier, cost) in [
+            ("cheap", "mixed", TaskComplexity::Low, Some(1.0)),
+            ("expensive", "mixed", TaskComplexity::Low, Some(5.0)),
+            ("middle", "peer", TaskComplexity::Hard, Some(3.0)),
+            ("fully-priced", "full", TaskComplexity::Low, Some(0.5)),
+            ("missing", "mixed", TaskComplexity::Hard, None),
+            ("missing-a", "unpriced", TaskComplexity::Low, None),
+            ("missing-b", "unpriced", TaskComplexity::Low, None),
+            ("missing-c", "unpriced", TaskComplexity::Low, None),
+        ] {
+            calibrated(
+                &fixture,
+                &repo,
+                title,
+                tier,
+                &format!("jrun-pilot-{crew}"),
+                &[&format!("src/{title}.rs")],
+                cost,
+                now,
+            );
+        }
+        let server = fixture.server(false);
+        let card = json_ok(server.get(&format!(
+            "/api/agents/pilots/scorecard?{WS}&window=30d&min_support=1"
+        )));
+        let mixed = row(&card, "mixed", "pilot-model");
+        assert_eq!(mixed["units"], 3);
+        assert_eq!(mixed["counts"]["tier_calibration"], 1);
+        assert_eq!(mixed["per_100"]["tier_calibration"], 50);
+        assert_eq!(mixed["term_units"]["tier_calibration"], 2);
+        assert_eq!(stat(mixed, "tier_matrix")["not_placed"], 1);
+        assert_eq!(mixed["per_100"]["f1_lift"], 100);
+        assert_eq!(mixed["raw"], 112.5);
+        let full = row(&card, "full", "pilot-model");
+        assert_eq!(full["units"], 1);
+        assert_eq!(full["term_units"]["tier_calibration"], 1);
+        assert_eq!(full["per_100"]["tier_calibration"], 100);
+        assert_eq!(full["raw"], 125, "full coverage retains its score");
+        let calibration = card["terms"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|term| term["key"] == "tier_calibration")
+            .unwrap();
+        assert_eq!(calibration["unit"], "placed tasks");
+        let detail = json_ok(server.get(&format!(
+            "/api/agents/pilots/detail?{WS}&window=30d&min_support=1&crew=mixed&model=pilot-model"
+        )));
+        assert_eq!(term(&detail, "tier_calibration")["units"], 2);
+        assert_eq!(term(&detail, "tier_calibration")["contribution"], 12.5);
+        let unpriced = row(&card, "unpriced", "pilot-model");
+        assert_eq!(unpriced["term_units"]["tier_calibration"], 0);
+        assert_eq!(stat(unpriced, "tier_matrix")["not_placed"], 3);
+        assert!(
+            unpriced["provisional_terms"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("tier_calibration"))
+        );
+        assert_eq!(unpriced["raw"], 100, "only F1 lift is measured");
+
+        let supported = json_ok(server.get(&format!(
+            "/api/agents/pilots/scorecard?{WS}&window=30d&min_support=3"
+        )));
+        let mixed = row(&supported, "mixed", "pilot-model");
+        assert_eq!(mixed["below_support"], false);
+        assert!(
+            mixed["provisional_terms"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("tier_calibration"))
+        );
+        assert_eq!(mixed["per_100"]["tier_calibration"], 50);
+        assert_eq!(mixed["raw"], 100, "two placements cannot support this term");
+
+        // The runtime projection used by CLI/MCP and the dashboard's HTTP
+        // projection must carry the same rates, units and provisional terms.
+        let runtime = scorecard(&fixture, "30d");
+        assert_eq!(runtime["rows"], card["rows"]);
+        assert_eq!(runtime["terms"], card["terms"]);
+        let tool = fixture
+            .runtime
+            .run_tool(
+                "orbit.agents.scorecard",
+                json!({
+                    "role": "pilots", "window": "30d", "min_support": 1,
+                }),
+            )
+            .unwrap();
+        assert_eq!(tool["rows"], card["rows"]);
+        assert_eq!(tool["terms"], card["terms"]);
+    });
 }
 
 /// Held assessments settle from task history alone, attributed to the pilot
@@ -1160,7 +1274,8 @@ fn pilots_settle_held_warnings_from_history() {
                 json!([
                     "confirmed_warnings",
                     "dismissed_warnings",
-                    "missed_scope_blocks"
+                    "missed_scope_blocks",
+                    "tier_calibration"
                 ]),
                 "four settled assessments are below the minimum of ten"
             );
@@ -1254,7 +1369,7 @@ fn pilots_settle_held_warnings_from_history() {
             let warden = row(&card, "warden", "warden-model");
             assert_eq!(warden["counts"]["missed_scope_blocks"], 1, "{warden}");
             assert_eq!(stat(warden, "settled_assessments"), 10);
-            assert_eq!(warden["provisional_terms"], json!([]));
+            assert_eq!(warden["provisional_terms"], json!(["tier_calibration"]));
             assert_eq!(
                 warden["raw"], 20,
                 "3 × 20 confirmed − 1 × 10 dismissed − 3 × 10 missed per 100 settled: {warden}"

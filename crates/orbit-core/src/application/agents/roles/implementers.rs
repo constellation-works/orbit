@@ -108,7 +108,7 @@ fn work_by_row(facts: &AgentFacts, since: DateTime<Utc>) -> BTreeMap<Key, Vec<&T
     work
 }
 
-fn rows(facts: &AgentFacts, since: DateTime<Utc>) -> Vec<RowInput<'_>> {
+fn rows(facts: &AgentFacts, since: DateTime<Utc>, _min_support: usize) -> Vec<RowInput<'_>> {
     let work = work_by_row(facts, since);
     let mut charges: BTreeMap<&str, Vec<&Charge>> = BTreeMap::new();
     let mut credits: BTreeMap<&str, Vec<&Credit>> = BTreeMap::new();

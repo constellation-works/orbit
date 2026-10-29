@@ -120,7 +120,11 @@ pub fn agent_scorecard(
     let spec = roles::spec(role);
     let mut payload = role_header(facts, role, query, since, cache_ttl);
     let (fleet_average, scored) = match spec.rows {
-        Some(rows) => score::score(spec.terms, rows(facts, since), query.min_support),
+        Some(rows) => score::score(
+            spec.terms,
+            rows(facts, since, query.min_support),
+            query.min_support,
+        ),
         None => (None, Vec::new()),
     };
     payload["fleet_average"] = json!(fleet_average.map(score::number));
@@ -204,7 +208,11 @@ pub fn agent_detail(
     let since = query.since(facts);
     let spec = roles::spec(role);
     let (fleet_average, scored) = match spec.rows {
-        Some(rows) => score::score(spec.terms, rows(facts, since), query.min_support),
+        Some(rows) => score::score(
+            spec.terms,
+            rows(facts, since, query.min_support),
+            query.min_support,
+        ),
         None => (None, Vec::new()),
     };
     let matching: Vec<_> = scored

@@ -9,7 +9,9 @@
 //! before any pilot ran are the baseline the F1 lift is measured from. The
 //! observed tier ranks the window's assessed tasks by total implementation
 //! cost and cuts the ranking in the proportions the pilots assigned, so
-//! calibration measures ordering, not absolute cost. Cost is never a term.
+//! calibration measures ordering, not absolute cost. Only placed tasks
+//! support calibration; missing tiers or prices are not misses. Cost is
+//! never a term.
 //!
 //! The warning terms grade every assessment, held or clean, by how it
 //! settled ([`super::pilot_warnings`]), rated per 100 settled assessments
@@ -28,13 +30,16 @@ use super::pilot_warnings::{self, CONFIRMED, DISMISSED, MISSED, SETTLED_UNIT, Wa
 use crate::application::agents::AgentFacts;
 use crate::application::agents::attribution::row_key;
 use crate::application::agents::facts::TaskFacts;
-use crate::application::agents::score::{Occurrence, RowInput, Stat, Tally, Term, number};
+use crate::application::agents::score::{
+    Denominator, Occurrence, RowInput, Stat, Tally, Term, number,
+};
 use crate::application::codebase::{Anchor, Contest, HeldWait, PilotEvidence, PilotRun};
 
 pub(super) const ROLE: RoleSpec = RoleSpec {
     unit: "assessed tasks",
     terms: TERMS,
     term_units: &[
+        ("tier_calibration", "placed tasks"),
         (CONFIRMED, SETTLED_UNIT),
         (DISMISSED, SETTLED_UNIT),
         (MISSED, SETTLED_UNIT),
@@ -55,7 +60,7 @@ const TERMS: &[Term] = &[
         key: "tier_calibration",
         label: "Tier calibration",
         weight: 0.25,
-        definition: "Tasks whose assessed complexity matches their observed tier, so per 100 tasks the percent on the tier.",
+        definition: "Placed tasks whose assessed complexity matches their observed tier, per 100 placed tasks. Tasks without a tier or a priced implementation are unmeasured; below the requested minimum placement support this term is provisional and not scored.",
         group: "credit",
     },
     Term {
@@ -471,7 +476,7 @@ fn observed_tiers<'a>(
 
 /// One row per pilot crew and model over the assessments written in the
 /// window.
-fn rows(facts: &AgentFacts, since: DateTime<Utc>) -> Vec<RowInput<'_>> {
+fn rows(facts: &AgentFacts, since: DateTime<Utc>, min_support: usize) -> Vec<RowInput<'_>> {
     let tasks: BTreeMap<&str, &TaskFacts> = facts
         .tasks
         .iter()
@@ -502,7 +507,15 @@ fn rows(facts: &AgentFacts, since: DateTime<Utc>) -> Vec<RowInput<'_>> {
     work.into_iter()
         .map(|(row, assessed)| {
             let warnings = warnings.remove(&row).unwrap_or_default();
-            row_input(facts, row, &assessed, &tiers, &present, warnings)
+            row_input(
+                facts,
+                row,
+                &assessed,
+                &tiers,
+                &present,
+                warnings,
+                min_support,
+            )
         })
         .collect()
 }
@@ -514,8 +527,9 @@ fn row_input<'a>(
     tiers: &BTreeMap<&str, (usize, usize)>,
     present: &[usize],
     warnings: WarningRow<'a>,
+    min_support: usize,
 ) -> RowInput<'a> {
-    let denominators = warnings.denominators();
+    let mut denominators = warnings.denominators();
     let warning_stats = warnings.stats();
     let mut tallies: BTreeMap<&'static str, Tally<'a>> = warnings.tallies;
     let mut pilot = Score::default();
@@ -616,6 +630,13 @@ fn row_input<'a>(
         .map(|(graded, _)| graded.pilot.declared)
         .sum();
     let placed: usize = matrix.iter().flatten().sum();
+    denominators.insert(
+        "tier_calibration",
+        Denominator {
+            units: placed,
+            min_support,
+        },
+    );
     let mut on_tier = 0;
     let mut too_easy = 0;
     let mut too_hard = 0;
