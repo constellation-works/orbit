@@ -9,6 +9,7 @@
 // and `setDockMode` for the router to select the Drain, Locks held or Log view.
 
 import { bindTaskLink, el, fetchJson, formatClock, formatDateTime, onClockZoneChange, onWorkspaceChange, getHost, isHostUnavailable, withHost } from './common.js';
+import { recordRoutedHref } from './router.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -175,6 +176,9 @@ export function chooseDockMode(mode) {
   // `tasks-main` without `dock-route` until a reload routes the same hash,
   // and a resize to phone width keeps the list instead of the selected dock.
   setDockRouteShown(true);
+  // ORB-19783: the router's last-routed address must follow this rewrite, or a
+  // later hash navigation back to the list URL is skipped as already routed.
+  recordRoutedHref();
 }
 
 // Legacy Start links reveal the existing Start card in the Drain view.
@@ -292,10 +296,9 @@ function wireDockBack() {
     params.delete("dock");
     const rest = params.toString();
     window.location.hash = rest ? `${route}?${rest}` : route;
-    // ORB-19732: a dock tab selected via chooseDockMode (replaceState) leaves
-    // the router's last-routed href on the list URL, so returning to it may
-    // not re-route. Mirror the list visibility here; a router run stays
-    // idempotent.
+    // The hash change routes the list. Setting a fragment that is already the
+    // list's fires no hashchange, so mirror the list visibility here too; a
+    // router run stays idempotent.
     setDockRouteShown(false);
   });
 }

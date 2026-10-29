@@ -202,6 +202,37 @@ try {
     }
     await page.setViewportSize({ width: 1440, height: 1000 });
   }
+  // ORB-19783: a plain hash navigation to the list URL after a desktop dock
+  // selection must show the list at phone width, as a reload of that URL does.
+  // chooseDockMode rewrites the hash with replaceState, so the router's
+  // last-routed address still names the list URL; the navigation must route
+  // rather than be skipped as that address.
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.evaluate(() => { location.hash = '#jobs/live'; });
+  await page.evaluate(() => { location.hash = '#tasks?status=backlog'; });
+  await page.locator('#tasks-main > .col-tasks').waitFor({ state: 'visible' });
+  await page.locator('#dock-mode-toggle .dock-seg[data-mode="log"]').click();
+  await page.setViewportSize({ width: 375, height: 812 });
+  const logSelected = await dockTabVisible('log');
+  if (!logSelected.hash.includes('dock=log') || !logSelected.dockRoute || logSelected.listVisible || !logSelected.dockVisible) {
+    throw new Error(`Desktop Log selection resized to phone must show the dock before the list navigation: ${JSON.stringify(logSelected)}`);
+  }
+  await page.evaluate(() => { location.hash = '#tasks?status=backlog'; });
+  const listNavigated = await dockTabVisible('log');
+  await page.screenshot({ path: path.join(evidence, 'tasks-list-hash-navigation-dark-375.png'), animations: 'disabled' });
+  if (listNavigated.hash.includes('dock=') || listNavigated.dockRoute
+    || !listNavigated.listVisible || listNavigated.dockVisible || listNavigated.backVisible) {
+    throw new Error(`Hash navigation to the list URL after a desktop dock selection must show the list and hide the dock: ${JSON.stringify(listNavigated)}`);
+  }
+  await page.evaluate(async () => {
+    const { setActiveTab } = await import('/js/router.js');
+    setActiveTab(location.hash, { refresh: false });
+  });
+  const listReloaded = await dockTabVisible('log');
+  if (JSON.stringify(listReloaded) !== JSON.stringify(listNavigated)) {
+    throw new Error(`Hash navigation to the list URL must match a reload of it: ${JSON.stringify({ listNavigated, listReloaded })}`);
+  }
+  await page.setViewportSize({ width: 1440, height: 1000 });
   // Ordinary phone navigation still returns to the list, and the desktop
   // side-by-side dock remains usable afterwards.
   await page.setViewportSize({ width: 375, height: 812 });
@@ -229,7 +260,7 @@ try {
     throw new Error(`Desktop side-by-side dock must remain usable after phone navigation: ${JSON.stringify(desktopAfterBack)}`);
   }
   if (pageErrors.length) throw new Error(`Browser page errors: ${pageErrors.join(' | ')}`);
-  console.log(`PASS: 375x812 phone dock Drain, Log, keyboard Back and retained status/search filters; desktop tab selection resized to phone for drain/locks/log with matching reload route. Screenshots: ${evidence}`);
+  console.log(`PASS: 375x812 phone dock Drain, Log, keyboard Back and retained status/search filters; desktop tab selection resized to phone for drain/locks/log with matching reload route; hash navigation to the list URL after a desktop Log selection shows the list. Screenshots: ${evidence}`);
 } finally {
   await browser?.close();
   await new Promise(resolve => server.close(resolve));
