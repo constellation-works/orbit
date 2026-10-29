@@ -93,9 +93,15 @@ recovery after an interrupted enqueue hashes the identical packet rather than
 minting another logical work ID. A marker can wait for owner restart without its
 creation timestamp exhausting the service queue age before first collection.
 Once admitted, expired work remains an explicit coverage gap under service
-policy. At most 27 criteria fit all independent questions within the service's
-400-question bound. Larger tasks receive `invalid_request` coverage, and other
-host limits or admission failures receive a gap; neither counts as clean.
+policy. Repeated ticks for unchanged content and policy retain its work ID and
+collection timestamp, including after service-record retention; a missing current
+projection alone does not authorize re-admission. Returning to a prior semantic
+snapshot can refresh its stale receipt when another selected snapshot or a
+displaced assistance slot proves restoration. It reuses the snapshot, annotation
+and dismissal identities while admitting fresh bounded work; superseded results
+remain in history. At most 27 criteria fit all independent questions within the
+service's 400-question bound. Larger tasks receive `invalid_request` coverage,
+and other host limits or admission failures receive a gap; neither counts as clean.
 
 Task shared locks precede private ledger locks during local admission, current
 reads and feedback. They exclude semantic edits and terminal transitions without

@@ -253,6 +253,16 @@ impl AssistanceService {
         Ok(Some(claim.work.id))
     }
 
+    /// Whether another admission displaced this receipt's slot. Unlike the
+    /// assessment view, queue age does not imply semantic supersession, and a
+    /// record removed by retention supplies no evidence of supersession.
+    pub(crate) fn assistance_work_was_superseded(&self, id: &str) -> Result<bool, OrbitError> {
+        Ok(self
+            .store
+            .assistance_record(id)?
+            .is_some_and(|record| !record.current))
+    }
+
     /// Operator/history view, including pending, shadow and explicit gaps.
     /// The consumer supplies its current semantic digest on every read.
     pub fn assistance_assessment(
