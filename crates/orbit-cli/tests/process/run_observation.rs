@@ -1160,10 +1160,17 @@ fn cancelling_owners_with_pre_change_ps_tokens_still_signals_them() {
         fixture.db().execute("INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state, scheduled_at, started_at, created_at, pid, pid_start_time) VALUES (?1, ?2, 'fixture_job', 1, 'running', ?3, ?3, ?3, ?4, ?5)", params![run_id, fixture.workspace_id(), now, owner.pid(), token]).unwrap();
         let cancelled = fixture.json(&["run", "cancel", &run_id, "--confirm", "--json"]);
         assert_eq!(cancelled["outcome"], "cancelled", "{format}: {cancelled}");
+        assert_eq!(cancelled["signal_attempted"], true, "{format}: {cancelled}");
         assert!(
-            cancelled["signal_outcome"]
-                .as_str()
-                .is_some_and(|o| o.starts_with("terminated_")),
+            matches!(
+                cancelled["signal_outcome"].as_str(),
+                Some(
+                    "terminated_process_group"
+                        | "killed_process_group"
+                        | "terminated_owner"
+                        | "killed_owner"
+                )
+            ),
             "pre-change {format} owner token must still verify: {cancelled}"
         );
         assert!(
