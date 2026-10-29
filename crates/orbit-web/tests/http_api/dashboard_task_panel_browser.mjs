@@ -96,6 +96,7 @@ globalThis.panelFixture = {
   deliveryClaim: false, readiness: [], lifecycle: [],
   holdTaskList: false, releaseTaskList: null,
   drainActions: [], drainPhase: 'idle', failAlsoTaskReadiness: false,
+  refuseWith: null,
 };
 globalThis.fetch = async (input, options = {}) => {
   const url = new URL(input, location.href);
@@ -187,6 +188,7 @@ globalThis.fetch = async (input, options = {}) => {
   }
   const lifecycle = api.match(/^\\/api\\/tasks\\/([^/]+)\\/(reject|archive)$/);
   if (lifecycle && options.method === 'POST') {
+    if (globalThis.panelFixture.refuseWith) return json({ error: globalThis.panelFixture.refuseWith }, 409);
     globalThis.panelFixture.lifecycle.push({ path: api, body: options.body ? JSON.parse(options.body) : null });
     return json({ ok: true });
   }
@@ -195,6 +197,7 @@ globalThis.fetch = async (input, options = {}) => {
     const task = globalThis.panelFixture.tasks.find(item => item.id === decodeURIComponent(detail[1]));
     if (task && options.method === 'PATCH') {
       const body = JSON.parse(options.body);
+      if (body.status === 'done' && globalThis.panelFixture.refuseWith) return json({ error: globalThis.panelFixture.refuseWith }, 409);
       globalThis.panelFixture.patches.push({ id: task.id, body });
       if (Object.hasOwn(body, 'crew')) task.crew = body.crew;
       if (Object.hasOwn(body, 'not_before')) { task.not_before = body.not_before || null; task.scheduled_hold = Boolean(body.not_before); }
@@ -462,6 +465,42 @@ async function checkTaskPanel() {
     assert.deepEqual(errors, []);
     await context.close();
     results.reviewClaimApprovalGuard = true;
+  }
+
+  // ORB-19685: a refused done transition's lifecycle message ran on one line
+  // past the pane edge. The status lever's feedback and a refused action's
+  // error wrap inside the pane, a 60-character unbroken token included.
+  {
+    const refusal = "policy denied: completion requires an operator's post-deploy met record for criteria 4; owed or failed measurements cannot complete (evidence run " + 'jrun20261029x0437c14'.padEnd(60, 'Q') + ')';
+    const bounds = {};
+    for (const width of [1440, 375]) {
+      const { page, errors, context } = await openPage({ width, height: width === 375 ? 812 : 900 });
+      await page.evaluate(text => { globalThis.panelFixture.refuseWith = text; }, refusal);
+      await row(page, 'PANEL-1').locator('.title').click();
+      await waitShown(page, 'PANEL-1');
+      const detail = pane(page).locator('#detail-PANEL-1');
+      await detail.locator('.task-levers .task-status-select').selectOption('done');
+      await detail.locator('.task-levers .mutation-feedback.error').waitFor({ state: 'visible' });
+      await detail.getByRole('button', { name: 'archive', exact: true }).click();
+      await detail.locator('.action-error').waitFor({ state: 'visible' });
+      bounds[width] = await page.evaluate(() => {
+        const paneBox = document.getElementById('task-detail-pane').getBoundingClientRect();
+        return Object.fromEntries(['.task-levers .mutation-feedback.error', '.action-error'].map(selector => {
+          const node = document.querySelector(`#detail-PANEL-1 ${selector}`);
+          const box = node.getBoundingClientRect();
+          return [selector, { left: box.left, right: box.right, paneLeft: paneBox.left, paneRight: paneBox.right, scrollWidth: node.scrollWidth, clientWidth: node.clientWidth }];
+        }));
+      });
+      for (const [selector, box] of Object.entries(bounds[width])) {
+        assert.ok(box.left >= box.paneLeft - 0.5 && box.right <= box.paneRight + 0.5, `${selector} stays inside the pane at ${width}px: ${JSON.stringify(box)}`);
+        assert.ok(box.scrollWidth <= box.clientWidth + 1, `${selector} wraps its text inside its box at ${width}px: ${JSON.stringify(box)}`);
+      }
+      await capture(page, `task-refusal-wrap-dark-${width}.png`);
+      assert.deepEqual(errors, []);
+      await context.close();
+    }
+    fs.writeFileSync(path.join(evidence, 'task-refusal-wrap-result.json'), JSON.stringify(bounds, null, 2));
+    results.longRefusalWrapsInPane = true;
   }
 
   // Status gating stays attached to the same handlers after the controls move.

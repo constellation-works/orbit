@@ -366,13 +366,19 @@ th,
   vertical-align: middle;
 }
 
+/* A refusal wraps inside whatever holds it (task pane, task page, run
+   detail), long run ids and paths included. */
 .action-error {
+  min-width: 0;
+  max-width: 100%;
   padding: 8px 12px;
   border-left: 3px solid var(--state-failed);
   border-radius: 4px;
   color: var(--state-failed);
   font-family: var(--font-mono);
   font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   background: rgba(239, 68, 68, 0.1);
 }
 
