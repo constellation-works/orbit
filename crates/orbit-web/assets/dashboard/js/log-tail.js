@@ -196,6 +196,13 @@ export function revealDockStart() {
   card.scrollIntoView?.({ block: "nearest" });
 }
 
+// At phone width an explicit dock route (`dock=` in the Tasks hash) shows the
+// dock in place of the list. The router calls this on every Tasks route, so a
+// route without `dock=` brings the list back. Desktop keeps both (tasks.css).
+export function setDockRouteShown(shown) {
+  $("tasks-main")?.classList.toggle("dock-route", Boolean(shown));
+}
+
 /// Level the active tab's first card with the first task block.
 /// `--tasks-dock-lead` on #tasks-dock is the room above #side-dock that takes,
 /// and tasks.css gives it to the fixed message area; the tab bar sits inside
@@ -271,6 +278,18 @@ function wireDockModeToggle() {
   });
 }
 
+// The phone dock route's Back control drops only `dock=`, so the hash keeps the
+// list's filters and the router then shows the list.
+function wireDockBack() {
+  $("dock-back-tasks")?.addEventListener("click", () => {
+    const [route, query = ""] = window.location.hash.slice(1).split("?");
+    const params = new URLSearchParams(query);
+    params.delete("dock");
+    const rest = params.toString();
+    window.location.hash = rest ? `${route}?${rest}` : route;
+  });
+}
+
 // ORB-10972: the bottom status bar carries the newest line on every tab, not
 // just Tasks where the full tail is mounted. The SSE connection is opened
 // once at boot and never torn down on a tab change, so mirroring here is
@@ -342,6 +361,7 @@ function wireLogPanelPreferences() {
   if (logPanelPrefsWired) return;
   logPanelPrefsWired = true;
   wireDockModeToggle();
+  wireDockBack();
   applyDockMode();
 }
 

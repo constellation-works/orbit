@@ -512,8 +512,9 @@ try {
         drainStatusShown: document.getElementById('auto-drain-panel').getClientRects().length > 0,
       };
     });
-    // The Tasks dock sits beside the list above 1000px, leading with the
-    // Auto-drain status card, and gives way below it.
+    // On the list route the Tasks dock sits beside the list above 1000px,
+    // leading with the Auto-drain status card, and gives way below it. A phone
+    // dock route (ORB-19691) is checked with the Global Drain indicator below.
     const docked = width > 1000;
     const dockSpace = docked ? tasks.gap + tasks.dockWidth : 0;
     if (tasks.tracks !== (docked ? 2 : 1) || (tasks.dockWidth > 0) !== docked || tasks.drainStatusShown !== docked || Math.abs(tasks.listWidth + dockSpace - tasks.mainWidth) > 1) {
@@ -1072,6 +1073,36 @@ try {
     if (animation !== 'none') throw new Error(`Reduced-motion drain indicator ${selector} animates: ${animation}`);
   }
   await page.emulateMedia({ reducedMotion: 'no-preference' });
+  // ORB-19691: below 1000px the dock is not beside the list, so an explicit dock
+  // route shows it in place of the list. Back returns to the list from the
+  // keyboard, and no step overflows the document.
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.click('#global-drain-state');
+  await page.locator('#side-dock[data-mode="drain"]').waitFor({ state: 'visible' });
+  const phoneDockRoute = () => page.evaluate(() => ({
+    list: document.querySelector('#tasks-main > .col-tasks').getClientRects().length > 0,
+    dock: document.getElementById('side-dock').getClientRects().length > 0,
+    hash: location.hash,
+  }));
+  let phoneRoute = await phoneDockRoute();
+  if (phoneRoute.list || !phoneRoute.dock || !phoneRoute.hash.includes('dock=drain')) {
+    throw new Error(`The phone Global Drain indicator must show the dock in place of the list: ${JSON.stringify(phoneRoute)}`);
+  }
+  await assertNoOverflow('phone Drain dock route at 375px');
+  await page.waitForTimeout(350);
+  await page.screenshot({ path: path.join(evidence, 'tasks-dock-phone-drain-dark-375.png'), animations: 'disabled' });
+  await page.evaluate(() => { location.hash = '#tasks?dock=log'; });
+  await page.locator('#side-dock[data-mode="log"] #log-panel').waitFor({ state: 'visible' });
+  phoneRoute = await phoneDockRoute();
+  if (phoneRoute.list || !phoneRoute.dock) throw new Error(`A phone Log deep link must show the dock in place of the list: ${JSON.stringify(phoneRoute)}`);
+  await assertNoOverflow('phone Log dock route at 375px');
+  await page.waitForTimeout(350);
+  await page.screenshot({ path: path.join(evidence, 'tasks-dock-phone-log-dark-375.png'), animations: 'disabled' });
+  await page.locator('#dock-back-tasks').focus();
+  await page.keyboard.press('Enter');
+  await page.locator('#tasks-main > .col-tasks').waitFor({ state: 'visible' });
+  phoneRoute = await phoneDockRoute();
+  if (phoneRoute.dock || phoneRoute.hash.includes('dock=')) throw new Error(`Back to tasks must return to the list without dock=: ${JSON.stringify(phoneRoute)}`);
   await page.setViewportSize({ width: 1280, height: 900 });
   await drainCheck('1280', null);
   // The approve-proposed opt-in and the live window's approvals line fit the
