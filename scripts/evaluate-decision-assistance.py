@@ -5,11 +5,13 @@ Stdlib only, no network. See docs/design/decision-assistance/2_evaluation.md.
 Formats are versioned (`decision-assistance-eval/1`); synthetic labels are
 never human ground truth (label.provenance distinguishes them).
 """
-import argparse, hashlib, json, math, sys
+import argparse, hashlib, json, math, os, sys
 from collections import Counter, defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
 
 FORMAT = "decision-assistance-eval/1"
+HOLDOUT_RECORDS = Path(".decision-assistance-eval") / "holdouts"
 DISPOSITIONS = ["suggested", "uncertain", "refused", "unavailable", "invalid", "stale"]
 FAILURE_CATEGORIES = ["product_defect", "misclassified_hold", "provider", "upstream_quality",
                       "environment", "one_off", "insufficient_evidence"]
@@ -291,11 +293,62 @@ def score(ds, ansdoc):
                         "input_tokens": agg(in_tok, usage_known["input_tokens"]), "output_tokens": agg(out_tok, usage_known["output_tokens"])}
     return report
 
+def _holdout_timestamp(value):
+    if not isinstance(value, str):
+        raise ValueError("holdout timestamps must be ISO 8601 strings with a timezone")
+    timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if timestamp.tzinfo is None:
+        raise ValueError("holdout timestamps must include a timezone")
+    return timestamp
+
+def _record_holdout_opening(holdout_id):
+    HOLDOUT_RECORDS.mkdir(parents=True, exist_ok=True)
+    # Exclusive creation arbitrates concurrent checks without overwriting history.
+    path = HOLDOUT_RECORDS / (hashlib.sha256(holdout_id.encode()).hexdigest() + ".json")
+    try:
+        record = path.open("x", encoding="utf-8")
+    except FileExistsError:
+        return False
+    with record:
+        json.dump({"format_version": FORMAT, "holdout_id": holdout_id,
+                   "opened_at": datetime.now(timezone.utc).isoformat()}, record)
+        record.write("\n")
+        record.flush()
+        os.fsync(record.fileno())
+    return True
+
+def _target_recorded_opening(doc):
+    try:
+        paths = list(HOLDOUT_RECORDS.iterdir())
+    except FileNotFoundError:
+        paths = []
+    openings = {}
+    for path in paths:
+        if path.suffix != ".json":
+            continue
+        record = load(path)
+        if not isinstance(record, dict) or record.get("format_version") != FORMAT:
+            raise ValueError(f"invalid holdout record {path}")
+        hid = record.get("holdout_id")
+        if not isinstance(hid, str) or not hid.strip():
+            raise ValueError(f"invalid holdout_id in {path}")
+        if path.stem != hashlib.sha256(hid.encode()).hexdigest():
+            raise ValueError(f"holdout record filename does not match holdout_id in {path}")
+        openings[hid] = _holdout_timestamp(record.get("opened_at"))
+    hid = doc.get("holdout_id")
+    if hid is not None:
+        if not isinstance(hid, str) or not hid.strip():
+            raise ValueError("targets holdout_id must be a non-empty string")
+        return openings.get(hid)
+    if len(openings) > 1:
+        raise ValueError("targets holdout_id required when multiple holdouts have been opened")
+    return next(iter(openings.values()), None)
+
 def check_split(ds, manifest, prior_holdout_ids):
     errs = validate_dataset(ds)
     if manifest.get("format_version") != FORMAT: errs.append(f"manifest format_version must be {FORMAT}")
     hid = manifest.get("holdout_id")
-    if not hid: errs.append("manifest holdout_id required")
+    if not isinstance(hid, str) or not hid.strip(): errs.append("manifest holdout_id must be a non-empty string")
     if hid in (prior_holdout_ids or []): errs.append(f"holdout_id {hid} already used/opened; reused holdout IDs are rejected")
     if hid in manifest.get("previously_opened_holdout_ids", []): errs.append(f"holdout_id {hid} listed in previously_opened_holdout_ids")
     cases = {c["case_id"]: c for c in ds.get("cases", [])}
@@ -327,14 +380,27 @@ def check_split(ds, manifest, prior_holdout_ids):
         non = [cases[c]["evidence_packet"]["collected_at"] for c, s in seen_split.items() if s != "holdout" and c in cases]
         hold = [cases[c]["evidence_packet"]["collected_at"] for c, s in seen_split.items() if s == "holdout" and c in cases]
         if non and hold and min(hold) <= max(non): errs.append("time holdout: earliest holdout evidence must be after latest train/dev evidence")
+    if not errs:
+        try:
+            if not _record_holdout_opening(hid):
+                errs.append(f"holdout_id {hid} already used/opened; reused holdout IDs are rejected")
+        except OSError as error:
+            errs.append(f"cannot record holdout access: {error}")
     return errs
 
 def check_targets(doc, holdout_opened_at):
     errs = []
     if doc.get("format_version") != FORMAT: errs.append(f"targets format_version must be {FORMAT}")
     if not _ts(doc.get("registered_at", "")): errs.append("targets registered_at required")
-    if holdout_opened_at and _ts(doc.get("registered_at", "")) and doc["registered_at"] >= holdout_opened_at:
-        errs.append("targets must be registered before holdout access (registered_at >= holdout_opened_at)")
+    try:
+        recorded_opening = _target_recorded_opening(doc)
+        deadlines = [recorded_opening] if recorded_opening is not None else []
+        if holdout_opened_at:
+            deadlines.append(_holdout_timestamp(holdout_opened_at))
+        if deadlines and _holdout_timestamp(doc.get("registered_at")) >= min(deadlines):
+            errs.append("targets must be registered before holdout access (registered_at >= holdout_opened_at)")
+    except (OSError, ValueError) as error:
+        errs.append(f"cannot verify holdout access: {error}")
     if not doc.get("baseline", {}).get("name"): errs.append("targets baseline.name required (baseline comparison)")
     want = {"failure_category"} | set(TASK_PREDICATES)
     got = {t.get("question") for t in doc.get("targets", [])}
