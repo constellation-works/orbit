@@ -225,7 +225,8 @@ impl OrbitRuntime {
     /// Why a standing provider hold keeps `task` from the executor `request`
     /// comes from, or `None` when the crew it would run as is not excluded.
     /// [ORB-16379] The hold is read as the executor's `machine` sees it: an
-    /// unavailable hold placed on another host excludes nothing there.
+    /// unavailable hold placed on another host excludes there only the crews
+    /// it carries from an earlier standing hold.
     fn pull_provider_hold(
         &self,
         task: &Task,
