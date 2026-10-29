@@ -530,14 +530,19 @@ The test gate in `ci.yml` runs on parallel runners from one build:
 Locally, `make ci` keeps the single-process full mode: the folded build, then
 nextest from its binary listing.
 
-`ci-guardrails.sh` repeats its phase breakdown in the final log tail, including
-on failure: format, workflow test listing/build (which folds in the all-targets
-Clippy lint), the exclusive self-test lane, workspace test listing, workspace
-tests, production Clippy, doctests, documentation, supply-chain checks and
-repository guards. `--test-archive` mode records only
+In full mode, `ci-guardrails.sh` repeats its phase breakdown in the final log
+tail, including on failure: format, workflow test listing/build (which folds in
+the all-targets Clippy lint), the exclusive self-test lane, workspace test
+listing, workspace tests, production Clippy, doctests, documentation,
+supply-chain checks and repository guards. `--test-archive` mode records only
 `workflow-test-list-build` and `workspace-test-archive`, `--test-partitions`
-mode only `workspace-test-partitions`, and `--checks` mode records every phase
-except the workflow test build and the workspace test phases.
+mode only `workspace-test-partitions`, and `--test-doctests` mode only
+`doctests`. `--checks` mode records every phase except the workflow test build,
+the workspace test phases and doctests: the hosted Check job leaves doctests to
+the Test build job. That job runs them through `with-test-build-lint.sh`
+directly and logs a `doctests_seconds=` timing, with no `ci-guardrails-phase`
+record. `--test-doctests` runs the same command through the guard and records
+its `doctests` phase for local replays.
 `guard-pool` times the background pool from its start to its join. In fast mode
 that is the pool's own wall time. In full mode the join follows the workflow
 test build, so `guard-pool` includes the overlapped build.
