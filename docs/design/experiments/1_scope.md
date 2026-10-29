@@ -307,9 +307,11 @@ Policy only. Experiment definitions are store records.
 - **Interference.** Arms share one codebase. A change landed by one arm (a better map, a
   fixed flake) helps every arm afterwards. Concurrent arms keep this symmetric, but it shrinks
   measured effects.
-- **Crew and model mix.** The crew draw is independent of the arm, so the mix balances in
-  expectation, not in a small sample. The readout shows each arm's crew mix and can cut by
-  crew; crew-changing arms bypass performance weighting by design.
+- **Crew and model mix.** Tasks without an explicit crew draw from the arm's configured
+  pool: its overlay pool when set, otherwise the ordinary pool. Different pools can produce
+  different mixes by design; within a pool, weighted draws balance only in expectation. The
+  readout shows each arm's crew mix and can cut by crew; crew-changing arms bypass
+  performance weighting by design.
 - **Skill discovery differs by provider.** Control runs retain the shared skill links.
   Treated Claude invocations use a private discovery root; the other provider families
   refuse skill overlays until they have an adapter that can replace a name in isolation.
