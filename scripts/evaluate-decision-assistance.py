@@ -30,12 +30,96 @@ QUESTION_SETS = {
             ("scope_clarification", "True only if unrelated deliverables lack a common outcome. Coherent cross-component work is not flagged.")]}},
 }
 PROVENANCES = ["synthetic", "independent_human"]
+HUMAN_LABEL_IMPORT_FIELDS = (
+    "labeler_id",
+    "labeler_role",
+    "labeled_at",
+    "intake_snapshot_at",
+    "second_label_or_adjudication",
+)
 
 def digest(text): return "sha256:" + hashlib.sha256(text.encode()).hexdigest()
 def crit_ref(index, text): return {"index": index, "text_digest": digest(text)}
 def is_digest(v): return isinstance(v, str) and v.startswith("sha256:") and len(v) == 71 and all(c in "0123456789abcdef" for c in v[7:])
 
 def _ts(v): return isinstance(v, str) and len(v) >= 10 and v[4] == "-" and v[7] == "-"
+
+def _validate_human_label_import(label, case_id, case_expected, manifest_snapshot):
+    errs = []
+    where = f"holdout case {case_id}: label"
+    missing = [field for field in HUMAN_LABEL_IMPORT_FIELDS if field not in label]
+    if missing:
+        errs.append(f"{where} missing required import field(s): {', '.join(missing)}")
+
+    for field in ("labeler_id", "labeler_role"):
+        if not isinstance(label.get(field), str) or not label[field].strip():
+            errs.append(f"{where}.{field} must be a non-empty string")
+    for field in ("labeled_at", "intake_snapshot_at"):
+        if not _ts(label.get(field, "")):
+            errs.append(f"{where}.{field} must be ISO-8601")
+    if _ts(label.get("intake_snapshot_at", "")) and _ts(manifest_snapshot):
+        if label["intake_snapshot_at"] != manifest_snapshot:
+            errs.append(f"{where}.intake_snapshot_at must match manifest intake_snapshot_at")
+
+    record = label.get("second_label_or_adjudication")
+    if not isinstance(record, dict):
+        if "second_label_or_adjudication" in label:
+            errs.append(f"{where}.second_label_or_adjudication must be an object")
+        return errs
+
+    kind = record.get("kind")
+    if kind == "second_independent_label":
+        record_where = f"{where}.second_label_or_adjudication"
+        for field in ("labeler_id", "labeler_role"):
+            if not isinstance(record.get(field), str) or not record[field].strip():
+                errs.append(f"{record_where}.{field} must be a non-empty string")
+        if record.get("labeler_id") == label.get("labeler_id"):
+            errs.append(f"{record_where}.labeler_id must identify a second independent labeler")
+        if not _ts(record.get("labeled_at", "")):
+            errs.append(f"{record_where}.labeled_at must be ISO-8601")
+        if "value" not in record:
+            errs.append(f"{record_where}.value is required")
+        elif record["value"] != case_expected:
+            errs.append(f"{record_where} disagrees with the accepted label; an adjudication record is required")
+    elif kind == "adjudication":
+        record_where = f"{where}.second_label_or_adjudication"
+        for field in ("adjudicator_id", "adjudicator_role", "rationale_category"):
+            if not isinstance(record.get(field), str) or not record[field].strip():
+                errs.append(f"{record_where}.{field} must be a non-empty string")
+        if not _ts(record.get("adjudicated_at", "")):
+            errs.append(f"{record_where}.adjudicated_at must be ISO-8601")
+        originals = record.get("original_labels")
+        if not isinstance(originals, list) or len(originals) != 2:
+            errs.append(f"{record_where}.original_labels must retain both independent labels")
+        else:
+            original_ids = []
+            for index, original in enumerate(originals):
+                original_where = f"{record_where}.original_labels[{index}]"
+                if not isinstance(original, dict):
+                    errs.append(f"{original_where} must be an object")
+                    continue
+                for field in ("labeler_id", "labeler_role"):
+                    if not isinstance(original.get(field), str) or not original[field].strip():
+                        errs.append(f"{original_where}.{field} must be a non-empty string")
+                if not _ts(original.get("labeled_at", "")):
+                    errs.append(f"{original_where}.labeled_at must be ISO-8601")
+                if "value" not in original:
+                    errs.append(f"{original_where}.value is required")
+                if isinstance(original.get("labeler_id"), str):
+                    original_ids.append(original["labeler_id"])
+            if len(original_ids) == 2 and len(set(original_ids)) != 2:
+                errs.append(f"{record_where}.original_labels must come from two independent labelers")
+            if label.get("labeler_id") not in original_ids:
+                errs.append(f"{record_where}.original_labels must include labeler_id")
+            if record.get("adjudicator_id") in original_ids:
+                errs.append(f"{record_where}.adjudicator_id must identify a third adjudicator")
+        if "value" not in record:
+            errs.append(f"{record_where}.value is required")
+        elif record["value"] != case_expected:
+            errs.append(f"{record_where}.value must match the accepted label")
+    else:
+        errs.append(f"{where}.second_label_or_adjudication.kind must be second_independent_label or adjudication")
+    return errs
 
 def validate_packet(p, errs, where):
     if not isinstance(p, dict): errs.append(f"{where}: evidence_packet must be an object"); return
@@ -219,8 +303,12 @@ def check_split(ds, manifest, prior_holdout_ids):
             if k in store and (store[k] == "holdout") != (split == "holdout"):
                 errs.append(f"{key} {k} overlaps holdout and non-holdout splits (case {cid})")
             store.setdefault(k, split)
-        if split == "holdout" and c.get("label", {}).get("provenance") != "independent_human":
-            errs.append(f"holdout case {cid}: label.provenance must be independent_human, got {c.get('label', {}).get('provenance')!r} (synthetic is not human ground truth)")
+        label = c.get("label", {})
+        if split == "holdout" and label.get("provenance") != "independent_human":
+            errs.append(f"holdout case {cid}: label.provenance must be independent_human, got {label.get('provenance')!r} (synthetic is not human ground truth)")
+        elif split == "holdout":
+            errs.extend(_validate_human_label_import(
+                label, cid, c.get("expected"), manifest.get("intake_snapshot_at", "")))
         ep = c.get("evidence_packet") or {}
         if _ts(ep.get("collected_at", "")) and _ts(manifest.get("intake_snapshot_at", "")) and ep["collected_at"] > manifest["intake_snapshot_at"]:
             errs.append(f"case {cid}: evidence after intake_snapshot_at")
