@@ -84,6 +84,7 @@ template:
   - orbit.task.list
   - orbit.task.show
   - orbit.search
+  - orbit.task.update
   priority: medium
   complexity: medium
   status: backlog

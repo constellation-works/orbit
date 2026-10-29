@@ -158,6 +158,10 @@ template:
   tags:
   - qa-sweep
   - no-diff-expected
+  required_tools:
+  - orbit.task.add
+  - orbit.task.artifact.put
+  - orbit.task.show
   priority: medium
   complexity: medium
   status: backlog
