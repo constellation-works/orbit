@@ -217,6 +217,27 @@ def score(ds, ansdoc):
     total = answered = abstained = invalid = refused = 0
     lat, costs, in_tok, out_tok = [], [], [], []
     usage_known = {"latency": True, "cost": True, "input_tokens": True, "output_tokens": True}
+    # Usage belongs to each reported call, including calls omitted from case scoring.
+    for a in ansdoc.get("answers", []):
+        latency = a.get("latency_ms")
+        if (isinstance(latency, (int, float)) and not isinstance(latency, bool) and latency >= 0
+                and (not isinstance(latency, float) or math.isfinite(latency))):
+            lat.append(latency)
+        else:
+            usage_known["latency"] = False
+        cost = a.get("cost_usd")
+        if (isinstance(cost, (int, float)) and not isinstance(cost, bool) and cost >= 0
+                and (not isinstance(cost, float) or math.isfinite(cost))):
+            costs.append(cost)
+        else:
+            usage_known["cost"] = False
+        usage = a.get("usage")
+        for key, values in (("input_tokens", in_tok), ("output_tokens", out_tok)):
+            count = usage.get(key) if isinstance(usage, dict) else None
+            if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
+                values.append(count)
+            else:
+                usage_known[key] = False
     # per-question accumulators
     choice_conf = defaultdict(Counter); choice_counts = defaultdict(lambda: [0, 0, 0])  # tp,fp,fn
     pred_stats = {}
@@ -228,16 +249,6 @@ def score(ds, ansdoc):
         if a["disposition"] in ("refused", "unavailable"): refused += 1; abstained += 1; continue
         if a["disposition"] != "suggested": abstained += 1; continue
         got = a.get("answers") or {}
-        # usage (missing = unknown, never zero)
-        if isinstance(a.get("latency_ms"), (int, float)): lat.append(a["latency_ms"])
-        else: usage_known["latency"] = False
-        if isinstance(a.get("cost_usd"), (int, float)): costs.append(a["cost_usd"])
-        else: usage_known["cost"] = False
-        u = a.get("usage") or {}
-        if isinstance(u.get("input_tokens"), int): in_tok.append(u["input_tokens"])
-        else: usage_known["input_tokens"] = False
-        if isinstance(u.get("output_tokens"), int): out_tok.append(u["output_tokens"])
-        else: usage_known["output_tokens"] = False
         case_answered = True
         for q, exp in case["expected"].items():
             pred = got.get(q, {}); ev, pv = exp["value"], pred.get("value")
