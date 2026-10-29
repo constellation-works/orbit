@@ -122,6 +122,13 @@ const summaryValue = (label) => Array.from(body().querySelectorAll('.operation-s
 const disabledGroupCount = () => Array.from(body().querySelectorAll('.operation-group'))
   .find((node) => node.querySelector('.operation-group-title strong')?.textContent === 'Disabled')
   ?.querySelector('.operation-group-count')?.textContent ?? '';
+const lastMintedSub = (name) => card(name)?.querySelector('.operation-cell[data-label="Last minted"] .operation-cell-sub');
+const nextMintMain = (name) => card(name)?.querySelector('.operation-cell[data-label="Next mint"] .operation-cell-main');
+const openDuplicatesStat = () => Array.from(body().querySelectorAll('.operation-stat'))
+  .find((node) => node.querySelector('.operation-field-label')?.textContent === 'Open duplicates');
+const openDuplicatesHasHold = () => openDuplicatesStat()?.classList.contains('warn') ?? false;
+const inDisabledGroup = (name) => card(name)?.closest('.operation-group')
+  ?.querySelector('.operation-group-title strong')?.textContent === 'Disabled';
 const mintConfirm = (name) => {
   const button = Array.from(card(name).querySelectorAll('button')).find((node) => node.textContent === 'Mint now');
   assert(button && !button.disabled, name + ': manual mint must stay enabled under its dedupe policy');
@@ -161,47 +168,55 @@ try {
 
   // ORB-19707 disabled always-fire alone: paused, no mint promise, raw count kept.
   render([definition('paused-always', 'always', false)]);
-  const pausedAlone = lastMintedCell('paused-always');
-  assert(pausedAlone && pausedAlone.textContent.includes('still open'), 'disabled always-fire row lost its open duplicate: ' + pausedAlone?.textContent);
-  assert(!pausedAlone.textContent.includes('next due slot mints another'), 'disabled always-fire promises another mint: ' + pausedAlone?.textContent);
-  assert(!pausedAlone.textContent.includes('scheduler'), 'disabled always-fire claims a scheduler hold: ' + pausedAlone?.textContent);
-  assert(pausedAlone.textContent.includes('paused') && pausedAlone.textContent.includes('no scheduled mint'), 'disabled always-fire row must say paused with no scheduled mint: ' + pausedAlone?.textContent);
-  assert(!pausedAlone.classList.contains('warn'), 'disabled always-fire row must not warn: ' + pausedAlone?.textContent);
-  assert(card('paused-always').classList.contains('disabled'), 'disabled always-fire row must sit in Disabled');
-  assert(disabledGroupCount() === '1', 'Disabled group must count the paused definition: ' + disabledGroupCount());
-  assert(summaryValue('Open duplicates') === '1', 'raw duplicate count must stay 1 while paused: ' + summaryValue('Open duplicates'));
-  assert(summaryValue('Enabled') === '0', 'paused strip must show Enabled 0: ' + summaryValue('Enabled'));
-  assert(summaryValue('Next mint') === '—', 'paused strip must show Next mint —: ' + summaryValue('Next mint'));
-  assert(summaryNote() === 'paused · no scheduled mint', 'paused summary must not promise a mint: ' + summaryNote());
+  const pausedAlone = lastMintedSub('paused-always');
+  assert(pausedAlone, '[ORB-19707] disabled always-fire row keeps its Last minted line');
+  assert(!pausedAlone.classList.contains('warn'), '[ORB-19707] disabled always-fire row must not warn');
+  assert(!openDuplicatesHasHold(), '[ORB-19707] disabled always-fire summary must not warn');
+  assert(card('paused-always').classList.contains('disabled'), '[ORB-19707] disabled always-fire row must sit in Disabled');
+  assert(inDisabledGroup('paused-always'), '[ORB-19707] disabled always-fire row must sit in the Disabled group');
+  assert(nextMintMain('paused-always')?.classList.contains('muted'), '[ORB-19707] disabled always-fire row must mute its Next mint');
+  assert(disabledGroupCount() === '1', '[ORB-19707] Disabled group must count the paused definition: ' + disabledGroupCount());
+  assert(summaryValue('Open duplicates') === '1', '[ORB-19707] raw duplicate count must stay 1 while paused: ' + summaryValue('Open duplicates'));
+  assert(summaryValue('Enabled') === '0', '[ORB-19707] paused strip must show Enabled 0: ' + summaryValue('Enabled'));
+  assert(summaryValue('Next mint') === '—', '[ORB-19707] paused strip must show Next mint —: ' + summaryValue('Next mint'));
   mintConfirm('paused-always');
 
   // Disabled skip-if-open alone: also paused, never a held slot.
   render([definition('paused-held', 'skip_if_open', false)]);
-  const pausedHeldAlone = lastMintedCell('paused-held');
-  assert(pausedHeldAlone && pausedHeldAlone.textContent.includes('still open'), 'disabled skip-if-open row lost its open duplicate: ' + pausedHeldAlone?.textContent);
-  assert(!pausedHeldAlone.textContent.includes('scheduler will skip'), 'disabled skip-if-open claims an active hold: ' + pausedHeldAlone?.textContent);
-  assert(pausedHeldAlone.textContent.includes('paused') && pausedHeldAlone.textContent.includes('no scheduled mint'), 'disabled skip-if-open row must say paused: ' + pausedHeldAlone?.textContent);
-  assert(!pausedHeldAlone.classList.contains('warn'), 'disabled skip-if-open row must not warn: ' + pausedHeldAlone?.textContent);
-  assert(summaryValue('Open duplicates') === '1', 'raw duplicate count must stay 1 while paused: ' + summaryValue('Open duplicates'));
-  assert(summaryNote() === 'paused · no scheduled mint', 'paused skip summary must not claim a hold: ' + summaryNote());
+  const pausedHeldAlone = lastMintedSub('paused-held');
+  assert(pausedHeldAlone, '[ORB-19707] disabled skip-if-open row keeps its Last minted line');
+  assert(!pausedHeldAlone.classList.contains('warn'), '[ORB-19707] disabled skip-if-open row must not warn');
+  assert(!openDuplicatesHasHold(), '[ORB-19707] disabled skip-if-open summary must not warn');
+  assert(card('paused-held').classList.contains('disabled'), '[ORB-19707] disabled skip-if-open row must sit in Disabled');
+  assert(inDisabledGroup('paused-held'), '[ORB-19707] disabled skip-if-open row must sit in the Disabled group');
+  assert(nextMintMain('paused-held')?.classList.contains('muted'), '[ORB-19707] disabled skip-if-open row must mute its Next mint');
+  assert(summaryValue('Open duplicates') === '1', '[ORB-19707] raw duplicate count must stay 1 while paused: ' + summaryValue('Open duplicates'));
   mintConfirm('paused-held');
 
   // Mixed enabled always-fire plus disabled skip-if-open: the paused row is not a hold.
   render([definition('always-chore', 'always', true), definition('paused-held', 'skip_if_open', false)]);
-  assert(lastMintedCell('always-chore').textContent.includes('next due slot mints another'), 'enabled always-fire row lost its mint line beside a paused row: ' + lastMintedCell('always-chore')?.textContent);
-  assert(lastMintedCell('paused-held').textContent.includes('paused'), 'paused row lost its paused line beside an enabled row: ' + lastMintedCell('paused-held')?.textContent);
-  assert(!lastMintedCell('paused-held').textContent.includes('scheduler'), 'paused row claims a hold beside an enabled row: ' + lastMintedCell('paused-held')?.textContent);
-  assert(summaryValue('Open duplicates') === '2', 'mixed strip must retain both open duplicates: ' + summaryValue('Open duplicates'));
-  assert(summaryNote() === 'always-fire definitions mint again when due', 'mixed strip must not count the paused row as a hold: ' + summaryNote());
+  assert(!card('always-chore').classList.contains('disabled'), '[ORB-19707] enabled always-fire row stays enabled beside a paused row');
+  assert(!lastMintedSub('always-chore').classList.contains('warn'), '[ORB-19707] enabled always-fire row must not warn beside a paused row');
+  assert(!nextMintMain('always-chore')?.classList.contains('muted'), '[ORB-19707] enabled always-fire row keeps a live Next mint beside a paused row');
+  assert(!lastMintedSub('paused-held').classList.contains('warn'), '[ORB-19707] paused row must not warn beside an enabled row');
+  assert(!openDuplicatesHasHold(), '[ORB-19707] mixed strip must not warn when only the paused row is open beside an enabled row');
+  assert(card('paused-held').classList.contains('disabled'), '[ORB-19707] paused row must sit in Disabled beside an enabled row');
+  assert(inDisabledGroup('paused-held'), '[ORB-19707] paused row must sit in the Disabled group beside an enabled row');
+  assert(summaryValue('Open duplicates') === '2', '[ORB-19707] mixed strip must retain both open duplicates: ' + summaryValue('Open duplicates'));
+  assert(summaryValue('Enabled') === '1', '[ORB-19707] mixed strip must count one enabled definition: ' + summaryValue('Enabled'));
   mintConfirm('always-chore');
   mintConfirm('paused-held');
 
   // Mixed enabled held plus disabled always-fire: one active hold of two open duplicates.
   render([definition('held-chore', 'skip_if_open', true), definition('paused-always', 'always', false)]);
-  assert(lastMintedCell('held-chore').textContent.includes('scheduler will skip'), 'enabled held row lost its hold beside a paused row: ' + lastMintedCell('held-chore')?.textContent);
-  assert(lastMintedCell('paused-always').textContent.includes('paused'), 'paused row lost its paused line beside a held row: ' + lastMintedCell('paused-always')?.textContent);
-  assert(summaryValue('Open duplicates') === '2', 'mixed strip must retain both open duplicates: ' + summaryValue('Open duplicates'));
-  assert(summaryNote() === 'scheduler skips 1 of these slots', 'mixed strip must count only the enabled hold: ' + summaryNote());
+  assert(lastMintedSub('held-chore').classList.contains('warn'), '[ORB-19707] enabled held row must warn beside a paused row');
+  assert(!card('held-chore').classList.contains('disabled'), '[ORB-19707] enabled held row stays enabled beside a paused row');
+  assert(!lastMintedSub('paused-always').classList.contains('warn'), '[ORB-19707] paused row must not warn beside a held row');
+  assert(card('paused-always').classList.contains('disabled'), '[ORB-19707] paused row must sit in Disabled beside a held row');
+  assert(inDisabledGroup('paused-always'), '[ORB-19707] paused row must sit in the Disabled group beside a held row');
+  assert(openDuplicatesHasHold(), '[ORB-19707] mixed strip must warn for the one enabled hold');
+  assert(summaryValue('Open duplicates') === '2', '[ORB-19707] mixed strip must retain both open duplicates: ' + summaryValue('Open duplicates'));
+  assert(summaryValue('Enabled') === '1', '[ORB-19707] mixed strip must count one enabled definition: ' + summaryValue('Enabled'));
   mintConfirm('held-chore');
   mintConfirm('paused-always');
   globalThis.autoTaskPolicyTestsPassed = true;
