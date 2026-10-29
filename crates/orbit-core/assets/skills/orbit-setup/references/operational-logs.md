@@ -294,11 +294,11 @@ not implemented on macOS. Percent memory limits use physical RAM; `infinity`
 disables only the memory ceiling. The five-second profile sampler is unchanged.
 
 A watchdog breach carries `worker_resource_limit` in `orbit run show`, with
-command names, PIDs and memory bytes for top consumers. Durable resource evidence
-in `worker_resource_limits` retains the same bounded snapshot with start keys,
-CPU rates (absent at the first reading), totals, limits and observation time,
-one row per workspace/run until that run is deleted. Read it through `WorkerResourceLimitStoreBackend`
-when inspecting resource history. Arguments and environment are not collected.
+command names, PIDs and memory bytes for top consumers. The resource evidence is
+kept with the run: the same bounded snapshot with start keys, CPU rates (absent
+at the first reading), totals, limits and observation time, one record per run
+until that run is deleted. `orbit run show --json` returns it under
+`worker_resource_limit`. Arguments and environment are not collected.
 
 Polling can overshoot between checks. Unreadable snapshots skip a check. A
 process that calls `setsid` after leaving the tree and any children it starts
