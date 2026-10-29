@@ -950,10 +950,12 @@ for scenario, stage, participants in [
                         os.waitpid(pid, os.WNOHANG)
                     except ChildProcessError:
                         pass
-                # Keep the leader unreaped through every signal, then reap it
-                # once no adopted descendants remain (no later group signals).
+                # The leader's exit reparents its descendants to this fixture.
+                # Observe that exit while the leader stays unreaped, before the
+                # child list is trusted; then reap the leader with no descendants.
+                leader_exited = os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None
                 remaining = Path(f"/proc/{os.getpid()}/task/{os.getpid()}/children").read_text().split()
-                if all(int(pid) == process.pid for pid in remaining):
+                if leader_exited and all(int(pid) == process.pid for pid in remaining):
                     break
                 assert time.monotonic() < deadline, "fixture could not reap its children"
                 time.sleep(0.01)

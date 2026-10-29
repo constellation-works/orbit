@@ -35,7 +35,7 @@ def group_lifetime_regression(root, namespace_source=None, watchdog_source=None)
                     if str(path).startswith("/proc/"):
                         if str(path) != "/proc/100/task/100/children":
                             return ""
-                        return "101" + (" 103" if name == "supervisor" and len(processes) == 2 else "") + (" 102" if state["child"] else "")
+                        return "101" + (" 103" if name == "supervisor" and len(processes) == 2 else "") + (" 102" if state["child"] and state["listed"] else "")
                     return read_text(path, *args, **kwargs)
 
                 class Process:
@@ -48,7 +48,9 @@ def group_lifetime_regression(root, namespace_source=None, watchdog_source=None)
                             self.pid = 103
                         else:
                             assert not processes or not state["reserved"], "previous leader was not reaped"
-                            state.update(reserved=True, child=True, killed=False)
+                            # A delayed watchdog's adopted descendants are listed only after its leader exits.
+                            state.update(reserved=True, child=True, killed=False, pending=False,
+                                         listed=name != "watchdog" or not delayed, exited=not delayed)
                         self.code = 0
                         if name == "watchdog":
                             env = kwargs["env"]
@@ -82,6 +84,10 @@ def group_lifetime_regression(root, namespace_source=None, watchdog_source=None)
                         if self.returncode is None:
                             state["reaped"] += 1
                         self.returncode = self.code
+                        if name == "watchdog":
+                            # Reaping the leader ends its exit, so any adopted descendant must already be dead.
+                            state.update(exited=True, listed=True, pending=False)
+                            assert not state["child"], "watchdog reaped its leader while an adopted descendant was alive"
                         return self.code
 
                 def monotonic():
@@ -92,7 +98,7 @@ def group_lifetime_regression(root, namespace_source=None, watchdog_source=None)
                     assert kind == os.P_PID and pid == 101
                     assert options & os.WNOWAIT, "exit observation must preserve the leader"
                     assert state["reserved"], "leader observed after losing its reservation"
-                    if delayed and not state["killed"]:
+                    if not state["exited"]:
                         return None
                     return SimpleNamespace(si_code=os.CLD_EXITED, si_status=processes[-1].code)
 
@@ -101,8 +107,13 @@ def group_lifetime_regression(root, namespace_source=None, watchdog_source=None)
                     assert state["reserved"], f"{name}: killpg reached a reused foreign process group"
                     state["signals"] += 1
                     if sig == signal.SIGKILL:
-                        state["killed"] = True
-                        state["child"] = False
+                        # The group signal does not reach adopted descendants, which live in their own groups.
+                        state.update(killed=True, pending=True)
+
+                def model_sleep(_seconds):
+                    # A signaled leader exits at the next scheduling point; its descendants reparent then.
+                    if state["pending"]:
+                        state.update(pending=False, exited=True, listed=True)
 
                 def kill(pid, sig):
                     assert pid in (101, 102)
@@ -123,7 +134,7 @@ def group_lifetime_regression(root, namespace_source=None, watchdog_source=None)
                         patch("os.waitpid", waitpid), patch("os.killpg", killpg), patch("os.kill", kill), \
                         patch("os.getpid", return_value=100), patch("pathlib.Path.read_text", model_read_text), \
                         patch("ctypes.CDLL", return_value=SimpleNamespace(prctl=lambda *_: 0)), \
-                        patch("time.monotonic", monotonic), patch("time.sleep"), \
+                        patch("time.monotonic", monotonic), patch("time.sleep", model_sleep), \
                         patch.dict(os.environ, {"NS_REAL_CARGO": "cargo", "NS_REAL_HOME": "home"}), \
                         patch.object(sys, "platform", "linux"), patch.object(sys, "argv", argv):
                     try:
