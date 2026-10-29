@@ -583,13 +583,9 @@ const SHOW: TaskOperation = TaskOperation {
                         value_name: None,
                         multiple: true,
                     },
-                    help: Description::Static(concat!(
-                        "Print only the specified field projection(s). Valid values: ",
-                        orbit_types::task_show_projection_fields_csv!(),
-                        ". Repeat the flag or use a comma-separated value list. Combined with --json, \
-                         a single field returns that field as JSON and multiple fields return a JSON object. \
-                         The derived terminal field remains keyed as an object."
-                    )),
+                    help: Description::Static(
+                        "Print only the specified field projection(s), for example `--fields title,status`. Repeat the flag or use a comma-separated list. Valid names and JSON output shapes: installed Orbit skill `references/task-fields.md`.",
+                    ),
                 }),
             },
             mcp_only(

@@ -51,7 +51,8 @@ as a string or array of field names, or `field` as a single-field alias.
 ```text
 id, parent_id, title, description, acceptance_criteria,
 dependencies, resolved_dependencies, tags, required_tools, granted_tools,
-requires_labels, not_before, plan, execution_summary, context_files,
+requires_labels, not_before, started_at, scheduled_hold, plan,
+execution_summary, context_files,
 created_by, created_by_model, planned_by, implemented_by, status, terminal, priority,
 complexity, type, pr_status, external_refs, relations,
 source_task_id, job_run_id, job_run_machine, crew, resolved_crew,
@@ -66,6 +67,11 @@ the requested fields as JSON: a single field returns its value, and multiple
 fields return an object keyed by field name. A single derived `terminal`
 selection remains keyed as `{"terminal": ...}`. It is read-only and reports
 whether the task refuses implementer writes.
+
+On the CLI, `orbit task show --fields` takes the same names, repeated or
+comma-separated. Without `--json`, a single field prints its bare value and
+several fields print each under a `Field:` heading; with `--json`, the shapes
+above apply.
 
 Write responses without a projection omit the append-heavy `comments` and
 `history`; request those fields explicitly when needed. Write projections
