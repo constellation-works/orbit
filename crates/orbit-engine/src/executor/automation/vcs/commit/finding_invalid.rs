@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 use crate::context::RuntimeHost;
 
 use super::super::git::{git_command_success, git_output_raw};
+use super::super::retry_lineage::{LineageStep, LineageStop, RETRY_LINEAGE_MAX_HOPS, RetryLineage};
 use super::already_landed::run_in_lineage;
 use super::checkpoint::pinned_object_id;
 use super::clean_tree::{Specification, Verifier};
@@ -92,10 +93,12 @@ impl Verifier for FindingInvalid {
 
 /// Whether the task's report claims this run: it names this run or one in
 /// its retry lineage. An unreadable report claims this run only when its
-/// `run_id` still decodes and names this run or its lineage; a report from
-/// an earlier, unrelated run — or text that names no run — never shadows
-/// this run's no-diff or already-landed evidence. A report that does name
-/// this run still fails verification, and the refusal names the parse error.
+/// `run_id` still decodes and names this run or its lineage, or — when the
+/// bytes are not valid JSON at all — when the raw text still names this run
+/// or its lineage; a report from an earlier, unrelated run — or text that
+/// names no run — never shadows this run's no-diff or already-landed
+/// evidence. A report that does name this run still fails verification,
+/// and the refusal names the parse error.
 pub(super) fn claims_run<H: RuntimeHost + ?Sized>(
     host: &H,
     task: &Task,
@@ -112,7 +115,7 @@ pub(super) fn claims_run<H: RuntimeHost + ?Sized>(
     match serde_json::from_slice::<FindingInvalidReport>(&artifact.content) {
         Ok(report) => run_in_lineage(host, run_id, &report.run_id),
         Err(_) => {
-            let claimed = serde_json::from_slice::<Value>(&artifact.content)
+            if let Some(claimed) = serde_json::from_slice::<Value>(&artifact.content)
                 .ok()
                 .and_then(|value| {
                     value
@@ -120,13 +123,53 @@ pub(super) fn claims_run<H: RuntimeHost + ?Sized>(
                         .and_then(Value::as_str)
                         .map(str::to_owned)
                 })
-                .unwrap_or_default();
-            if claimed.is_empty() {
-                return Ok(false);
+                .filter(|claimed| !claimed.is_empty())
+            {
+                return run_in_lineage(host, run_id, &claimed);
             }
-            run_in_lineage(host, run_id, &claimed)
+            // The bytes are not valid JSON at all (truncated, a stray comma,
+            // prose), so no `run_id` decodes. Claim this run only when the
+            // raw text still names this run or one in its retry lineage;
+            // verification then refuses with the parse error.
+            raw_text_names_lineage(host, run_id, &artifact.content)
         }
     }
+}
+
+/// Whether syntactically invalid `content` textually names `run_id` or one
+/// of its retry ancestors. The current run needs no stored run to match; an
+/// ancestor matches only when the walk reaches it, mirroring
+/// [`run_in_lineage`].
+fn raw_text_names_lineage<H: RuntimeHost + ?Sized>(
+    host: &H,
+    run_id: &str,
+    content: &[u8],
+) -> Result<bool, OrbitError> {
+    if run_id.is_empty() {
+        return Ok(false);
+    }
+    let text = String::from_utf8_lossy(content);
+    if text.contains(run_id) {
+        return Ok(true);
+    }
+    let Some(run) = host.get_job_run(run_id)? else {
+        return Ok(false);
+    };
+    let mut lineage = RetryLineage::any_job(&run);
+    for _ in 1..RETRY_LINEAGE_MAX_HOPS {
+        match lineage.step(host)? {
+            LineageStep::Ancestor(source, _) => {
+                if !source.is_empty() && text.contains(&source) {
+                    return Ok(true);
+                }
+            }
+            LineageStep::Stop(LineageStop::Missing(source)) => {
+                return Ok(!source.is_empty() && text.contains(&source));
+            }
+            LineageStep::Stop(_) => return Ok(false),
+        }
+    }
+    Ok(false)
 }
 
 /// Verify the report against the clean pinned HEAD, then have the host

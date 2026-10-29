@@ -99,6 +99,17 @@ fn malformed_finding_invalid(head: &str, run_id: &str) -> String {
     )
 }
 
+/// A syntactically invalid report that still textually names `run_id`. The
+/// stray trailing comma makes the bytes unparseable as JSON, so neither the
+/// strict nor the lenient `Value` parse decodes `run_id`.
+fn syntactically_invalid_finding_invalid(head: &str, run_id: &str) -> String {
+    format!(
+        "{{\"schema_version\":1,\"task_id\":\"{TASK_ID}\",\"run_id\":\"{run_id}\",\
+         \"tested_head\":\"{head}\",\"reasoning\":\"stale report\",\
+         \"evidence\":[{{\"location\":\"README.md:1\",\"note\":\"The only line.\"}},]}}"
+    )
+}
+
 fn unparseable_report_from_another_run_does_not_shadow_no_diff() {
     let temp = tempdir().expect("create tempdir");
     init_git_repo(temp.path());
@@ -137,7 +148,7 @@ fn unparseable_report_naming_this_run_still_refuses_with_parse_error() {
         vec![
             TaskArtifact::from_text(
                 "finding-invalid.json",
-                malformed_finding_invalid(&head, RUN_ID),
+                syntactically_invalid_finding_invalid(&head, RUN_ID),
             ),
             artifact("no-diff.json", no_diff),
             artifact("validation.json", log),
