@@ -851,6 +851,70 @@ records an `activity.tag_instructions_applied` event naming the step,
 activity, task, and each instruction's tag, role, source, SHA-256 and
 size.
 
+## PR screenshot section
+
+`pr.screenshot_section` (advanced, default `auto`) decides whether a
+single-task pull request body carries the optional `## Screenshots` table
+that Orbit builds from the task's `screenshots/` artifacts.
+
+| Value | A single-task delivery gets the section when |
+|---|---|
+| `auto` (default) | the task carries the `ui` tag, matched ignoring case |
+| `always` | every single-task delivery |
+| `off` | never: `pr_open` reads no screenshots and pushes no evidence ref |
+
+Any other value fails the configuration load, so `orbit doctor` reports it
+before a claim. A bundle of several tasks keeps Orbit's batch body and never
+gets the section, and a `body` supplied to `pr_open` is published as given,
+without it.
+The `ui` tag's implementer routing is described in
+[Tag instructions](#tag-instructions).
+
+This setting governs only PR publication. Task-artifact evidence is a
+separate duty: a diff that changes something a user sees still attaches its
+screenshots as task artifacts when the workspace guide requires them,
+whatever this value is. Name each artifact
+`screenshots/<view>-<theme>-<width>[-before|-after].<ext>`. The width is the
+last number in the name, the theme is the token before it, and the view is
+the rest. A name without a suffix is an After shot; the Before shot is
+optional. Only PNG, JPEG, GIF and WebP files within the 1 MiB artifact limit
+are published. Any other artifact under `screenshots/` is skipped with a
+warning in the run's log.
+
+When the section applies and no screenshot is publishable, the body carries
+the neutral note `No screenshots attached.` That note is not a required-section
+gap: `pr.missing_required_section` never drafts or refuses the PR for it.
+Only `pr.required_sections` gaps do that.
+
+### Set and verify the value
+
+1. Confirm the installed version supports the key:
+   `orbit config keys --json` lists `pr.screenshot_section`.
+2. Read the effective value: `orbit config get pr.screenshot_section`
+   (add `--json` for an object). `orbit config show --all` lists it in the
+   delivery section with its source.
+3. When provenance matters, resolve one file in isolation with
+   `orbit config get pr.screenshot_section --scope global` or
+   `--scope workspace`.
+4. Only with the operator's authorization, change it:
+   `orbit config set pr.screenshot_section always`. This writes the workspace
+   `config.toml`; add `--global` to write the global file. Use `auto`, `always`
+   or `off`; the value is parsed as a TOML literal, and these three fall back
+   to plain strings.
+5. Read the value back with step 2 and run `orbit doctor`.
+6. Check the outcome on a real delivery, without opening a PR for the test:
+   - Before `pr_open`, `orbit task show <task-id> --fields artifacts` lists
+     the task's `screenshots/` artifacts.
+   - After the PR opens, `gh pr view <pr-number> --json body --jq .body`
+     should show the expected body:
+     - a `## Screenshots` table with one row per view, width and theme (the
+       theme is named only when the shots carry several), with Before and
+       After columns, when publishable shots exist;
+     - the `No screenshots attached.` note, when the section applies and no
+       shot is publishable;
+     - no `## Screenshots` section, when the value is `off`, or `auto` on an
+       untagged task.
+
 ## Review-skip tags
 
 A workspace can map its own tag to a review skip for low-risk work that
