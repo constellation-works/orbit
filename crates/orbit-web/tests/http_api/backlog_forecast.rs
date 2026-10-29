@@ -37,7 +37,7 @@ impl orbit_core::application::routines::loader::RoutineWorkspaceProvider for For
     }
 }
 
-fn forecast_tick(fixture: &Fixture, now: DateTime<Utc>, dry_run: bool) {
+pub(super) fn forecast_tick(fixture: &Fixture, now: DateTime<Utc>, dry_run: bool) {
     let outcome = orbit_core::test_support::run_sweep_at(
         &fixture.global,
         orbit_core::application::routines::SweepOptions {
@@ -406,7 +406,7 @@ fn stale_and_legacy_rows_compute_live_and_stay_readable() {
     );
 }
 
-fn history(
+pub(super) fn history(
     fixture: &Fixture,
 ) -> std::sync::Arc<dyn orbit_store::contracts::TaskHistoryStoreBackend> {
     let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(

@@ -341,7 +341,8 @@ impl Outcome {
             result["pre_regression_baseline"] = baseline;
             result["unavailable"] = json!({
                 "risk_unestimated": members.iter().any(|index| rework.probabilities[*index].is_none()),
-                "regression_history_missing": members.iter().any(|index| rework.pools[*index].is_empty()) || rework.missing_fix_history > 0,
+                "regression_history_missing": members.iter().any(|index| !rework.history_supported(*index)),
+                "regression_history_gaps": rework.member_gaps(members),
                 "arrival_conflict_unknown": !arrivals_supported,
             });
             for metric in ["time_to_drain_hours", "tokens", "usd"] {

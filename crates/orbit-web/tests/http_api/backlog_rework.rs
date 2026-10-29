@@ -1,10 +1,47 @@
 //! Regression costs must be visible at the public forecast boundary.
 
-use super::backlog_forecast::{ENDPOINT, backlog_task, completed};
+use super::backlog_forecast::{
+    ENDPOINT, backlog_task, completed, forecast_tick, history, prediction,
+};
 use super::support::{Fixture, isolated, json_ok};
-use chrono::{Duration, Utc};
-use orbit_types::task::{TaskEnvelopeV2, TaskRelation, TaskRelationType};
-use serde_json::Value;
+use chrono::{DateTime, Duration, Utc};
+use orbit_store::contracts::TaskHistoryUpdateParams;
+use orbit_types::task::{
+    CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep, Task, TaskDecision,
+    TaskEnvelopeV2, TaskEventRowV2, TaskHistoryEntry, TaskRelation, TaskRelationType, TaskStatus,
+};
+use serde_json::{Value, json};
+
+fn bundle_path(fixture: &Fixture, id: &str) -> std::path::PathBuf {
+    let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
+        &orbit_store::maintenance::task_registry::task_registry_path(
+            &fixture.runtime.global_root(),
+        ),
+    )
+    .unwrap();
+    registry
+        .find_task_binding(id)
+        .unwrap()
+        .unwrap()
+        .canonical_path
+}
+
+/// A legacy done record: its history keeps no transition into done.
+fn forget_completion(fixture: &Fixture, id: &str) {
+    let path = bundle_path(fixture, id).join("events.jsonl");
+    let events = std::fs::read_to_string(&path)
+        .unwrap()
+        .lines()
+        .map(|line| {
+            let mut event: TaskEventRowV2 = serde_json::from_str(line).unwrap();
+            if event.to_status == Some(TaskStatus::Done) {
+                event.to_status = None;
+            }
+            serde_json::to_string(&event).unwrap() + "\n"
+        })
+        .collect::<String>();
+    std::fs::write(path, events).unwrap();
+}
 
 pub(super) fn edit_task(fixture: &Fixture, id: &str, edit: impl FnOnce(&mut TaskEnvelopeV2)) {
     let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
@@ -110,7 +147,7 @@ fn regression_draws_add_cost_time_and_count_prior_fallbacks() {
             let high = sized_risk_forecast(&WIDE, Duration::hours(1), false, true);
             let low = sized_risk_forecast(&["file:safe.rs"], Duration::hours(1), false, true);
             assert!(high["model_version"].as_u64().unwrap() > 7);
-            assert_eq!(high["inputs"]["admission_factors"]["regression_rework"], 1);
+            assert_eq!(high["inputs"]["admission_factors"]["regression_rework"], 2);
             assert_eq!(high["coverage"]["risk_prior_fallbacks"], 0);
             for metric in ["time_to_drain_hours", "usd", "tokens"] {
                 assert!(
@@ -249,7 +286,7 @@ fn known_proposed_fix_only_suppresses_rework_in_the_approved_scenario() {
                 .add_task(orbit_core::application::task::TaskAddParams {
                     title: "Known proposed fix".into(),
                     complexity: orbit_types::task::TaskComplexity::Medium,
-                    status: Some(orbit_types::task::TaskStatus::Proposed),
+                    status: Some(TaskStatus::Proposed),
                     context_files: vec!["file:safe.rs".into()],
                     relations: vec![link(&origin)],
                     ..Default::default()
@@ -277,6 +314,125 @@ fn known_proposed_fix_only_suppresses_rework_in_the_approved_scenario() {
     );
 }
 
+/// The seeded regression fixes, in id order.
+fn fixes(fixture: &Fixture) -> Vec<Task> {
+    let mut fixes: Vec<Task> = fixture
+        .runtime
+        .list_task_metadata()
+        .unwrap()
+        .into_iter()
+        .filter(|task| {
+            task.relations
+                .iter()
+                .any(|link| link.relation_type == TaskRelationType::RegressionFrom)
+        })
+        .collect();
+    fixes.sort_by(|left, right| left.id.cmp(&right.id));
+    fixes
+}
+
+/// Append the durable record a delivery writes when it widens `id`'s
+/// selectors over the paths its agent changed.
+fn widened(fixture: &Fixture, id: &str, at: DateTime<Utc>, selectors: &[&str]) {
+    let widening = ContextFilesWidening {
+        run_id: format!("delivery-{id}"),
+        step: ContextWideningStep::Implement,
+        activity: "agent_implement".into(),
+        selectors: selectors
+            .iter()
+            .map(|selector| (*selector).into())
+            .collect(),
+    };
+    history(fixture)
+        .update_task_history(
+            id,
+            TaskHistoryUpdateParams {
+                actor: "fixture".into(),
+                append_history: vec![TaskHistoryEntry {
+                    at,
+                    by: "system".into(),
+                    event: CONTEXT_FILES_WIDENED_EVENT.into(),
+                    note: Some(serde_json::to_string(&widening).unwrap()),
+                    from_status: None,
+                    to_status: None,
+                    operation_id: None,
+                    decision: Some(TaskDecision::ContextFilesWidened(widening)),
+                }],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+}
+
+/// A measured fix of `origin`, completed a day ago with `context_files`.
+fn measured_fix(fixture: &Fixture, origin: &str, context_files: &[&str]) -> String {
+    let fix = completed(fixture, Utc::now() - Duration::days(1));
+    edit_task(fixture, &fix, |task| {
+        task.context_files = context_files.iter().map(|path| (*path).into()).collect();
+        task.created_at = Utc::now() - Duration::days(2);
+        task.relations = vec![link(origin)];
+    });
+    fix
+}
+
+fn assert_unavailable_with_baseline(scenario: &Value) {
+    assert_eq!(
+        scenario["regression_rework"]["available"], false,
+        "{scenario}"
+    );
+    assert!(scenario["regression_rework"]["expected_followups"].is_null());
+    assert!(scenario["usd"]["p50"].is_null());
+    assert!(scenario["time_to_drain_hours"]["p50"].is_null());
+    assert!(
+        scenario["pre_regression_baseline"]["time_to_drain_hours"]["p50"]
+            .as_f64()
+            .is_some(),
+        "{scenario}"
+    );
+    assert_eq!(scenario["unavailable"]["regression_history_missing"], true);
+}
+
+#[test]
+fn legacy_empty_fix_footprint_recovers_from_delivery_history() {
+    isolated(
+        "backlog_rework::legacy_empty_fix_footprint_recovers_from_delivery_history",
+        || {
+            let fixture = Fixture::new();
+            measured_history(&fixture, Duration::hours(1), false);
+            let fix = fixes(&fixture).remove(0);
+            // A legacy record: the current selectors are empty, but its
+            // delivery recorded the paths it changed before completion.
+            edit_task(&fixture, &fix.id, |task| task.context_files.clear());
+            widened(
+                &fixture,
+                &fix.id,
+                Utc::now() - Duration::days(1) - Duration::minutes(30),
+                &["file:fix-legacy.rs"],
+            );
+            backlog_task(&fixture, "Origin", &["file:risky.rs"], &[], &[]);
+            let server = fixture.server(false);
+            let forecast = json_ok(server.get(ENDPOINT));
+            let support = &forecast["inputs"]["regression_rework"];
+            assert_eq!(support["missing_fix_history"], 0, "{support}");
+            assert_eq!(support["recovered_footprints"], 1, "{support}");
+            assert_eq!(support["history_bundles"], 5);
+            assert_eq!(forecast["forecast"]["regression_rework"]["available"], true);
+            assert!(forecast["forecast"]["usd"]["p50"].as_f64().is_some());
+            assert!(forecast["forecast"]["unavailable"].is_null());
+            assert_eq!(forecast["coverage"]["regression_history_missing"], 0);
+            // Recovery reads history; it never rewrites the historical task.
+            assert!(
+                fixture
+                    .runtime
+                    .get_task(&fix.id)
+                    .unwrap()
+                    .context_files
+                    .is_empty()
+            );
+        },
+    );
+}
+
 #[test]
 fn unsupported_fix_footprints_do_not_make_the_bundle_cheaper() {
     isolated(
@@ -284,29 +440,230 @@ fn unsupported_fix_footprints_do_not_make_the_bundle_cheaper() {
         || {
             let fixture = Fixture::new();
             measured_history(&fixture, Duration::hours(1), false);
-            let fix = fixture
-                .runtime
-                .list_task_metadata()
-                .unwrap()
-                .into_iter()
-                .find(|task| !task.relations.is_empty())
-                .unwrap();
-            edit_task(&fixture, &fix.id, |task| {
+            let fixes = fixes(&fixture);
+            edit_task(&fixture, &fixes[0].id, |task| {
                 task.context_files = vec!["module:unresolved".into()]
             });
+            // Legacy: empty selectors and no recorded widening or pruning.
+            edit_task(&fixture, &fixes[1].id, |task| task.context_files.clear());
+            // A completed fix with no measured delivery.
+            let origin = fixes[2].relations[0].target.to_string();
+            fixture
+                .runtime
+                .add_task(orbit_core::application::task::TaskAddParams {
+                    title: "Unmeasured fix".into(),
+                    complexity: orbit_types::task::TaskComplexity::Medium,
+                    status: Some(TaskStatus::Done),
+                    context_files: vec!["file:unmeasured.rs".into()],
+                    relations: vec![link(&origin)],
+                    ..Default::default()
+                })
+                .unwrap();
+            let id = backlog_task(&fixture, "Origin", &["file:risky.rs"], &[], &[]);
+            let server = fixture.server(false);
+            let forecast = json_ok(server.get(ENDPOINT));
+            let support = &forecast["inputs"]["regression_rework"];
+            assert_eq!(support["missing_fix_history"], 3, "{support}");
+            assert_eq!(
+                support["missing_by_reason"],
+                json!({"footprint_unrecoverable": 2, "unmeasured_delivery": 1, "origin_completion_missing": 0})
+            );
+            assert_eq!(support["recovered_footprints"], 0);
+            assert_eq!(forecast["coverage"]["regression_history_missing"], 1);
+            assert_unavailable_with_baseline(&forecast["forecast"]);
+            assert_eq!(
+                forecast["forecast"]["unavailable"]["regression_history_gaps"],
+                json!({"footprint_unrecoverable": 2, "unmeasured_delivery": 1, "origin_completion_missing": 0})
+            );
+            assert_eq!(prediction(&forecast, &id)["regression_history_gaps"], 3);
+        },
+    );
+}
+
+#[test]
+fn origin_completion_gaps_stay_unsupported_and_non_simulating_links_are_excluded() {
+    isolated(
+        "backlog_rework::origin_completion_gaps_stay_unsupported_and_non_simulating_links_are_excluded",
+        || {
+            // A done origin without a durable completion has no detection lag.
+            let fixture = Fixture::new();
+            measured_history(&fixture, Duration::hours(1), false);
+            let origin = completed(&fixture, Utc::now() - Duration::days(3));
+            forget_completion(&fixture, &origin);
+            measured_fix(&fixture, &origin, &["file:lagless.rs"]);
             backlog_task(&fixture, "Origin", &["file:risky.rs"], &[], &[]);
             let server = fixture.server(false);
             let forecast = json_ok(server.get(ENDPOINT));
-            assert_eq!(forecast["coverage"]["regression_history_missing"], 1);
+            let support = &forecast["inputs"]["regression_rework"];
             assert_eq!(
-                forecast["forecast"]["regression_rework"]["available"],
-                false
+                support["missing_by_reason"]["origin_completion_missing"], 1,
+                "{support}"
             );
-            assert!(forecast["forecast"]["usd"]["p50"].is_null());
+            assert_eq!(support["missing_fix_history"], 1);
+            assert_unavailable_with_baseline(&forecast["forecast"]);
+            drop(server);
+
+            // Links to an absent record or a never-completed task are not
+            // regressions of completed work, which is all the model draws.
+            let fixture = Fixture::new();
+            measured_history(&fixture, Duration::hours(1), false);
+            let rejected = fixture
+                .runtime
+                .add_task(orbit_core::application::task::TaskAddParams {
+                    title: "Never completed".into(),
+                    complexity: orbit_types::task::TaskComplexity::Medium,
+                    status: Some(TaskStatus::Rejected),
+                    ..Default::default()
+                })
+                .unwrap()
+                .id
+                .to_string();
+            measured_fix(&fixture, &rejected, &["file:abandoned.rs"]);
+            measured_fix(&fixture, "ORB-404404", &["file:foreign.rs"]);
+            backlog_task(&fixture, "Origin", &["file:risky.rs"], &[], &[]);
+            let server = fixture.server(false);
+            let forecast = json_ok(server.get(ENDPOINT));
+            let support = &forecast["inputs"]["regression_rework"];
+            assert_eq!(support["missing_fix_history"], 0, "{support}");
             assert_eq!(
-                forecast["inputs"]["regression_rework"]["missing_fix_history"],
-                1
+                support["excluded"],
+                json!({"origin_absent": 1, "origin_not_completed": 1})
             );
+            assert_eq!(support["history_bundles"], 5);
+            assert_eq!(forecast["forecast"]["regression_rework"]["available"], true);
+            assert!(forecast["forecast"]["usd"]["p50"].as_f64().is_some());
+        },
+    );
+}
+
+#[test]
+fn a_gap_outside_the_sampled_pool_leaves_it_supported() {
+    isolated(
+        "backlog_rework::a_gap_outside_the_sampled_pool_leaves_it_supported",
+        || {
+            let mut forecasts = Vec::new();
+            for gap_crew in ["beta", "alpha"] {
+                let fixture = Fixture::new();
+                measured_history(&fixture, Duration::hours(1), false);
+                for fix in fixes(&fixture) {
+                    edit_task(&fixture, &fix.relations[0].target, |task| {
+                        task.crew = Some("alpha".into())
+                    });
+                }
+                let origin = completed(&fixture, Utc::now() - Duration::days(3));
+                edit_task(&fixture, &origin, |task| task.crew = Some(gap_crew.into()));
+                measured_fix(&fixture, &origin, &[]);
+                let id = backlog_task(&fixture, "Origin", &["file:risky.rs"], &[], &[]);
+                edit_task(&fixture, &id, |task| task.crew = Some("alpha".into()));
+                let server = fixture.server(false);
+                let forecast = json_ok(server.get(ENDPOINT));
+                let row = prediction(&forecast, &id).clone();
+                assert_eq!(row["regression_bundle_basis"], "complexity_crew", "{row}");
+                assert_eq!(row["regression_bundle_samples"], 5);
+                assert_eq!(
+                    forecast["inputs"]["regression_rework"]["missing_by_reason"]["footprint_unrecoverable"],
+                    1
+                );
+                forecasts.push((forecast, row));
+            }
+            // The gap's origin is in another crew's cell: this pool is whole.
+            let (unrelated, row) = &forecasts[0];
+            assert_eq!(row["regression_history_gaps"], 0);
+            assert_eq!(
+                unrelated["forecast"]["regression_rework"]["available"],
+                true
+            );
+            assert!(unrelated["forecast"]["usd"]["p50"].as_f64().is_some());
+            assert_eq!(unrelated["coverage"]["regression_history_missing"], 0);
+            // In the sampled cell it is missing relevant evidence.
+            let (related, row) = &forecasts[1];
+            assert_eq!(row["regression_history_gaps"], 1);
+            assert_unavailable_with_baseline(&related["forecast"]);
+            assert_eq!(related["coverage"]["regression_history_missing"], 1);
+        },
+    );
+}
+
+#[test]
+fn stored_forecasts_keep_their_assumptions_after_fix_metadata_changes() {
+    isolated(
+        "backlog_rework::stored_forecasts_keep_their_assumptions_after_fix_metadata_changes",
+        || {
+            // An earlier model's fresh snapshot is readable but never served.
+            let fixture = Fixture::new();
+            measured_history(&fixture, Duration::hours(1), false);
+            backlog_task(&fixture, "Origin", &["file:risky.rs"], &[], &[]);
+            let older = orbit_core::StoredBacklogForecast {
+                workspace_id: String::new(),
+                forecast_at: Utc::now() - Duration::minutes(100),
+                model_version: 13,
+                inputs_json: "{}".into(),
+                result_json: json!({"snapshot": {"model_version": 13}}).to_string(),
+                tasks_json: "[]".into(),
+            };
+            assert!(
+                fixture
+                    .runtime
+                    .record_backlog_forecast(older.clone(), Duration::zero())
+                    .unwrap()
+            );
+            let server = fixture.server(false);
+            let live = json_ok(server.get(ENDPOINT));
+            assert_eq!(live["served_from"], "live");
+            assert_eq!(live["model_version"], 14);
+            assert_eq!(live["stored"]["recorded"], true);
+            let rows = fixture.runtime.backlog_forecasts(10).unwrap();
+            assert_eq!(rows.len(), 2);
+            assert_eq!(rows[1].result_json, older.result_json, "never rewritten");
+            drop(server);
+
+            // The clock's snapshot freezes the fix evidence it saw.
+            let fixture = Fixture::new();
+            measured_history(&fixture, Duration::hours(1), false);
+            let fix = fixes(&fixture).remove(0);
+            widened(
+                &fixture,
+                &fix.id,
+                Utc::now() - Duration::days(1) - Duration::minutes(30),
+                &["file:fix-0.rs"],
+            );
+            backlog_task(&fixture, "Origin", &["file:risky.rs"], &[], &[]);
+            forecast_tick(&fixture, Utc::now() - Duration::minutes(5), false);
+            let rows = fixture.runtime.backlog_forecasts(10).unwrap();
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0].model_version, 14);
+            let server = fixture.server(false);
+            let stored = json_ok(server.get(ENDPOINT));
+            assert_eq!(stored["served_from"], "stored");
+            assert_eq!(
+                stored["inputs"]["regression_rework"]["recovered_footprints"],
+                0
+            );
+            assert_eq!(stored["forecast"]["regression_rework"]["available"], true);
+
+            // Clearing the fix's current selectors changes no stored record.
+            edit_task(&fixture, &fix.id, |task| task.context_files.clear());
+            let again = json_ok(server.get(ENDPOINT));
+            assert_eq!(again["served_from"], "stored");
+            assert_eq!(again["generated_at"], stored["generated_at"]);
+            assert_eq!(again["inputs"], stored["inputs"]);
+            assert_eq!(again["forecast"], stored["forecast"]);
+            assert_eq!(fixture.runtime.backlog_forecasts(10).unwrap(), rows);
+
+            // A live refresh recovers the footprint from durable history and
+            // keeps the hourly write rule.
+            let refreshed = json_ok(server.get(&format!("{ENDPOINT}&refresh=1")));
+            assert_eq!(refreshed["served_from"], "live");
+            assert_eq!(refreshed["model_version"], 14);
+            let support = &refreshed["inputs"]["regression_rework"];
+            assert_eq!(support["recovered_footprints"], 1, "{support}");
+            assert_eq!(support["missing_fix_history"], 0);
+            assert_eq!(
+                refreshed["forecast"]["regression_rework"]["available"],
+                true
+            );
+            assert_eq!(refreshed["stored"]["recorded"], false);
+            assert_eq!(fixture.runtime.backlog_forecasts(10).unwrap(), rows);
         },
     );
 }
@@ -318,11 +675,30 @@ fn missing_regression_evidence_is_not_free_work() {
         || {
             let fixture = Fixture::new();
             completed(&fixture, Utc::now() - Duration::days(1));
+            // Its only fix names work that never completed: no legitimate
+            // regression history, which is unknown rework, not zero.
+            let rejected = fixture
+                .runtime
+                .add_task(orbit_core::application::task::TaskAddParams {
+                    title: "Never completed".into(),
+                    complexity: orbit_types::task::TaskComplexity::Medium,
+                    status: Some(TaskStatus::Rejected),
+                    ..Default::default()
+                })
+                .unwrap()
+                .id
+                .to_string();
+            measured_fix(&fixture, &rejected, &["file:abandoned.rs"]);
             backlog_task(&fixture, "Unknown risk", &[], &[], &[]);
             let server = fixture.server(false);
             let forecast = json_ok(server.get(ENDPOINT));
             assert_eq!(forecast["coverage"]["risk_unestimated"], 1);
-            assert!(forecast["forecast"]["time_to_drain_hours"]["p50"].is_null());
+            let support = &forecast["inputs"]["regression_rework"];
+            assert_eq!(support["history_bundles"], 0, "{support}");
+            assert_eq!(support["missing_fix_history"], 0);
+            assert_eq!(support["excluded"]["origin_not_completed"], 1);
+            assert_eq!(forecast["coverage"]["regression_history_missing"], 1);
+            assert_unavailable_with_baseline(&forecast["forecast"]);
             assert_eq!(
                 forecast["forecast"]["pre_regression_baseline"]["time_to_drain_hours"]["p50"],
                 1.0

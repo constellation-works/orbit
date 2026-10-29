@@ -29,8 +29,11 @@ use super::review_modes::ReviewMode;
 /// rework draws from task riskiness estimator 2, the size-based fit
 /// [ORB-19361]. 13: regression rework draws from task riskiness estimator 3,
 /// whose nearby-size fits no longer collapse to the fallback prior
-/// [ORB-19376].
-pub(super) const MODEL_VERSION: u32 = 13;
+/// [ORB-19376]. 14: a legacy fix's footprint is recovered from durable
+/// history, links to absent or never-completed origins are not samples,
+/// and remaining fix-history gaps withhold only the pools their origins
+/// join [ORB-19961].
+pub(super) const MODEL_VERSION: u32 = 14;
 /// The revision of each backlog-forecast-v2 factor this model applies;
 /// `None` for one not yet modelled.
 pub(super) const ADMISSION_FACTORS: [(&str, Option<u32>); 5] = [
@@ -38,7 +41,7 @@ pub(super) const ADMISSION_FACTORS: [(&str, Option<u32>); 5] = [
     ("review_modes", Some(1)),
     ("outcomes", Some(1)),
     ("resource_fit", Some(1)),
-    ("regression_rework", Some(1)),
+    ("regression_rework", Some(2)),
 ];
 /// Simulated drains per forecast.
 pub(super) const ITERATIONS: usize = 1_000;

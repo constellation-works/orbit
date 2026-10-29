@@ -45,6 +45,7 @@ pub(super) fn calculate_backlog_forecast(
                     prediction["regression_probability_basis"] = json!(rework.prior_basis[index]);
                     prediction["regression_bundle_samples"] = json!(rework.pools[index].len());
                     prediction["regression_bundle_basis"] = json!(rework.pool_basis[index]);
+                    prediction["regression_history_gaps"] = json!(rework.pool_gaps[index].len());
                 }
             }
         }
