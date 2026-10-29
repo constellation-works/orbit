@@ -2,7 +2,7 @@
 //! escalated leaves its task blocked with that PR open and unmerged. Once
 //! every required check has passed on the recorded head, an operator requeue
 //! resumes the PR and the next run adopts it without re-implementing. Source
-//! repair names that route instead of pointing back at requeue. A moved head,
+//! repair can authorize source changes separately. A moved head,
 //! unfinished, failed, missing or stale checks, a closed or merged PR, a
 //! foreign owner, a changed specification and a terminal task stay refused
 //! with nothing written. A plain resume whose worktree is gone is refused
@@ -123,8 +123,8 @@ fn set_origin(f: &Fixture, origin: &orbit_types::task::ExecutionLocation) {
 }
 
 /// The incident: the escalated task's PR went green at its recorded head,
-/// requeue pointed at source repair and source repair pointed back. Source
-/// repair now names requeue, and the requeue resumes the kept PR.
+/// requeue pointed at source repair and source repair pointed back. Requeue
+/// still carries a green candidate without granting source-repair authority.
 fn an_escalated_publication_with_green_checks_is_requeued_onto_its_pull_request() {
     let (mut f, _, _) = escalated_completion_fixture();
     assert_eq!(
@@ -134,12 +134,9 @@ fn an_escalated_publication_with_green_checks_is_requeued_onto_its_pull_request(
     let repair = f
         .runtime
         .run_tool_as_human("orbit.workflow.run.resume", f.request("inspect"))
-        .unwrap_err()
-        .to_string();
-    assert!(
-        repair.contains("source repair refused") && repair.contains("orbit task requeue"),
-        "source repair names the route that applies: {repair}"
-    );
+        .unwrap();
+    assert_eq!(repair["binding"]["head_sha"], f.head);
+    assert!(repair["policy_digest"].is_string());
     green_forge(&mut f);
     let answer = requeue(&f, false).unwrap();
     assert_eq!(answer["status"], "backlog", "{answer}");

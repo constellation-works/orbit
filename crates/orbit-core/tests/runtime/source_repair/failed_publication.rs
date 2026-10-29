@@ -1064,6 +1064,19 @@ fn reviewer_handoffs_refuse_unproven_transitions_without_writes() {
 /// the publication replaced its source.
 pub(super) fn escalated_completion_fixture() -> (Fixture, PathBuf, Value) {
     let mut f = Fixture::new();
+    let path = f
+        ._root
+        .path()
+        .join("global/resources/jobs/task_pr_pipeline.yaml");
+    let yaml = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(
+        path,
+        yaml.replace(
+            "  task_delivery: {}",
+            "  task_delivery: {}\n  failure_activity: pr_failure_handoff",
+        ),
+    )
+    .unwrap();
     let binding = f.inspect();
     let checkout = published_owner::publication(&mut f);
     escalate(&f, &f.source.run_id);
@@ -1090,15 +1103,30 @@ pub(super) fn escalated_completion_fixture() -> (Fixture, PathBuf, Value) {
     (f, checkout, binding)
 }
 
-fn escalated_completion_receipt_is_not_a_blocked_publication_receipt() {
-    let (f, _, binding) = escalated_completion_fixture();
+fn escalated_completion_receipt_requires_explicit_rework_authority() {
+    let (f, _, _) = escalated_completion_fixture();
     // A real completion-preservation receipt has a distinct contract. It is
     // retained, never rewritten into a blocked-publication receipt for admission.
-    refused_without_writes(&f, &f.source.run_id, &binding, "completion receipt variant");
+    let task = serde_json::to_value(f.runtime.get_task(&f.task).unwrap()).unwrap();
+    let history = serde_json::to_value(f.runtime.get_task_history(&f.task).unwrap()).unwrap();
+    let error = f
+        .runtime
+        .run_tool_as_human("orbit.workflow.run.resume", f.submit(f.inspect()))
+        .unwrap_err();
+    assert!(error.to_string().contains("unmet_acceptance"), "{error}");
+    assert_eq!(
+        serde_json::to_value(f.runtime.get_task(&f.task).unwrap()).unwrap(),
+        task
+    );
+    assert_eq!(
+        serde_json::to_value(f.runtime.get_task_history(&f.task).unwrap()).unwrap(),
+        history
+    );
+    f.assert_original();
 }
 
 crate::scenario_table!(
     reviewer_handoff_refusal_scenarios,
     reviewer_handoffs_refuse_unproven_transitions_without_writes,
-    escalated_completion_receipt_is_not_a_blocked_publication_receipt
+    escalated_completion_receipt_requires_explicit_rework_authority
 );

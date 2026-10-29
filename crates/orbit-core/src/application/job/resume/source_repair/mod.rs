@@ -6,6 +6,7 @@ mod completion;
 mod escalated_publication;
 mod handoff;
 mod identity;
+mod inline_publication;
 mod observation;
 mod publication;
 mod published_owner;

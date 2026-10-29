@@ -28,6 +28,8 @@ mod completion;
 mod generations;
 #[path = "source_repair/handoff_requeue.rs"]
 mod handoff_requeue;
+#[path = "source_repair/inline_publication.rs"]
+mod inline_publication;
 #[path = "source_repair/publication.rs"]
 mod publication;
 #[path = "source_repair/published_owner.rs"]

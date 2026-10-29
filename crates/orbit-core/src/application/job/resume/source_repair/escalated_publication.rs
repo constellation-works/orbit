@@ -5,7 +5,8 @@
 //! failed completion; its failure handoff kept that PR open and unmerged
 //! (`review_completion_failure` or `landing_review_failure`) and its final
 //! recovery escalated, blocking the task. No `[BLOCKED]` PR receipt exists,
-//! so neither the failure-handoff requeue nor explicit source repair applies.
+//! so the failure-handoff requeue does not apply. Explicit source repair can
+//! authorize source work separately under fresh operator policy.
 //! A requeue resumes it exactly as a final-recovery requeue would: it records
 //! the same publication-preservation record, and the next run adopts the
 //! branch and PR, then validates, reviews and lands afresh.

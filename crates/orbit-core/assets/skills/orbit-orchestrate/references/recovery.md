@@ -278,9 +278,25 @@ automatic fixes and explicit generations share the PR repair budget. Generic
 resume still cannot replay an admitted source-repair attempt.
 
 In addition to cancelled publications and failed publications with an applied
-requeue, inspection supports two conclusively stopped failed owner shapes
+requeue, inspection supports these conclusively stopped failed owner shapes
 after final recovery escalated:
 
+- **The pipeline published its PR and the failure hook kept it.** Select the
+  original publishing run explicitly, including when newer attempts failed at
+  candidate adoption without producing source. Its kept-publication receipt
+  must bind the unchanged task specification, and its original successful host
+  publication chain, repository, branch, PR head and remote lease must agree.
+  Inspection returns `binding.superseded` for every stopped completion
+  retry and empty successor. Completion retries must preserve the original
+  checkpoint prefix, deadlines and recovery evidence without mutation or
+  repair provenance. Submit the inspected current `policy_digest` and explicit
+  `unmet_acceptance` evidence with the exact binding, key and diagnosis. This
+  admits source repair even with red hosted checks and expired completion;
+  it does not extend historical deadlines or inherit merge/auto-fix authority.
+  Current policy and complete stopped lineage are checked before source
+  effects. Dirty worktrees, active or ambiguous lineage and changed heads or
+  specifications refuse. Green requeue remains the route for carrying the
+  unchanged candidate without authorizing implementation.
 - **An admitted source repair pushed before `pr_open` failed.** Its original
   system reservation and unique run link, successful branch adoption, host
   commit, prepare, synchronization, review/publication chain and push must
@@ -302,7 +318,7 @@ after final recovery escalated:
   exact commit objects and the unchanged remote branch lease permit
   reconstruction. A local branch present at another head still refuses.
 
-Neither route treats publication as validation. The new worktree integrates
+None of these routes treats publication as validation. The new worktree integrates
 the exact retained candidate onto the current remote base, preserves its PR
 and branch under the exact lease, and requires fresh complete host gates and
 normal configured review. A handoff repair was not certified by the old
