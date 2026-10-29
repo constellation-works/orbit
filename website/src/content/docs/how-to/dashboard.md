@@ -284,8 +284,8 @@ regression-risk score. The estimate is fitted on task size alone, without
 per-file or crew attribution. Tasks without a usable diff-based fit use the
 number of distinct file and directory paths in their context selectors. A
 review or done task with a resolvable diff and enough matching landed-diff
-history uses the diff's inserted and deleted lines. The **Regression risk**
-breakdown shows this basis and its size band: recent done tasks on the same
+history uses the diff's inserted and deleted lines. The **Risk** pill
+tooltip shows this basis and its size band: recent done tasks on the same
 basis at least this size, and how many regressed. A `~` before the percentage
 means some selectors have no path and are omitted from the declared-file count,
 so that count is a lower bound. When no estimate is available, the Tasks row
@@ -293,9 +293,9 @@ has no risk part; the Risk chip says **No estimate** and its tooltip gives the
 reason: `no files` (no context selectors and no usable diff-based estimate),
 `no paths` (selectors identify no file or directory), `thin history` (not
 enough usable done-task observations on the selected basis to fit), or
-`unavailable` (the estimate could not be computed). The detail breakdown is
-shown only when there is an estimate. The score uses `window_days` and
-`min_support` even when `workflow.regression_risk.enabled` is off, since that
+`unavailable` (the estimate could not be computed). Hover, keyboard-focus or
+tap the pill to read its accessible description; Escape dismisses the tooltip.
+The score uses `window_days` and `min_support` even when `workflow.regression_risk.enabled` is off, since that
 switch controls prompt marks only. A circled *i* beside a value explains it on
 hover or focus. Its tabs are
 **Overview**, **Delivery** (only for a task with a delivery claim), **History**,
@@ -305,14 +305,11 @@ previews the ones that are safe to show. It does not attach files. See
 [Task artifacts](../../concepts/tasks/#task-artifacts).
 
 The metadata card above the tabs starts with **Scheduled**: the scheduled
-time, or **not scheduled**, with **Edit** when you can change it. The row is
-shown when it has a value or you can edit it, and remains visible even when
-the card has no other metadata. When the task has started, an **Actual start**
-row follows **Scheduled** with the actual started-at time, so the two times are
-not implied to be the same; a task that has not started has no such row. Run details in the same card include **Branch** and
-**Worktree** on one line; long values lose their beginning to an ellipsis so
-the distinctive end stays visible, including on a phone. Hover for the full
-value, or click it to copy the complete branch or worktree path.
+time, or **not scheduled**, with **Edit** beside the value when you can change
+it. Once the task has started, that same row adds `· started` and the actual
+start time, and no longer offers Edit. The row remains visible even when the
+card has no other metadata. The card also keeps the **Run**, its execution
+machine, and **Pull request** when present.
 
 The card lists relations one row per type, with each task id opening that
 task. A **Regression from** id that carries a classification adds its readable
@@ -320,9 +317,9 @@ nature, escape and severity beside the id — for example `ORB-1 · contract
 drift · escaped: no test · severity: high (verified)`, with `unclassified`
 muted. The severity names who rated it unless that was the filer, and a link
 stored before severity existed shows `medium (unrated)`, muted. Each link also
-lists its defect sites under that id, one per line in monospace with the start
-elided and the full selector in its title. A link without a classification stays a plain id,
-as do the other relation types.
+offers a **1 site** or **N sites** dropdown under that id. Open it to read
+every complete defect selector in monospace, wrapped to fit the pane. A link
+without a classification stays a plain id, as do the other relation types.
 
 ### Edit task metadata
 
@@ -334,7 +331,7 @@ do not dispatch work.
 | **description** | Left column. **edit** opens a Markdown editor. |
 | **acceptance criteria** | Left column, collapsed section. **edit**, then one criterion per line. |
 | **complexity** | **Details**. Pick **low**, **medium**, **hard**, or **xhard**; it saves on change. A stored **unassessed** is shown but cannot be picked. |
-| **Scheduled** | Top of the metadata card. **Edit**, then an RFC 3339 time with an offset; clear the field to remove the schedule. |
+| **Scheduled** | Top of the metadata card. Before the task starts, **Edit** accepts an RFC 3339 time with an offset; clear it to remove the schedule. After start, the row shows both times without an editor. |
 | **tags** | **edit** after the tags in **Details**. Separate tags with commas or newlines. |
 | **context files** | **context files** section. **edit**, then one selector per line: `file:…`, `dir:…`, or `symbol:…`. |
 

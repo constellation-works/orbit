@@ -1,12 +1,12 @@
 // Orbit dashboard task detail metadata: the meta block, the lifecycle and
 // delivery-stage strips, the hands chain, the delivery card and the OS readout.
 
-import { el, infoHint, isAggregateView, makeCopyButton, runHref } from './common.js';
+import { el, infoHint, isAggregateView, runHref } from './common.js';
 import { elapsedLabel } from './task-runtime.js';
 import { buildExecutionProvenance, formatExecutionLocation } from './distributed.js';
 import { absTimeNode, canMutateTask, pullRequestLink } from './task-shared.js';
 import { explicitCrewValue, resolvedCrewName } from './task-crew.js';
-import { buildRiskChip, buildRiskDetail } from './task-riskiness.js';
+import { buildRiskChip } from './task-riskiness.js';
 import { buildCrewUpdateControl, buildStatusUpdateControl } from './task-status-controls.js';
 import { buildRelationRow, drainDependencyIds, relationTargets } from './task-relations.js';
 import * as taskFields from './task-fields.js';
@@ -58,8 +58,6 @@ export function buildTaskMeta(task, context, { editor, showsEditor, drain }) {
   if (showsEditor("tags")) levers.appendChild(el("div", { class: "task-levers-tags" }, [editor("tags")]));
 
   const head = el("div", { class: "task-meta-block" }, [levers]);
-  const riskDetail = buildRiskDetail(task);
-  if (riskDetail) head.appendChild(riskDetail);
   const lifecycle = buildLifecycleStrip(task.status);
   if (lifecycle) head.appendChild(lifecycle);
   const delivery = buildDeliveryCard(task, drain, context, { editor, showsEditor });
@@ -293,8 +291,15 @@ function buildDeliveryCard(task, drain, context, { editor, showsEditor }) {
   const row = (kind, label, value) =>
     el("div", { class: `property-row fact task-delivery-row ${kind}` }, [el("span", { class: "label", text: label }), value]);
   const rows = [];
-  if (showsEditor("not_before")) rows.push(row("schedule", "Scheduled", editor("not_before")));
-  if (task.started_at) rows.push(row("started-at task-started-at", "Actual start", absTimeNode(context, task.started_at)));
+  if (task.started_at) {
+    const schedule = el("span", { class: "value" });
+    if (task.not_before) schedule.append("scheduled ", absTimeNode(context, task.not_before));
+    else schedule.append("not scheduled");
+    schedule.append(" · started ", absTimeNode(context, task.started_at));
+    rows.push(row("schedule", "Scheduled", schedule));
+  } else if (showsEditor("not_before")) {
+    rows.push(row("schedule", "Scheduled", editor("not_before")));
+  }
   const pullRequest = pullRequestLink(task);
   if (pullRequest || task.pr_number) {
     const value = el("span", { class: "value" });
@@ -312,13 +317,6 @@ function buildDeliveryCard(task, drain, context, { editor, showsEditor }) {
   }
   if (task.job_run_id != null && task.job_run_id !== "") {
     rows.push(row("run", "Run", buildRunValue(task)));
-    // Detail-only: the list row carries no `job_run_worktree`, so these rows
-    // appear once the task detail read lands.
-    const worktree = task.job_run_worktree;
-    if (worktree) {
-      rows.push(row("run-branch", "Branch", buildRunWorktreeValue(worktree.branch, "branch", worktree.unrecorded)));
-      rows.push(row("run-worktree", "Worktree", buildRunWorktreeValue(worktree.worktree_path, "worktree path", worktree.unrecorded)));
-    }
   }
   const hands = buildHandsChain(task);
   if (hands) rows.push(row("hands", "Handled by", hands));
@@ -395,23 +393,5 @@ function buildRunValue(task) {
   if (task.job_run_navigable === false) notes.push("No owner-local run for this id — inspect it on its execution machine.");
   if (!known) notes.push(`Execution machine ${formatExecutionLocation(null)}.`);
   if (notes.length) value.appendChild(infoHint(notes.join("\n")));
-  return value;
-}
-
-// The run's branch or worktree path on its execution machine, as the detail
-// read's `job_run_worktree` reports it from the run's own record; a click
-// copies the exact value. A value the run never recorded reads
-// "unavailable", with the reason as the hint, never a derived guess.
-function buildRunWorktreeValue(recorded, noun, unrecorded) {
-  const value = el("span", { class: "value run-worktree-value" });
-  if (recorded) {
-    // Isolate the label's LTR path order while CSS uses RTL to elide its start.
-    const copy = makeCopyButton(recorded, { class: "mono run-worktree-copy", text: `\u2066${recorded}\u2069`, title: recorded });
-    copy.setAttribute("aria-label", `Copy the run's ${noun}: ${recorded}`);
-    value.appendChild(copy);
-    return value;
-  }
-  value.appendChild(el("span", { class: "fact-note", text: "unavailable" }));
-  if (unrecorded) value.appendChild(infoHint(unrecorded));
   return value;
 }

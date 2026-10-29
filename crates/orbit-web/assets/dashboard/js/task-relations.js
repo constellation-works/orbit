@@ -191,9 +191,13 @@ export function buildRelationRow(key, label, targets, context) {
         item.appendChild(buildRegressionHead(entry, context));
         const sites = regressionSitesOf(entry);
         if (sites.length) {
-          const sitesWrap = el("div", { class: "regression-sites" });
+          const siteList = el("div", { class: "regression-site-list" });
+          const sitesWrap = el("details", { class: "regression-sites" }, [
+            el("summary", { text: `${sites.length} ${sites.length === 1 ? "site" : "sites"}` }),
+            siteList,
+          ]);
           for (const site of sites) {
-            sitesWrap.appendChild(el("div", { class: "mono regression-site", text: site, title: site }));
+            siteList.appendChild(el("div", { class: "mono regression-site", text: site }));
           }
           item.appendChild(sitesWrap);
         }

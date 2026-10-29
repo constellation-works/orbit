@@ -81,7 +81,7 @@ const FALLBACK = {
   diff_history_insufficient: "too few recent done tasks have a landed diff to fit lines changed",
 };
 
-// Every line the tooltip and the detail block show, in reading order.
+// Every line the risk tooltip shows, in reading order.
 export function riskinessLines(riskiness) {
   if (!riskiness) return [];
   const lines = [];
@@ -129,30 +129,32 @@ export function buildRiskRowPart(task) {
   return el("span", { class: `risk-part ${chipClass(riskiness)}`, text: `risk ${valueText(riskiness)}`, title, "aria-label": title });
 }
 
-// The task detail's lever chip: the value, with every line in its tooltip.
+// The task detail's lever chip: focus or tap the pill for the same breakdown
+// as hover. Its description stays readable by assistive technology while closed.
 export function buildRiskChip(task) {
   const riskiness = riskinessOf(task);
   if (!riskiness) return null;
-  const title = riskinessLines(riskiness).join("\n");
-  return el("span", { class: `task-chip task-chip-risk ${chipClass(riskiness)}`, title }, [
+  const descriptionId = `task-risk-${task.id}`;
+  const tooltip = el("span", {
+    class: "task-risk-tooltip", id: descriptionId, role: "tooltip",
+    text: riskinessLines(riskiness).join("\n"),
+  });
+  const chip = el("button", {
+    class: `task-chip task-chip-risk ${chipClass(riskiness)}`,
+    type: "button", "aria-describedby": descriptionId,
+  }, [
     el("span", { text: "Risk" }),
     el("span", { class: "risk-value", text: valueText(riskiness) }),
   ]);
-}
-
-// The task detail's breakdown, readable without hover (a phone has none).
-export function buildRiskDetail(task) {
-  const riskiness = riskinessOf(task);
-  if (!riskiness || !estimated(riskiness)) return null;
-  const lines = riskinessLines(riskiness);
-  const [lead, ...rest] = lines;
-  const summary = el("summary", {}, [
-    el("span", { class: "task-risk-label", text: "Regression risk" }),
-    el("span", { class: `task-risk-value ${chipClass(riskiness)}`, text: valueText(riskiness) }),
-  ]);
-  const body = el("div", { class: "task-risk-body" }, [
-    el("p", { class: "task-risk-lead", text: lead }),
-    ...rest.map((line) => el("p", { class: "task-risk-line", text: line })),
-  ]);
-  return el("details", { class: "task-risk" }, [summary, body]);
+  const hint = el("span", { class: "task-risk-hint" }, [chip, tooltip]);
+  const show = () => hint.classList.remove("dismissed");
+  chip.addEventListener("focus", show);
+  chip.addEventListener("click", show);
+  hint.addEventListener("pointerenter", show);
+  hint.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    event.stopPropagation();
+    hint.classList.add("dismissed");
+  });
+  return hint;
 }
