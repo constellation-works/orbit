@@ -429,3 +429,72 @@ for (const overlap of [false, true]) {
     }
   });
 }
+
+await test('stored calibration history pages every forecast with its column context', async () => {
+  const forecasts = Array.from({ length: 61 }, (_, index) => ({
+    forecast_at: new Date(Date.UTC(2026, 9, 28, 20, index)).toISOString(),
+    model_version: index < 20 ? 9 : 10,
+    done: index + 1,
+    tasks: 61,
+    excluded: index ? { rejected: index } : {},
+    forecast: {
+      time_to_drain_hours: { p50: index + 1, p90: index + 2 },
+      usd: { p50: index + 1, p90: index + 2 },
+      tokens: { p50: (index + 1) * 1000, p90: (index + 2) * 1000 },
+    },
+    actual: {
+      time_to_drain_hours: index + 0.5,
+      usd: index + 0.5,
+      tokens: (index + 0.5) * 1000,
+    },
+    scored_whole: index % 2 === 0,
+    settled: false,
+    pending: 61 - index,
+  }));
+  const stored = {
+    ...payload(),
+    served_from: 'stored',
+    generated_at: '2026-10-28T20:00:00Z',
+    calibration: {
+      model_version: 10,
+      task_level: { hours: { n: 6, under_p50: 0.5, under_p90: 0.9 } },
+      forecast_level: { time_to_drain_hours: { n: 3, under_p50: 0.5, under_p90: 0.9 } },
+      by_model_version: [{ model_version: 9, forecasts: 20, task_level: { hours: { n: 20, under_p50: 0.5, under_p90: 0.9 } }, forecast_level: { time_to_drain_hours: { n: 10, under_p50: 0.5, under_p90: 0.9 } } }],
+      forecasts,
+    },
+  };
+  common.setWorkspace('ws-calibration-pages');
+  await render(stored);
+
+  const expectedHeaders = ['Recorded', 'Model', 'Done', 'Left out', 'Drain p50 – p90 → actual', 'Cost', 'Tokens', 'State'];
+  const seen = new Set();
+  for (let page = 0; page < 7; page += 1) {
+    const history = body().querySelector('.fc-history-table-wrap');
+    const rows = history.querySelectorAll('tbody tr');
+    assert.equal(rows.length, Math.min(10, 61 - page * 10), `page ${page + 1} renders only its bounded rows`);
+    assert.deepEqual([...history.querySelectorAll('thead th')].map(cell => cell.textContent), expectedHeaders, `page ${page + 1} repeats the useful column headings`);
+    assert.ok(body().textContent.includes('Model v10, the current model.'), `page ${page + 1} keeps the calibration summary available`);
+    assert.ok(body().textContent.includes('Earlier models, under p50 · under p90 (scored).'), `page ${page + 1} keeps model-version interpretation available`);
+    assert.match(body().querySelector('.fc-history-page-status').textContent, new RegExp(`Page ${page + 1} of 7`));
+    for (const row of rows) {
+      const cells = row.querySelectorAll('th, td');
+      const done = Number(cells[2].textContent.split('/')[0]);
+      const index = done - 1;
+      assert.equal(cells[1].textContent, `v${index < 20 ? 9 : 10}`, `forecast ${done} keeps its model version`);
+      assert.equal(cells[2].textContent, `${done}/61`, `forecast ${done} keeps its task values`);
+      assert.equal(cells[3].textContent, index ? `${index} rejected` : '—', `forecast ${done} keeps its exclusions`);
+      const range = (values, actual, format) => `${forecast.formatForecastQuantileRange(values, format)} → ${format(actual)}`;
+      assert.equal(cells[4].textContent, range(forecasts[index].forecast.time_to_drain_hours, forecasts[index].actual.time_to_drain_hours, forecast.formatForecastHours), `forecast ${done} keeps its drain values`);
+      assert.equal(cells[5].textContent, range(forecasts[index].forecast.usd, forecasts[index].actual.usd, forecast.formatForecastUsd), `forecast ${done} keeps its cost values`);
+      assert.equal(cells[6].textContent, range(forecasts[index].forecast.tokens, forecasts[index].actual.tokens, forecast.formatForecastTokens), `forecast ${done} keeps its token values`);
+      assert.equal(cells[7].textContent, index % 2 === 0 ? 'scored' : `${61 - index} pending`, `forecast ${done} keeps its scoring state`);
+      seen.add(done);
+    }
+    const older = [...body().querySelectorAll('button')].find(button => button.textContent === 'Older forecasts');
+    assert.equal(older.disabled, page === 6, `older navigation is ${page === 6 ? 'disabled on the last page' : 'available'}`);
+    if (page < 6) clickForecastControl('Older forecasts');
+  }
+  assert.equal(seen.size, 61, 'every stored forecast appears across the pages');
+  clickForecastControl('Newer forecasts');
+  assert.equal(body().querySelector('.fc-history-table-wrap tbody tr').querySelectorAll('th, td')[2].textContent, '51/61', 'Newer returns to the preceding forecast page');
+});

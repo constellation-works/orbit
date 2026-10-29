@@ -34,6 +34,9 @@
 .fc-approved { margin: 0; color: var(--fg-dim); font: 13px var(--font-sans); }
 .fc-table td.fc-state, .fc-table td.fc-review { white-space: nowrap; }
 .fc-table td.fc-basis { color: var(--fg-mute); font: 12px var(--font-mono); white-space: nowrap; }
+.fc-history-table-wrap { max-height: 420px; border: 1px solid var(--hair); border-radius: 8px; }
+.fc-history-pagination { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; }
+.fc-history-page-status { color: var(--fg-dim); font: 12px var(--font-sans); }
 /* Coverage counts: one cell per count, wrapping on narrow screens. */
 .fc-coverage {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; margin: 0;
