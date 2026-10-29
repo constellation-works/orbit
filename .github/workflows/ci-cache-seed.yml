@@ -1,0 +1,172 @@
+name: CI cache seed
+
+# Required CI's same-tree skip remains a validation decision. This optional
+# workflow gives that trusted push a writer without changing PR gate emission.
+on:
+  push:
+    branches: [main, agent-main]
+
+# Do not cancel an active writer. A newer pending push replaces the previous
+# pending one and probes its own identities; BEFORE is never proof of a save.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+# Match the compiler inputs of ci.yml's Check and Test build dependency caches.
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  CARGO_PROFILE_DEV_STRIP: "symbols"
+  CARGO_PROFILE_TEST_STRIP: "symbols"
+  # rust-cache hashes every CARGO* variable, including tool installer inputs.
+  # These must match ci.yml even though seeders do not run cargo-deny.
+  CARGO_DENY_VERSION: 0.19.9
+  CARGO_DENY_LINUX_SHA256: f1f8eedc2a3ac297c540873f93785d4104b102c0079506b2a6b3221b7ec956af
+
+jobs:
+  scope:
+    name: Cache seed scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+    outputs:
+      mode: ${{ steps.scope.outputs.mode }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Classify the change
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          SHA: ${{ github.sha }}
+          BEFORE: ${{ github.event.before }}
+        run: scripts/ci-change-scope.sh
+
+  seed-check:
+    needs: scope
+    if: ${{ github.event_name == 'push' && needs.scope.outputs.mode == 'skip' }}
+    name: Seed Check dependencies
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
+      # No compiler-object cache is needed to produce dependency archives.
+      ORBIT_COMPILER_CACHE: "0"
+    steps:
+      - &checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # Rust 1.98.1
+        with:
+          toolchain: "1.98.1"
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        id: lookup
+        continue-on-error: true
+        with:
+          prefix-key: v1-rust-${{ hashFiles('Cargo.toml') }}
+          shared-key: rust-1.98.1-checks
+          lookup-only: true
+          save-if: false
+
+      # Exact presence needs no download, disk cleanup or compilation. Empty
+      # output or an unavailable lookup falls back to the bounded producer.
+      - &disk
+        name: Admit runner disk space
+        if: ${{ steps.lookup.outputs.cache-hit != 'true' }}
+        run: |
+          set -euo pipefail
+          minimum_kib=$((32 * 1024 * 1024))
+          available_kib() { df -Pk / | awk 'NR == 2 {print $4}'; }
+          echo "runner=${RUNNER_NAME} image=${ImageOS:-unknown}/${ImageVersion:-unknown}"
+          df -h /
+          if (( $(available_kib) < minimum_kib )); then
+            for path in /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+              /usr/local/.ghcup /opt/hostedtoolcache/CodeQL \
+              /usr/local/share/boost /usr/local/share/powershell /usr/share/swift; do
+              sudo rm -rf "$path"
+              if (( $(available_kib) >= minimum_kib )); then
+                break
+              fi
+            done
+          fi
+          free_kib="$(available_kib)"
+          echo "free_kib=$free_kib minimum_kib=$minimum_kib"
+          if (( free_kib < minimum_kib )); then
+            echo '::error title=Insufficient runner disk::Need at least 32 GiB free before cache restore and compilation'
+            exit 1
+          fi
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: ${{ steps.lookup.outputs.cache-hit != 'true' }}
+        with:
+          prefix-key: v1-rust-${{ hashFiles('Cargo.toml') }}
+          shared-key: rust-1.98.1-checks
+          save-if: ${{ github.event_name == 'push' }}
+
+      # Produce the same check/doc dependency units, without guards, tests or
+      # shard waits. Failed producers do not save a partially seeded archive.
+      - name: Compile Check dependencies
+        if: ${{ steps.lookup.outputs.cache-hit != 'true' }}
+        env:
+          RUSTC_WORKSPACE_WRAPPER: clippy-driver
+          CLIPPY_ARGS: '-D__CLIPPY_HACKERY__warnings__CLIPPY_HACKERY__-D__CLIPPY_HACKERY__clippy::disallowed_methods__CLIPPY_HACKERY__'
+        run: |
+          set -euo pipefail
+          cargo check --locked --workspace --lib --bins
+          RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps --workspace
+
+  seed-build:
+    needs: scope
+    if: ${{ github.event_name == 'push' && needs.scope.outputs.mode == 'skip' }}
+    name: Seed Test build dependencies
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ORBIT_COMPILER_CACHE: "0"
+    steps:
+      - *checkout
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # Rust 1.98.1
+        with:
+          toolchain: "1.98.1"
+          components: clippy
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        id: lookup
+        continue-on-error: true
+        with:
+          prefix-key: v1-rust-${{ hashFiles('Cargo.toml') }}
+          shared-key: rust-1.98.1
+          lookup-only: true
+          save-if: false
+
+      - *disk
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: ${{ steps.lookup.outputs.cache-hit != 'true' }}
+        with:
+          prefix-key: v1-rust-${{ hashFiles('Cargo.toml') }}
+          shared-key: rust-1.98.1
+          save-if: ${{ github.event_name == 'push' }}
+
+      - name: Compile Test build dependencies
+        if: ${{ steps.lookup.outputs.cache-hit != 'true' }}
+        run: scripts/with-test-build-lint.sh cargo test --no-run --locked --workspace --lib --bins --tests --examples

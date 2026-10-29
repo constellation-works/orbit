@@ -41,22 +41,69 @@ a host that can create Linux mount namespaces.
 Hosted CI keeps no compiler-object cache. The Rust build caches in
 `.github/workflows/ci.yml` are the `Swatinem/rust-cache` dependency archives:
 `rust-1.98.1` for **Test build**, `rust-1.98.1-checks` for **Check / Clippy /
-Test**, and the MSRV job's entry for its own toolchain. rust-cache keys each on
-the toolchain, `Cargo.lock`, the manifests and the `CARGO*`/`RUST*`
-environment, and prunes `target/` to dependency artifacts before it saves.
+Test**, and the MSRV job's entry for its own toolchain. All three use
+`prefix-key: v1-rust-${{ hashFiles('Cargo.toml') }}`: the complete virtual-root
+manifest, including workspace dependencies and build profiles, is an explicit
+cache input. The pinned action discovers manifests through Cargo's packages;
+that omits a virtual workspace root. Its `key` input would also be ignored
+beside `shared-key`, so the root digest belongs in `prefix-key`. A root change
+invalidates both the exact key and its fallback prefix; even a comment change
+starts a new namespace. Unchanged root bytes keep the same namespace.
+
+The action additionally keys each archive on the installed compiler versions,
+`Cargo.lock`, member manifests and the `CARGO*`/`RUST*` environment, and prunes
+`target/` to dependency artifacts before it saves.
 Workspace members are never cached: each run compiles them from the checkout,
 and Cargo's own fingerprints decide freshness. No source mtimes are rewritten.
 
-- **Who writes.** Every rust-cache step has
+- **Who writes.** Every producer rust-cache step has
   `save-if: ${{ github.event_name == 'push' }}`. Only a push to `main` or
-  `agent-main` saves, after the job's work, on failure too
-  (`cache-on-failure`), and only when it missed the exact key. A PR run
+  `agent-main` saves, after the job's work. Check and Test build also save on
+  failure (`cache-on-failure`); MSRV saves on success. Only a miss or prefix
+  hit allows a save; an exact hit cannot replace an existing archive. A PR run
   restores and never writes, so no PR-built entry exists for another PR or an
   `agent-main` run to restore. A PR can restore the base branch's entries
   ([GitHub cache scope](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching)).
   `python3 scripts/test-pr-state-workflows.py` evaluates every cache writer's
   condition for each event and fails on an `actions/cache` step, whose
   implicit post-job save runs on every event.
+- **Reseeding a validated merge.** `ci.yml` keeps its original two-step
+  `Change scope` proof: identical merged PR-head tree, that head's successful
+  full-workspace Check and a full-selection notice from the same suite. Its
+  required jobs, skip decisions and deadlines are unchanged. The separate
+  push-only `.github/workflows/ci-cache-seed.yml` classifies once with the
+  same script and admits two bounded Linux producers only for `skip`.
+  It never handles PRs or writes PR caches. Full/docs pushes use existing CI
+  without duplicate seed builds; scope errors or an empty mode admit full CI
+  and no seeders.
+
+  Each seeder uses its corresponding Check/Test build toolchain, root prefix,
+  compiler environment and shared key. A read-only `lookup-only` action
+  avoids downloads; an exact hit skips restore, cleanup and compilation.
+  Prefix/missing/error/empty results run the bounded producer and a push-only
+  rust-cache save on success. Check produces the existing production Clippy
+  and documentation dependency units; Test build compiles through the folded
+  lint wrapper with `cargo test --no-run`, without executing tests, making
+  archives or waiting for shards. Seeders disable the unused compiler-object
+  cache. They retain the corresponding 45/30 minute job limits and 32 GiB
+  disk admission. A failed seed stays visible and saves no partial archive;
+  a later normal push can recover. An exact cache hit proves key presence,
+  not complete warm artifacts or a measured speedup.
+
+  Active seeders are not cancelled by newer pushes. A superseded pending push
+  cannot strand the namespace: its replacement checks actual cache presence,
+  independently of `BEFORE`. A delayed writer checks out its triggering SHA.
+  The same path covers a single-PR merge and a literal fast-forward. No cache
+  deletion, permission expansion or extra validation is required. Hosted
+  writer/reuse outcomes and rolling full Check p90 still need collection
+  after normal publication; local fixtures do not establish the <600 s goal.
+- **Other Linux consumers.** The coverage workflow caches only registry/git
+  data (`cache-targets: false`), so it holds no compiled profile artifacts.
+  Desktop check/bundle caches use `desktop/`, whose root is a real package
+  manifest already included by the action. Neither consumes these three
+  virtual-root target archives. MSRV uses its own compiler identity and is
+  seeded by ordinary full pushes. The two optional seeders do not warm the
+  independent MSRV archive; an MSRV miss still rebuilds on its next full run.
 - **Misses and failures.** A missed key restores the newest entry that shares
   its toolchain and environment prefix, or nothing, and Cargo rebuilds every
   dependency the restored `target/` lacks or holds stale. A restore error is
