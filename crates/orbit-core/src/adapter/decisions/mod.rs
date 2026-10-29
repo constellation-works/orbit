@@ -52,6 +52,8 @@ pub struct AssistanceHttpResponse {
 /// Supported synthetic transport seam. Implementations must return within the
 /// requested deadline and enforce max_response_bytes while receiving data.
 /// Errors must be fixed reason codes, never reqwest errors or response text.
+/// `DeadlineBeforeSend` is reserved for a deadline that passed before any request
+/// was built; every other error means an outbound attempt was made.
 pub trait DecisionsTransport: Send + Sync {
     fn send_assistance(
         &self,
@@ -76,7 +78,7 @@ impl DecisionsTransport for OpenAiDecisionsTransport {
     ) -> Result<AssistanceHttpResponse, AssistanceReason> {
         let remaining = (deadline - Utc::now())
             .to_std()
-            .map_err(|_| AssistanceReason::TimeoutUnknown)?
+            .map_err(|_| AssistanceReason::DeadlineBeforeSend)?
             .min(Duration::from_secs(limits.timeout_seconds.into()));
         let client = reqwest::blocking::Client::builder()
             .timeout(remaining)

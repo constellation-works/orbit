@@ -6,6 +6,7 @@ use fixture::{
     AssistanceFixture, CREDENTIAL, FixtureResult, ambiguous_non_timeout_send_failure_reason,
     builder_send_failure_reason, connect_send_failure_reason, timeout_send_failure_reason,
 };
+use orbit_common::OrbitError;
 use orbit_core::adapter::decisions::AssistanceHttpResponse;
 use orbit_store::Store;
 use orbit_store::contracts::assistance::{AssistanceAdmission, AssistanceStoreBackend};
@@ -16,7 +17,7 @@ use serde_json::{Value, json};
 use std::io::Write;
 use std::path::Path;
 use std::process::Command;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 fn fixture_service_boundaries(root: &Path, schema: &Value) -> FixtureResult {
     let f = AssistanceFixture::open_fixture(root, schema, "task_quality")?;
@@ -244,6 +245,14 @@ fn fixture_send_failure_reconciliation(root: &Path, schema: &Value) -> FixtureRe
             .outcome_unknown_attempts,
         0
     );
+    // A builder failure enters the transport client, so its reservation is charged.
+    assert_eq!(
+        pre_send
+            .store
+            .assistance_accounting("synthetic-only/1")?
+            .reserved_tokens,
+        u64::from(pre_send_record.work.limits.max_input_tokens)
+    );
 
     let connect = AssistanceFixture::open_fixture(&root.join("connect"), schema, "task_quality")?;
     let connect_id = connect.enqueue(connect.request("connect-failure")?)?;
@@ -281,6 +290,90 @@ fn fixture_send_failure_reconciliation(root: &Path, schema: &Value) -> FixtureRe
             .ok_or("timeout result missing")?
             .reason,
         AssistanceReason::TimeoutUnknown
+    );
+    Ok(())
+}
+
+fn fixture_credential_refusal_releases_reservation(root: &Path, schema: &Value) -> FixtureResult {
+    // Unavailable credentials refuse locally: no request leaves the host, so no
+    // reservation may survive and the allocation must not drain.
+    let f = AssistanceFixture::open_fixture(root, schema, "task_quality")?;
+    f.credential.1.store(false, Ordering::SeqCst);
+    let mut last = String::new();
+    for n in 0..40 {
+        last = f.enqueue(f.request(&format!("credential-unavailable-{n}"))?)?;
+        f.process()?;
+    }
+    let accounting = f.store.assistance_accounting("synthetic-only/1")?;
+    assert_eq!(
+        accounting.reserved_tokens, 0,
+        "credential refusals before send kept their token reservation"
+    );
+    assert_eq!(
+        accounting.reserved_charge_microusd, 0,
+        "credential refusals before send kept their charge reservation"
+    );
+    assert_eq!(accounting.attempts, 0);
+    assert_eq!(accounting.outcome_unknown_attempts, 0);
+    assert!(
+        f.transport
+            .bodies
+            .lock()
+            .map_err(|_| "body lock")?
+            .is_empty()
+    );
+    assert_eq!(
+        f.record(&last)?
+            .result
+            .ok_or("missing credential result")?
+            .reason,
+        AssistanceReason::CredentialUnavailable
+    );
+    Ok(())
+}
+
+fn fixture_deadline_before_send_is_not_unknown(root: &Path, schema: &Value) -> FixtureResult {
+    // A deadline reached before send is a local refusal, not an outcome-unknown
+    // attempt. The clock passes the claim deadline between claim and deadline check.
+    let f = AssistanceFixture::open_fixture(root, schema, "task_quality")?;
+    let id = f.enqueue(f.request("deadline-before-send")?)?;
+    let clock = f.clock.clone();
+    let advanced = AtomicBool::new(false);
+    f.service
+        .process_next_assistance_checked("ws_fixture", "task_quality", |_| {
+            if !advanced.swap(true, Ordering::SeqCst) {
+                *clock
+                    .lock()
+                    .map_err(|_| OrbitError::InvalidInput("fixture clock lock".into()))? +=
+                    Duration::seconds(60);
+            }
+            Ok(true)
+        })?;
+    let record = f.record(&id)?;
+    let attempt = record.attempts.first().ok_or("deadline attempt missing")?;
+    assert!(
+        !attempt.outcome_unknown,
+        "a deadline reached before send was recorded as an outcome-unknown attempt"
+    );
+    assert_eq!(
+        record
+            .result
+            .as_ref()
+            .ok_or("deadline result missing")?
+            .disposition,
+        AssistanceDisposition::Unavailable
+    );
+    let accounting = f.store.assistance_accounting("synthetic-only/1")?;
+    assert_eq!(accounting.outcome_unknown_attempts, 0);
+    assert_eq!(accounting.reserved_tokens, 0);
+    assert_eq!(accounting.reserved_charge_microusd, 0);
+    assert_eq!(accounting.attempts, 0);
+    assert!(
+        f.transport
+            .bodies
+            .lock()
+            .map_err(|_| "body lock")?
+            .is_empty()
     );
     Ok(())
 }
@@ -690,6 +783,8 @@ fn main() -> FixtureResult {
         let root = Path::new(args.get(3).ok_or("isolated root required")?);
         fixture_service_boundaries(&root.join("service"), &schema)?;
         fixture_send_failure_reconciliation(&root.join("send-failure"), &schema)?;
+        fixture_credential_refusal_releases_reservation(&root.join("credential"), &schema)?;
+        fixture_deadline_before_send_is_not_unknown(&root.join("deadline"), &schema)?;
         fixture_restart_retry(&root.join("restart"), &schema)?;
         fixture_validation(&root.join("validation"), &schema)?;
         fixture_budgets(&root.join("bounds"), &schema)?;

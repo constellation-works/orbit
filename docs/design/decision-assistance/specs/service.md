@@ -134,7 +134,10 @@ attempt before a delayed retry can reserve another. Late responses are fenced;
 allocation counters survive retention. Terminal payloads, attempts and slots
 expire after the queue deadline plus retention; owners must call maintenance
 when no consumer is polling. Tiny allocation counters are retained for audit.
-This is conservative reservation accounting, not a vendor billing receipt.
+A claim refused before any outbound request is entered releases its reservation
+and records no outcome-unknown attempt; that is not a refund, because nothing was
+requested. Connect and client-build failures entered the transport and keep the
+reservation. This is conservative reservation accounting, not a vendor billing receipt.
 
 ## Direct Decisions adapter and data boundary
 
@@ -185,7 +188,7 @@ scripts/build-budget.py -- cargo run -p orbit-core --example assistance_fixture 
 It covers off with no credential/queue/call, value redaction and scope, strict
 answer translation, missing/extra/invalid/refused answers, probability bounds,
 choice abstention, unavailable budgets/pricing, overflow/queue expiry,
-restart/claim/retry identities, retained outcome-unknown charges, retention,
+restart/claim/retry identities, retained outcome-unknown charges, pre-send refusal releases, retention,
 shadow/advisory changes, disabled/superseded/late results, lock release before
 I/O, workspace config refusal, child credential exclusion and v71/v72 writer
 compatibility. The existing store schema-prefix and compatibility fixtures

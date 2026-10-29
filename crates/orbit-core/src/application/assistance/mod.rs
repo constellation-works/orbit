@@ -30,11 +30,25 @@ pub trait AssistanceAdapter: Send + Sync {
         supplied_secrets: &[String],
         policy: &AssistancePolicy,
     ) -> Result<AssistanceRequest, AssistanceReason>;
+    /// A refusal decided before outbound I/O must be one of the reasons that
+    /// `refusal_precedes_outbound_io` lists; any other result is an attempted request.
     fn evaluate_assistance(
         &self,
         claim: &AssistanceClaim,
         policy: &AssistancePolicy,
     ) -> AssistanceResult;
+}
+
+/// Adapter refusals decided before the transport is entered. Their claims release
+/// the reservation and record no outcome-unknown attempt.
+fn refusal_precedes_outbound_io(reason: AssistanceReason) -> bool {
+    matches!(
+        reason,
+        AssistanceReason::CredentialUnavailable
+            | AssistanceReason::ConfigurationChanged
+            | AssistanceReason::InvalidRequest
+            | AssistanceReason::DeadlineBeforeSend
+    )
 }
 
 /// Reloaded before admission, before sending, after sending and before reads.
@@ -184,14 +198,18 @@ impl AssistanceService {
                         .as_ref()
                         == Some(&digest)
             });
+        // Only a claim whose request entered outbound I/O keeps its reservation.
+        let mut attempted = false;
         let mut result = if !is_current(&claim.work.request)? {
             AssistanceResult::assistance_gap(AssistanceReason::Superseded)
         } else if !before_matches {
             AssistanceResult::assistance_gap(AssistanceReason::ConfigurationChanged)
         } else if (self.clock)() >= claim.deadline {
-            AssistanceResult::assistance_gap(AssistanceReason::TimeoutUnknown)
+            AssistanceResult::assistance_gap(AssistanceReason::DeadlineBeforeSend)
         } else {
-            self.adapter.evaluate_assistance(&claim, policy)
+            let evaluated = self.adapter.evaluate_assistance(&claim, policy);
+            attempted = !refusal_precedes_outbound_io(evaluated.reason);
+            evaluated
         };
         let after = (self.settings)();
         let after_matches = after
@@ -225,8 +243,13 @@ impl AssistanceService {
             .usage
             .as_ref()
             .and_then(|u| claim.work.budget.assistance_charge_bound(u.input_tokens));
-        self.store
-            .assistance_finish(&claim, result, (self.clock)())?;
+        if attempted {
+            self.store
+                .assistance_finish(&claim, result, (self.clock)())?;
+        } else {
+            self.store
+                .assistance_finish_unattempted(&claim, result, (self.clock)())?;
+        }
         Ok(Some(claim.work.id))
     }
 

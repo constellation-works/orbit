@@ -22,7 +22,7 @@ use std::error::Error;
 use std::path::Path;
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 pub(super) type FixtureResult<T = ()> = Result<T, Box<dyn Error>>;
 pub(super) const CREDENTIAL: &str = "fixture-project-credential-only";
@@ -44,11 +44,11 @@ pub(super) fn timeout_send_failure_reason() -> AssistanceReason {
     send_error::decisions_send_failure_reason(send_error::DecisionsSendFailureClass::Timeout)
 }
 
-pub(super) struct FixtureCredential(pub(super) AtomicUsize);
+pub(super) struct FixtureCredential(pub(super) AtomicUsize, pub(super) AtomicBool);
 impl AssistanceCredentialSource for FixtureCredential {
     fn assistance_credential(&self, _: &str) -> Option<String> {
         self.0.fetch_add(1, Ordering::SeqCst);
-        Some(CREDENTIAL.into())
+        self.1.load(Ordering::SeqCst).then(|| CREDENTIAL.into())
     }
 }
 
@@ -170,7 +170,10 @@ impl AssistanceFixture {
         let clock = Arc::new(Mutex::new(
             DateTime::parse_from_rfc3339("2026-10-28T12:00:00Z")?.with_timezone(&Utc),
         ));
-        let credential = Arc::new(FixtureCredential(AtomicUsize::new(0)));
+        let credential = Arc::new(FixtureCredential(
+            AtomicUsize::new(0),
+            AtomicBool::new(true),
+        ));
         let transport = Arc::new(FixtureTransport {
             store: store.clone(),
             replies: Mutex::new(VecDeque::new()),

@@ -17,6 +17,14 @@ struct AssistanceSettlementRow {
     ordinal: u32,
 }
 
+/// Whether the claim's request entered outbound I/O. Only an unattempted claim
+/// releases its reservation and is exempt from outcome-unknown accounting.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum AssistanceOutbound {
+    Attempted,
+    Unattempted,
+}
+
 pub(super) fn assistance_maintain_rows(
     conn: &Connection,
     now: DateTime<Utc>,
@@ -47,6 +55,7 @@ pub(super) fn assistance_maintain_rows(
             &claim,
             AssistanceResult::assistance_gap(AssistanceReason::ClaimExpiredUnknown),
             now,
+            AssistanceOutbound::Attempted,
         )?;
     }
     conn.execute("UPDATE assistance_work SET state='done',result_json=?2 WHERE state='queued' AND expires_at<=?1",
@@ -64,6 +73,7 @@ pub(super) fn assistance_settle_claim(
     claim: &AssistanceClaim,
     mut result: AssistanceResult,
     now: DateTime<Utc>,
+    outbound: AssistanceOutbound,
 ) -> Result<bool, OrbitError> {
     let state: Option<AssistanceSettlementRow> = conn.query_row(
         "SELECT state,claim_id,claim_until,expires_at,EXISTS(SELECT 1 FROM assistance_slots s WHERE s.request_id=w.id),payload_json,attempt_count
@@ -105,11 +115,12 @@ pub(super) fn assistance_settle_claim(
             params![claim.attempt_id,assistance_json(&result)?,claim.work.id]).map_err(sqlite_store_error)?;
         return Ok(false);
     }
-    let unknown = deadline.is_none_or(|d| now.timestamp_millis() >= d)
-        || matches!(
-            result.reason,
-            AssistanceReason::TimeoutUnknown | AssistanceReason::ClaimExpiredUnknown
-        );
+    let unknown = outbound == AssistanceOutbound::Attempted
+        && (deadline.is_none_or(|d| now.timestamp_millis() >= d)
+            || matches!(
+                result.reason,
+                AssistanceReason::TimeoutUnknown | AssistanceReason::ClaimExpiredUnknown
+            ));
     if unknown {
         result = AssistanceResult::assistance_gap(
             if result.reason == AssistanceReason::ClaimExpiredUnknown {
@@ -123,6 +134,9 @@ pub(super) fn assistance_settle_claim(
             [&work.budget.epoch],
         )
         .map_err(sqlite_store_error)?;
+    }
+    if outbound == AssistanceOutbound::Unattempted {
+        assistance_release_reservation(conn, claim, &work)?;
     }
     conn.execute(
         "UPDATE assistance_attempts SET outcome_unknown=?2,result_json=?3 WHERE attempt_id=?1",
@@ -143,4 +157,32 @@ pub(super) fn assistance_settle_claim(
         params![claim.work.id,if retry { "queued" } else { "done" },
             now.timestamp_millis()+i64::from(work.limits.retry_delay_seconds)*1000,assistance_json(&result)?]).map_err(sqlite_store_error)?;
     Ok(!retry && !unknown)
+}
+
+/// Returns an unattempted claim's reservation to its epoch, restoring the epoch
+/// counters to their pre-claim values. The attempt row stays as an audit record
+/// with zero reserved values, so per-attempt reservations still sum to the epoch.
+fn assistance_release_reservation(
+    conn: &Connection,
+    claim: &AssistanceClaim,
+    work: &AssistanceWork,
+) -> Result<(), OrbitError> {
+    let (tokens, charge): (u64, u64) = conn
+        .query_row(
+            "SELECT reserved_tokens,reserved_charge FROM assistance_attempts WHERE attempt_id=?1",
+            [&claim.attempt_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(sqlite_store_error)?;
+    conn.execute(
+        "UPDATE assistance_budgets SET reserved_tokens=reserved_tokens-?2, reserved_charge=reserved_charge-?3, attempts=attempts-1 WHERE epoch=?1",
+        params![&work.budget.epoch, tokens, charge],
+    )
+    .map_err(sqlite_store_error)?;
+    conn.execute(
+        "UPDATE assistance_attempts SET reserved_tokens=0, reserved_charge=0 WHERE attempt_id=?1",
+        [&claim.attempt_id],
+    )
+    .map_err(sqlite_store_error)?;
+    Ok(())
 }

@@ -85,6 +85,14 @@ pub trait AssistanceStoreBackend: Send + Sync {
         result: AssistanceResult,
         now: DateTime<Utc>,
     ) -> Result<bool, OrbitError>;
+    /// Settles a claim refused before any outbound request. It releases the
+    /// claim's reservation and never counts as an outcome-unknown attempt.
+    fn assistance_finish_unattempted(
+        &self,
+        claim: &AssistanceClaim,
+        result: AssistanceResult,
+        now: DateTime<Utc>,
+    ) -> Result<bool, OrbitError>;
     fn assistance_record(&self, id: &str) -> Result<Option<AssistanceRecord>, OrbitError>;
     fn assistance_accounting(&self, epoch: &str) -> Result<AssistanceAccounting, OrbitError>;
     /// Expire abandoned claims, queued work and retained terminal records.
