@@ -264,24 +264,107 @@ function backlogForecastFreshness(payload) {
   return "Forecast freshness unavailable";
 }
 
-/// Compact drain-card figures. Null when time to drain has no quantile.
-/// Tokens and cost are null when that pair has none, so a missing cost is
-/// left out rather than shown as a dash.
+function supportText(forecast, payload) {
+  const support = forecast?.regression_rework?.support;
+  const coverage = payload?.coverage || {};
+  const parts = [];
+  if (support && typeof support === "object") {
+    if (num(support.missing_fix_history) != null) parts.push(`${forecastCount(support.missing_fix_history)} with missing fix history`);
+    if (num(support.history_fixes) != null) parts.push(`${forecastCount(support.history_fixes)} recorded regression fixes`);
+    if (num(support.history_bundles) != null) parts.push(`${forecastCount(support.history_bundles)} regression bundles`);
+    if (support.history_thin) parts.push("regression history is thin");
+  }
+  if (num(coverage.regression_history_missing)) parts.push(`${forecastCount(coverage.regression_history_missing)} tasks missing regression history`);
+  if (num(coverage.risk_unestimated)) parts.push(`${forecastCount(coverage.risk_unestimated)} tasks with unestimated risk`);
+  if (num(coverage.regression_history_thin)) parts.push(`${forecastCount(coverage.regression_history_thin)} tasks with thin regression history`);
+  return parts.length ? `Available evidence: ${parts.join(" · ")}.` : "";
+}
+
+/// Reasons the adjusted forecast is unavailable, from `forecast.unavailable`.
+/// Null when no flag is set (older payloads omit the object entirely).
+export function forecastUnavailableInfo(forecast, payload = {}) {
+  const unavailable = forecast?.unavailable;
+  if (!unavailable || typeof unavailable !== "object") return null;
+  const reasons = [];
+  if (unavailable.regression_history_missing) reasons.push({ kind: "regression_history_missing", label: "Missing regression history", detail: "Regression follow-up work cannot be estimated for some tasks, so the regression-adjusted forecast is unavailable." });
+  if (unavailable.risk_unestimated) reasons.push({ kind: "risk_unestimated", label: "Risk not estimated", detail: "Regression risk is not estimated for some tasks, so the adjusted forecast is unavailable." });
+  if (unavailable.arrival_conflict_unknown) reasons.push({ kind: "arrival_conflict_unknown", label: "Arrival conflicts unknown", detail: "Whether arriving tasks would conflict with this backlog is unknown, so the adjusted forecast is unavailable." });
+  if (!reasons.length) return null;
+  const support = supportText(forecast, payload);
+  return { kind: reasons[0].kind, reasons, label: reasons.map((r) => r.label).join(" · "), detail: [reasons.map((r) => r.detail).join(" "), support].filter(Boolean).join(" "), support };
+}
+
+function quantileText(quantiles, fmt) {
+  const p50 = num(quantiles?.p50);
+  const p90 = num(quantiles?.p90);
+  if (p50 == null && p90 == null) return null;
+  return `p50 ${p50 == null ? "unknown" : fmt(p50)} · p90 ${p90 == null ? "unknown" : fmt(p90)}`;
+}
+
+/// Formatted pre-regression baseline figures; each missing percentile stays
+/// unknown and no metric is invented. Null when the baseline has no figures.
+export function forecastBaselineFigures(baseline) {
+  if (!baseline || typeof baseline !== "object") return null;
+  const figures = {
+    time: quantileText(baseline.time_to_drain_hours, formatForecastHours),
+    cost: quantileText(baseline.usd, formatForecastUsd),
+    tokens: quantileText(baseline.tokens, formatForecastTokens),
+  };
+  return figures.time || figures.cost || figures.tokens ? figures : null;
+}
+
+function baselineText(figures) {
+  if (!figures) return "";
+  const parts = [figures.time && `Time to drain ${figures.time}`, figures.cost && `Cost ${figures.cost}`, figures.tokens && `Tokens ${figures.tokens}`].filter(Boolean);
+  return parts.length ? `Pre-regression baseline (excludes unsupported regression follow-up work): ${parts.join(" · ")}.` : "";
+}
+
+export function backlogForecastFailureSummary() {
+  return { unavailable: true, reasonKind: "transport", reason: "Couldn't load the backlog forecast", detail: "The forecast could not be loaded. Check the connection and try again." };
+}
+
+/// Compact drain-card figures. When the adjusted forecast is unavailable this
+/// still returns a summary carrying the reason (and baseline, when present),
+/// so the drain card can explain itself instead of a generic line. Null only
+/// for a non-object payload.
 export function backlogForecastSummary(payload) {
   if (!payload || typeof payload !== "object") return null;
   const forecast = payload.forecast || {};
-  const hours = forecast.time_to_drain_hours;
-  if (!quantilePair(hours)) return null;
   const backlog = payload.backlog || {};
-  const costed = quantilePair(forecast.usd);
-  return {
-    drain: formatForecastQuantileRange(hours, formatForecastHours),
-    cost: costed ? formatForecastQuantileRange(forecast.usd, wholeUsd) : null,
-    exactCost: costed ? formatForecastQuantileRange(forecast.usd, formatForecastUsd) : null,
-    tokens: quantilePair(forecast.tokens) ? formatForecastQuantileRange(forecast.tokens, formatForecastTokens) : null,
-    counts: `${forecastCount(backlog.backlog)} backlog · ${forecastCount(backlog.in_progress)} in progress`,
-    freshness: backlogForecastFreshness(payload),
-  };
+  const counts = `${forecastCount(backlog.backlog)} backlog · ${forecastCount(backlog.in_progress)} in progress`;
+  const freshness = backlogForecastFreshness(payload);
+  const info = forecastUnavailableInfo(forecast, payload);
+  if (info) {
+    const figures = forecastBaselineFigures(forecast.pre_regression_baseline);
+    return { unavailable: true, reasonKind: info.kind, reason: info.label, detail: info.detail, reasons: info.reasons, baseline: figures, baselineText: baselineText(figures), counts, freshness, drain: null, cost: null, exactCost: null, tokens: null };
+  }
+  if (num(forecast.tasks) === 0) {
+    return { unavailable: true, reasonKind: "empty", reason: "No backlog to forecast", detail: "No backlog or in-progress tasks in this workspace.", baseline: null, baselineText: "", counts, freshness, drain: null, cost: null, exactCost: null, tokens: null };
+  }
+  const hours = forecast.time_to_drain_hours;
+  if (quantilePair(hours)) {
+    const costed = quantilePair(forecast.usd);
+    return {
+      drain: formatForecastQuantileRange(hours, formatForecastHours),
+      cost: costed ? formatForecastQuantileRange(forecast.usd, wholeUsd) : null,
+      exactCost: costed ? formatForecastQuantileRange(forecast.usd, formatForecastUsd) : null,
+      tokens: quantilePair(forecast.tokens) ? formatForecastQuantileRange(forecast.tokens, formatForecastTokens) : null,
+      counts, freshness,
+    };
+  }
+  // No adjusted quantiles and no unavailable flags: classify from evidence.
+  const tasks = num(forecast.tasks);
+  const history = num(payload.inputs?.history_deliveries);
+  const coverage = payload.coverage || {};
+  let reasonKind = "unknown";
+  let reason = "Backlog forecast unavailable";
+  let detail = "The forecast did not say why it is unavailable.";
+  if (tasks === 0) { reasonKind = "empty"; reason = "No backlog to forecast"; detail = "No backlog or in-progress tasks in this workspace."; }
+  else if (history === 0 || (tasks != null && tasks > 0 && num(coverage.no_history) != null && num(coverage.no_history) >= tasks)) { reasonKind = "no_history"; reason = "No delivery history to sample"; detail = "There is no delivery history to sample for this backlog."; }
+  else if (forecast.schedulable_subset) { reasonKind = "subset"; reason = "Not every task can be scheduled"; detail = "Some tasks depend on work the drain cannot start, so there is no full total."; }
+  else if (tasks != null && tasks > 0) { reasonKind = "horizon"; reason = "Beyond the 90-day horizon"; detail = "The simulated backlog did not drain within the 90-day horizon."; }
+  const figures = forecastBaselineFigures(forecast.pre_regression_baseline);
+  return { unavailable: true, reasonKind, reason, detail, baseline: figures, baselineText: baselineText(figures), counts, freshness, drain: null, cost: null, exactCost: null, tokens: null };
 }
 
 // Whole dollars, so the dock line fits; the tooltip keeps the cents.
@@ -295,12 +378,21 @@ function wholeUsd(value) {
 /// exact cost are in its tooltip and accessible text. A null summary is the
 /// muted unavailable line.
 export function drainBacklogForecastLink(summary) {
-  const unavailable = !summary;
+  const unavailable = !summary || Boolean(summary.unavailable);
   const link = el("a", { class: unavailable ? "drain-backlog-forecast unavailable" : "drain-backlog-forecast" });
   link.href = scopedHashHref("#analytics/forecast");
   if (unavailable) {
-    link.title = "Analytics › Forecast";
-    link.textContent = "Backlog forecast unavailable";
+    const reason = summary?.reason || "Backlog forecast unavailable";
+    const detail = [reason, summary?.detail, summary?.baselineText, summary?.counts].filter(Boolean).join(" ");
+    link.title = `${detail}\nAnalytics › Forecast`;
+    if (summary) link.dataset.forecastReason = summary.reasonKind || "unknown";
+    for (const child of [
+      el("span", { class: "drain-section-label", text: "Backlog" }),
+      el("span", { class: "drain-backlog-forecast-reason", text: reason }),
+      summary?.baselineText ? el("span", { class: "drain-backlog-forecast-baseline", text: summary.baselineText }) : null,
+      el("span", { class: "visually-hidden", text: ` ${detail}` }),
+      el("span", { class: "drain-backlog-forecast-go", text: "›", "aria-hidden": "true" }),
+    ]) if (child) link.append(child);
     return link;
   }
   const figures = [summary.drain, summary.cost].filter(Boolean).join(" · ");
@@ -354,18 +446,50 @@ function kpi(label, quantiles, fmt, foot) {
 const SUBSET_FOOT = "not every task can be scheduled";
 
 function metricFoot(quantiles, metric) {
+  const info = forecastUnavailableInfo(lastPayload.forecast, lastPayload);
+  if (info) return info.label;
   if (quantiles?.p90 != null) return metric === "tokens" ? "normalized" : null;
   if (lastPayload.forecast?.schedulable_subset) return SUBSET_FOOT;
+  const coverage = lastPayload.coverage || {};
+  if (metric === "tokens" && num(coverage.uncovered_model)) return "some tasks have no priced history";
+  if (metric === "usd" && num(coverage.uncosted)) return "some tasks have no costed history";
   const missing = lastPayload.arrivals?.coverage?.[`missing_${metric}`];
+  if (missing) return metric === "tokens" ? "some history is missing token telemetry" : "some history is missing cost telemetry";
   if (lastPayload.inputs?.arrivals && missing) return "incomplete history or arrival telemetry";
   return metric === "tokens" ? "not enough priced history" : "not enough costed history";
 }
 
 function drainFoot(quantiles) {
+  const info = forecastUnavailableInfo(lastPayload.forecast, lastPayload);
+  if (info) return info.label;
   if (quantiles?.p90 != null) return null;
   if (lastPayload.forecast?.schedulable_subset) return SUBSET_FOOT;
   if (quantiles?.p50 != null) return "p90 beyond the 90-day horizon";
   return lastPayload.coverage?.no_history ? "some tasks have no history" : "beyond the 90-day horizon";
+}
+
+function unavailableBlock(forecast, payload) {
+  const info = forecastUnavailableInfo(forecast, payload);
+  if (!info) return null;
+  const children = [
+    el("span", { class: "fc-assume-head", text: `Forecast unavailable: ${info.label}` }),
+    el("span", { class: "fc-assume-rate", text: info.detail }),
+  ];
+  const block = el("div", { class: "fc-assume fc-unavailable", role: "note" }, children);
+  block.dataset.forecastReason = info.kind;
+  return block;
+}
+
+function baselineBlock(baseline) {
+  const figures = forecastBaselineFigures(baseline);
+  if (!figures) return null;
+  const parts = [figures.time && `Time to drain ${figures.time}`, figures.cost && `Cost ${figures.cost}`, figures.tokens && `Tokens ${figures.tokens}`].filter(Boolean).join(" · ");
+  const block = el("div", { class: "fc-assume fc-baseline", role: "note" }, [
+    el("span", { class: "fc-assume-head", text: "Pre-regression baseline" }),
+    el("span", { class: "fc-assume-rate", text: `${parts}. This baseline excludes unsupported regression follow-up work and is not the regression-adjusted forecast; a percentile shown as unknown was not estimated.` }),
+  ]);
+  block.dataset.forecastBaseline = "pre-regression";
+  return block;
 }
 
 function capacityText(inputs) {
@@ -457,6 +581,10 @@ function forecastCard() {
         ? `None of the newest ${inputs.history_tasks} completed tasks has recorded agent runs.`
         : `No task finished with recorded agent runs in the last ${inputs.lookback_days} days or among the newest ${inputs.min_history_tasks ?? 50} completions. Widen the history.` }),
     ]));
+  } else if (forecastUnavailableInfo(forecast, lastPayload)) {
+    children.push(unavailableBlock(forecast, lastPayload), baselineBlock(forecast.pre_regression_baseline));
+    const subset = subsetNote(forecast);
+    if (subset) children.push(subset);
   } else {
     children.push(el("div", { class: "mx-series fc-kpis" }, [
       kpi("Time to drain", forecast.time_to_drain_hours, formatForecastHours, drainFoot(forecast.time_to_drain_hours)),
@@ -472,9 +600,17 @@ function forecastCard() {
   children.push(arrivalsLine());
   const approved = lastPayload.if_approved;
   if (approved && backlog.proposed) {
-    children.push(el("p", { class: "fc-approved" }, [
-      `If the ${backlog.proposed} proposed task${backlog.proposed === 1 ? " is" : "s are"} approved: drain ${formatForecastQuantileRange(approved.time_to_drain_hours, formatForecastHours)}, cost ${formatForecastQuantileRange(approved.usd, formatForecastUsd)}, tokens ${formatForecastQuantileRange(approved.tokens, formatForecastTokens)} (p50 – p90).`,
-    ]));
+    const approvedInfo = forecastUnavailableInfo(approved, lastPayload);
+    if (approvedInfo) {
+      children.push(el("div", { class: "fc-approved fc-approved-unavailable" }, [
+        el("p", { class: "fc-approved", text: `If approved, the adjusted forecast is also unavailable: ${approvedInfo.label}. ${approvedInfo.detail}` }),
+        baselineBlock(approved.pre_regression_baseline),
+      ]));
+    } else {
+      children.push(el("p", { class: "fc-approved" }, [
+        `If the ${backlog.proposed} proposed task${backlog.proposed === 1 ? " is" : "s are"} approved: drain ${formatForecastQuantileRange(approved.time_to_drain_hours, formatForecastHours)}, cost ${formatForecastQuantileRange(approved.usd, formatForecastUsd)}, tokens ${formatForecastQuantileRange(approved.tokens, formatForecastTokens)} (p50 – p90).`,
+      ]));
+    }
   }
   return el("section", { class: "mx-card", "aria-label": "Backlog forecast" }, children);
 }
@@ -645,7 +781,13 @@ function coverageCard() {
     ["Unknown review assumption", coverage.review_mode_unknown, "The task's review mode could not be resolved, so it is not treated as a measured review policy. An unknown assumption uses the mode-pooled fallback."],
     ["History with unknown review", coverage.history_review_mode_unknown, "Deliveries in the lookback whose review evidence is missing or contradictory. They are not a measured review mode."],
   ] : [];
+  const regressionItems = ["regression_history_missing", "risk_unestimated", "regression_history_thin"].some((key) => Object.prototype.hasOwnProperty.call(coverage, key)) ? [
+    ["Missing regression history", coverage.regression_history_missing, "Tasks whose regression follow-up cannot be estimated from recorded fix history. This is why the adjusted forecast may be unavailable; the pre-regression baseline excludes that follow-up work."],
+    ["Risk not estimated", coverage.risk_unestimated, "Tasks whose regression risk has no estimate."],
+    ["Thin regression history", coverage.regression_history_thin, "Tasks with some regression history, but fewer bundles than the minimum sample."],
+  ] : [];
   const items = [
+    ...regressionItems,
     ["Unassessed", coverage.unassessed, "No complexity yet: sampled from every delivery."],
     ["Thin-cell fallbacks", coverage.thin_cell_fallbacks, thinHint],
     ...reviewItems,

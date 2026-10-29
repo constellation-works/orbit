@@ -264,7 +264,9 @@ globalThis.fetch = async (path, options = {}) => {
     const tokens = { p50: 1500000, p90: 4800000 };
     const usd = { p50: 12.5, p90: 40 };
     const backlog = { backlog: 18, in_progress: 2 };
-    if (mode === 'empty') return response({ backlog, forecast: { tasks: 5, time_to_drain_hours: { p50: null, p90: null }, tokens: { p50: null, p90: null }, usd: { p50: null, p90: null } } });
+    if (mode === 'empty') return response({ backlog: { backlog: 0, in_progress: 0 }, forecast: { tasks: 0, time_to_drain_hours: { p50: null, p90: null }, tokens: { p50: null, p90: null }, usd: { p50: null, p90: null } } });
+    if (mode === 'regression') return response({ inputs: { history_deliveries: 12, concurrency: 5, concurrency_source: 'default', iterations: 1000, lookback_days: 30, min_history_tasks: 50 }, backlog, coverage: { tasks: 8, regression_history_missing: 8, risk_unestimated: 0, regression_history_thin: 0 }, forecast: { tasks: 8, time_to_drain_hours: { p50: null, p90: null }, tokens: { p50: null, p90: null }, usd: { p50: null, p90: null }, unavailable: { regression_history_missing: true, risk_unestimated: false, arrival_conflict_unknown: false }, regression_rework: { available: false, support: { missing_fix_history: 36, history_fixes: 4, history_bundles: 5, history_thin: false } }, pre_regression_baseline: { time_to_drain_hours: { p50: 2.68, p90: null }, usd: { p50: 10, p90: 25 }, tokens: { p50: null, p90: null } } } });
+    if (mode === 'horizon') return response({ inputs: { history_deliveries: 12 }, backlog, forecast: { tasks: 5, time_to_drain_hours: { p50: null, p90: null }, tokens: { p50: null, p90: null }, usd: { p50: null, p90: null } } });
     if (mode === 'nocost') return response({ inputs: { history_deliveries: 12 }, backlog, forecast: { tasks: 20, time_to_drain_hours: hours, tokens, usd: { p50: null, p90: null } } });
     if (mode === 'notokens') return response({ inputs: { history_deliveries: 12 }, backlog, forecast: { tasks: 20, time_to_drain_hours: hours, tokens: { p50: null, p90: null }, usd } });
     if (mode === 'ready') return response({ inputs: { history_deliveries: 12 }, backlog, forecast: { tasks: 20, time_to_drain_hours: hours, tokens, usd } });
@@ -1614,6 +1616,12 @@ const renderDrainForecastScenario = async scenario => {
   await fetchAndRenderAutoDrainPane();
 };
 globalThis.setDrainForecastScenarioForScreenshot = renderDrainForecastScenario;
+globalThis.setBacklogForecastScenarioForScreenshot = async mode => {
+  backlogForecastMode = mode;
+  harnessTab = 'tasks';
+  await fetchAndRenderAutoDrainPane();
+  await tick();
+};
 drainTasksOverride = [{ task_id: 'ORB-18901', status: 'backlog', eligible: false, reason: 'gap_fit' }];
 drainCapacityOverride = { ...emptyPool, last_admission_forecast: historyForecast };
 await fetchAndRenderAutoDrainPane();
@@ -1764,9 +1772,24 @@ for (const mode of ['empty', 'error', 'missing']) {
   await fetchAndRenderAutoDrainPane();
   await tick();
   const missed = backlogLink();
-  assert(forecastCard()?.querySelectorAll('.drain-backlog-forecast').length === 1 && missed?.classList.contains('unavailable') && missed.textContent === 'Backlog forecast unavailable', `${mode}: one muted line: ${missed?.textContent}`);
+  const wantReason = mode === 'empty' ? 'empty' : 'transport';
+  const wantText = mode === 'empty' ? /no backlog/i : /couldn't load/i;
+  assert(forecastCard()?.querySelectorAll('.drain-backlog-forecast').length === 1 && missed?.classList.contains('unavailable') && missed.dataset.forecastReason === wantReason && wantText.test(missed.textContent), `${mode}: one explained muted line (${wantReason}): ${missed?.textContent}`);
+  assert(missed.getAttribute('href')?.includes('#analytics/forecast') || String(missed.href || '').includes('analytics/forecast'), `${mode}: the explained line stays a link to Analytics › Forecast`);
   assert(forecastTextIncludesAdmission() && get('auto-drain-body').querySelector('.drain-capacity'), `${mode}: the drain card still renders`);
 }
+backlogForecastMode = 'regression';
+await fetchAndRenderAutoDrainPane();
+await tick();
+const regressionLink = backlogLink();
+assert(regressionLink?.dataset.forecastReason === 'regression_history_missing' && /regression/i.test(regressionLink.querySelector('.drain-backlog-forecast-reason')?.textContent || ''), `regression gap explains itself visibly on the drain card: ${regressionLink?.textContent}`);
+assert(/pre-regression baseline/i.test(regressionLink.textContent) && /excludes unsupported regression/i.test(regressionLink.textContent) && regressionLink.textContent.includes('2.7h') && /p90 unknown/i.test(regressionLink.textContent), `regression baseline is labelled and keeps p90 unknown: ${regressionLink?.textContent}`);
+assert(!/90-day horizon/i.test(regressionLink.textContent), `regression gap is not a horizon exceedance: ${regressionLink?.textContent}`);
+backlogForecastMode = 'horizon';
+await fetchAndRenderAutoDrainPane();
+await tick();
+const horizonLink = backlogLink();
+assert(horizonLink?.dataset.forecastReason === 'horizon' && /90-day horizon/i.test(horizonLink.textContent) && !/regression/i.test(horizonLink.textContent), `true horizon exceedance is distinct on the drain card: ${horizonLink?.textContent}`);
 // A detached success or failure from the previous workspace cannot replace
 // the current workspace's summary.
 for (const staleMode of ['ready', 'error']) {

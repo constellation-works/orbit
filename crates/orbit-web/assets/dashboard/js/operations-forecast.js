@@ -1,4 +1,4 @@
-import { backlogForecastSummary, drainBacklogForecastLink, fetchBacklogForecast } from './forecast.js';
+import { backlogForecastFailureSummary, backlogForecastSummary, drainBacklogForecastLink, fetchBacklogForecast } from './forecast.js';
 import { getWorkspaceRevision, isAggregateView, el } from './common.js';
 import { sparkline, svg } from './sparkline.js';
 import { $, autoDrainNumber, operationsState, registerOperationsReset, selectedWorkspace, taskLink, time } from './operations-shared.js';
@@ -281,7 +281,8 @@ function placeBacklogForecast(section) {
   if (!section) return;
   section.querySelector(":scope > .drain-backlog-forecast")?.remove();
   if (backlogForecastCache.revision !== getWorkspaceRevision() || backlogForecastCache.status === "pending") return;
-  const summary = backlogForecastCache.status === "ready" ? backlogForecastCache.summary : null;
+  const summary = backlogForecastCache.status === "failed" ? backlogForecastFailureSummary()
+    : backlogForecastCache.status === "ready" || backlogForecastCache.status === "unavailable" ? backlogForecastCache.summary : null;
   section.append(drainBacklogForecastLink(summary));
 }
 
@@ -302,10 +303,10 @@ export function refreshBacklogForecast() {
   const promise = fetchBacklogForecast().then((payload) => {
     if (getWorkspaceRevision() !== revision || !selectedWorkspace()) return;
     const summary = backlogForecastSummary(payload);
-    backlogForecastCache = { revision, status: summary ? "ready" : "unavailable", summary };
+    backlogForecastCache = { revision, status: summary && !summary.unavailable ? "ready" : "unavailable", summary };
   }).catch(() => {
     if (getWorkspaceRevision() !== revision || !selectedWorkspace()) return;
-    backlogForecastCache = { revision, status: "unavailable", summary: null };
+    backlogForecastCache = { revision, status: "failed", summary: null };
   }).finally(() => {
     if (backlogForecastFlight?.promise === promise) backlogForecastFlight = null;
     if (getWorkspaceRevision() === revision) paintBacklogForecast();

@@ -358,6 +358,46 @@ try {
   };
   await captureDrainForecast('live');
   await captureDrainForecast('terminal');
+  // Backlog forecast unavailable reason + labelled baseline, compact and full.
+  await page.evaluate(async () => {
+    await globalThis.setBacklogForecastScenarioForScreenshot('regression');
+    const { setDockMode } = await import('/js/log-tail.js');
+    const { setActiveTab } = await import('/js/router.js');
+    setDockMode('drain');
+    setActiveTab('auto-drain');
+  });
+  const regressionLink = page.locator('#auto-drain-body .drain-backlog-forecast');
+  await regressionLink.waitFor({ state: 'visible' });
+  const regressionReason = await regressionLink.getAttribute('data-forecast-reason');
+  const regressionCompactText = await regressionLink.textContent();
+  if (regressionReason !== 'regression_history_missing' || !/regression/i.test(regressionCompactText || '') || !/pre-regression baseline/i.test(regressionCompactText || '')) {
+    throw new Error(`compact regression link must explain itself: reason=${regressionReason} text=${regressionCompactText}`);
+  }
+  await regressionLink.focus();
+  const regressionFocused = await page.evaluate(() => document.activeElement?.classList.contains('drain-backlog-forecast'));
+  if (!regressionFocused) throw new Error('compact regression link must stay keyboard-focusable');
+  await page.locator('#auto-drain-body .drain-forecast').screenshot({ path: path.join(evidence, 'drain-forecast-regression-dark-1440.png'), animations: 'disabled' });
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.screenshot({ path: path.join(evidence, 'tasks-forecast-regression-dark-375.png'), animations: 'disabled' });
+  await assertNoOverflow('compact regression forecast at 375px');
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.click('.tab[data-tab="analytics"]');
+  await page.click('#analytics-subtabs .subtab[data-subtab="forecast"]');
+  await page.evaluate(async () => {
+    const forecastModule = await import('/js/forecast.js');
+    await forecastModule.fetchAndRenderForecast();
+  });
+  await page.locator('#forecast-body .fc-unavailable').waitFor({ state: 'visible' });
+  const panelReason = await page.locator('#forecast-body .fc-unavailable').getAttribute('data-forecast-reason');
+  const panelText = await page.locator('#forecast-body').textContent();
+  if (panelReason !== 'regression_history_missing' || !/pre-regression baseline/i.test(panelText || '') || !/excludes unsupported regression/i.test(panelText || '')) {
+    throw new Error(`full forecast panel must explain the regression gap and baseline: reason=${panelReason}`);
+  }
+  await page.locator('#forecast-panel').screenshot({ path: path.join(evidence, 'analytics-forecast-regression-dark-1440.png'), animations: 'disabled' });
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.screenshot({ path: path.join(evidence, 'analytics-forecast-regression-dark-375.png'), animations: 'disabled' });
+  await assertNoOverflow('full regression forecast at 375px');
+  await page.setViewportSize({ width: 1440, height: 1000 });
   await page.evaluate(async (mode) => {
     const { setDockMode } = await import('/js/log-tail.js');
     const { setActiveTab } = await import('/js/router.js');

@@ -344,6 +344,94 @@ assert.ok(!older.includes('mode_pooled_cell'), `older responses do not show a re
 assert.ok(!headers().includes('Review'), `older schedules omit the review column: ${headers().join(', ')}`);
 assert.deepEqual(coverageRow('Thin-cell fallbacks'), { text: '1', warn: true });
 
+function unavailableFixture({ flags = { regression_history_missing: true }, baseline = { time_to_drain_hours: { p50: 2.68, p90: null }, usd: { p50: 10, p90: 25 }, tokens: { p50: null, p90: null } }, support = { missing_fix_history: 36, history_fixes: 4, history_bundles: 5, history_thin: false } } = {}) {
+  const fixture = payload({ coverage: { regression_history_missing: 8, risk_unestimated: 0, regression_history_thin: 0 } });
+  fixture.forecast.time_to_drain_hours = { p50: null, p90: null };
+  fixture.forecast.usd = { p50: null, p90: null };
+  fixture.forecast.tokens = { p50: null, p90: null };
+  fixture.forecast.drain_probability = null;
+  fixture.forecast.completion_probability = null;
+  fixture.forecast.unavailable = { risk_unestimated: false, regression_history_missing: false, arrival_conflict_unknown: false, ...flags };
+  fixture.forecast.regression_rework = { available: false, support };
+  if (baseline) fixture.forecast.pre_regression_baseline = baseline;
+  return fixture;
+}
+const kpiFoot = (label) => [...body().querySelectorAll('.fc-kpi')].find((node) => node.textContent.includes(label))?.textContent ?? '';
+const compactLink = (summary) => forecast.drainBacklogForecastLink(summary);
+
+await render(unavailableFixture());
+const regressionText = text();
+const regressionBlock = body().querySelector('.fc-unavailable');
+const baselineBlockNode = body().querySelector('.fc-baseline');
+assert.ok(regressionBlock, `regression gap renders a visible reason block: ${regressionText}`);
+assert.equal(regressionBlock.dataset.forecastReason, 'regression_history_missing');
+assert.ok(/regression/i.test(regressionBlock.textContent) && regressionBlock.textContent.includes('36'), `regression reason names missing evidence and support: ${regressionBlock.textContent}`);
+assert.ok(!/90-day horizon/i.test(regressionBlock.textContent), `regression gap is not labelled horizon exceedance: ${regressionBlock.textContent}`);
+assert.ok(baselineBlockNode && baselineBlockNode.dataset.forecastBaseline === 'pre-regression', `baseline is labelled separately: ${regressionText}`);
+assert.ok(/excludes unsupported regression/i.test(baselineBlockNode.textContent) && /not the regression-adjusted/i.test(baselineBlockNode.textContent), `baseline states its limitation: ${baselineBlockNode.textContent}`);
+assert.ok(baselineBlockNode.textContent.includes('2.7h') && /p90 unknown/i.test(baselineBlockNode.textContent), `baseline keeps a missing p90 unknown, not zero: ${baselineBlockNode.textContent}`);
+assert.ok(!body().querySelector('.fc-kpi'), 'unavailable adjusted forecast does not present null KPIs as figures');
+assert.deepEqual(coverageRow('Missing regression history'), { text: '8', warn: true });
+const regressionSummary = forecast.backlogForecastSummary(unavailableFixture());
+assert.equal(regressionSummary.unavailable, true);
+assert.equal(regressionSummary.reasonKind, 'regression_history_missing');
+const regressionLink = compactLink(regressionSummary);
+assert.ok(regressionLink.getAttribute('href')?.includes('analytics/forecast') || String(regressionLink.href || '').includes('analytics/forecast'), 'compact regression link stays navigable');
+assert.equal(regressionLink.dataset.forecastReason, 'regression_history_missing');
+assert.ok(/regression/i.test(regressionLink.querySelector('.drain-backlog-forecast-reason')?.textContent || ''), 'compact link shows the reason visibly, not only in a tooltip');
+assert.ok(regressionLink.querySelector('.visually-hidden')?.textContent.includes('36'), `compact accessible detail carries support counts: ${regressionLink.textContent}`);
+assert.ok(/pre-regression baseline/i.test(regressionLink.textContent) && /excludes unsupported regression/i.test(regressionLink.textContent), `compact link labels the baseline: ${regressionLink.textContent}`);
+
+for (const [flags, kind] of [[{ risk_unestimated: true }, 'risk_unestimated'], [{ arrival_conflict_unknown: true }, 'arrival_conflict_unknown']]) {
+  const fixture = unavailableFixture({ flags, baseline: null });
+  await render(fixture);
+  assert.equal(body().querySelector('.fc-unavailable')?.dataset.forecastReason, kind, `${kind} renders its own reason`);
+  assert.equal(forecast.backlogForecastSummary(fixture).reasonKind, kind);
+  assert.ok(!body().querySelector('.fc-baseline'), `${kind} without a baseline invents none`);
+}
+
+const horizonFixture = payload();
+horizonFixture.forecast.time_to_drain_hours = { p50: null, p90: null };
+await render(horizonFixture);
+assert.ok(/beyond the 90-day horizon/i.test(kpiFoot('Time to drain')), `true horizon exceedance is named on the KPI: ${kpiFoot('Time to drain')}`);
+assert.equal(forecast.backlogForecastSummary(horizonFixture).reasonKind, 'horizon');
+
+const metricFixture = payload({ coverage: { uncosted: 2, uncovered_model: 3 } });
+metricFixture.forecast.usd = { p50: null, p90: null };
+metricFixture.forecast.tokens = { p50: null, p90: null };
+await render(metricFixture);
+assert.ok(/costed/i.test(kpiFoot('Cost')), `cost gap is metric-specific: ${kpiFoot('Cost')}`);
+assert.ok(/priced/i.test(kpiFoot('Tokens')), `token gap is metric-specific: ${kpiFoot('Tokens')}`);
+assert.ok(!/missing regression/i.test(kpiFoot('Cost')), 'metric gaps are not regression gaps');
+
+const emptyFixture = payload({ tasks: [] });
+emptyFixture.forecast.tasks = 0;
+emptyFixture.backlog = { backlog: 0, in_progress: 0, blocked: 0, proposed: 0 };
+await render(emptyFixture);
+assert.ok(text().includes('Nothing to forecast'), 'empty backlog keeps its empty state');
+assert.equal(forecast.backlogForecastSummary(emptyFixture).reasonKind, 'empty');
+
+const noHistoryFixture = payload();
+noHistoryFixture.inputs.history_deliveries = 0;
+noHistoryFixture.forecast.time_to_drain_hours = { p50: null, p90: null };
+await render(noHistoryFixture);
+assert.ok(text().includes('No delivery history to sample'), 'no-history keeps its panel state');
+assert.equal(forecast.backlogForecastSummary(noHistoryFixture).reasonKind, 'no_history');
+
+const unknownSummary = forecast.backlogForecastSummary({});
+assert.equal(unknownSummary.reasonKind, 'unknown');
+assert.ok(/unavailable/i.test(compactLink(unknownSummary).textContent), 'sparse older payload falls back truthfully');
+const olderNullFixture = payload({ review: false });
+delete olderNullFixture.forecast.unavailable;
+assert.ok(!('pre_regression_baseline' in olderNullFixture.forecast), 'older fixture omits baseline');
+await render(olderNullFixture);
+assert.ok(!body().querySelector('.fc-unavailable') && !body().querySelector('.fc-baseline'), 'older payload without unavailable flags invents no reason or baseline');
+
+const failureLink = compactLink(forecast.backlogForecastFailureSummary());
+assert.equal(failureLink.dataset.forecastReason, 'transport');
+assert.ok(/couldn't load/i.test(failureLink.textContent), `transport failure is distinct and visible: ${failureLink.textContent}`);
+assert.notEqual(failureLink.dataset.forecastReason, regressionLink.dataset.forecastReason);
+
 console.log('forecast review-mode rendering passed');
 
 async function advanceClock(ms) {
