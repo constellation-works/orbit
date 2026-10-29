@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## 0.38.0 — 2026-10-29
+
+### Breaking Changes
+
+- **Creator model recorded**: tasks created with a full model id now store it as `created_by_model`. Older binaries refuse the new task field, so upgrade the owner and followers together. ([ORB-19636])
+
+### Highlights
+
+- **Live dashboard updates**: the dashboard receives workspace change events over a server-sent stream, so the Tasks page, drain card and run timers update without polling. ([ORB-19621])
+- **Pilot rejects invalid findings**: the task pilot checks review-filed bugs against the code before backlog and rejects a finding it can disprove, recording the evidence and a rejected finding verdict. ([ORB-19635])
+- **Fairer scorecards**: implementer scores no longer subtract escaped regressions, which track diff size, and show diff economy instead; review-job findings without a verification verdict are scored by their task's outcome. ([ORB-19629])
+- **Handled by shows every hand**: task detail lists who piloted, reviewed and recovered a task alongside its creator, implementer and orchestrator, and names the creator's model. ([ORB-19636])
+- **Faster forecast**: Analytics › Forecast serves its default backlog forecast from the hourly snapshot. ([ORB-19615])
+
 ## 0.37.0 — 2026-10-28
 
 ### Breaking Changes
