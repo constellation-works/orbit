@@ -46,7 +46,6 @@ HUMAN_LABEL_IMPORT_FIELDS_V1 = (
     "intake_snapshot_at",
     "second_label_or_adjudication",
 )
-HUMAN_LABEL_IMPORT_FIELDS = HUMAN_LABEL_IMPORT_FIELDS_V1
 HUMAN_LABEL_IMPORT_FIELDS_V2 = (
     "labeler_id",
     "labeler_role",

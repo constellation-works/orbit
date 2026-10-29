@@ -260,30 +260,6 @@ class EvalTests(unittest.TestCase):
                       "value", "second_label_or_adjudication"):
             self.assertTrue(any(field in error for error in errors), errors)
 
-        legacy_ds = self._load(self.ds)
-        legacy_case = next(c for c in legacy_ds["cases"] if c["case_id"] == "seed-fail-provider")
-        legacy_case["label"] = {
-            "provenance": "independent_human",
-            "labeler_id": "labeler-1",
-            "labeler_role": "incident investigator",
-            "labeled_at": "2026-01-10T00:00:00Z",
-            "intake_snapshot_at": legacy_ds["intake_snapshot_at"],
-            "second_label_or_adjudication": {
-                "kind": "second_independent_label",
-                "labeler_id": "labeler-2",
-                "labeler_role": "incident investigator",
-                "labeled_at": "2026-01-12T00:00:00Z",
-                "value": legacy_case["expected"],
-            },
-        }
-        legacy_manifest = self._manifest(legacy_ds, holdout_id="holdout-legacy-v1")
-        legacy_manifest["assignments"][legacy_case["case_id"]] = "holdout"
-        r = self._run("check-split", "--dataset", str(self._dump("legacy-v1-ds.json", legacy_ds)),
-                "--manifest", str(self._dump("legacy-v1-manifest.json", legacy_manifest)))
-        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
-        errors = json.loads(r.stdout)["errors"]
-        self.assertTrue(any("legacy v1 second label" in error for error in errors), errors)
-
         valid_records = [
             {
                 "kind": "second_independent_label",
@@ -345,6 +321,34 @@ class EvalTests(unittest.TestCase):
                         str(self._dump(f"valid-human-ds-{index}.json", valid_ds)),
                         "--manifest", str(self._dump(f"valid-human-manifest-{index}.json", valid_manifest)))
                 self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_v1_second_label_cannot_hide_disagreement_after_expected_is_rewritten(self):
+        # v1 records no first labeler value, so a second label equal to a rewritten
+        # expected passed check-split before the fix (base evaluator returns 0).
+        ds = self._load(self.ds)
+        case = next(c for c in ds["cases"] if c["case_id"] == "seed-fail-provider")
+        case["expected"] = {"failure_category": {"value": "product_defect"}}
+        case["label"] = {
+            "provenance": "independent_human",
+            "labeler_id": "labeler-1",
+            "labeler_role": "incident investigator",
+            "labeled_at": "2026-01-10T00:00:00Z",
+            "intake_snapshot_at": ds["intake_snapshot_at"],
+            "second_label_or_adjudication": {
+                "kind": "second_independent_label",
+                "labeler_id": "labeler-2",
+                "labeler_role": "incident investigator",
+                "labeled_at": "2026-01-12T00:00:00Z",
+                "value": case["expected"],
+            },
+        }
+        manifest = self._manifest(ds, holdout_id="holdout-legacy-v1")
+        manifest["assignments"][case["case_id"]] = "holdout"
+        r = self._run("check-split", "--dataset", str(self._dump("legacy-v1-ds.json", ds)),
+                "--manifest", str(self._dump("legacy-v1-manifest.json", manifest)))
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        errors = json.loads(r.stdout)["errors"]
+        self.assertTrue(any("legacy v1 second label" in error for error in errors), errors)
 
     def test_holdout_rejects_second_label_disagreement_after_expected_is_rewritten(self):
         v2 = "decision-assistance-eval/2"
