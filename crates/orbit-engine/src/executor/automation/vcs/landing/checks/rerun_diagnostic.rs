@@ -51,6 +51,10 @@ pub(in crate::executor::automation::vcs) struct CiRerunDiagnostic {
     pub(super) job_id: Option<u64>,
     jobs: Vec<CiRerunJobIdentity>,
     jobs_omitted: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    prerequisite_job: Option<CiRerunJobIdentity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    prerequisite_repository: Option<String>,
     kind: CiRerunDiagnosticKind,
     reason: String,
 }
@@ -69,6 +73,8 @@ impl CiRerunDiagnostic {
             job_id: None,
             jobs: Vec::new(),
             jobs_omitted: 0,
+            prerequisite_job: None,
+            prerequisite_repository: None,
             kind: CiRerunDiagnosticKind::Wait,
             reason: String::new(),
         }
@@ -91,6 +97,21 @@ impl CiRerunDiagnostic {
         self.jobs = identities;
     }
 
+    pub(super) fn bind_prerequisite(&mut self, deferred: &super::DeferredLogRead) {
+        self.stage = CiRerunStage::Log;
+        self.run_id = Some(deferred.run_id);
+        self.job_id = Some(deferred.job_id);
+        self.prerequisite_job = Some(CiRerunJobIdentity {
+            run_id: Some(deferred.run_id),
+            job_id: Some(deferred.job_id),
+            run_attempt: deferred.run_attempt,
+        });
+        self.prerequisite_repository = deferred
+            .repository
+            .clone()
+            .filter(|repository| repository.len() <= 256);
+    }
+
     /// The failed-job log read this observation stopped at, bound to its
     /// exact job, when `error` is the provider's typed throttle [ORB-20178].
     /// A job outside the bounded identity list is not bound here.
@@ -104,13 +125,18 @@ impl CiRerunDiagnostic {
         }
         let (run_id, job_id) = (self.run_id?, self.job_id?);
         let identity = self
-            .jobs
-            .iter()
-            .find(|job| job.run_id == Some(run_id) && job.job_id == Some(job_id))?;
+            .prerequisite_job
+            .as_ref()
+            .filter(|job| job.run_id == Some(run_id) && job.job_id == Some(job_id))
+            .or_else(|| {
+                self.jobs
+                    .iter()
+                    .find(|job| job.run_id == Some(run_id) && job.job_id == Some(job_id))
+            })?;
         Some(super::DeferredLogRead {
             reason: format!("the log of run {run_id} job {job_id} could not be read: {error}"),
             head: self.head_sha.clone()?,
-            repository: None,
+            repository: self.prerequisite_repository.clone(),
             run_id,
             job_id,
             run_attempt: identity.run_attempt,

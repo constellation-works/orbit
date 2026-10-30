@@ -228,7 +228,14 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
             ));
         };
         let label = job_label(job);
-        let log = match job_log(host, workspace, run_id, job_id, job, None) {
+        let log = match job_log(
+            host,
+            workspace,
+            run_id,
+            job_id,
+            job,
+            Some(recovery.deadline_ms),
+        ) {
             Ok(log) => log,
             Err(error) => {
                 return Ok(unclassified(format!(
@@ -247,7 +254,9 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
             moved_tip,
             &mut base_jobs,
             &mut tip_jobs,
-        );
+            Some(recovery.deadline_ms),
+        )
+        .map_err(|deferred| deferred.error())?;
         if class == CheckFailureClass::Flaky
             && super::suspect::has_matching_candidate_rerun(
                 host,

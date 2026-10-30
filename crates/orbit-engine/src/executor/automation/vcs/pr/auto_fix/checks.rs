@@ -12,7 +12,7 @@ use super::super::super::git::{
     base_sync_mode_from_input, git_output, resolve_worktree_start_point,
 };
 use super::super::super::landing::checks::{
-    DeferredLogRead, HeadCheckEvidence, head_check_evidence, unmoved_red_base,
+    CheckReadGap, DeferredLogRead, HeadCheckEvidence, head_check_evidence, unmoved_red_base,
 };
 use super::super::answers::{CheckState, PullRequestStatus, RequiredChecks, read_required_checks};
 use super::{admission, ledger, verdict};
@@ -32,6 +32,8 @@ use super::{admission, ledger, verdict};
 /// log) is not itself a red base. It holds only when an earlier poll already
 /// recorded this head's failure as inherited (`pr_auto_fix_base_red`): a
 /// read gap must not turn that recorded inheritance into a repair.
+// Keep the pinned read context and its absolute deadline explicit together.
+#[allow(clippy::too_many_arguments)]
 pub(in crate::executor::automation::vcs::pr) fn red_base_wait<H: RuntimeHost + ?Sized>(
     host: &H,
     auto_fix: &admission::AutoFix,
@@ -40,8 +42,11 @@ pub(in crate::executor::automation::vcs::pr) fn red_base_wait<H: RuntimeHost + ?
     pr_number: &str,
     status: &PullRequestStatus,
     failed: &[(Option<String>, String)],
-) -> Option<String> {
-    let head = status.head_sha.as_deref()?;
+    deadline_ms: Option<u64>,
+) -> Result<Option<String>, Box<DeferredLogRead>> {
+    let Some(head) = status.head_sha.as_deref() else {
+        return Ok(None);
+    };
     match evaluate_red_base(
         host,
         auto_fix,
@@ -50,20 +55,26 @@ pub(in crate::executor::automation::vcs::pr) fn red_base_wait<H: RuntimeHost + ?
         pr_number,
         head,
         failed,
+        deadline_ms,
     ) {
-        Ok(hold) => hold,
-        Err(gap) => recorded_base_red(host, auto_fix, head).then(|| {
-            tracing::warn!(pr_number, head, %gap, "auto-fix kept the recorded base_red hold");
-            format!(
-                "base_red: head {head} was recorded failing as its base does, and this poll \
+        Ok(hold) => Ok(hold),
+        Err(CheckReadGap::Deferred(deferred)) => Err(deferred),
+        Err(CheckReadGap::Unavailable(gap)) => {
+            Ok(recorded_base_red(host, auto_fix, head).then(|| {
+                tracing::warn!(pr_number, head, %gap, "auto-fix kept the recorded base_red hold");
+                format!(
+                    "base_red: head {head} was recorded failing as its base does, and this poll \
                  could not read the base evidence again, so no repair agent runs on this poll"
-            )
-        }),
+                )
+            }))
+        }
     }
 }
 
 /// [`red_base_wait`]'s reading: `Ok(Some)` holds, `Ok(None)` does not, and
 /// `Err` names what could not be read.
+// Same immutable observation context as red_base_wait; no new budget is inferred.
+#[allow(clippy::too_many_arguments)]
 fn evaluate_red_base<H: RuntimeHost + ?Sized>(
     host: &H,
     auto_fix: &admission::AutoFix,
@@ -72,7 +83,8 @@ fn evaluate_red_base<H: RuntimeHost + ?Sized>(
     pr_number: &str,
     head: &str,
     failed: &[(Option<String>, String)],
-) -> Result<Option<String>, String> {
+    deadline_ms: Option<u64>,
+) -> Result<Option<String>, CheckReadGap> {
     // [ORB-16416] An optional failure that no job answers would otherwise
     // switch the hold off for a required inherited failure beside it.
     let (failed, _) = required_failures(host, workspace_path, pr_number, head, failed)?;
@@ -98,6 +110,7 @@ fn evaluate_red_base<H: RuntimeHost + ?Sized>(
         &auto_fix.task_ids,
         &failed,
         pr_number.parse::<u64>().ok(),
+        deadline_ms,
     )
 }
 
@@ -279,15 +292,26 @@ pub(in crate::executor::automation::vcs::pr) fn base_tip_checks<H: RuntimeHost +
     pr_number: &str,
     status: &PullRequestStatus,
     failed: &[(Option<String>, String)],
-) -> Option<Value> {
+    deadline_ms: Option<u64>,
+) -> Result<Option<Value>, CheckReadGap> {
     let workspace = Path::new(workspace_path);
-    let head = status.head_sha.as_deref()?;
-    let (failed, _) = required_failures(host, workspace_path, pr_number, head, failed).ok()?;
-    let base = input_string_field(input, "base")?;
-    let base_ref =
-        resolve_worktree_start_point(workspace, &base, base_sync_mode_from_input(input).ok()?)
-            .ok()?;
-    let tip = commit_sha(workspace, &base_ref).ok()?;
+    let Some(head) = status.head_sha.as_deref() else {
+        return Ok(None);
+    };
+    let (failed, _) = required_failures(host, workspace_path, pr_number, head, failed)
+        .map_err(CheckReadGap::Unavailable)?;
+    let Some(base) = input_string_field(input, "base") else {
+        return Ok(None);
+    };
+    let Ok(sync) = base_sync_mode_from_input(input) else {
+        return Ok(None);
+    };
+    let Ok(base_ref) = resolve_worktree_start_point(workspace, &base, sync) else {
+        return Ok(None);
+    };
+    let Ok(tip) = commit_sha(workspace, &base_ref) else {
+        return Ok(None);
+    };
     super::super::super::landing::checks::base_tip_check_evidence(
         host,
         workspace,
@@ -295,6 +319,7 @@ pub(in crate::executor::automation::vcs::pr) fn base_tip_checks<H: RuntimeHost +
         base.strip_prefix("origin/").unwrap_or(&base),
         &tip,
         &failed,
+        deadline_ms,
     )
 }
 

@@ -3239,6 +3239,70 @@ fn auto_fix_waits_out_a_throttled_failed_log_read_within_the_completion_deadline
     );
 }
 
+/// The first rerun diagnosis uses the remaining original completion
+/// deadline for its real adapter read, before any repair can be admitted.
+#[test]
+fn first_failed_log_read_keeps_the_original_completion_deadline() {
+    auto_fix_table(
+        "auto_fix::first_failed_log_read_keeps_the_original_completion_deadline",
+        "first_read",
+        |_, row| {
+            const START: u64 = 1_000_000;
+            let (fx, host) = opened_review(row);
+            plant_commit_ci(
+                &fx,
+                &fx.candidate,
+                11,
+                "failure",
+                "error[E0433]: cannot find module `candidate_only`\n",
+            );
+            plant_commit_ci(&fx, &fx.base_sha, 21, "success", "");
+            fx.script_checks(&["failure"]);
+            let input = waited_auto_fix_input(&fx, 5, Some(5));
+            let clock = std::rc::Rc::new(std::cell::Cell::new(START));
+            let sampled = std::rc::Rc::clone(&clock);
+            let expiring = std::rc::Rc::clone(&clock);
+            let observed = std::rc::Rc::new(std::cell::Cell::new(false));
+            let seen = std::rc::Rc::clone(&observed);
+            let result = orbit_engine::test_support::with_prerequisite_clock(
+                move || sampled.get(),
+                move |label, remaining| {
+                    if label == "prerequisite log" {
+                        assert!(remaining <= 5_000);
+                        seen.set(true);
+                        expiring.set(START + 5_001);
+                    }
+                },
+                || action(&host, "pr_complete", &input),
+            );
+            assert!(
+                observed.get(),
+                "the first failed-log adapter read carries the absolute deadline"
+            );
+            assert!(matches!(
+                result,
+                Err(orbit_common::OrbitError::DeliveryRefused {
+                    refusal: orbit_types::workflow::DeliveryRefusal::CompletionBudgetExpired,
+                    ..
+                })
+            ));
+            assert!(repair_attempts(&host).is_empty());
+            assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, "expired first read");
+        },
+    );
+}
+
+/// A head log can succeed while its base prerequisite is throttled. The
+/// durable wait must bind that base job, while retaining the watched head.
+#[test]
+fn nested_base_log_throttle_defers_the_bound_prerequisite_read() {
+    auto_fix_table(
+        "auto_fix::nested_base_log_throttle_defers_the_bound_prerequisite_read",
+        "nested_base",
+        throttled_log_case,
+    );
+}
+
 fn throttled_log_case(case: &str, row: &std::path::Path) {
     const START_MS: u64 = 1_000_000;
     let (fx, host) = opened_review(row);
@@ -3250,12 +3314,30 @@ fn throttled_log_case(case: &str, row: &std::path::Path) {
         "error[E0433]: cannot find module `candidate_only`\n\
          ##[error]Process completed with exit code 101.\n",
     );
-    plant_commit_ci(&fx, &fx.base_sha, 21, "success", "");
+    plant_commit_ci(
+        &fx,
+        &fx.base_sha,
+        21,
+        if case == "nested_base" {
+            "failure"
+        } else {
+            "success"
+        },
+        if case == "nested_base" {
+            "error[E0433]: cannot find module `candidate_only`\n##[error]Process completed with exit code 101.\n"
+        } else {
+            ""
+        },
+    );
     // `until` is the provider clock instant the throttle lifts.
     let (stderr, until) = match case {
         "retry_after" | "head_moved" => (
             format!("{RATE_LIMITED_LOG}\nRetry-After: 120"),
             Some(START_MS + 120_000),
+        ),
+        "nested_base" => (
+            format!("{RATE_LIMITED_LOG}\nRetry-After: 1"),
+            Some(START_MS + 1_000),
         ),
         "unknown_reset" => (RATE_LIMITED_LOG.to_string(), Some(START_MS + 60_000)),
         "resumed" => (RATE_LIMITED_LOG.to_string(), Some(START_MS + 200_000)),
@@ -3283,7 +3365,11 @@ fn throttled_log_case(case: &str, row: &std::path::Path) {
         ),
         other => panic!("unknown case {other}"),
     };
-    let ci = fx.forge.join("commit-ci").join(&fx.candidate);
+    let ci = fx.forge.join("commit-ci").join(if case == "nested_base" {
+        &fx.base_sha
+    } else {
+        &fx.candidate
+    });
     fs::write(ci.join("log-fault"), stderr).unwrap();
     if let Some(until) = until {
         fs::write(ci.join("log-fault-until"), until.to_string()).unwrap();
@@ -3303,7 +3389,7 @@ fn throttled_log_case(case: &str, row: &std::path::Path) {
         );
     }
     fx.script_checks(&["failure"]);
-    let input = waited_auto_fix_input(&fx, 600, Some(5));
+    let input = waited_auto_fix_input(&fx, if case == "nested_base" { 10 } else { 600 }, Some(5));
     let clock = std::rc::Rc::new(std::cell::Cell::new(START_MS));
     let now = std::rc::Rc::clone(&clock);
     let waited = std::rc::Rc::clone(&clock);
@@ -3380,6 +3466,29 @@ fn throttled_log_case(case: &str, row: &std::path::Path) {
         .collect::<Vec<_>>();
     let polls = fx.status_reads() - reads_before;
     match case {
+        "nested_base" => {
+            assert!(result.is_err(), "an inherited red base remains held");
+            assert_eq!(
+                deferrals.len(),
+                1,
+                "the base prerequisite gets one durable wait"
+            );
+            assert_eq!(deferrals[0]["head_sha"], fx.candidate);
+            assert_eq!(deferrals[0]["run_id"], 21);
+            assert_eq!(deferrals[0]["job_id"], 22);
+            assert!(
+                waits
+                    .first()
+                    .is_some_and(|wait| *wait > 0 && *wait <= 1_000)
+            );
+            assert!(
+                host.history(TASK_ID)
+                    .iter()
+                    .any(|entry| entry.event == "pr_auto_fix_base_red"),
+                "the later base read establishes inheritance"
+            );
+            assert!(repair_attempts(&host).is_empty());
+        }
         "retry_after" | "unknown_reset" | "resumed" => {
             let error = result.expect_err(case).to_string();
             assert!(is_check_repair(&error), "{case}: {error}");
@@ -3521,4 +3630,124 @@ fn throttled_log_case(case: &str, row: &std::path::Path) {
     }
     assert_eq!(fx.remote_tip(BASE), fx.base_sha, "{case}: base unchanged");
     assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
+}
+
+/// The moved-base comparison is another read-only diagnosis boundary. Neither
+/// a head nor tip-log throttle may fall through into candidate repair.
+#[test]
+fn moved_base_log_throttle_retains_its_deadline_and_exact_read_identity() {
+    auto_fix_table(
+        "auto_fix::moved_base_log_throttle_retains_its_deadline_and_exact_read_identity",
+        "head tip deadline",
+        |case, row| {
+            const START: u64 = 1_000_000;
+            let (fx, host) = opened_review(row);
+            let signature = "error[E0433]: cannot find module `broken_base`\n";
+            plant_commit_ci(&fx, &fx.candidate, 11, "failure", signature);
+            plant_commit_ci(&fx, &fx.base_sha, 21, "success", "");
+            fx.advance_base();
+            let tip = fx.local_tip(BASE);
+            plant_commit_ci(&fx, &tip, 31, "failure", signature);
+            let fault_head = case == "head";
+            let ci = fx
+                .forge
+                .join("commit-ci")
+                .join(if fault_head { &fx.candidate } else { &tip });
+            let seconds = if case == "deadline" { 900 } else { 1 };
+            fs::write(
+                ci.join("log-fault"),
+                format!("{RATE_LIMITED_LOG}\nRetry-After: {seconds}"),
+            )
+            .unwrap();
+            fs::write(
+                ci.join("log-fault-until"),
+                (START + seconds * 1000).to_string(),
+            )
+            .unwrap();
+            if fault_head {
+                fs::write(ci.join("log-fault-after-reads"), "1").unwrap();
+            }
+            fx.script_checks(&["failure"]);
+            let input = waited_auto_fix_input(&fx, 10, Some(5));
+            let clock = std::rc::Rc::new(std::cell::Cell::new(START));
+            let sampled = std::rc::Rc::clone(&clock);
+            let advancing = std::rc::Rc::clone(&clock);
+            let forge = fx.forge.clone();
+            let first_wait = std::cell::Cell::new(true);
+            let fault_counter = ci.join("log-read-count");
+            let result = orbit_engine::test_support::with_prerequisite_clock(
+                move || {
+                    let now = sampled.get();
+                    sampled.set(now + 1);
+                    now
+                },
+                |_, _| {},
+                || {
+                    orbit_engine::test_support::with_vcs_retry_wait(
+                        move |duration| {
+                            if fault_head && first_wait.replace(false) {
+                                assert_eq!(
+                                    fs::read_to_string(&fault_counter).unwrap().trim(),
+                                    "2",
+                                    "the first throttle stops this poll before a second early head-log read"
+                                );
+                            }
+                            advancing.set(
+                                advancing.get() + u64::try_from(duration.as_millis()).unwrap(),
+                            );
+                            fs::write(forge.join("clock"), advancing.get().to_string()).unwrap();
+                        },
+                        || action(&host, "pr_complete", &input),
+                    )
+                },
+            );
+            assert!(result.is_err(), "the red base is never merged");
+            let deferrals = host
+                .history(TASK_ID)
+                .into_iter()
+                .filter(|entry| entry.event == "pr_auto_fix_read_deferred")
+                .map(|entry| serde_json::from_str::<Value>(entry.note.as_deref().unwrap()).unwrap())
+                .collect::<Vec<_>>();
+            if case == "deadline" {
+                assert!(
+                    deferrals.is_empty(),
+                    "no wait can exceed the original deadline"
+                );
+                assert!(matches!(
+                    result,
+                    Err(orbit_common::OrbitError::DeliveryRefused {
+                        refusal: orbit_types::workflow::DeliveryRefusal::CheckEvidenceInconclusive,
+                        ..
+                    })
+                ));
+            } else {
+                assert_eq!(
+                    deferrals.len(),
+                    1,
+                    "one durable wait for the moved-base diagnosis"
+                );
+                assert_eq!(deferrals[0]["head_sha"], fx.candidate);
+                assert_eq!(deferrals[0]["run_id"], if fault_head { 11 } else { 31 });
+                assert_eq!(deferrals[0]["job_id"], if fault_head { 12 } else { 32 });
+                assert!(
+                    host.history(TASK_ID)
+                        .iter()
+                        .any(|entry| entry.event == "pr_auto_fix_base_red"),
+                    "later evidence establishes the red tip"
+                );
+            }
+            assert!(
+                repair_attempts(&host).is_empty(),
+                "unreadable base evidence cannot admit repair"
+            );
+            assert!(
+                !host
+                    .history(TASK_ID)
+                    .iter()
+                    .any(|entry| entry.event == "pr_auto_fix_base_refresh")
+            );
+            assert_eq!(fx.remote_tip(BASE), tip);
+            assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
+        },
+    );
 }

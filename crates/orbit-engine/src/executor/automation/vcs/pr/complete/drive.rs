@@ -12,6 +12,7 @@ use crate::context::RuntimeHost;
 
 use super::super::super::super::ci::bounded_u64;
 use super::super::super::super::input::input_string_field;
+use super::super::super::landing::checks::CheckReadGap;
 use super::super::super::push::push_batch_changes;
 use super::super::answers::{ReviewedMergeOutcome, read_pr_status, read_pr_status_before};
 use super::super::auto_fix::{
@@ -250,6 +251,16 @@ fn drive_pr_to_merged_observed<H: RuntimeHost + ?Sized>(
         let mut base_refresh_wait = false;
         if let Some(auto_fix) = auto_fix {
             pin.ensure_candidate_identity(&status, pr_number)?;
+            // Honor a durable wait before any head/base log diagnosis, including
+            // conflict and resumed paths. The freshly read head was pinned above.
+            if has_failures
+                && let Some(head) = status.head_sha.as_deref()
+                && let Some(wait_ms) =
+                    owed_read_wait(host, auto_fix, pr_number, head, observation_budget)?
+            {
+                sleep(Duration::from_millis(wait_ms));
+                continue;
+            }
             if base_candidate.is_none() {
                 base_candidate = super::super::super::base::refresh::owner_candidate(
                     Path::new(workspace_path),
@@ -371,15 +382,32 @@ fn drive_pr_to_merged_observed<H: RuntimeHost + ?Sized>(
         {
             let failed = super::super::super::landing::checks::failed_checks(&status);
             if !failed.is_empty()
-                && let Some(reason) = red_base_wait(
-                    host,
-                    auto_fix,
-                    input,
-                    workspace_path,
-                    pr_number,
-                    &status,
-                    &failed,
-                )
+                && let Some(reason) = {
+                    match red_base_wait(
+                        host,
+                        auto_fix,
+                        input,
+                        workspace_path,
+                        pr_number,
+                        &status,
+                        &failed,
+                        observation_budget,
+                    ) {
+                        Ok(reason) => reason,
+                        Err(deferred) => {
+                            let wait_ms = defer_throttled_read(
+                                host,
+                                auto_fix,
+                                pr_number,
+                                &deferred,
+                                observation_budget,
+                                mutated,
+                            )?;
+                            sleep(Duration::from_millis(wait_ms));
+                            continue;
+                        }
+                    }
+                }
             {
                 record_base_path(
                     host,
@@ -408,16 +436,6 @@ fn drive_pr_to_merged_observed<H: RuntimeHost + ?Sized>(
                     Some(code) => hold_auto_fix_stop(error, code),
                     None => error,
                 });
-            }
-            // [ORB-20178] A throttled log read this run lineage recorded
-            // for this head is not read again before its not-before.
-            if diagnose
-                && let Some(head) = status.head_sha.as_deref()
-                && let Some(wait_ms) =
-                    owed_read_wait(host, auto_fix, pr_number, head, observation_budget)?
-            {
-                sleep(Duration::from_millis(wait_ms));
-                continue;
             }
             if diagnose {
                 let retry = super::super::auto_fix::recover_ci_rerun(
@@ -574,14 +592,35 @@ fn drive_pr_to_merged_observed<H: RuntimeHost + ?Sized>(
                         ));
                     }
                     BlockedVerdict::RepairChecks(failed) => {
-                        let base_evidence = base_tip_checks(
+                        let base_evidence = match base_tip_checks(
                             host,
                             input,
                             workspace_path,
                             pr_number,
                             &status,
                             &failed,
-                        );
+                            observation_budget,
+                        ) {
+                            Ok(evidence) => evidence,
+                            Err(CheckReadGap::Deferred(deferred)) => {
+                                let wait_ms = defer_throttled_read(
+                                    host,
+                                    auto_fix,
+                                    pr_number,
+                                    &deferred,
+                                    observation_budget,
+                                    mutated,
+                                )?;
+                                sleep(Duration::from_millis(wait_ms));
+                                continue;
+                            }
+                            Err(CheckReadGap::Unavailable(reason)) => {
+                                return Err(hold_auto_fix_stop(
+                                    stopped(pr_number, &reason),
+                                    DeliveryRefusal::CheckEvidenceInconclusive,
+                                ));
+                            }
+                        };
                         if base_evidence
                             .as_ref()
                             .is_some_and(|evidence| evidence["path"] == "known_red_base")
@@ -657,15 +696,32 @@ fn drive_pr_to_merged_observed<H: RuntimeHost + ?Sized>(
                             pin.adopt_refreshed_candidate(Some(to));
                             landed_refresh_attempted = true;
                             continue;
-                        } else if let Some(reason) = red_base_wait(
-                            host,
-                            auto_fix,
-                            input,
-                            workspace_path,
-                            pr_number,
-                            &status,
-                            &failed,
-                        ) {
+                        } else if let Some(reason) = {
+                            match red_base_wait(
+                                host,
+                                auto_fix,
+                                input,
+                                workspace_path,
+                                pr_number,
+                                &status,
+                                &failed,
+                                observation_budget,
+                            ) {
+                                Ok(reason) => reason,
+                                Err(deferred) => {
+                                    let wait_ms = defer_throttled_read(
+                                        host,
+                                        auto_fix,
+                                        pr_number,
+                                        &deferred,
+                                        observation_budget,
+                                        mutated,
+                                    )?;
+                                    sleep(Duration::from_millis(wait_ms));
+                                    continue;
+                                }
+                            }
+                        } {
                             record_base_path(
                                 host,
                                 auto_fix,

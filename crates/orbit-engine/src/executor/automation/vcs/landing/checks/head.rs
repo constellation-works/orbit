@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use orbit_common::ProviderReadThrottle;
+use orbit_common::{OrbitError, ProviderReadThrottle};
 use serde_json::Value;
 
 use crate::context::RuntimeHost;
@@ -54,6 +54,57 @@ pub(in crate::executor::automation::vcs) struct DeferredLogRead {
     pub(in crate::executor::automation::vcs) job_id: u64,
     pub(in crate::executor::automation::vcs) run_attempt: Option<u64>,
     pub(in crate::executor::automation::vcs) throttle: ProviderReadThrottle,
+}
+
+/// A prerequisite read gap; typed throttles retain the actual read identity.
+pub(in crate::executor::automation::vcs) enum CheckReadGap {
+    Unavailable(String),
+    Deferred(Box<DeferredLogRead>),
+}
+impl From<String> for CheckReadGap {
+    fn from(reason: String) -> Self {
+        Self::Unavailable(reason)
+    }
+}
+
+pub(super) fn prerequisite_log<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace: &Path,
+    watched_head: &str,
+    job: &Value,
+    run_id: u64,
+    job_id: u64,
+    deadline_ms: Option<u64>,
+) -> Result<String, CheckReadGap> {
+    job_log(host, workspace, run_id, job_id, job, deadline_ms).map_err(|error| {
+        let reason = format!("the log of '{}' could not be read: {error}", job_label(job));
+        match error
+            .private_vcs_failure()
+            .and_then(|failure| failure.read_throttle.clone())
+        {
+            Some(throttle) => CheckReadGap::Deferred(Box::new(DeferredLogRead {
+                reason,
+                head: watched_head.to_string(),
+                repository: job["repository"].as_str().map(ToOwned::to_owned),
+                run_id,
+                job_id,
+                run_attempt: job["run_attempt"].as_u64(),
+                throttle,
+            })),
+            None => CheckReadGap::Unavailable(reason),
+        }
+    })
+}
+
+impl DeferredLogRead {
+    pub(super) fn error(&self) -> OrbitError {
+        OrbitError::PrivateVcs(Box::new(orbit_common::PrivateVcsFailure {
+            operation: super::super::super::operations::CI_JOB_LOG.into(),
+            class: orbit_common::PrivateVcsFailureClass::Other,
+            message: self.reason.clone(),
+            read_throttle: Some(self.throttle.clone()),
+        }))
+    }
 }
 
 /// Read the failed jobs behind `failed` on `head`, the exact commit the
@@ -225,25 +276,26 @@ pub(super) fn classify_logged_job<H: RuntimeHost + ?Sized>(
     moved_tip: Option<&str>,
     base_jobs: &mut CommitJobs,
     tip_jobs: &mut CommitJobs,
-) -> (CheckFailureClass, String, bool, String) {
+    deadline_ms: Option<u64>,
+) -> Result<(CheckFailureClass, String, bool, String), Box<DeferredLogRead>> {
     let signature = error_signature(log, failed_step(job));
     if let Some(evidence) = transient_evidence(log) {
-        return (
+        return Ok((
             CheckFailureClass::Transient,
             format!("the log shows `{evidence}`"),
             false,
             signature.text,
-        );
+        ));
     }
     if signature.step_fallback {
-        return (
+        return Ok((
             CheckFailureClass::Inconclusive,
             "its log names no diagnostic, only the failed step".to_string(),
             false,
             signature.text,
-        );
+        ));
     }
-    match inherited(
+    Ok(match inherited(
         host,
         workspace,
         job,
@@ -254,8 +306,10 @@ pub(super) fn classify_logged_job<H: RuntimeHost + ?Sized>(
         moved_tip,
         base_jobs,
         tip_jobs,
+        deadline_ms,
     ) {
-        Err(gap) => (CheckFailureClass::Inconclusive, gap, false, signature.text),
+        Err(CheckReadGap::Deferred(deferred)) => return Err(deferred),
+        Err(CheckReadGap::Unavailable(gap)) => (CheckFailureClass::Inconclusive, gap, false, signature.text),
         Ok(Some(found)) => (
             CheckFailureClass::Inherited,
             found.why,
@@ -292,7 +346,7 @@ pub(super) fn classify_logged_job<H: RuntimeHost + ?Sized>(
                 signature.text,
             ),
         },
-    }
+    })
 }
 
 /// Whether every failed check on `head` is a workflow job the base already
@@ -328,7 +382,8 @@ pub(in crate::executor::automation::vcs) fn unmoved_red_base<H: RuntimeHost + ?S
     tasks: &[String],
     failed: &[(Option<String>, String)],
     pr_number: Option<u64>,
-) -> Result<Option<String>, String> {
+    deadline_ms: Option<u64>,
+) -> Result<Option<String>, CheckReadGap> {
     let head_jobs = commit_jobs(host, workspace, head).map_err(|error| error.to_string())?;
     let moved_tip = (tip != base).then_some(tip);
     let mut base_jobs = None;
@@ -345,11 +400,10 @@ pub(in crate::executor::automation::vcs) fn unmoved_red_base<H: RuntimeHost + ?S
             return Ok(None);
         };
         let (Some(run_id), Some(job_id)) = (job["run_id"].as_u64(), job["job_id"].as_u64()) else {
-            return Err("a failed job reported no identity".to_string());
+            return Err("a failed job reported no identity".to_string().into());
         };
         let label = job_label(job);
-        let log = job_log(host, workspace, run_id, job_id, job, None)
-            .map_err(|error| format!("the log of '{label}' could not be read: {error}"))?;
+        let log = prerequisite_log(host, workspace, head, job, run_id, job_id, deadline_ms)?;
         let (class, why, _, signature) = classify_logged_job(
             host,
             workspace,
@@ -361,7 +415,9 @@ pub(in crate::executor::automation::vcs) fn unmoved_red_base<H: RuntimeHost + ?S
             moved_tip,
             &mut base_jobs,
             &mut tip_jobs,
-        );
+            deadline_ms,
+        )
+        .map_err(CheckReadGap::Deferred)?;
         match class {
             CheckFailureClass::Inherited => reasons.push(why),
             CheckFailureClass::BaseSuspect => {
@@ -417,7 +473,7 @@ pub(in crate::executor::automation::vcs) fn unmoved_red_base<H: RuntimeHost + ?S
         return Ok(Some(reasons.join("; ")));
     }
     if let Some(gap) = inconclusive {
-        return Err(gap);
+        return Err(gap.into());
     }
     if reasons.is_empty() {
         return Ok(None);
@@ -504,7 +560,8 @@ fn inherited<H: RuntimeHost + ?Sized>(
     moved_tip: Option<&str>,
     base_jobs: &mut CommitJobs,
     tip_jobs: &mut CommitJobs,
-) -> Result<Option<Inheritance>, String> {
+    deadline_ms: Option<u64>,
+) -> Result<Option<Inheritance>, CheckReadGap> {
     let base_jobs = base_jobs
         .get_or_insert_with(|| commit_jobs(host, workspace, base).map_err(|e| e.to_string()))
         .as_ref()
@@ -516,16 +573,23 @@ fn inherited<H: RuntimeHost + ?Sized>(
         let (Some(run_id), Some(job_id)) =
             (candidate["run_id"].as_u64(), candidate["job_id"].as_u64())
         else {
-            return Err(format!("a failed job on base {base} reported no identity"));
+            return Err(format!("a failed job on base {base} reported no identity").into());
         };
-        let log = job_log(host, workspace, run_id, job_id, candidate, None).map_err(|error| {
-            format!("the log of the failed job on base {base} could not be read: {error}")
-        })?;
+        let log = prerequisite_log(
+            host,
+            workspace,
+            head,
+            candidate,
+            run_id,
+            job_id,
+            deadline_ms,
+        )?;
         let found = error_signature(&log, failed_step(candidate));
         if found.step_fallback {
             return Err(format!(
                 "the failed job on base {base} logs no diagnostic, only the failed step"
-            ));
+            )
+            .into());
         }
         if found.text == signature {
             let tip_passes =
@@ -578,8 +642,20 @@ fn inherited<H: RuntimeHost + ?Sized>(
             else {
                 continue;
             };
-            let Ok(tip_log) = job_log(host, workspace, run_id, job_id, candidate, None) else {
-                continue;
+            let tip_log = match prerequisite_log(
+                host,
+                workspace,
+                head,
+                candidate,
+                run_id,
+                job_id,
+                deadline_ms,
+            ) {
+                Ok(log) => log,
+                Err(CheckReadGap::Deferred(deferred)) => {
+                    return Err(CheckReadGap::Deferred(deferred));
+                }
+                Err(CheckReadGap::Unavailable(_)) => continue,
             };
             let found = error_signature(&tip_log, failed_step(candidate));
             if !found.step_fallback && found.text == signature {
