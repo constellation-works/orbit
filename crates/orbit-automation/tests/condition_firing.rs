@@ -832,3 +832,164 @@ fn a_pending_intent_from_the_old_definition_is_refused_not_admitted_under_the_ed
     let state = store.condition_state(CONSUMER).unwrap().unwrap();
     assert_eq!(state.fires[0].state, ConditionFireState::Refused);
 }
+
+#[test]
+fn capacity_baseline_omits_false_subjects_and_finds_later_edge() {
+    let store = memory_store();
+    let board = Board::default();
+    let trigger = trigger(serde_json::json!({}));
+    board.set(
+        (0..1001)
+            .map(|i| subject(&format!("task-{i}"), Truth::False, "1"))
+            .collect(),
+    );
+    pass(&*store, &board, &trigger, at(0));
+    assert!(
+        store
+            .condition_state(CONSUMER)
+            .unwrap()
+            .unwrap()
+            .subjects
+            .len()
+            <= 1000
+    );
+    board.set(vec![subject("task-1000", Truth::True, "2")]);
+    pass(&*store, &board, &trigger, at(1));
+    assert_eq!(board.admissions(), 1);
+}
+
+#[test]
+fn capacity_subjects_backpressure_without_losing_edges() {
+    let store = memory_store();
+    let board = Board::default();
+    let trigger = trigger(
+        serde_json::json!({"max_matches": 1000, "max_fires_per_hour": 1000, "max_fires_per_day": 1000}),
+    );
+    let epoch = condition_epoch(&trigger, &("mint", "fixture")).unwrap();
+    let mut state = ConditionState::new(CONSUMER, &epoch);
+    state.enabled = true;
+    for i in 0..995 {
+        state.subjects.insert(
+            format!("old-{i}"),
+            orbit_types::workflow::automation::ConditionSubject {
+                arm: ConditionArm::Fired,
+                observed_at: Some(at(0)),
+                ..Default::default()
+            },
+        );
+    }
+    assert!(store.condition_initialize(&state).unwrap());
+    let mut subjects = (0..995)
+        .map(|i| subject(&format!("old-{i}"), Truth::True, "1"))
+        .collect::<Vec<_>>();
+    subjects.extend((0..20).map(|i| subject(&format!("new-{i}"), Truth::True, "1")));
+    board.set(subjects);
+    let result = pass(&*store, &board, &trigger, at(1));
+    let saved = result.state.unwrap();
+    assert!(saved.subjects.len() <= 1000);
+    assert!(
+        saved
+            .skip_counts
+            .get("backpressure")
+            .copied()
+            .unwrap_or_default()
+            > 0
+    );
+    assert_eq!(board.admissions(), 5);
+    board.set(
+        (0..20)
+            .map(|i| subject(&format!("new-{i}"), Truth::True, "1"))
+            .collect(),
+    );
+    pass(&*store, &board, &trigger, at(31 * 24 * 60));
+    pass(&*store, &board, &trigger, at(31 * 24 * 60 + 1));
+    assert_eq!(
+        board.admissions(),
+        20,
+        "edges deferred by capacity are eventually admitted"
+    );
+}
+
+#[test]
+fn capacity_fires_preserves_pending_intents_and_makes_progress() {
+    let store = memory_store();
+    let board = Board::default();
+    let trigger =
+        trigger(serde_json::json!({"max_fires_per_hour": 1000, "max_fires_per_day": 1000}));
+    let epoch = condition_epoch(&trigger, &("mint", "fixture")).unwrap();
+    let mut state = ConditionState::new(CONSUMER, &epoch);
+    state.enabled = true;
+    for i in 0..999 {
+        state.fires.push(ConditionFire {
+            fire_id: format!("old-{i}"),
+            subject: format!("old-{i}"),
+            revision: "1".into(),
+            arm_sequence: 0,
+            epoch: epoch.clone(),
+            observed_at: at(-2880),
+            depth: 1,
+            parent_fire_id: None,
+            captured: serde_json::json!({}),
+            action_key: format!("old-{i}"),
+            state: if i == 0 {
+                ConditionFireState::Intent
+            } else {
+                ConditionFireState::Acknowledged
+            },
+            action_id: None,
+            acknowledged_at: Some(at(-2880)),
+            attempts: 0,
+            detail: None,
+        });
+    }
+    assert!(store.condition_initialize(&state).unwrap());
+    *board.deferral.borrow_mut() = Some("waiting".into());
+    board.set(vec![
+        subject("new-1", Truth::True, "1"),
+        subject("new-2", Truth::True, "1"),
+    ]);
+    let saved = pass(&*store, &board, &trigger, at(0)).state.unwrap();
+    assert!(saved.fires.len() <= 1000);
+    assert_eq!(
+        saved.fire("old-0").unwrap().state,
+        ConditionFireState::Intent
+    );
+    assert_eq!(
+        saved
+            .fires
+            .iter()
+            .filter(|f| f.subject.starts_with("new-"))
+            .count(),
+        2
+    );
+
+    // Saturation with only unsettled intents must defer the edge, not drop
+    // an intent or mark the subject fired.
+    let full_store = memory_store();
+    let mut full = ConditionState::new(CONSUMER, &epoch);
+    full.enabled = true;
+    full.fires = (0..1000)
+        .map(|i| {
+            let mut fire = saved.fire("old-0").unwrap().clone();
+            fire.fire_id = format!("pending-{i}");
+            fire.action_key = fire.fire_id.clone();
+            fire
+        })
+        .collect();
+    assert!(full_store.condition_initialize(&full).unwrap());
+    board.set(vec![subject("waiting", Truth::True, "1")]);
+    let result = pass(&*full_store, &board, &trigger, at(1));
+    assert_eq!(result.reason, "backpressure");
+    let saved = result.state.unwrap();
+    assert_eq!(saved.fires.len(), 1000);
+    assert!(
+        saved
+            .fires
+            .iter()
+            .all(|fire| fire.state == ConditionFireState::Intent)
+    );
+    assert_eq!(
+        saved.subjects["waiting"].deferred.as_deref(),
+        Some("backpressure")
+    );
+}
