@@ -16,6 +16,6 @@ export async function check(ctx) {
     }
     return result;
   });
-  const failures = found.filter((item) => item.bordered && !ALLOW.has(item.tag) && !item.role && !item.labelled);
+  const failures = found.filter((item) => (item.bordered || item.filled) && !ALLOW.has(item.tag) && !item.role && !item.labelled);
   return verdict(ctx, rule, found.length, failures);
 }
