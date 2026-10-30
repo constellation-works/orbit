@@ -1,9 +1,9 @@
 //! Authenticate the complete set affected by a workflow-wide failed-jobs retry.
 use super::super::completion_deadline::Deadline;
 use super::{
-    ci::ci_job_log,
     input::{number, required_string, same, text},
     prerequisite::{self, api, complete_list, unreadable},
+    recovery_log,
 };
 use orbit_common::OrbitError;
 use orbit_types::workflow::{CiRerunPlan, CiRerunRoot};
@@ -149,41 +149,6 @@ pub(super) fn ci_rerun_plan(input: &Value) -> Result<Value, OrbitError> {
     {
         return Err(unreadable("empty or ambiguous retry selection"));
     }
-    let mut root_ids = BTreeSet::new();
-    let mut logs = Vec::new();
-    for root in &roots {
-        let job = failed
-            .iter()
-            .find(|job| job["id"].as_u64() == Some(root.job_id))
-            .ok_or_else(|| unreadable("retry root absent from failed set"))?;
-        let expected_check = format!(
-            "{} / {}",
-            text(&run, "name", unreadable)?,
-            text(job, "name", unreadable)?
-        );
-        if root.check != expected_check {
-            return Err(unreadable("retry root check identity"));
-        }
-        let log = complete_job_log(deadline, workspace, run_id, job)?;
-        let failed_steps = job["steps"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter(|step| step["conclusion"] == "failure")
-            .collect::<Vec<_>>();
-        let [step] = failed_steps.as_slice() else {
-            return Err(unreadable("ambiguous root failure"));
-        };
-        let signature = super::super::super::ci::log_signature::error_signature(
-            &log,
-            text(step, "name", unreadable)?,
-        );
-        if signature.step_fallback || signature.text != root.signature {
-            return Err(unreadable("retry root diagnostic changed"));
-        }
-        root_ids.insert(root.job_id);
-        logs.push(json!({"job_id":root.job_id,"log":log}));
-    }
     let (path, blob, source) = prerequisite::workflow(deadline, workspace, &run)?;
     // Trust is rooted in the accepted base, rather than a candidate-authored workflow.
     let trusted = api(
@@ -209,16 +174,58 @@ pub(super) fn ci_rerun_plan(input: &Value) -> Result<Value, OrbitError> {
         "accepted workflow source",
         unreadable,
     )?;
+    let mut root_ids = BTreeSet::new();
+    let mut logs = Vec::new();
+    for root in &roots {
+        let job = failed
+            .iter()
+            .find(|job| job["id"].as_u64() == Some(root.job_id))
+            .ok_or_else(|| unreadable("retry root absent from failed set"))?;
+        let expected_check = format!(
+            "{} / {}",
+            text(&run, "name", unreadable)?,
+            text(job, "name", unreadable)?
+        );
+        if root.check != expected_check {
+            return Err(unreadable("retry root check identity"));
+        }
+        let log = recovery_log::complete_job_log(deadline, workspace, run_id, job, &source)?;
+        let failed_steps = job["steps"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|step| step["conclusion"] == "failure")
+            .collect::<Vec<_>>();
+        let [step] = failed_steps.as_slice() else {
+            return Err(unreadable("ambiguous root failure"));
+        };
+        let signature = super::super::super::ci::log_signature::error_signature(
+            &log.text,
+            text(step, "name", unreadable)?,
+        );
+        if signature.step_fallback || signature.text != root.signature {
+            return Err(unreadable("retry root diagnostic changed"));
+        }
+        root_ids.insert(root.job_id);
+        logs.push(json!({"job_id":root.job_id,"log":log.text,"proof":log.proof}));
+    }
     let mut dependencies = Vec::new();
     for job in failed
         .iter()
         .filter(|job| !root_ids.contains(&job["id"].as_u64().unwrap_or_default()))
     {
-        let log = complete_job_log(deadline, workspace, run_id, job)?;
+        let log = recovery_log::complete_job_log(deadline, workspace, run_id, job, &source)?;
+        // Regions may omit another record or an independent waiter diagnostic.
+        // Only a complete command/failed-step log can prove record uniqueness.
+        if log.proof["kind"] == "selected_failure_regions" {
+            return Err(unreadable(
+                "dependency authentication needs a complete producer command, not selected failure regions",
+            ));
+        }
         dependencies.push(super::dependency_record::authenticate_dependency_record(
-            deadline, workspace, &snapshot, &run, job, &failed, accepted, &path, &source, &log,
+            deadline, workspace, &snapshot, &run, job, &failed, accepted, &path, &source, &log.text,
         )?);
-        logs.push(json!({"job_id":job["id"],"log":log}));
+        logs.push(json!({"job_id":job["id"],"log":log.text,"proof":log.proof}));
     }
     let mut covered = root_ids.clone();
     for _ in 0..dependencies.len() {
@@ -266,45 +273,4 @@ pub(super) fn ci_rerun_plan(input: &Value) -> Result<Value, OrbitError> {
         return Err(unreadable("CI retry authorization exceeds its bound"));
     }
     Ok(json!({"plan":plan}))
-}
-
-pub(super) fn complete_job_log(
-    deadline: Deadline,
-    workspace: &Path,
-    run_id: u64,
-    job: &Value,
-) -> Result<String, OrbitError> {
-    let read = ci_job_log(
-        &json!({"workspace_path":workspace,"run_id":run_id.to_string(),"job_id":number(job,"id",unreadable)?.to_string(),"deadline_ms":deadline.0}),
-    )?;
-    if read["truncated"] != false
-        || read["source_complete"] != true
-        || !read["fallback_error"].is_null()
-    {
-        return Err(unreadable("incomplete retry diagnostic"));
-    }
-    // Only gh's failed-step columns can authenticate a record. The generic
-    // raw-job fallback cannot prove which step emitted arbitrary JSON.
-    if read["source"].as_str() != Some(orbit_tools::github_cli::SOURCE_RUN_LOG) {
-        return Err(unreadable("retry diagnostic has no step provenance"));
-    }
-    let mut result = Vec::new();
-    for line in text(&read, "log", unreadable)?.lines() {
-        let mut columns = line.splitn(3, '\t');
-        let (Some(name), Some(step), Some(body)) = (columns.next(), columns.next(), columns.next())
-        else {
-            return Err(unreadable("retry log columns"));
-        };
-        if name != text(job, "name", unreadable)?
-            || !job["steps"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .any(|candidate| candidate["name"] == step && candidate["conclusion"] == "failure")
-        {
-            return Err(unreadable("retry log job or step"));
-        }
-        result.push(body);
-    }
-    Ok(result.join("\n"))
 }

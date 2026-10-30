@@ -43,13 +43,17 @@ jobs:
 "#;
 
 fn fixture(row: &Path) -> (Fixture, DeliveryHost, Value) {
+    fixture_with_source(row, WORKFLOW)
+}
+
+fn fixture_with_source(row: &Path, workflow: &str) -> (Fixture, DeliveryHost, Value) {
     let mut fx = Fixture::new(row);
     let helper = fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/ci-await-jobs.py"),
     )
     .unwrap();
     fx.commit_files_on_base(&[
-        (".github/workflows/retry.yml", WORKFLOW),
+        (".github/workflows/retry.yml", workflow),
         ("scripts/ci-await-jobs.py", &helper),
         ("src/stable", "stable\n"),
     ]);
@@ -158,155 +162,177 @@ fn first_dependency_failure_reruns_before_owner_repair() {
     );
 }
 
+mod bounded;
+
 #[test]
 fn dependency_adapter_refuses_incomplete_or_forged_evidence() {
     isolated(
         "ci_rerun::dependency_adapter_refuses_incomplete_or_forged_evidence",
         |sandbox| {
-            for case in [
-                "incomplete",
-                "changed_helper",
-                "changed_workflow",
-                "wrong_app",
-                "wrong_root_check",
-                "wrong_root_job",
-                "printed_record",
-                "own_step",
-                "unread",
-                "wrong_repository",
-                "wrong_step_name",
-                "wrong_dependency_outcome",
-                "dispatch",
-                "wrong_branch",
-                "wrong_run",
-                "pending",
-                "wrong_execution",
-                "wrong_producer",
-                "wrong_dependency",
-                "truncated",
-                "foreign_event",
-                "wrong_pr",
-                "wrong_head",
-                "wrong_attempt",
-                "wrong_job",
-                "wrong_step",
-                "legacy",
-                "ambient_execution",
-                "missing_execution_contract",
-                "own_failure",
-                "independent",
-            ] {
-                in_fresh_row(sandbox, |row| {
-                    let (fx, host, mut request) = fixture(row);
-                    let mut config: Value = serde_json::from_slice(
-                        &fs::read(fx.forge.join("retry-config.json")).unwrap(),
-                    )
-                    .unwrap();
-                    match case {
-                        "incomplete" => config["incomplete"] = json!(true),
-                        "changed_helper" => config["changed_helper"] = json!(true),
-                        "changed_workflow" => config["changed_workflow"] = json!(true),
-                        "wrong_app" => config["wrong_app"] = json!(true),
-                        "wrong_root_check" => request["roots"][0]["check"] = json!("CI / other"),
-                        "wrong_root_job" => request["roots"][0]["job_id"] = json!(1005),
-                        "own_step" => config["own_step"] = json!(true),
-                        "unread" => {
-                            fs::write(fx.forge.join("retry-log-1000"), b"").unwrap();
-                        }
-                        "dispatch" => config["run_override"] = json!({"event":"workflow_dispatch"}),
-                        "wrong_branch" => config["run_override"] = json!({"head_branch":"foreign"}),
-                        "wrong_run" => config["run_override"] = json!({"id":702}),
-                        "pending" => {
-                            config["run_override"] =
-                                json!({"status":"in_progress","conclusion":null})
-                        }
-                        "printed_record" => {
-                            let path = fx.forge.join("retry-log-1001");
-                            let old = fs::read_to_string(&path).unwrap();
-                            let record = old
-                                .lines()
-                                .find_map(|line| {
-                                    line.split_once("orbit-dependency-evidence:")
-                                        .map(|(_, body)| body)
-                                })
-                                .unwrap();
-                            fs::write(path,format!("lint\tWait\t##[group]Run echo 'orbit-dependency-evidence:{record}'\nlint\tWait\t##[endgroup]\nlint\tWait\terror: own failure\n")).unwrap();
-                        }
-                        "truncated" => {
-                            fs::write(
-                                fx.forge.join("retry-log-1001"),
-                                format!("lint\tWait\t{}\n", "x".repeat(70 * 1024)),
-                            )
-                            .unwrap();
-                        }
-                        "foreign_event" => config["run_override"] = json!({"event":"push"}),
-                        "independent" => {
-                            config["candidate"] = json!(true);
-                            fs::write(fx.forge.join("retry-log-1002"),"independent\tTests\terror: genuine candidate failure at src/feature.txt:1:1\n").unwrap();
-                        }
-                        _ => {
-                            let path = fx.forge.join("retry-log-1001");
-                            let log = fs::read_to_string(&path).unwrap();
-                            let mut records = log
-                                .lines()
-                                .filter_map(|line| {
-                                    line.split_once("orbit-dependency-evidence:").map(
-                                        |(_, json)| serde_json::from_str::<Value>(json).unwrap(),
-                                    )
-                                })
-                                .collect::<Vec<_>>();
-                            let record = &mut records[0];
-                            match case {
-                                "wrong_pr" => {
-                                    record["workflow_ref"] = json!(
-                                        "orbit/test/.github/workflows/retry.yml@refs/pull/43/merge"
-                                    )
-                                }
-                                "wrong_head" => record["head_sha"] = json!("a".repeat(40)),
-                                "wrong_attempt" => record["run_attempt"] = json!(2),
-                                "wrong_job" => record["source"]["job_id"] = json!(1005),
-                                "wrong_step" => record["source"]["step_number"] = json!(5),
-                                "legacy" => record["schema_version"] = json!(0),
-                                "ambient_execution" => {
-                                    record["execution_contract"] = json!("ambient")
-                                }
-                                "missing_execution_contract" => {
-                                    record.as_object_mut().unwrap().remove("execution_contract");
-                                }
-                                "wrong_execution" => record["execution_sha"] = json!(fx.candidate),
-                                "wrong_repository" => record["repository"] = json!("foreign/repo"),
-                                "wrong_step_name" => {
-                                    record["source"]["step_name"] = json!("Own failure")
-                                }
-                                "wrong_dependency_outcome" => {
-                                    record["dependencies"][0]["conclusion"] = json!("success")
-                                }
-                                "wrong_producer" => record["producer_sha"] = json!(fx.candidate),
-                                "wrong_dependency" => {
-                                    record["dependencies"][0]["job_id"] = json!(1005)
-                                }
-                                "own_failure" => record["kind"] = json!("own_failure"),
-                                _ => unreachable!(),
+            for raw in [false, true] {
+                for case in [
+                    "incomplete",
+                    "changed_helper",
+                    "changed_workflow",
+                    "wrong_app",
+                    "wrong_root_check",
+                    "wrong_root_job",
+                    "printed_record",
+                    "own_step",
+                    "unread",
+                    "wrong_repository",
+                    "wrong_step_name",
+                    "wrong_dependency_outcome",
+                    "dispatch",
+                    "wrong_branch",
+                    "wrong_run",
+                    "pending",
+                    "wrong_execution",
+                    "wrong_producer",
+                    "wrong_dependency",
+                    "truncated",
+                    "foreign_event",
+                    "wrong_pr",
+                    "wrong_head",
+                    "wrong_attempt",
+                    "wrong_job",
+                    "wrong_step",
+                    "legacy",
+                    "ambient_execution",
+                    "missing_execution_contract",
+                    "own_failure",
+                    "independent",
+                ] {
+                    in_fresh_row(sandbox, |row| {
+                        let (fx, host, mut request) = fixture(row);
+                        let mut config: Value = serde_json::from_slice(
+                            &fs::read(fx.forge.join("retry-config.json")).unwrap(),
+                        )
+                        .unwrap();
+                        match case {
+                            "incomplete" => config["incomplete"] = json!(true),
+                            "changed_helper" => config["changed_helper"] = json!(true),
+                            "changed_workflow" => config["changed_workflow"] = json!(true),
+                            "wrong_app" => config["wrong_app"] = json!(true),
+                            "wrong_root_check" => {
+                                request["roots"][0]["check"] = json!("CI / other")
                             }
-                            fs::write(
-                                path,
-                                format!("lint\tWait\torbit-dependency-evidence:{record}\n"),
-                            )
-                            .unwrap();
+                            "wrong_root_job" => request["roots"][0]["job_id"] = json!(1005),
+                            "own_step" => config["own_step"] = json!(true),
+                            "unread" => {
+                                fs::write(fx.forge.join("retry-log-1000"), b"").unwrap();
+                            }
+                            "dispatch" => {
+                                config["run_override"] = json!({"event":"workflow_dispatch"})
+                            }
+                            "wrong_branch" => {
+                                config["run_override"] = json!({"head_branch":"foreign"})
+                            }
+                            "wrong_run" => config["run_override"] = json!({"id":702}),
+                            "pending" => {
+                                config["run_override"] =
+                                    json!({"status":"in_progress","conclusion":null})
+                            }
+                            "printed_record" => {
+                                let path = fx.forge.join("retry-log-1001");
+                                let old = fs::read_to_string(&path).unwrap();
+                                let record = old
+                                    .lines()
+                                    .find_map(|line| {
+                                        line.split_once("orbit-dependency-evidence:")
+                                            .map(|(_, body)| body)
+                                    })
+                                    .unwrap();
+                                fs::write(path,format!("lint\tWait\t##[group]Run echo 'orbit-dependency-evidence:{record}'\nlint\tWait\t##[endgroup]\nlint\tWait\terror: own failure\n")).unwrap();
+                            }
+                            "truncated" => {
+                                fs::write(
+                                    fx.forge.join("retry-log-1001"),
+                                    format!("lint\tWait\t{}\n", "x".repeat(70 * 1024)),
+                                )
+                                .unwrap();
+                            }
+                            "foreign_event" => config["run_override"] = json!({"event":"push"}),
+                            "independent" => {
+                                config["candidate"] = json!(true);
+                                fs::write(fx.forge.join("retry-log-1002"),"independent\tTests\terror: genuine candidate failure at src/feature.txt:1:1\n").unwrap();
+                            }
+                            _ => {
+                                let path = fx.forge.join("retry-log-1001");
+                                let log = fs::read_to_string(&path).unwrap();
+                                let mut records = log
+                                    .lines()
+                                    .filter_map(|line| {
+                                        line.split_once("orbit-dependency-evidence:").map(
+                                            |(_, json)| {
+                                                serde_json::from_str::<Value>(json).unwrap()
+                                            },
+                                        )
+                                    })
+                                    .collect::<Vec<_>>();
+                                let record = &mut records[0];
+                                match case {
+                                    "wrong_pr" => {
+                                        record["workflow_ref"] = json!(
+                                            "orbit/test/.github/workflows/retry.yml@refs/pull/43/merge"
+                                        )
+                                    }
+                                    "wrong_head" => record["head_sha"] = json!("a".repeat(40)),
+                                    "wrong_attempt" => record["run_attempt"] = json!(2),
+                                    "wrong_job" => record["source"]["job_id"] = json!(1005),
+                                    "wrong_step" => record["source"]["step_number"] = json!(5),
+                                    "legacy" => record["schema_version"] = json!(0),
+                                    "ambient_execution" => {
+                                        record["execution_contract"] = json!("ambient")
+                                    }
+                                    "missing_execution_contract" => {
+                                        record
+                                            .as_object_mut()
+                                            .unwrap()
+                                            .remove("execution_contract");
+                                    }
+                                    "wrong_execution" => {
+                                        record["execution_sha"] = json!(fx.candidate)
+                                    }
+                                    "wrong_repository" => {
+                                        record["repository"] = json!("foreign/repo")
+                                    }
+                                    "wrong_step_name" => {
+                                        record["source"]["step_name"] = json!("Own failure")
+                                    }
+                                    "wrong_dependency_outcome" => {
+                                        record["dependencies"][0]["conclusion"] = json!("success")
+                                    }
+                                    "wrong_producer" => {
+                                        record["producer_sha"] = json!(fx.candidate)
+                                    }
+                                    "wrong_dependency" => {
+                                        record["dependencies"][0]["job_id"] = json!(1005)
+                                    }
+                                    "own_failure" => record["kind"] = json!("own_failure"),
+                                    _ => unreachable!(),
+                                }
+                                fs::write(
+                                    path,
+                                    format!("lint\tWait\torbit-dependency-evidence:{record}\n"),
+                                )
+                                .unwrap();
+                            }
                         }
-                    }
-                    fs::write(
-                        fx.forge.join("retry-config.json"),
-                        serde_json::to_vec(&config).unwrap(),
-                    )
-                    .unwrap();
-                    assert!(
-                        run_private_vcs_operation("ci.rerun_plan", &request).is_err(),
-                        "{case}"
-                    );
-                    assert!(fx.forge_lines("retry-sends").is_empty(), "{case}");
-                    assert!(pr_auto_fix_attempts(&host.history(TASK_ID), "42").is_empty());
-                });
+                        fs::write(
+                            fx.forge.join("retry-config.json"),
+                            serde_json::to_vec(&config).unwrap(),
+                        )
+                        .unwrap();
+                        bounded::bounded_logs(&fx, raw);
+                        assert!(
+                            run_private_vcs_operation("ci.rerun_plan", &request).is_err(),
+                            "{case}"
+                        );
+                        assert!(fx.forge_lines("retry-sends").is_empty(), "{case}");
+                        assert!(pr_auto_fix_attempts(&host.history(TASK_ID), "42").is_empty());
+                    });
+                }
             }
         },
     );

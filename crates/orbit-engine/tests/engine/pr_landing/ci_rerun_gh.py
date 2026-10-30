@@ -64,6 +64,16 @@ def jobs(is_base=False, producing=False):
         rows[1]["status"] = "in_progress"
         rows[1]["conclusion"] = None
         rows[1]["steps"][1].update(status="in_progress", conclusion=None)
+    if not is_base and not producing:
+        for row in rows:
+            row.update(config.get("job_overrides", {}).get(str(row["id"]), {}))
+    for row in rows:
+        for index, step in enumerate(row["steps"]):
+            starts = ["00", "10", "50"] if len(row["steps"]) == 3 else ["00"]
+            ends = ["10", "50", "60"] if len(row["steps"]) == 3 else ["60"]
+            step.setdefault("started_at", f"2026-10-29T10:00:{starts[index]}Z")
+            end = f"2026-10-29T10:00:{ends[index]}Z" if ends[index] != "60" else "2026-10-29T10:01:00Z"
+            step.setdefault("completed_at", end)
     result = {"total_count": len(rows), "jobs": rows}
     if config.get("incomplete") and not is_base and not producing:
         result["total_count"] += 1
@@ -81,6 +91,13 @@ if args[:2] == ["run", "rerun"]:
         raise SystemExit(1)
     raise SystemExit
 if args[:2] == ["run", "view"]:
+    if "--json" in args:
+        rows = [dict(row, databaseId=row["id"]) for row in jobs()["jobs"]]
+        if config.get("fallback_name"):
+            rows[0]["name"] = "foreign"
+        emit({"databaseId": 700, "url": "https://github.com/orbit/test/actions/runs/700", "jobs": rows})
+    if config.get("raw_fallback"):
+        raise SystemExit
     job = args[args.index("--job") + 1]
     print((root / f"retry-log-{job}").read_text(), end="")
     raise SystemExit
@@ -101,6 +118,10 @@ if args[1] == "graphql":
         emit({"data": {"repository": {"pullRequest": {"headRefOid": head, "commits": {"nodes": [{"commit": {"oid": head, "statusCheckRollup": {"contexts": contexts}}}]}}}}})
     raise SystemExit(77)
 endpoint = next((arg for arg in args[1:] if arg.startswith("repos/")), "")
+if "/actions/jobs/" in endpoint and endpoint.endswith("/logs"):
+    job = endpoint.split("/actions/jobs/", 1)[1].split("/", 1)[0]
+    print((root / f"retry-log-{job}").read_text(), end="")
+    raise SystemExit
 if "--include" in args and "actions/runs/700/jobs" in endpoint:
     print("HTTP/2 200 OK\nContent-Type: application/json\n")
     print(json.dumps(jobs(producing=True)))

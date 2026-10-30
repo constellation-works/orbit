@@ -10,6 +10,7 @@ mod pr;
 mod prerequisite;
 pub(super) mod process;
 mod push_retry;
+mod recovery_log;
 mod workflow_dependency;
 mod workflow_read;
 

@@ -111,6 +111,10 @@ pub struct StreamedLog {
     pub checkout_evidence: CheckoutEvidence,
     /// Complete runner command evidence, independent of display truncation.
     pub diagnostic: Option<String>,
+    /// Complete bounded runner display of the unique failed command. This
+    /// is source evidence for workflow/step binding, never authority by itself.
+    /// Absent for incomplete, ambiguous or oversized command displays.
+    pub diagnostic_command: Option<String>,
     /// Selected command regions or independently collected nextest blocks,
     /// including original source byte ranges for recognized nextest failures.
     pub failure_regions: Option<Value>,
