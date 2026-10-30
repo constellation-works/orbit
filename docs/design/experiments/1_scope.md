@@ -325,7 +325,7 @@ Policy only. Experiment definitions are store records.
 
 ## Phasing
 
-1. **Records and shadow assignment.** An additive migration (the store is at schema 62), lifecycle, events, `orbit.experiment.*`
+1. **Records and shadow assignment.** An additive migration (`crates/orbit-store/src/driver/sqlite/migration/experiments.rs`), lifecycle, events, `orbit.experiment.*`
    and CLI, sticky assignment at admission, claim capture of the arm, `task show` and
    `run show` lines. Overlays are recorded but not applied; the first experiment is an A/A
    test whose sample-ratio check must pass.
