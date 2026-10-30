@@ -127,7 +127,6 @@ fn a_pull_captures_the_shipping_modes_authoritative_tag_instructions() {
                             repo_root: repo,
                             ship_mode: mode,
                             base_branch: Some(base.into()),
-                            generation_authority: None,
                         },
                     )
                     .unwrap()

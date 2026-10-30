@@ -1,6 +1,6 @@
 Inspect or apply pending `.orbit/` workspace upgrades.
 
-By default, this command lists pending upgrades without applying them. `--dry-run` explicitly requests the same inspection, while `--confirm` applies the pending upgrades. Orbit also applies required workspace upgrades automatically when it opens a workspace.
+By default, this command lists pending upgrades without applying them. `--dry-run` explicitly requests the same inspection, while `--confirm` applies the pending upgrades. Orbit also applies required workspace upgrades automatically when it opens a workspace. `--adopt-authority` records which generation authority protects a workspace that has recorded none, without applying anything.
 
 Usage: orbit migrate [OPTIONS]
 
@@ -21,6 +21,9 @@ Options:
 
       --backfill-task-crews
           Apply pending migrations, then set each task's crew to the crew its latest delivery selected (latest local delivery run or claimed-leaf settlement), where they differ
+
+      --adopt-authority <PATH>
+          Record the generation authority this command runs under (its home directory, --root or ORBIT_ROOT; PATH must name it) as the one protecting a workspace that has recorded none. Stop every orbit process using the workspace first; nothing is migrated
 
   -h, --help
           Print help (see a summary with '-h')

@@ -435,7 +435,6 @@ impl DashboardState {
                 repo_root: PathBuf::new(),
                 ship_mode: ShipMode::Local,
                 base_branch: None,
-                generation_authority: None,
             }),
             active: true,
         };
@@ -453,7 +452,6 @@ impl DashboardState {
                     repo_root: PathBuf::new(),
                     ship_mode: ShipMode::Local,
                     base_branch: None,
-                    generation_authority: None,
                 },
                 orbit_dir: PathBuf::new(),
                 generation: INITIAL_GENERATION,

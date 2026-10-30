@@ -5319,6 +5319,8 @@ fn runtime_opens(log_path: &Path) -> usize {
 }
 
 mod upgrade;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod workspace_authority;
 
 mod plugins;
 mod serving_hosts;

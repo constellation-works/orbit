@@ -100,6 +100,19 @@ If migrations are pending, `orbit migrate` lists them and exits with a nonzero s
 orbit migrate --confirm
 ```
 
+### Adopt a workspace that recorded no authority
+
+A workspace layout migration runs only under the generation authority whose clients use the workspace: the home directory, `--root` or `ORBIT_ROOT` they run under. A workspace records that authority when it is first created. A workspace last opened by an older Orbit, or a data directory used as its own `--root`, may record none. Every pending layout migration then refuses with `it has recorded no generation authority`, whichever authority runs it.
+
+To adopt such a workspace, stop every Orbit process that uses it under any home or root: MCP sessions, the dashboard, drains and the clock. Then, under the authority those clients use, name that authority explicitly:
+
+```bash
+orbit migrate --adopt-authority ~/.orbit
+orbit --root /srv/orbit migrate --adopt-authority /srv/orbit   # a data directory used as its own root
+```
+
+The authority must have registered the checkout or be the workspace data directory. Adoption refuses, changing nothing, while a long-lived client of that authority, or of any other authority known to have opened the workspace, is still running. It also refuses when the workspace already records a different authority. Re-running an adoption that already landed changes nothing. Afterwards, `orbit migrate --confirm` applies the pending migration under the recorded authority, still waiting for its incompatible clients to exit.
+
 ### Repair historical crew attribution
 
 Tasks admitted by recent Orbit releases record the crew their delivery selected, and analytics that group by crew read that stored value. Tasks admitted before the write-back landed carry a stale or missing crew. `orbit migrate --backfill-task-crews` repairs them in place. Run it once, on the owner's checkout, after upgrading.

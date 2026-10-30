@@ -46,7 +46,6 @@ fn bound_follower(pair: &Pair) -> (OrbitRuntime, String) {
         repo_root: pair.follower_repo.clone(),
         ship_mode: orbit_core::ShipMode::Local,
         base_branch: Some("main".to_string()),
-        generation_authority: None,
     };
     let follower = calm_host(
         OrbitRuntime::from_roots_with_binding(

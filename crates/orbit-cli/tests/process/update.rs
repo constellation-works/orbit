@@ -101,6 +101,12 @@ fn initialize_root(repo: &Path, home: &Path, mirror: &Path, root: &Path, suffix:
         ])
         .assert()
         .success();
+    // The first open records the explicit root as its own authority, which
+    // admits its later layout migrations.
+    orbit(repo, home, mirror)
+        .args(["--root", root.as_ref(), "task", "list"])
+        .assert()
+        .success();
 }
 
 /// Run a freshly copied test binary, absorbing the parallel-fork `ETXTBSY`

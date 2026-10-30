@@ -120,12 +120,14 @@ fn tool_run_unusable_input_does_not_migrate_a_pending_layout() {
         .assert()
         .success();
 
+    // The first open stamps the layout and records this home as the
+    // workspace's authority. Rewind to version 1 so a later runtime open has
+    // a pending migration to apply.
+    orbit_command(&work, &home)
+        .args(["task", "list"])
+        .assert()
+        .success();
     let marker = work.join(".orbit/state/layout.version");
-    if let Some(parent) = marker.parent() {
-        std::fs::create_dir_all(parent).expect("layout marker directory");
-    }
-    // Workspace init can leave the marker absent (version 0). Record version 1
-    // so a later runtime open has a pending migration to apply.
     std::fs::write(&marker, "1\n").expect("rewind layout marker");
 
     let json_error = run_tool(&work, &home, &["orbit.task.show", "--input", "not-json"]);
