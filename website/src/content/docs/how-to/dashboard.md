@@ -623,15 +623,30 @@ precede the first edit, where new bugs were filed, how many lines each
 delivery changes, or how much delivery friction each finished task costs,
 for the selected workspace.
 
-Seven trends share **Chart** and **Table**. Select a series to hide it; one
+Eight trends share **Chart** and **Table**. Select a series to hide it; one
 series stays visible. A duration point backed by fewer than three runs is
 drawn hollow. An empty trend offers the next wider window.
+
+**Tasks completed**, **Defects**, **Tokens**, and **Lines changed** also
+offer **Per bucket** | **Cumulative** | **Per day**. **Per bucket** draws
+each bucket's own value. **Cumulative** draws the running total from the
+start of the window, so its last point is the card total and empty buckets
+stay flat. **Per day** draws the sum of the 24 hours ending at each
+bucket's close, filled from the buckets before the window so the first
+points are complete; leading points with less than 24 hours of history
+behind them are hollow, and the last bucket is still in progress.
+**Per day** appears only when the bucket width divides a day evenly, so
+week-wide buckets offer only **Per bucket** and **Cumulative**. The window
+opens on **Per day** for `7d` and `30d` and on **Cumulative** otherwise
+(where the width allows it; otherwise **Cumulative**);
+the address remembers the view you pick for each trend.
 
 | Trend | Counts |
 |---|---|
 | **implement_one duration** | Wall-clock time of `implement_one` runs that finished in each bucket, by complexity (**Low**, **Medium**, **Hard**, and **All runs**). **Succeeded**, the default, counts the final attempt in a successful run that committed a candidate. **All** also counts failed, cancelled, no-diff, and unknown outcomes. Pick **Avg**, **p50**, or **p95**. |
 | **Tasks completed** | Tasks that moved to done in each bucket, by the same complexities. |
 | **Tokens per task** | Mean normalized tokens of the tasks that closed in each bucket, one line per complexity. A task's total sums every managed invocation linked to it; **Implement only** keeps implement invocations. **Done**, the default, counts done tasks; **All closed** adds rejected and archived ones. **Implementing model** keeps tasks whose latest implement run used that model. **Compare a tag** splits each complexity into tasks that carry the tag now and a dashed line for the rest. The tooltip gives the task count, mean, and median; a point from fewer than three tasks is hollow. Tasks with a model that has no price, or with no linked invocation, are left out and counted. A task's time is its last write after it closed. |
+| **Tokens** | Total normalized tokens of the tasks that closed in each bucket, by complexity, with a **Tokens (total)** card for the window total. A task's total sums every managed invocation linked to it, whenever it ran. It shares the **Tokens per task** filters (**Done** / **All closed**, **All invocations** / **Implement only**, implementing model, tag comparison) and the same exclusions: tasks with a model that has no price, or with no linked invocation, are left out and counted. **Tokens per task** shows the mean; **Tokens** shows the sum, with the **Per bucket** / **Cumulative** / **Per day** views above. |
 | **Turns to first edit** | Tool calls, and the result bytes those calls returned, before the first file edit in a task's first implement invocation, one line per complexity. **Done**, the default, counts done tasks; **All closed** adds rejected and archived ones. **Provider** keeps tasks whose first implement invocation ran on that provider. **Compare a tag** splits each complexity into a solid line for tasks that carry the tag now and a dashed line for the rest. **Turns** and **Result bytes** switch which mean the chart draws; the tooltip gives the task count and the mean and median of both. A point from fewer than three tasks is hollow. An invocation whose edits go through a shell, or that records no edit tool, is left out and counted, never drawn as zero. A task's time is its last write after it closed. |
 | **Lines changed** | Lines added and deleted by the deliveries that landed in each bucket. **Line kind** draws code and test lines, deletions dashed; **Crew** draws one line per implementing crew (the seven busiest, the rest folded into Other) for the chosen measure. **Statistic** switches between **Totals** and the per-task mean or median, and the complexity picker narrows the deliveries, so crews are compared on like work. The tooltip gives the delivery count, the value, totals, and net lines (code and tests added minus deleted); a point from fewer than three deliveries is hollow. Which paths count as tests or other is set by `workflow.test_paths` and `workflow.non_code_paths`. Deliveries that landed before diff stats were recorded appear after `orbit migrate --backfill-diff-stats`. |
 | **Delivery friction** | Step recoveries, final recoveries, PR auto-fixes, merge conflicts, failed CI, cost in USD and normalized tokens in each bucket. Pick families with the family buttons; recoveries, auto-fixes, conflicts and failed CI are on by default. **Count** shows distinct occurrences (USD and tokens summed); **Per done task** divides by the tasks that reached done in the same bucket, so a busy week does not look worse just for being busy. The tooltip gives each family's count, tasks done and rate. A bucket with fewer than three done tasks is sparse: its points are hollow and its table row is starred. Families in different units are each scaled to their own peak. The complexity and crew pickers narrow done tasks, auto-fixes, failed CI, cost and tokens; recoveries and conflicts are not tied to one task, so they stay unfiltered and say so. Failed CI counts each pull-request head with a failed required check that `--auto-fix` saw, plus each CI-failure sweep filing. |
