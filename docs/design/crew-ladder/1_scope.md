@@ -4,8 +4,8 @@ owner: claude
 last_updated: 2026-10-30
 last_validated: 2026-10-30
 status: Draft
-stage: designing
-next: "Daniel reviews this scope; then file phase 1 (ladder config, shadow trials and the ladder report)"
+stage: building
+next: "Phase 1 shipped (config, shadow, report); Daniel reviews, then file phase 2 (live propose trials)"
 feature: crew-ladder
 doc_role: scope
 type: design
