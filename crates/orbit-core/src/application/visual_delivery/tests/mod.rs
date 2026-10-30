@@ -1,1 +1,2 @@
 mod checks;
+mod resolve;
