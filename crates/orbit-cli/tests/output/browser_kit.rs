@@ -7,7 +7,9 @@ use std::process::Output;
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::test_env;
-use orbit_core::bootstrap::browser_kit::{KitLayout, PLAYWRIGHT_VERSION, WORKER_ENV_NAMES};
+use orbit_core::bootstrap::browser_kit::{
+    KitLayout, PIXEL_HELPER_VERSION, PLAYWRIGHT_VERSION, WORKER_ENV_NAMES,
+};
 use serde_json::{Value, json};
 
 use crate::git_repo::WorkCheckout;
@@ -33,6 +35,13 @@ fn write_kit(home: &Path, kit: &FixtureKit) -> PathBuf {
     )
     .unwrap();
     fs::write(package.join("index.mjs"), "export {};\n").unwrap();
+    let pixel_helper = root.join("kit/node_modules/pngjs");
+    fs::create_dir_all(&pixel_helper).unwrap();
+    fs::write(
+        pixel_helper.join("package.json"),
+        json!({ "name": "pngjs", "version": PIXEL_HELPER_VERSION }).to_string(),
+    )
+    .unwrap();
     let core = root.join("kit/node_modules/playwright-core");
     fs::create_dir_all(&core).unwrap();
     fs::write(
@@ -57,6 +66,7 @@ fn write_kit(home: &Path, kit: &FixtureKit) -> PathBuf {
                 "playwright_version": version,
                 "chromium_revision": REVISION,
                 "browser_version": "156.0.8078.4",
+                "pixel_helper_version": PIXEL_HELPER_VERSION,
                 "verified_at": "2026-10-18T00:00:00Z",
             })
             .to_string(),
@@ -318,7 +328,7 @@ mod verification_errors {
         let node = bin.join("node");
         fs::write(
             &node,
-            "#!/bin/sh\n: > \"$ORBIT_BROWSER_KIT_SCREENSHOT\"\nprintf '{\"text\":\"kit ok\",\"version\":\"fixture\"}\\n'\n",
+            "#!/bin/sh\n: > \"$ORBIT_BROWSER_KIT_SCREENSHOT\"\nprintf '{\"text\":\"kit ok\",\"version\":\"fixture\",\"pngjs\":\"7.0.0\",\"pixels_ok\":true}\\n'\n",
         )
         .unwrap();
         fs::set_permissions(&node, fs::Permissions::from_mode(0o755)).unwrap();
@@ -521,7 +531,7 @@ mod library_recovery {
 case "$2" in
   install-deps) printf 'Missing system dependencies (1):\n  libneeded\n' ;;
   -e) : > "$ORBIT_BROWSER_KIT_SCREENSHOT"
-      printf '{"text":"kit ok","version":"fixture"}\n' ;;
+      printf '{"text":"kit ok","version":"fixture","pngjs":"7.0.0","pixels_ok":true}\n' ;;
   *) exit 90 ;;
 esac"#,
             );
@@ -703,7 +713,7 @@ echo 'libneeded.so => not found'"#,
 case "$2" in
   install-deps) printf 'Missing system dependencies (1):\n  libneeded\n' ;;
   -e) : > "$ORBIT_BROWSER_KIT_SCREENSHOT"
-      printf '{"text":"kit ok","version":"fixture"}\n' ;;
+      printf '{"text":"kit ok","version":"fixture","pngjs":"7.0.0","pixels_ok":true}\n' ;;
   *) exit 90 ;;
 esac"#,
             );
