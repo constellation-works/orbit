@@ -126,11 +126,10 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Operations as Data](./design/operations-as-data/1_overview.md) | Restore ORB-15934 after 2026-11-12 to refuse unknown fields | claude |
 | [Web Terminal](./design/web-terminal/1_scope.md) | Phase 2: ORB-18489 PTY sessions and local terminal routes; phase 1 landed | claude |
 
-### Designing (9)
+### Designing (8)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
-| [Auto Sequence](./design/auto-sequence/1_scope.md) | Review condition, completion and expiry semantics before filing implementation work | codex |
 | [Cloud Dispatch](./design/cloud-dispatch/1_scope.md) | Review the Copilot existing-PR recovery companion; the Claude phase 0 spike remains pending | claude |
 | [Condition Triggers](./design/condition-triggers/1_scope.md) | Review this scope; then file phase 1 (CEL schema, load-time checking, automation explain) | claude |
 | [Conflict Budget](./design/conflict-budget/1_scope.md) | Settle the open questions (sum vs max, where weights live), then file phase 1 | claude |
@@ -144,7 +143,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 
 | Feature | Next | Lead |
 | --- | --- | --- |
-| [Activity / Job](./design/activity-job/1_overview.md) | — | codex |
+| [Activity / Job](./design/activity-job/1_overview.md) | Review proposed auto-task targets and durable CEL waiting; no implementation authorized | codex |
 | [Agent Families](./design/agent-families/1_overview.md) | — | grok |
 | [Agent Scorecards](./design/agent-scorecards/1_overview.md) | — | claude |
 | [Auditability](./design/auditability/1_overview.md) | — | codex |
@@ -202,7 +201,6 @@ a conservative title/status fallback.
 | [Agent Scorecards](./design/agent-scorecards/1_overview.md) | One scorecard per agent role (orchestrators, implementers, reviewers, task pilots), ranked by crew and model, where each problem counts against exactly one role. | Draft | claude |
 | [Auditability](./design/auditability/1_overview.md) | Auditability is Orbit's answer to the operator question that matters after an agent touches a real repository: what happened, why, and who is accountable? | Draft | codex |
 | [Auto-concurrency](./design/auto-concurrency/1_overview.md) | Partly implemented predictive admission — Orbit records per-task CPU and memory samples, builds resource profiles, forecasts host load, and supports shadow or forecast-based admission for local and pull drains; operational accuracy evidence remains limited. | Draft | claude |
-| [Auto Sequence](./design/auto-sequence/1_scope.md) | Condition-driven composition of existing auto-tasks, with sequential defaults, CEL waits and expiry, and durable step evidence. | Draft | codex |
 | [Auto-tasks](./design/auto-tasks/1_overview.md) | Dynamically-defined recurring task templates minted by the host clock tick — periodic work as data, not code. | Accepted | claude |
 | [Automation Triggers](./design/automation-triggers/1_overview.md) | Proposed bounded state-driven triggers for routines and auto-tasks with durable work identity and honest coverage. | Draft | codex |
 | [Backlog Forecast](./design/backlog-forecast/1_scope.md) | Scope: simulate real drain admission, review modes, retry outcomes, host resource fit and regression rework; expose task riskiness and score each forecast model version separately | Draft | claude |
