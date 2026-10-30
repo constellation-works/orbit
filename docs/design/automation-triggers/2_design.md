@@ -58,6 +58,7 @@ A definition has one typed trigger and one action. Supported candidate variants:
 | --- | --- | --- |
 | `cron` / `interval` | One UTC slot identity; missed slots collapse or skip according to explicit policy. | Accepted action outcome; legacy definitions keep legacy semantics. |
 | `deliveries_landed` | Oldest uncovered verified deliveries reach `threshold`, or nonempty pending work reaches `max_wait_minutes`. | Validated coverage of the captured delivery/range obligations. |
+| `condition` | Checked and explained only; never due in this release, so the definition stays disabled. | None yet; `orbit automation explain` shows what it would match. |
 | `preparation_eligible` | Proposed/backlog task has no fresh assessment for its material fingerprint. | Per-task accepted assessment, including an unready verdict. |
 | `execution_failed` | Retired (see §7): still parses, no shipped target job. | None. |
 | `finding_unverified` | Review-filed bug finding in proposed/someday/backlog has no CONFIRMED verdict for its current material ([finding-verification](../finding-verification/2_design.md)). | Per-task recorded verdict. |
