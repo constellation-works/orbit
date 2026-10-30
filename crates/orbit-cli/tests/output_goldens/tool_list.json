@@ -358,7 +358,7 @@
       },
       {
         "name": "schedule",
-        "description": "Schedule object: exactly one of `{ cron: string }` (5-field cron) `{ every_minutes: number }`, or `{ deliveries_landed: { branch, threshold, max_wait_minutes, coverage, owner_machine?, max_items?, retries? } }` (coverage: landed_code_review_v1; owner_machine defaults to this workspace's registered owner machine). Required.",
+        "description": "Schedule object: exactly one of `{ cron: string }` (5-field cron) `{ every_minutes: number }`, `{ deliveries_landed: { branch, threshold, max_wait_minutes, coverage, owner_machine?, max_items?, retries? } }` (coverage: landed_code_review_v1; owner_machine defaults to this workspace's registered owner machine), or `{ condition: { ... } }` (checked and explained but never fired in this release; definition must stay `enabled: false`). Required.",
         "param_type": "object",
         "required": true
       },
@@ -466,7 +466,7 @@
       },
       {
         "name": "schedule",
-        "description": "New schedule object: `{ cron: string }` `{ every_minutes: number }`, or `{ deliveries_landed: { branch, threshold, max_wait_minutes, coverage, owner_machine?, max_items?, retries? } }` (owner_machine defaults to this workspace's registered owner machine) (coverage: landed_code_review_v1).",
+        "description": "New schedule object: `{ cron: string }` `{ every_minutes: number }`, `{ deliveries_landed: { branch, threshold, max_wait_minutes, coverage, owner_machine?, max_items?, retries? } }` (owner_machine defaults to this workspace's registered owner machine) (coverage: landed_code_review_v1), or `{ condition: { ... } }` (checked and explained but never fired in this release; definition must stay `enabled: false`).",
         "param_type": "object",
         "required": false
       },
@@ -2070,7 +2070,7 @@
       },
       {
         "name": "trigger",
-        "description": "Required for set_trigger: replacement trigger, exactly one of `cron` (with optional `missed_run`), `state` or `deliveries_landed`",
+        "description": "Required for set_trigger: replacement trigger, exactly one of `cron` (with optional `missed_run`), `state`, `deliveries_landed` or `condition` (checked and explained but never fired in this release; routine must stay disabled)",
         "param_type": "object",
         "required": false
       },
