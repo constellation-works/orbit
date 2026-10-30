@@ -4,9 +4,11 @@
 //!
 //! Conditions do not fire in this release, so there is no arm state, hold,
 //! fire record or `self` history to show; the report says so instead of
-//! inventing values.
+//! inventing values. `job:<name>` explains a job's auto-task steps instead
+//! ([`job`]).
 
 mod facts;
+mod job;
 
 use chrono::Utc;
 use orbit_automation::condition::{
@@ -20,6 +22,7 @@ use orbit_types::workflow::automation::{ConditionScope, ConditionTrigger};
 use serde::Serialize;
 
 use crate::OrbitRuntime;
+pub use job::JobStepsExplain;
 
 /// Most matches and closest misses one explain lists.
 const MAX_LISTED: usize = 20;
@@ -27,7 +30,16 @@ const MAX_LISTED: usize = 20;
 /// The subject key of a workspace-scope condition.
 const WORKSPACE_SUBJECT: &str = "workspace";
 
-/// The explain report, the `orbit.automation.explain` payload.
+/// The `orbit.automation.explain` payload: a condition's report, or a job's
+/// auto-task steps for `job:<name>`.
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub enum AutomationExplain {
+    Condition(Box<ConditionExplain>),
+    Job(Box<JobStepsExplain>),
+}
+
+/// The explain report for a routine's or auto-task's condition.
 #[derive(Debug, Serialize)]
 pub struct ConditionExplain {
     pub definition: ExplainedDefinition,
@@ -57,7 +69,7 @@ pub struct ConditionExplain {
 
 #[derive(Debug, Serialize)]
 pub struct ExplainedDefinition {
-    /// `routine` or `auto-task`.
+    /// `routine`, `auto-task` or `job`.
     pub kind: &'static str,
     pub name: String,
     pub path: String,
@@ -152,10 +164,36 @@ pub struct ExplainTracking {
 const NOT_TRACKED: &str = "not_tracked";
 
 impl OrbitRuntime {
+    /// Explain `definition`: `job:<name>` reports that job's auto-task
+    /// steps, anything else one condition definition. Read-only.
+    pub fn explain_automation(
+        &self,
+        definition: &str,
+        subject: Option<&str>,
+    ) -> Result<AutomationExplain, OrbitError> {
+        let Some(job) = definition.trim().strip_prefix("job:") else {
+            return self
+                .explain_automation_condition(definition, subject)
+                .map(|report| AutomationExplain::Condition(Box::new(report)));
+        };
+        if subject.is_some_and(|subject| !subject.trim().is_empty()) {
+            return Err(OrbitError::InvalidInput(
+                "a job explain has no subject; drop --subject".into(),
+            ));
+        }
+        if job.is_empty() {
+            return Err(OrbitError::InvalidInput(
+                "definition must name a job after job:".into(),
+            ));
+        }
+        self.explain_job_auto_task_steps(job)
+            .map(|report| AutomationExplain::Job(Box::new(report)))
+    }
+
     /// Explain one condition definition over live state. `definition` is a
     /// name, or `routine:<name>` / `auto-task:<name>`; `subject` picks the
     /// clause tree's subject. Read-only.
-    pub fn explain_automation_condition(
+    fn explain_automation_condition(
         &self,
         definition: &str,
         subject: Option<&str>,

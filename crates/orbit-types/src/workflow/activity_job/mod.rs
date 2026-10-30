@@ -6,6 +6,12 @@ pub const ACTIVITY_REF_PREFIX: &str = "activity:";
 /// `script:<name>` prefix for the `target:` field on a TargetRef.
 pub const SCRIPT_REF_PREFIX: &str = script::SCRIPT_REF_PREFIX;
 
+/// `auto-task:<name>` prefix for the `target:` field on a TargetRef: a step
+/// that binds an auto-task and waits for its accepted completion
+/// (`docs/design/activity-job/specs/auto-task-step.md`). Such steps can be
+/// defined and explained; no binary runs them yet.
+pub const AUTO_TASK_REF_PREFIX: &str = "auto-task:";
+
 pub mod activity_roles;
 pub mod activity_v2;
 pub mod audit_envelope;

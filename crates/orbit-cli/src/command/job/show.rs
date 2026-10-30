@@ -38,6 +38,9 @@ impl Execute for JobShowArgs {
                 .unwrap_or_else(|_| "<invalid-json>".to_string());
             let _ = writeln!(out, "{} {}", bold("Default Input:"), rendered);
         }
+        if let Some(expire_when) = &job.spec.expire_when {
+            let _ = writeln!(out, "{} {}", bold("Expire When:"), expire_when);
+        }
         let _ = writeln!(out, "{} {}", bold("Steps:"), job.spec.steps.len());
         for (i, step) in job.spec.steps.iter().enumerate() {
             let _ = writeln!(out, "  {}:", bold(&format!("Step {}", i + 1)));

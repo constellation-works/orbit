@@ -3,6 +3,7 @@ use serde_json::Value;
 
 use crate::workflow::{JobScheduleState, ShipMode};
 
+use super::AUTO_TASK_REF_PREFIX;
 use super::activity_v2::{ActivityV2, ActivityV2Spec};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -74,6 +75,11 @@ pub struct JobV2 {
     pub max_active_runs: u32,
     #[serde(default)]
     pub kind: JobKind,
+    /// Finite outer CEL deadline of a job with `auto-task:` steps. Admitted
+    /// only on such a job, which must declare it; Core checks its shape and
+    /// bound at load.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expire_when: Option<String>,
     pub steps: Vec<JobV2Step>,
 }
 
@@ -157,6 +163,34 @@ impl JobV2 {
         let mut out = Vec::new();
         walk(&self.steps, None, &mut out);
         out
+    }
+
+    /// Every `auto-task:` step, nested ones included, in file order.
+    pub fn auto_task_steps(&self) -> Vec<&JobV2Step> {
+        fn walk<'a>(steps: &'a [JobV2Step], out: &mut Vec<&'a JobV2Step>) {
+            for step in steps {
+                if step.auto_task_name().is_some() {
+                    out.push(step);
+                }
+                match &step.body {
+                    JobV2StepBody::Parallel { parallel } => walk(&parallel.branches, out),
+                    JobV2StepBody::FanOut { fan_out, .. } => {
+                        walk(std::slice::from_ref(&*fan_out.worker), out);
+                    }
+                    JobV2StepBody::Loop { loop_ } => walk(&loop_.steps, out),
+                    JobV2StepBody::TargetRef(_) | JobV2StepBody::Target(_) => {}
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(&self.steps, &mut out);
+        out
+    }
+
+    /// Whether this job uses the auto-task step extension: an `auto-task:`
+    /// step or a job `expire_when`. No binary runs such a job yet.
+    pub fn declares_auto_task_steps(&self) -> bool {
+        self.expire_when.is_some() || !self.auto_task_steps().is_empty()
     }
 
     /// The stages this job declares, in first-appearance order. A stage id
@@ -286,9 +320,41 @@ pub struct JobV2Step {
     pub recovery_activity: Option<String>,
     #[serde(skip)]
     pub resolved_recovery_activity: Option<ActivityV2>,
+    /// CEL readiness predicate of an `auto-task:` step: false or unknown
+    /// waits. Unlike `when`, it never skips.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wait_until: Option<String>,
+    /// CEL terminal predicate of an `auto-task:` step: true ends the
+    /// unfinished step as `timeout`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expire_when: Option<String>,
+    /// CEL predicate over a candidate `result` that lets an `auto-task:`
+    /// step reuse accepted evidence instead of minting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reuse_when: Option<String>,
+    /// Typed result contract an `auto-task:` step's evidence must satisfy,
+    /// such as `release-readiness/v1`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub require_result: Option<String>,
     #[serde(flatten)]
     pub body: JobV2StepBody,
 }
+
+impl JobV2Step {
+    /// The auto-task this step names with `target: auto-task:<name>`.
+    pub fn auto_task_name(&self) -> Option<&str> {
+        match &self.body {
+            JobV2StepBody::TargetRef(reference) => {
+                reference.target.strip_prefix(AUTO_TASK_REF_PREFIX)
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Step keys only an `auto-task:` step admits.
+const AUTO_TASK_WAIT_KEYS: [&str; 4] =
+    ["wait_until", "expire_when", "reuse_when", "require_result"];
 
 /// One-of body for a v2 step. Picked by exactly one of the `target`, `spec`,
 /// `parallel`, `fan_out`, or `loop` body keys.
@@ -355,10 +421,37 @@ impl<'de> Deserialize<'de> for JobV2Step {
             obj.remove("recovery_activity"),
         )?;
 
+        let [wait_until, expire_when, reuse_when, require_result] = AUTO_TASK_WAIT_KEYS
+            .map(|key| deserialize_optional_string::<D::Error>(key, obj.remove(key)));
+        let (wait_until, expire_when, reuse_when, require_result) =
+            (wait_until?, expire_when?, reuse_when?, require_result?);
+
         if obj.contains_key("role") {
             return Err(D::Error::custom(
                 "step declares retired `role`; remove it and pass `crew` in the activity input to select a non-default crew",
             ));
+        }
+
+        let auto_task_target = obj
+            .get("target")
+            .and_then(Value::as_str)
+            .filter(|target| target.starts_with(AUTO_TASK_REF_PREFIX));
+        if let Some(target) = auto_task_target {
+            admit_auto_task_step::<D::Error>(
+                &id,
+                target,
+                obj,
+                retry.is_some(),
+                recovery_activity.is_some(),
+            )?;
+        } else if let Some((key, _)) = AUTO_TASK_WAIT_KEYS
+            .iter()
+            .zip([&wait_until, &expire_when, &reuse_when, &require_result])
+            .find(|(_, value)| value.is_some())
+        {
+            return Err(D::Error::custom(format!(
+                "step `{id}`: `{key}` is admitted only on a `target: auto-task:<name>` step"
+            )));
         }
 
         let has_parallel = obj.contains_key("parallel");
@@ -432,8 +525,49 @@ impl<'de> Deserialize<'de> for JobV2Step {
             retry,
             recovery_activity,
             resolved_recovery_activity: None,
+            wait_until,
+            expire_when,
+            reuse_when,
+            require_result,
             body,
         })
+    }
+}
+
+/// Admit an `auto-task:` step's shape. Its keys are a closed set, so a key
+/// this binary does not know is refused rather than dropped; the per-step
+/// activity knobs do not apply to a step that binds a task.
+fn admit_auto_task_step<E: serde::de::Error>(
+    id: &str,
+    target: &str,
+    rest: &serde_json::Map<String, Value>,
+    has_retry: bool,
+    has_recovery_activity: bool,
+) -> Result<(), E> {
+    let name = target.strip_prefix(AUTO_TASK_REF_PREFIX).unwrap_or(target);
+    if !crate::workflow::is_valid_auto_task_name(name) {
+        return Err(E::custom(format!(
+            "step `{id}`: target `{target}` does not name an auto-task; a name is lowercase \
+             letters, digits, `-` and `_`, starting with a letter or digit"
+        )));
+    }
+    // `timeout_seconds: 0` is what a serialized ref carries for "no timeout",
+    // so a step re-reads its own serialization.
+    let refused = rest
+        .iter()
+        .filter(|(key, value)| {
+            *key != "target" && !(*key == "timeout_seconds" && value.as_u64() == Some(0))
+        })
+        .map(|(key, _)| key.as_str())
+        .chain(has_retry.then_some("retry"))
+        .chain(has_recovery_activity.then_some("recovery_activity"))
+        .min();
+    match refused {
+        Some(key) => Err(E::custom(format!(
+            "step `{id}`: an `auto-task:` step does not admit `{key}`; it admits id, stage, \
+             when, target, wait_until, expire_when, reuse_when and require_result"
+        ))),
+        None => Ok(()),
     }
 }
 

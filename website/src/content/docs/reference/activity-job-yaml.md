@@ -653,3 +653,82 @@ timed_out}` as output, retried per the step's `retry`. Every attempt,
 refusals included, is listed by `orbit run show` and `orbit script
 history <name>` with the script's digest, grant, argv, exit, duration
 and its capped, redacted log.
+
+## Auto-task steps (defined and explained, not run)
+
+A step may name an auto-task definition: `target: auto-task:<name>`. Such
+a step binds one task from that definition and waits for its accepted
+completion, instead of running an activity. This Orbit loads, checks and
+explains these steps, but cannot run them yet: a job with one must keep
+`state: disabled`, `enabled` fails to load, and submitting it is refused
+before any run is recorded or task minted.
+
+```yaml
+spec:
+  state: disabled
+  expire_when: "now >= job.started_at + duration('24h')"
+  steps:
+    - id: qa
+      target: auto-task:full-qa-sweep
+      wait_until: "board.empty"
+      require_result: release-readiness/v1
+      reuse_when: >-
+        result.status == 'passed' && result.revision == job.source_revision
+        && now - result.completed_at <= duration('24h')
+    - id: security
+      target: auto-task:security-review
+      wait_until: "self.prev.status == 'done' && board.empty"
+      expire_when: "now >= self.wait_started_at + duration('8h')"
+```
+
+An auto-task step admits only `id`, `stage`, `when`, `target`,
+`wait_until`, `expire_when`, `reuse_when` and `require_result`; any other
+key, including `retry`, `recovery_activity`, `default_input` and a nonzero
+`timeout_seconds`, is refused rather than ignored. The four wait keys are
+refused on any other step, and `spec.expire_when` on a job without an
+auto-task step.
+
+| Field | Meaning |
+|---|---|
+| `when` | Unchanged: evaluated once, false skips the step. A skipped step is `skipped`, never accepted evidence, so use `wait_until` for prerequisites. |
+| `wait_until` | CEL readiness predicate: false or unknown waits, true is ready. Absent means ready when the job reaches the step. |
+| `expire_when` | CEL predicate: true ends the unfinished step as `timeout`. |
+| `reuse_when` | CEL predicate over a candidate `result` that lets the step reuse accepted evidence. |
+| `require_result` | Typed result contract; `release-readiness/v1` is the one registered. |
+| `spec.expire_when` | Required on a job with auto-task steps: `now >= job.started_at + duration('<d>')` or `now >= timestamp('<RFC3339>')`, positive and at most 168h after admission. |
+
+The CEL fields use the condition-trigger language with its 4 KiB, 200-node
+and nesting limits (see [Condition triggers](../scheduling-yaml/#condition-triggers)),
+over a typed job environment:
+
+- `now`, `job.started_at`, and `job.source_revision`. The revision is
+  pinned at admission when any step requires `release-readiness/v1`;
+  otherwise it may be absent and needs `has()`.
+- `self.wait_started_at`, `self.status`, optional `self.task_id`, and
+  `self.prev` (`status`, optional `end_time`). `self.prev` is the previous
+  sibling in a sequential list. It is always present on a later step and
+  never on a first step or a parallel branch, where reading it is refused.
+- `steps['<id>']` (`status`, optional `end_time` and `task_id`), with a
+  literal ID naming an earlier step in the same list or an enclosing one,
+  or a branch of an earlier parallel block. Forward, self, enclosing,
+  sibling-branch, loop/fan-out and computed references are refused.
+- `board` with `empty` (no backlog, in-progress or review task) beside the
+  condition `board` fields, and `tasks['<ID>']`.
+- `result` in `reuse_when` only: `status`, `revision` (required under
+  `release-readiness/v1`, else optional), `completed_at`, `contract`,
+  `definition_digest`, `task_id`, optional `run_id`.
+
+A step status is one of `waiting`, `queued`, `running`, `done`, `held`,
+`failed`, `timeout`, `cancelled` and `skipped`; a misspelled literal fails
+to load. An auto-task step inside a `loop` or `fan_out` is refused, and so
+is a job with more than 32 of them. Every refusal names the job file and
+the field (`spec.steps.<id>.wait_until`), and for an expression its
+line:column.
+
+`orbit automation explain job:<name>` shows the checked steps: the outer
+bound, whether the revision is pinned, and per step its target auto-task,
+resolved now with its file digest, enabled state and own condition guard
+(or reported `missing`), its guards, waits and the earlier steps it reads.
+It writes nothing. An older Orbit binary shows such a job without the wait
+fields and will not run it while it is disabled. An enabled copy fails
+target resolution in the worker before its first step.

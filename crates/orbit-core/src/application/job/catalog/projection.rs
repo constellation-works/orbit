@@ -60,6 +60,9 @@ pub fn job_catalog_to_json_with_last_run(
         "steps": job.spec.steps.iter().map(job_v2_step_to_json).collect::<Vec<_>>(),
         "path": job.path.display().to_string(),
     });
+    if let Some(expire_when) = &job.spec.expire_when {
+        value["expire_when"] = json!(expire_when);
+    }
     value["last_run_state"] = last_run
         .map(|r| serde_json::Value::String(r.state.to_string()))
         .unwrap_or(serde_json::Value::Null);
@@ -76,6 +79,16 @@ pub(super) fn job_v2_step_to_json(step: &JobV2Step) -> Value {
         "when": step.when,
         "retry": step.retry,
     });
+    for (key, field) in [
+        ("wait_until", &step.wait_until),
+        ("expire_when", &step.expire_when),
+        ("reuse_when", &step.reuse_when),
+        ("require_result", &step.require_result),
+    ] {
+        if let Some(field) = field {
+            value[key] = json!(field);
+        }
+    }
     match &step.body {
         JobV2StepBody::TargetRef(target) => {
             value["body"] = json!({

@@ -3,6 +3,8 @@ use std::cell::{OnceCell, RefCell};
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
+use chrono::{DateTime, Utc};
+use orbit_automation::condition::{CheckedJobWaits, check_job_waits};
 use orbit_common::fs::git::{GIT_LOCAL_TIMEOUT, GIT_OUTPUT_LIMIT};
 use orbit_common::process::run_bounded_capped;
 use orbit_common::{NotFoundKind, OrbitError};
@@ -368,6 +370,10 @@ impl OrbitRuntime {
         tracing::debug!(job_catalog_load = true);
         let mut catalog = V2JobCatalog::new();
         let mut diagnostics = Vec::new();
+        let dir_paths = dirs
+            .iter()
+            .map(|dir| dir.path().to_path_buf())
+            .collect::<Vec<_>>();
         for (directory_index, dir) in dirs.into_iter().enumerate() {
             if dir.path().is_dir() {
                 match catalog.load_dir_prefer_existing_best_effort(dir.path()) {
@@ -400,6 +406,16 @@ impl OrbitRuntime {
                 error,
             });
         });
+        for (path, error) in refuse_unchecked_auto_task_jobs(&mut catalog) {
+            diagnostics.push(V2JobCatalogDiagnostic {
+                directory_index: dir_paths
+                    .iter()
+                    .position(|dir| path.starts_with(dir))
+                    .unwrap_or(usize::MAX),
+                path,
+                error,
+            });
+        }
         for diagnostic in &diagnostics {
             tracing::warn!(
                 target: "orbit.core.jobs",
@@ -428,6 +444,11 @@ impl OrbitRuntime {
             }
         }
         self.load_plugin_job_files(&mut catalog, &mut |error| errors.push(error));
+        errors.extend(
+            refuse_unchecked_auto_task_jobs(&mut catalog)
+                .into_iter()
+                .map(|(_, error)| error),
+        );
         (catalog, errors)
     }
 
@@ -589,6 +610,42 @@ impl OrbitRuntime {
     }
 }
 
+/// Remove every job whose auto-task steps fail their load-time checks
+/// [ORB-20157], as a parse error removes its file, and return each one's
+/// path and error for the caller's diagnostics.
+fn refuse_unchecked_auto_task_jobs(catalog: &mut V2JobCatalog) -> Vec<(PathBuf, OrbitError)> {
+    let now = Utc::now();
+    let refused = catalog
+        .iter()
+        .filter_map(|(name, path, job)| {
+            check_auto_task_job(name, path, job, now)
+                .err()
+                .map(|error| (name.to_string(), path.to_path_buf(), error))
+        })
+        .collect::<Vec<_>>();
+    refused
+        .into_iter()
+        .map(|(name, path, error)| {
+            catalog.take(&name);
+            (path, error)
+        })
+        .collect()
+}
+
+/// Check one job's auto-task steps and CEL wait fields
+/// (`docs/design/activity-job/specs/auto-task-step.md` §2-§4), naming the
+/// job and its file in a refusal.
+pub(in crate::application) fn check_auto_task_job(
+    name: &str,
+    path: &Path,
+    job: &JobV2,
+    now: DateTime<Utc>,
+) -> Result<CheckedJobWaits, OrbitError> {
+    check_job_waits(job, now).map_err(|error| {
+        OrbitError::JobValidation(format!("job '{name}' ({}): {error}", path.display()))
+    })
+}
+
 pub(super) fn validate_ci_integration_branch(
     repo_root: &Path,
     branch: &str,
@@ -682,11 +739,13 @@ pub(in crate::application::job) fn shipped_job_spec(job_id: &str) -> Result<JobV
         .iter()
         .find(|(name, _)| *name == job_id)
         .ok_or_else(|| OrbitError::not_found(NotFoundKind::Job, job_id.to_string()))?;
-    Ok(orbit_engine::activity_job::load_job_asset(yaml)
+    let spec = orbit_engine::activity_job::load_job_asset(yaml)
         .map_err(|error| {
             OrbitError::JobValidation(format!("shipped job asset `{job_id}` is invalid: {error}"))
         })?
-        .spec)
+        .spec;
+    check_auto_task_job(job_id, Path::new(job_id), &spec, Utc::now())?;
+    Ok(spec)
 }
 
 pub(crate) fn seed_default_jobs(

@@ -56,6 +56,7 @@ fn short_inspection_revision_fails_a_retried_task_pilot_once() {
         steering_gate: None,
         max_active_runs: 1,
         kind: JobKind::Workflow,
+        expire_when: None,
         steps: vec![JobV2Step {
             id: "pilot".to_string(),
             stage: None,
@@ -68,6 +69,10 @@ fn short_inspection_revision_fails_a_retried_task_pilot_once() {
             }),
             recovery_activity: None,
             resolved_recovery_activity: None,
+            wait_until: None,
+            expire_when: None,
+            reuse_when: None,
+            require_result: None,
             body: JobV2StepBody::Target(TargetStep {
                 spec: ActivityV2Spec::AgentLoop(spec),
                 activity_name: Some("task_pilot".to_string()),

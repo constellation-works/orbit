@@ -111,6 +111,10 @@ pub(super) fn target_step(id: &str, action: &str) -> JobV2Step {
         retry: None,
         recovery_activity: None,
         resolved_recovery_activity: None,
+        wait_until: None,
+        expire_when: None,
+        reuse_when: None,
+        require_result: None,
         body: JobV2StepBody::Target(deterministic_target(action)),
     }
 }
@@ -130,6 +134,7 @@ pub(super) fn job_with_steps(steps: Vec<JobV2Step>) -> JobV2 {
         steering_gate: None,
         max_active_runs: 1,
         kind: JobKind::Workflow,
+        expire_when: None,
         steps,
     }
 }

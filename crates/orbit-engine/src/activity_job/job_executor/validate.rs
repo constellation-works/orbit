@@ -120,6 +120,7 @@ fn deterministic_target(step: &JobV2Step) -> Option<(&TargetStep, &str)> {
 }
 
 pub fn validate_job(job: &JobV2) -> Result<(), DispatchError> {
+    refuse_auto_task_steps(job)?;
     if let Some(name) = &job.recovery_activity
         && job.resolved_recovery_activity.is_none()
     {
@@ -174,6 +175,26 @@ pub fn validate_job(job: &JobV2) -> Result<(), DispatchError> {
     }
     validate_step_output_readiness(job)?;
     Ok(())
+}
+
+/// Refuse a job using the auto-task step extension before any step runs:
+/// this binary defines and explains such steps but has no durable waiting or
+/// keyed child admission to run them with
+/// (`docs/design/activity-job/specs/auto-task-step.md` §7, phase 1).
+fn refuse_auto_task_steps(job: &JobV2) -> Result<(), DispatchError> {
+    let what = match job.auto_task_steps().first() {
+        Some(step) => format!(
+            "step `{}` targets auto-task `{}`",
+            step.id,
+            step.auto_task_name().unwrap_or_default()
+        ),
+        None if job.expire_when.is_some() => "the job declares `expire_when`".to_string(),
+        None => return Ok(()),
+    };
+    Err(DispatchError::JobValidation(format!(
+        "{what}: auto-task steps can be defined and explained, but this Orbit cannot run them \
+         yet; no step ran and no task was minted"
+    )))
 }
 
 /// [ORB-11325] Reject a job whose `when:` / `break_when:` reads

@@ -18,7 +18,7 @@ use orbit_types::workflow::automation::{ConditionScope, ConditionTrigger};
 use super::ast::{
     conjuncts, count_nodes, line_column, path_of, string_list_literal, string_literal,
 };
-use super::schema::ConditionCarrier;
+use super::schema::{ConditionCarrier, Environment};
 use super::typing::check_types;
 
 /// Longest admitted expression source, in bytes.
@@ -81,6 +81,8 @@ pub struct ConditionReads {
     pub board: BTreeSet<&'static str>,
     /// Whether any `status_since` is read, which needs task history.
     pub status_since: bool,
+    /// `steps['<id>']` step IDs a job wait reads.
+    pub steps: BTreeSet<String>,
 }
 
 /// A condition that passed every load-time check.
@@ -119,25 +121,15 @@ pub fn check_condition(
         }
     })?;
     let mut reads = ConditionReads::default();
-    let when = check_expression(
-        &condition.when,
-        &format!("{clause}.when"),
-        condition.scope,
+    let env = Environment::Condition {
+        scope: condition.scope,
         carrier,
-        &mut reads,
-    )?;
+    };
+    let when = check_expression(&condition.when, &format!("{clause}.when"), env, &mut reads)?;
     let rearm = condition
         .rearm
         .as_deref()
-        .map(|source| {
-            check_expression(
-                source,
-                &format!("{clause}.rearm"),
-                condition.scope,
-                carrier,
-                &mut reads,
-            )
-        })
+        .map(|source| check_expression(source, &format!("{clause}.rearm"), env, &mut reads))
         .transpose()?;
     let prefilter = match condition.scope {
         ConditionScope::Task => task_prefilter(&when).map_err(|message| ConditionCheckError {
@@ -157,11 +149,12 @@ pub fn check_condition(
     })
 }
 
-fn check_expression(
+/// Parse and type-check one expression in `env`, under the size and AST
+/// limits, naming `clause` in any refusal.
+pub(crate) fn check_expression(
     source: &str,
     clause: &str,
-    scope: ConditionScope,
-    carrier: ConditionCarrier,
+    env: Environment<'_>,
     reads: &mut ConditionReads,
 ) -> Result<CheckedExpression, ConditionCheckError> {
     let error = |offset: Option<u32>, message: String| ConditionCheckError {
@@ -206,7 +199,7 @@ fn check_expression(
             format!("expression has {nodes} AST nodes; the limit is {MAX_CONDITION_NODES}"),
         ));
     }
-    check_types(&ast, &info, scope, carrier, reads)
+    check_types(&ast, &info, env, reads)
         .map_err(|failure| error(failure.offset, failure.message))?;
     Ok(CheckedExpression {
         source: source.to_string(),
