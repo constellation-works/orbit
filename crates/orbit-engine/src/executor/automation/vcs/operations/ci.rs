@@ -225,7 +225,8 @@ pub(super) fn ci_commit_jobs(input: &Value) -> Result<Value, OrbitError> {
 
 /// One failed job's bounded, redacted failed-step log. `fallback_error` is
 /// the redacted reason the read recovered no text, so the caller can tell an
-/// unreadable log from a readable one. Complete command evidence or bounded
+/// unreadable log from a readable one; `read_throttle` beside it, or on a
+/// failed primary read, is the provider's typed throttling answer. Complete command evidence or bounded
 /// failure regions accompany the display with their source; callers must bind
 /// them to the provider's failed job and step before recovery.
 pub(super) fn ci_job_log(input: &Value) -> Result<Value, OrbitError> {
@@ -256,7 +257,7 @@ pub(super) fn ci_job_log(input: &Value) -> Result<Value, OrbitError> {
         super::super::completion_deadline::probe("prerequisite log", deadline.remaining()?);
         deadline.remaining()?;
     }
-    Ok(json!({
+    let mut answer = json!({
         "log": read.log.text,
         "truncated": read.log.truncated,
         "source_complete": read.log.source_complete,
@@ -267,7 +268,14 @@ pub(super) fn ci_job_log(input: &Value) -> Result<Value, OrbitError> {
         "source_jobs": read.source_jobs,
         "source": read.source,
         "fallback_error": read.fallback_error,
-    }))
+    });
+    // Present only beside `fallback_error`, so readers that refuse an
+    // unreadable log keep refusing it.
+    if let Some(throttle) = read.fallback_throttle {
+        answer["read_throttle"] = serde_json::to_value(throttle)
+            .map_err(|error| OrbitError::Execution(error.to_string()))?;
+    }
+    Ok(answer)
 }
 
 /// Rerun one workflow run's failed jobs. Single-shot: the landing reruns a

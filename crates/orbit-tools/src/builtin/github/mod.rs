@@ -15,6 +15,7 @@ pub mod auth;
 pub mod dependabot_alerts;
 mod diagnostic;
 mod nextest_regions;
+mod throttle;
 pub use diagnostic::strip_ansi_sequences;
 pub mod logs;
 pub mod pr_list;

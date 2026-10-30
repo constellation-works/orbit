@@ -16,6 +16,10 @@
 //!   required failures' jobs and logs are read on the exact head the rollup
 //!   reports ([`head_check_evidence`]); a check no job answers, an unreadable
 //!   job or log, or a runner or network failure stops without an agent. A
+//!   failed job's log read the provider throttled (an authenticated rate
+//!   limit) instead waits, read-only and recorded, for the provider's reset
+//!   or a bounded backoff, never past the completion deadline
+//!   ([`defer_throttled_read`]) [ORB-20178]. A
 //!   required check run outside a workflow (a provider app's aggregate) is
 //!   repaired only from its authenticated source failure annotations, which
 //!   are retained with the task before the repair is admitted [ORB-16185].
@@ -59,10 +63,13 @@ mod checks;
 mod ledger;
 mod publication;
 mod published_head;
+mod read_deferral;
 mod verdict;
 
 pub(super) use admission::{AutoFix, admit};
-pub(super) use checks::{base_tip_checks, recover_ci_rerun, red_base_wait, repair_failed_checks};
+pub(super) use checks::{
+    CheckRepair, base_tip_checks, recover_ci_rerun, red_base_wait, repair_failed_checks,
+};
 pub(super) use ledger::{
     attach_evidence, record_base_path, record_landed_repair, record_published_repair,
     reserve_base_refresh,
@@ -73,6 +80,7 @@ pub(crate) use published_head::{
     AUTHENTICATED_PUBLISHED_HEAD_SHA, apply_authenticated_published_head,
     provider_authenticated_published_head, recovery_published_head,
 };
+pub(super) use read_deferral::{defer_throttled_read, owed_read_wait};
 pub(super) use verdict::{
     BlockedStopReason, BlockedVerdict, UNSETTLED_BLOCKED_POLLS, blocked_verdict,
     hold_auto_fix_stop, stopped, stopped_by,

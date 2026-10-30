@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use orbit_common::OrbitError;
+use orbit_common::{OrbitError, PrivateVcsFailure, PrivateVcsFailureClass, ProviderReadThrottle};
 use orbit_tools::github_cli::{SOURCE_JOB_API_LOG, SOURCE_RUN_LOG};
 use serde_json::{Value, json};
 
@@ -10,26 +10,43 @@ use super::super::super::operations;
 use crate::context::RuntimeHost;
 
 /// One failed job's log. A read that recovered no text, which the log
-/// reader reports beside an empty log, is a failed read.
+/// reader reports beside an empty log, is a failed read; when the provider
+/// throttled it, the failure carries that typed throttle. `deadline_ms`, when
+/// set, bounds every read subprocess by the completion's absolute deadline.
 pub(super) fn job_log<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
     run_id: u64,
     job_id: u64,
     job: &Value,
+    deadline_ms: Option<u64>,
 ) -> Result<String, OrbitError> {
-    let response = host.run_private_vcs_operation(
-        operations::CI_JOB_LOG,
-        json!({
-            "run_id": run_id.to_string(),
-            "job_id": job_id.to_string(),
-            "workspace_path": workspace.to_string_lossy(),
-        }),
-    )?;
+    let mut input = json!({
+        "run_id": run_id.to_string(),
+        "job_id": job_id.to_string(),
+        "workspace_path": workspace.to_string_lossy(),
+    });
+    if let Some(deadline_ms) = deadline_ms {
+        input["deadline_ms"] = json!(deadline_ms);
+    }
+    let response = host.run_private_vcs_operation(operations::CI_JOB_LOG, input)?;
     if let Some(reason) = response["fallback_error"].as_str() {
-        return Err(OrbitError::Execution(format!(
-            "the log read recovered no text: {reason}"
-        )));
+        let message = format!("the log read recovered no text: {reason}");
+        let throttle = response
+            .get("read_throttle")
+            .filter(|throttle| !throttle.is_null())
+            .map(|throttle| serde_json::from_value::<ProviderReadThrottle>(throttle.clone()));
+        return Err(match throttle {
+            Some(Ok(throttle)) => OrbitError::PrivateVcs(Box::new(PrivateVcsFailure {
+                operation: operations::CI_JOB_LOG.to_string(),
+                class: PrivateVcsFailureClass::Other,
+                message,
+                read_throttle: Some(throttle),
+            })),
+            // An unreadable throttle is no wait evidence: the read stays
+            // the ordinary failure.
+            Some(Err(_)) | None => OrbitError::Execution(message),
+        });
     }
     if response["source_complete"] == false {
         return Err(OrbitError::Execution(

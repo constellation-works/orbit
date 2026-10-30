@@ -433,6 +433,33 @@ pub struct PrivateVcsFailure {
     pub class: PrivateVcsFailureClass,
     /// The rendered message, without the `execution failed: ` prefix.
     pub message: String,
+    /// Set only when a provider adapter recognized an authenticated
+    /// throttling answer to a read. The class stays as read, so no transient
+    /// retry ever repeats it; whether and when the read may repeat is the
+    /// caller's policy.
+    pub read_throttle: Option<ProviderReadThrottle>,
+}
+
+/// What an authenticated provider throttling answer to a read made
+/// observable. Every field is optional: an absent field was not observed and
+/// must never be invented. None of them carries a credential.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderReadThrottle {
+    /// The provider's `Retry-After` wait, in seconds from the answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_after_seconds: Option<u64>,
+    /// The provider's rate-limit reset instant, in Unix seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reset_epoch_seconds: Option<u64>,
+    /// The rate-limit resource the provider named.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource: Option<String>,
+    /// The throttled account as the provider named it, such as `user ID 1`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub principal: Option<String>,
+    /// The provider's request identifier for the throttled answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
 }
 
 /// Stable decision-request and channel refusal codes shared by all transports.

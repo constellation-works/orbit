@@ -15,13 +15,14 @@
 //! scope — only jobs that run itself reported unsuccessful, so a job that
 //! passed can never be returned as failed-step evidence.
 
-use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_all;
+use orbit_common::{OrbitError, ProviderReadThrottle};
 use orbit_exec::{ExecRequest, NoSandbox, run_process, run_process_streaming_stdout};
 use serde_json::{Value, json};
 
-use crate::{TIMEOUT_LONG_MS, check_exec_result};
+use crate::TIMEOUT_LONG_MS;
 
+use super::throttle::{check_read_result, throttle_of};
 use super::{LogSelection, StreamedLog, StreamedLogCollector};
 
 /// Cap on returned checkout-evidence lines. Evidence is a handful of lines per
@@ -291,6 +292,9 @@ pub struct RunLogRead {
     /// Why the fallback recovered nothing, already redacted. Set only when the
     /// read ends with no text: a fallback that found evidence reports none.
     pub fallback_error: Option<String>,
+    /// The provider throttled a fallback read, so `fallback_error` is a read
+    /// the caller's policy may repeat, not a refusal. Set only beside it.
+    pub fallback_throttle: Option<ProviderReadThrottle>,
     /// The requested step could not be mapped in a raw job log (see
     /// `StreamedLog::selection_unsupported`).
     pub selection_unsupported: bool,
@@ -366,6 +370,7 @@ pub fn read_run_log_guarded(
                 source: SOURCE_RUN_LOG,
                 source_jobs: Vec::new(),
                 fallback_error: None,
+                fallback_throttle: None,
                 selection_unsupported: false,
             });
         }
@@ -388,6 +393,7 @@ pub fn read_run_log_guarded(
             source: SOURCE_RUN_LOG,
             source_jobs: Vec::new(),
             fallback_error: None,
+            fallback_throttle: None,
             selection_unsupported: false,
         });
     }
@@ -534,7 +540,7 @@ fn stream_bounded_log(
             collector.push(&chunk[..read]);
         }
     })?;
-    check_exec_result(&result, label)?;
+    check_read_result(&result, label)?;
     Ok(log)
 }
 
@@ -574,11 +580,14 @@ fn recover_from_job_logs(
     cached_run_view: Option<&Value>,
     guard: &dyn Fn(&ExecRequest) -> Result<ExecRequest, OrbitError>,
 ) -> RunLogRead {
-    let unrecovered = |reason: String, selection_unsupported: bool| RunLogRead {
+    let unrecovered = |reason: String,
+                       selection_unsupported: bool,
+                       throttle: Option<ProviderReadThrottle>| RunLogRead {
         log: empty,
         source: SOURCE_RUN_LOG,
         source_jobs: Vec::new(),
         fallback_error: Some(redact_all(&reason)),
+        fallback_throttle: throttle,
         selection_unsupported,
     };
 
@@ -588,15 +597,24 @@ fn recover_from_job_logs(
     };
     let jobs = match fallback_jobs(requests, cached_run_view, guard) {
         Ok(jobs) => jobs,
-        Err(reason) => return unrecovered(qualify(reason), false),
+        Err(gap) => {
+            return unrecovered(
+                qualify(gap.reason),
+                false,
+                gap.throttle.map(|throttle| *throttle),
+            );
+        }
     };
     let considered = jobs.len();
     let mut attempts: Vec<String> = Vec::new();
     let mut selection_unsupported = false;
+    let mut throttle = None;
     for job in jobs.iter().take(bounds.max_fallback_jobs) {
         let request = match guard(&requests.job_log_request(job.id)) {
             Ok(request) => request,
-            Err(error) => return unrecovered(qualify(error.to_string()), selection_unsupported),
+            Err(error) => {
+                return unrecovered(qualify(error.to_string()), selection_unsupported, throttle);
+            }
         };
         match stream_bounded_log(
             &request,
@@ -611,6 +629,7 @@ fn recover_from_job_logs(
                     source: SOURCE_JOB_API_LOG,
                     source_jobs: vec![job.to_json()],
                     fallback_error: None,
+                    fallback_throttle: None,
                     selection_unsupported: false,
                 };
             }
@@ -626,7 +645,10 @@ fn recover_from_job_logs(
                 })
             }
             Ok(_) => attempts.push(format!("{} returned no log text", job.label())),
-            Err(error) => attempts.push(format!("{}: {error}", job.label())),
+            Err(error) => {
+                throttle = throttle.or_else(|| throttle_of(&error));
+                attempts.push(format!("{}: {error}", job.label()));
+            }
         }
     }
     let skipped = considered.saturating_sub(bounds.max_fallback_jobs);
@@ -641,7 +663,7 @@ fn recover_from_job_logs(
             bounds.max_fallback_jobs
         ));
     }
-    unrecovered(qualify(reason), selection_unsupported)
+    unrecovered(qualify(reason), selection_unsupported, throttle)
 }
 
 /// The jobs whose logs may be read for this request, from verified run
@@ -650,7 +672,7 @@ fn recover_from_job_logs(
 /// Every rejection here is deliberate: unverifiable metadata must end the
 /// fallback rather than widen it. The failure is returned as prose because it
 /// is evidence about *this run's* collection, not a fault the caller can
-/// retry differently.
+/// retry differently, except that a provider throttle behind it stays typed.
 ///
 /// `cached_run_view` skips the self-query below entirely when the caller
 /// already holds an equivalent, freshly projected payload — identity is still
@@ -659,7 +681,7 @@ fn fallback_jobs(
     requests: &RunLogRequests,
     cached_run_view: Option<&Value>,
     guard: &dyn Fn(&ExecRequest) -> Result<ExecRequest, OrbitError>,
-) -> Result<Vec<FallbackJob>, String> {
+) -> Result<Vec<FallbackJob>, FallbackGap> {
     let owned;
     let view = match cached_run_view {
         Some(view) => view,
@@ -667,7 +689,10 @@ fn fallback_jobs(
             let request = guard(&requests.run_view).map_err(|error| error.to_string())?;
             let result = run_process(&request, &NoSandbox)
                 .map_err(|error| format!("gh run view could not run: {error}"))?;
-            check_exec_result(&result, "gh run view").map_err(|error| error.to_string())?;
+            check_read_result(&result, "gh run view").map_err(|error| FallbackGap {
+                reason: error.to_string(),
+                throttle: throttle_of(&error).map(Box::new),
+            })?;
             owned = super::parse_gh_json(&result.stdout, "gh run view")
                 .map(|parsed| super::run::view::project_run_view(&parsed))
                 .map_err(|error| error.to_string())?;
@@ -683,13 +708,15 @@ fn fallback_jobs(
             return Err(format!(
                 "gh run view reported run {reported}, not run {}; refusing its job metadata",
                 requests.run_id
-            ));
+            )
+            .into());
         }
         None => {
             return Err(format!(
                 "gh run view reported no run id for run {}; refusing its job metadata",
                 requests.run_id
-            ));
+            )
+            .into());
         }
     }
 
@@ -707,7 +734,7 @@ fn fallback_jobs(
         }
     };
     if jobs.is_empty() {
-        return Err(match (&requests.job, requests.scope) {
+        return Err(FallbackGap::from(match (&requests.job, requests.scope) {
             (Some(job), LogScope::Failed) => format!(
                 "job {job} is not a job of run {} that this run reported unsuccessful",
                 requests.run_id
@@ -725,9 +752,25 @@ fn fallback_jobs(
                     requests.run_id
                 )
             }
-        });
+        }));
     }
     Ok(jobs)
+}
+
+/// Why the fallback found no job to read, already rendered, and the provider
+/// throttle behind it when one answered.
+struct FallbackGap {
+    reason: String,
+    throttle: Option<Box<ProviderReadThrottle>>,
+}
+
+impl From<String> for FallbackGap {
+    fn from(reason: String) -> Self {
+        Self {
+            reason,
+            throttle: None,
+        }
+    }
 }
 
 /// Read one job array out of a projected run view, keeping only jobs this

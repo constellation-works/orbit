@@ -131,7 +131,7 @@ fn plan_ci_rerun_observed<H: RuntimeHost + ?Sized>(
         diagnostic.stage = CiRerunStage::Log;
         diagnostic.run_id = Some(run);
         diagnostic.job_id = Some(id);
-        let log = job_log(host, workspace, run, id, job)?;
+        let log = job_log(host, workspace, run, id, job, Some(deadline_ms))?;
         diagnostic.stage = CiRerunStage::Classification;
         let emitted_record =
             super::super::super::super::ci::log_signature::classify_log_lines(&log)
@@ -158,7 +158,7 @@ fn plan_ci_rerun_observed<H: RuntimeHost + ?Sized>(
         {
             (prior.class, prior.signature.clone())
         } else {
-            let (class, _, _, signature) = classify_logged_job(
+            let classification = classify_logged_job(
                 host,
                 workspace,
                 job,
@@ -169,7 +169,15 @@ fn plan_ci_rerun_observed<H: RuntimeHost + ?Sized>(
                 (base != tip).then_some(tip),
                 &mut base_jobs,
                 &mut tip_jobs,
+                Some(deadline_ms),
             );
+            let (class, _, _, signature) = match classification {
+                Ok(classification) => classification,
+                Err(deferred) => {
+                    diagnostic.bind_prerequisite(&deferred);
+                    return Err(deferred.error());
+                }
+            };
             (class, signature)
         };
         if class == CheckFailureClass::Flaky

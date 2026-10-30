@@ -5730,6 +5730,7 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
                         orbit_common::PrivateVcsFailureClass::Other
                     },
                     message: script["reason"].as_str().unwrap().into(),
+                    read_throttle: None,
                 },
             )));
         }
@@ -6113,6 +6114,25 @@ commit_ci_log() {
                 if [ "$previous" = --job ]; then job="$arg"; fi
                 previous="$arg"
             done
+            # `log-fault` refuses the read with that stderr until the
+            # fixture's logical clock (`$forge/clock`, in ms) reaches
+            # `log-fault-until`; without it the refusal never ends.
+            if [ -f "$dir/log-fault-after-reads" ]; then
+                reads=$(cat "$dir/log-read-count" 2>/dev/null || echo 0)
+                reads=$((reads + 1))
+                echo "$reads" > "$dir/log-read-count"
+            else
+                reads=1
+            fi
+            after=$(cat "$dir/log-fault-after-reads" 2>/dev/null || echo 0)
+            if [ -f "$dir/log-fault" ] && [ "$reads" -gt "$after" ]; then
+                until=$(cat "$dir/log-fault-until" 2>/dev/null || echo never)
+                now=$(cat "$forge/clock" 2>/dev/null || echo 0)
+                if [ "$until" = never ] || [ "$now" -lt "$until" ]; then
+                    cat "$dir/log-fault" >&2
+                    exit 1
+                fi
+            fi
             if [ -f "$dir/log-$job" ]; then cat "$dir/log-$job"; else cat "$dir/log"; fi
             return
         fi

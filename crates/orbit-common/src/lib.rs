@@ -32,8 +32,9 @@ pub mod test_process;
 pub use error::{
     ArtifactOrigin, ArtifactOriginMode, CandidateAbsorbed, ClaimRefusalKind, ConflictedFile,
     DecisionRefusalCode, DependencyNotDelivered, HostRegistryCode, LOCK_BUSY_ERROR_CODE,
-    NotFoundKind, OrbitError, PrivateVcsFailure, PrivateVcsFailureClass, RecoverableVcsConflict,
-    RemoteToolCode, SqliteContention, StorageLayer, WorkspaceClaimHeld, is_lock_busy_message,
+    NotFoundKind, OrbitError, PrivateVcsFailure, PrivateVcsFailureClass, ProviderReadThrottle,
+    RecoverableVcsConflict, RemoteToolCode, SqliteContention, StorageLayer, WorkspaceClaimHeld,
+    is_lock_busy_message,
 };
 pub use model::pricing::derive_cost_usd;
 pub use tracing;

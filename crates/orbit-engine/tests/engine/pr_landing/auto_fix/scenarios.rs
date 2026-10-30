@@ -3218,3 +3218,536 @@ fn unreadable_log_hold(row: &std::path::Path, case: &str) {
     assert!(repair_attempts(&host).is_empty());
     assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
 }
+
+/// The provider's authenticated primary rate-limit answer to a failed-job log
+/// read, as `gh run view --log-failed` renders it [ORB-20178].
+const RATE_LIMITED_LOG: &str = "failed to get run log: HTTP 403: API rate limit exceeded for \
+    user ID 270255973. (https://api.github.com/repos/orbit/test/actions/jobs/12/logs)";
+
+/// A throttled failed-log read waits for the provider's not-before inside the
+/// original completion deadline, then reads the same pinned job again and
+/// classifies it normally. Persistent throttling, a not-before past the
+/// deadline and permission or credential refusals stay held with the
+/// original diagnostic, admitting no repair and writing nothing.
+#[test]
+fn auto_fix_waits_out_a_throttled_failed_log_read_within_the_completion_deadline() {
+    auto_fix_table(
+        "auto_fix::auto_fix_waits_out_a_throttled_failed_log_read_within_the_completion_deadline",
+        "retry_after unknown_reset resumed head_moved persistent beyond_deadline forbidden \
+         bad_credentials unauthenticated",
+        throttled_log_case,
+    );
+}
+
+/// The first rerun diagnosis uses the remaining original completion
+/// deadline for its real adapter read, before any repair can be admitted.
+#[test]
+fn first_failed_log_read_keeps_the_original_completion_deadline() {
+    auto_fix_table(
+        "auto_fix::first_failed_log_read_keeps_the_original_completion_deadline",
+        "first_read",
+        |_, row| {
+            const START: u64 = 1_000_000;
+            let (fx, host) = opened_review(row);
+            plant_commit_ci(
+                &fx,
+                &fx.candidate,
+                11,
+                "failure",
+                "error[E0433]: cannot find module `candidate_only`\n",
+            );
+            plant_commit_ci(&fx, &fx.base_sha, 21, "success", "");
+            fx.script_checks(&["failure"]);
+            let input = waited_auto_fix_input(&fx, 5, Some(5));
+            let clock = std::rc::Rc::new(std::cell::Cell::new(START));
+            let sampled = std::rc::Rc::clone(&clock);
+            let expiring = std::rc::Rc::clone(&clock);
+            let observed = std::rc::Rc::new(std::cell::Cell::new(false));
+            let seen = std::rc::Rc::clone(&observed);
+            let result = orbit_engine::test_support::with_prerequisite_clock(
+                move || sampled.get(),
+                move |label, remaining| {
+                    if label == "prerequisite log" {
+                        assert!(remaining <= 5_000);
+                        seen.set(true);
+                        expiring.set(START + 5_001);
+                    }
+                },
+                || action(&host, "pr_complete", &input),
+            );
+            assert!(
+                observed.get(),
+                "the first failed-log adapter read carries the absolute deadline"
+            );
+            assert!(matches!(
+                result,
+                Err(orbit_common::OrbitError::DeliveryRefused {
+                    refusal: orbit_types::workflow::DeliveryRefusal::CompletionBudgetExpired,
+                    ..
+                })
+            ));
+            assert!(repair_attempts(&host).is_empty());
+            assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, "expired first read");
+        },
+    );
+}
+
+/// A head log can succeed while its base prerequisite is throttled. The
+/// durable wait must bind that base job, while retaining the watched head.
+#[test]
+fn nested_base_log_throttle_defers_the_bound_prerequisite_read() {
+    auto_fix_table(
+        "auto_fix::nested_base_log_throttle_defers_the_bound_prerequisite_read",
+        "nested_base",
+        throttled_log_case,
+    );
+}
+
+fn throttled_log_case(case: &str, row: &std::path::Path) {
+    const START_MS: u64 = 1_000_000;
+    let (fx, host) = opened_review(row);
+    plant_commit_ci(
+        &fx,
+        &fx.candidate,
+        11,
+        "failure",
+        "error[E0433]: cannot find module `candidate_only`\n\
+         ##[error]Process completed with exit code 101.\n",
+    );
+    plant_commit_ci(
+        &fx,
+        &fx.base_sha,
+        21,
+        if case == "nested_base" {
+            "failure"
+        } else {
+            "success"
+        },
+        if case == "nested_base" {
+            "error[E0433]: cannot find module `candidate_only`\n##[error]Process completed with exit code 101.\n"
+        } else {
+            ""
+        },
+    );
+    // `until` is the provider clock instant the throttle lifts.
+    let (stderr, until) = match case {
+        "retry_after" | "head_moved" => (
+            format!("{RATE_LIMITED_LOG}\nRetry-After: 120"),
+            Some(START_MS + 120_000),
+        ),
+        "nested_base" => (
+            format!("{RATE_LIMITED_LOG}\nRetry-After: 1"),
+            Some(START_MS + 1_000),
+        ),
+        "unknown_reset" => (RATE_LIMITED_LOG.to_string(), Some(START_MS + 60_000)),
+        "resumed" => (RATE_LIMITED_LOG.to_string(), Some(START_MS + 200_000)),
+        "persistent" => (RATE_LIMITED_LOG.to_string(), None),
+        "beyond_deadline" => (format!("{RATE_LIMITED_LOG}\nRetry-After: 900"), None),
+        "forbidden" => (
+            "failed to get run log: HTTP 403: Resource not accessible by integration \
+             (https://api.github.com/repos/orbit/test/actions/jobs/12/logs)"
+                .to_string(),
+            None,
+        ),
+        "bad_credentials" => (
+            "failed to get run log: HTTP 401: Bad credentials \
+             (https://api.github.com/repos/orbit/test/actions/jobs/12/logs)"
+                .to_string(),
+            None,
+        ),
+        // An unauthenticated limit names an address, not an account: the
+        // credential is missing, which waiting cannot fix.
+        "unauthenticated" => (
+            "failed to get run log: HTTP 403: API rate limit exceeded for 203.0.113.9. \
+             (https://api.github.com/repos/orbit/test/actions/jobs/12/logs)"
+                .to_string(),
+            None,
+        ),
+        other => panic!("unknown case {other}"),
+    };
+    let ci = fx.forge.join("commit-ci").join(if case == "nested_base" {
+        &fx.base_sha
+    } else {
+        &fx.candidate
+    });
+    fs::write(ci.join("log-fault"), stderr).unwrap();
+    if let Some(until) = until {
+        fs::write(ci.join("log-fault-until"), until.to_string()).unwrap();
+    }
+    if case == "resumed" {
+        // An earlier process of this run recorded the wait and was
+        // interrupted before it ended.
+        seed_auto_fix_history(
+            &host,
+            "pr_auto_fix_read_deferred",
+            &json!({
+                "execution": RUN_ID, "pr": PR_NUMBER, "head_sha": fx.candidate,
+                "repository": null, "run_id": 11, "job_id": 12, "run_attempt": null,
+                "attempt": 1, "observed_at_ms": START_MS - 60_000,
+                "not_before_ms": START_MS + 200_000, "reset": "unknown",
+            }),
+        );
+    }
+    fx.script_checks(&["failure"]);
+    let input = waited_auto_fix_input(&fx, if case == "nested_base" { 10 } else { 600 }, Some(5));
+    let clock = std::rc::Rc::new(std::cell::Cell::new(START_MS));
+    let now = std::rc::Rc::clone(&clock);
+    let waited = std::rc::Rc::clone(&clock);
+    let forge = fx.forge.clone();
+    let (repo, candidate) = (fx.repo.clone(), fx.candidate.clone());
+    let moves_head = case == "head_moved";
+    let reads_before = fx.status_reads();
+    let result = orbit_engine::test_support::with_prerequisite_clock(
+        move || {
+            let current = now.get();
+            now.set(current + 1);
+            current
+        },
+        |_, _| {},
+        || {
+            orbit_engine::test_support::with_vcs_retry_wait(
+                move |duration| {
+                    let millis = u64::try_from(duration.as_millis()).unwrap();
+                    waited.set(waited.get() + millis);
+                    fs::write(forge.join("clock"), waited.get().to_string()).unwrap();
+                    let mut calls = fs::OpenOptions::new()
+                        .append(true)
+                        .open(forge.join("calls"))
+                        .unwrap();
+                    writeln!(calls, "wait {millis}").unwrap();
+                    if moves_head && !forge.join("head-moved").exists() {
+                        // Another writer pushes while completion waits.
+                        let remote = forge.join("remote.git");
+                        let next = git(
+                            &repo,
+                            &[
+                                "-c",
+                                "user.name=Other",
+                                "-c",
+                                "user.email=other@example.invalid",
+                                "--git-dir",
+                                path_str(&remote),
+                                "commit-tree",
+                                &format!("{candidate}^{{tree}}"),
+                                "-p",
+                                &candidate,
+                                "-m",
+                                "foreign push",
+                            ],
+                        );
+                        git(
+                            &repo,
+                            &[
+                                "--git-dir",
+                                path_str(&remote),
+                                "update-ref",
+                                &format!("refs/heads/{BRANCH}"),
+                                &next,
+                            ],
+                        );
+                        fs::write(forge.join("head-moved"), next).unwrap();
+                    }
+                },
+                || action(&host, "pr_complete", &input),
+            )
+        },
+    );
+    let calls = fx.forge_calls();
+    let waits = calls
+        .iter()
+        .filter_map(|call| call.strip_prefix("wait "))
+        .map(|millis| millis.parse::<u64>().unwrap())
+        .collect::<Vec<_>>();
+    let deferrals = host
+        .history(TASK_ID)
+        .into_iter()
+        .filter(|entry| entry.event == "pr_auto_fix_read_deferred")
+        .map(|entry| serde_json::from_str::<Value>(entry.note.as_deref().unwrap()).unwrap())
+        .collect::<Vec<_>>();
+    let polls = fx.status_reads() - reads_before;
+    match case {
+        "nested_base" => {
+            assert!(result.is_err(), "an inherited red base remains held");
+            assert_eq!(
+                deferrals.len(),
+                1,
+                "the base prerequisite gets one durable wait"
+            );
+            assert_eq!(deferrals[0]["head_sha"], fx.candidate);
+            assert_eq!(deferrals[0]["run_id"], 21);
+            assert_eq!(deferrals[0]["job_id"], 22);
+            assert!(
+                waits
+                    .first()
+                    .is_some_and(|wait| *wait > 0 && *wait <= 1_000)
+            );
+            assert!(
+                host.history(TASK_ID)
+                    .iter()
+                    .any(|entry| entry.event == "pr_auto_fix_base_red"),
+                "the later base read establishes inheritance"
+            );
+            assert!(repair_attempts(&host).is_empty());
+        }
+        "retry_after" | "unknown_reset" | "resumed" => {
+            let error = result.expect_err(case).to_string();
+            assert!(is_check_repair(&error), "{case}: {error}");
+            assert!(
+                error.contains("candidate_only"),
+                "{case}: the re-read log is the repair evidence: {error}"
+            );
+            let attempts = repair_attempts(&host);
+            assert_eq!(attempts.len(), 1, "{case}: one ordinary repair");
+            assert_eq!(attempts[0].head_sha, fx.candidate, "{case}");
+            let expected_wait = match case {
+                "retry_after" => 120_000,
+                "unknown_reset" => 60_000,
+                _ => 200_000,
+            };
+            let [wait] = waits.as_slice() else {
+                panic!("{case}: one bounded wait, no busy loop: {calls:?}");
+            };
+            assert!(
+                wait + 50 >= expected_wait && *wait <= expected_wait,
+                "{case}: waits for the provider's not-before ({wait}ms)"
+            );
+            let first_wait = calls
+                .iter()
+                .position(|call| call.starts_with("wait "))
+                .unwrap();
+            assert!(
+                calls[first_wait..].iter().any(|call| call == "run view"),
+                "{case}: the same pinned log is read again after the wait: {calls:?}"
+            );
+            assert!(
+                calls[..first_wait]
+                    .iter()
+                    .filter(|call| *call == "run view")
+                    .count()
+                    <= usize::from(case != "resumed"),
+                "{case}: the first throttled answer ends the poll's log reads: {calls:?}"
+            );
+            if case == "resumed" {
+                assert!(
+                    !calls[..first_wait].iter().any(|call| call == "run view"),
+                    "{case}: no log read before the recorded not-before: {calls:?}"
+                );
+                assert_eq!(deferrals.len(), 1, "{case}: no new deferral is recorded");
+            } else {
+                let [deferral] = deferrals.as_slice() else {
+                    panic!("{case}: one durable deferral: {deferrals:?}");
+                };
+                assert_eq!(deferral["execution"], RUN_ID, "{case}");
+                assert_eq!(deferral["pr"], PR_NUMBER, "{case}");
+                assert_eq!(deferral["head_sha"], fx.candidate, "{case}");
+                assert_eq!(deferral["run_id"], 11, "{case}");
+                assert_eq!(deferral["job_id"], 12, "{case}");
+                assert_eq!(deferral["attempt"], 1, "{case}");
+                assert_eq!(deferral["principal"], "user ID 270255973", "{case}");
+                assert_eq!(deferral["request_id"], "unavailable", "{case}");
+                assert_eq!(
+                    deferral["reset"],
+                    if case == "retry_after" {
+                        "provider"
+                    } else {
+                        "unknown"
+                    },
+                    "{case}"
+                );
+                assert!(
+                    deferral["not_before_ms"].as_u64().unwrap()
+                        < deferral["deadline_ms"].as_u64().unwrap(),
+                    "{case}: the wait fits the original deadline: {deferral}"
+                );
+                assert!(
+                    deferral["diagnostic"]
+                        .as_str()
+                        .unwrap()
+                        .contains("API rate limit exceeded"),
+                    "{case}: the original diagnostic is kept: {deferral}"
+                );
+            }
+        }
+        _ => {
+            let error = result.expect_err(case);
+            let refusal = orbit_types::workflow::DeliveryRefusal::CheckEvidenceInconclusive;
+            if case != "head_moved" {
+                assert!(
+                    matches!(&error, orbit_common::OrbitError::DeliveryRefused { refusal: actual, .. } if *actual == refusal),
+                    "{case}: held, not failed: {error}"
+                );
+            }
+            let error = error.to_string();
+            assert!(!is_check_repair(&error), "{case}: no repair: {error}");
+            assert!(
+                repair_attempts(&host).is_empty(),
+                "{case}: no attempt is spent"
+            );
+            match case {
+                "head_moved" => {
+                    let wait = calls
+                        .iter()
+                        .position(|call| call.starts_with("wait "))
+                        .unwrap();
+                    assert!(
+                        !calls[wait..].iter().any(|call| call == "run view"),
+                        "{case}: the replaced head's log is never read again: {calls:?}"
+                    );
+                }
+                "persistent" => {
+                    assert_eq!(
+                        waits,
+                        vec![60_000, 120_000, 240_000],
+                        "{case}: bounded conservative backoff with an unknown reset"
+                    );
+                    assert_eq!(deferrals.len(), 3, "{case}: each wait is recorded");
+                    assert!(
+                        error.contains("API rate limit exceeded")
+                            && error.contains("could not be read"),
+                        "{case}: the original failure is kept: {error}"
+                    );
+                    assert!(
+                        clock.get() < START_MS + 600_000,
+                        "{case}: the original deadline is never extended"
+                    );
+                }
+                "beyond_deadline" => {
+                    assert!(waits.is_empty(), "{case}: no wait past the deadline");
+                    assert!(
+                        error.contains("API rate limit exceeded")
+                            && error.contains("completion deadline"),
+                        "{case}: {error}"
+                    );
+                }
+                _ => {
+                    assert!(waits.is_empty(), "{case}: a refusal is not waited on");
+                    assert!(deferrals.is_empty(), "{case}: nothing is deferred");
+                    assert!(error.contains("could not be read"), "{case}: {error}");
+                    assert_eq!(polls, 1, "{case}: the refusal is not observed again");
+                }
+            }
+        }
+    }
+    assert_eq!(fx.remote_tip(BASE), fx.base_sha, "{case}: base unchanged");
+    assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
+}
+
+/// The moved-base comparison is another read-only diagnosis boundary. Neither
+/// a head nor tip-log throttle may fall through into candidate repair.
+#[test]
+fn moved_base_log_throttle_retains_its_deadline_and_exact_read_identity() {
+    auto_fix_table(
+        "auto_fix::moved_base_log_throttle_retains_its_deadline_and_exact_read_identity",
+        "head tip deadline",
+        |case, row| {
+            const START: u64 = 1_000_000;
+            let (fx, host) = opened_review(row);
+            let signature = "error[E0433]: cannot find module `broken_base`\n";
+            plant_commit_ci(&fx, &fx.candidate, 11, "failure", signature);
+            plant_commit_ci(&fx, &fx.base_sha, 21, "success", "");
+            fx.advance_base();
+            let tip = fx.local_tip(BASE);
+            plant_commit_ci(&fx, &tip, 31, "failure", signature);
+            let fault_head = case == "head";
+            let ci = fx
+                .forge
+                .join("commit-ci")
+                .join(if fault_head { &fx.candidate } else { &tip });
+            let seconds = if case == "deadline" { 900 } else { 1 };
+            fs::write(
+                ci.join("log-fault"),
+                format!("{RATE_LIMITED_LOG}\nRetry-After: {seconds}"),
+            )
+            .unwrap();
+            fs::write(
+                ci.join("log-fault-until"),
+                (START + seconds * 1000).to_string(),
+            )
+            .unwrap();
+            if fault_head {
+                fs::write(ci.join("log-fault-after-reads"), "1").unwrap();
+            }
+            fx.script_checks(&["failure"]);
+            let input = waited_auto_fix_input(&fx, 10, Some(5));
+            let clock = std::rc::Rc::new(std::cell::Cell::new(START));
+            let sampled = std::rc::Rc::clone(&clock);
+            let advancing = std::rc::Rc::clone(&clock);
+            let forge = fx.forge.clone();
+            let first_wait = std::cell::Cell::new(true);
+            let fault_counter = ci.join("log-read-count");
+            let result = orbit_engine::test_support::with_prerequisite_clock(
+                move || {
+                    let now = sampled.get();
+                    sampled.set(now + 1);
+                    now
+                },
+                |_, _| {},
+                || {
+                    orbit_engine::test_support::with_vcs_retry_wait(
+                        move |duration| {
+                            if fault_head && first_wait.replace(false) {
+                                assert_eq!(
+                                    fs::read_to_string(&fault_counter).unwrap().trim(),
+                                    "2",
+                                    "the first throttle stops this poll before a second early head-log read"
+                                );
+                            }
+                            advancing.set(
+                                advancing.get() + u64::try_from(duration.as_millis()).unwrap(),
+                            );
+                            fs::write(forge.join("clock"), advancing.get().to_string()).unwrap();
+                        },
+                        || action(&host, "pr_complete", &input),
+                    )
+                },
+            );
+            assert!(result.is_err(), "the red base is never merged");
+            let deferrals = host
+                .history(TASK_ID)
+                .into_iter()
+                .filter(|entry| entry.event == "pr_auto_fix_read_deferred")
+                .map(|entry| serde_json::from_str::<Value>(entry.note.as_deref().unwrap()).unwrap())
+                .collect::<Vec<_>>();
+            if case == "deadline" {
+                assert!(
+                    deferrals.is_empty(),
+                    "no wait can exceed the original deadline"
+                );
+                assert!(matches!(
+                    result,
+                    Err(orbit_common::OrbitError::DeliveryRefused {
+                        refusal: orbit_types::workflow::DeliveryRefusal::CheckEvidenceInconclusive,
+                        ..
+                    })
+                ));
+            } else {
+                assert_eq!(
+                    deferrals.len(),
+                    1,
+                    "one durable wait for the moved-base diagnosis"
+                );
+                assert_eq!(deferrals[0]["head_sha"], fx.candidate);
+                assert_eq!(deferrals[0]["run_id"], if fault_head { 11 } else { 31 });
+                assert_eq!(deferrals[0]["job_id"], if fault_head { 12 } else { 32 });
+                assert!(
+                    host.history(TASK_ID)
+                        .iter()
+                        .any(|entry| entry.event == "pr_auto_fix_base_red"),
+                    "later evidence establishes the red tip"
+                );
+            }
+            assert!(
+                repair_attempts(&host).is_empty(),
+                "unreadable base evidence cannot admit repair"
+            );
+            assert!(
+                !host
+                    .history(TASK_ID)
+                    .iter()
+                    .any(|entry| entry.event == "pr_auto_fix_base_refresh")
+            );
+            assert_eq!(fx.remote_tip(BASE), tip);
+            assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
+        },
+    );
+}

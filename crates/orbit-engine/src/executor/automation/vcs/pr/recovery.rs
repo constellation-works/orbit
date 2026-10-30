@@ -71,11 +71,16 @@ pub(crate) fn completion_recovery_checks<H: RuntimeHost + ?Sized>(
             &[failed],
             &required,
             false,
+            None,
         ) {
             HeadCheckEvidence::Repair { evidence, .. } => evidence,
             HeadCheckEvidence::Stop(reason) | HeadCheckEvidence::Inconclusive(reason) => reason,
             HeadCheckEvidence::WaitForBase(reason) => {
                 return Ok(CompletionRecoveryChecks::Wait(reason));
+            }
+            // A throttled read is no diagnosis: a later run reads it again.
+            HeadCheckEvidence::ReadDeferred(deferred) => {
+                return Ok(CompletionRecoveryChecks::Wait(deferred.reason));
             }
         };
         failures.push(json!({"name":name,"workflow":check.workflow_name,"evidence":detail}));

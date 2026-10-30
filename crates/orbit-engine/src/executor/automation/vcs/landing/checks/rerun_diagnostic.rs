@@ -51,6 +51,10 @@ pub(in crate::executor::automation::vcs) struct CiRerunDiagnostic {
     pub(super) job_id: Option<u64>,
     jobs: Vec<CiRerunJobIdentity>,
     jobs_omitted: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    prerequisite_job: Option<CiRerunJobIdentity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    prerequisite_repository: Option<String>,
     kind: CiRerunDiagnosticKind,
     reason: String,
 }
@@ -69,6 +73,8 @@ impl CiRerunDiagnostic {
             job_id: None,
             jobs: Vec::new(),
             jobs_omitted: 0,
+            prerequisite_job: None,
+            prerequisite_repository: None,
             kind: CiRerunDiagnosticKind::Wait,
             reason: String::new(),
         }
@@ -91,6 +97,53 @@ impl CiRerunDiagnostic {
         self.jobs = identities;
     }
 
+    pub(super) fn bind_prerequisite(&mut self, deferred: &super::DeferredLogRead) {
+        self.stage = CiRerunStage::Log;
+        self.run_id = Some(deferred.run_id);
+        self.job_id = Some(deferred.job_id);
+        self.prerequisite_job = Some(CiRerunJobIdentity {
+            run_id: Some(deferred.run_id),
+            job_id: Some(deferred.job_id),
+            run_attempt: deferred.run_attempt,
+        });
+        self.prerequisite_repository = deferred
+            .repository
+            .clone()
+            .filter(|repository| repository.len() <= 256);
+    }
+
+    /// The failed-job log read this observation stopped at, bound to its
+    /// exact job, when `error` is the provider's typed throttle [ORB-20178].
+    /// A job outside the bounded identity list is not bound here.
+    pub(in crate::executor::automation::vcs) fn throttled_log_read(
+        &self,
+        error: &OrbitError,
+    ) -> Option<super::DeferredLogRead> {
+        let throttle = error.private_vcs_failure()?.read_throttle.clone()?;
+        if self.stage != CiRerunStage::Log {
+            return None;
+        }
+        let (run_id, job_id) = (self.run_id?, self.job_id?);
+        let identity = self
+            .prerequisite_job
+            .as_ref()
+            .filter(|job| job.run_id == Some(run_id) && job.job_id == Some(job_id))
+            .or_else(|| {
+                self.jobs
+                    .iter()
+                    .find(|job| job.run_id == Some(run_id) && job.job_id == Some(job_id))
+            })?;
+        Some(super::DeferredLogRead {
+            reason: format!("the log of run {run_id} job {job_id} could not be read: {error}"),
+            head: self.head_sha.clone()?,
+            repository: self.prerequisite_repository.clone(),
+            run_id,
+            job_id,
+            run_attempt: identity.run_attempt,
+            throttle,
+        })
+    }
+
     pub(super) fn with_reason(mut self, reason: &str) -> Self {
         self.reason = bounded_ci_rerun_reason(reason);
         self
@@ -99,7 +152,7 @@ impl CiRerunDiagnostic {
     pub(super) fn with_error(self, error: &OrbitError) -> Self {
         let mut diagnostic = self;
         diagnostic.kind = match error {
-            OrbitError::PrivateVcs(failure) => private_vcs_diagnostic_kind(failure.class),
+            OrbitError::PrivateVcs(failure) => private_vcs_diagnostic_kind(failure),
             OrbitError::DeliveryRefused { .. } => CiRerunDiagnosticKind::DeliveryRefused,
             OrbitError::PolicyDenied(_) => CiRerunDiagnosticKind::PolicyDenied,
             _ => CiRerunDiagnosticKind::EvidenceUnavailable,
@@ -248,8 +301,12 @@ pub(in crate::executor::automation::vcs) fn record_ci_rerun_outcome<H: RuntimeHo
     let outcome = match result {
         Ok(_) => json!({"kind":"completed"}),
         Err(OrbitError::DeliveryRefused { refusal, .. }) => json!({"kind":refusal.error_code()}),
+        // A throttled read is no provider decision about the retry.
+        Err(OrbitError::PrivateVcs(failure)) if failure.read_throttle.is_some() => {
+            json!({"kind":"stopped"})
+        }
         Err(OrbitError::PrivateVcs(failure)) => {
-            json!({"kind":private_vcs_diagnostic_kind(failure.class)})
+            json!({"kind":private_vcs_diagnostic_kind(failure)})
         }
         Err(_) => json!({"kind":"stopped"}),
     };
@@ -283,11 +340,13 @@ pub(in crate::executor::automation::vcs) fn append_ci_rerun_diagnostic(
     }
 }
 
-fn private_vcs_diagnostic_kind(
-    class: orbit_common::PrivateVcsFailureClass,
-) -> CiRerunDiagnosticKind {
+/// A throttled read left the evidence unavailable; it refused nothing.
+fn private_vcs_diagnostic_kind(failure: &orbit_common::PrivateVcsFailure) -> CiRerunDiagnosticKind {
     use orbit_common::PrivateVcsFailureClass;
-    match class {
+    if failure.read_throttle.is_some() {
+        return CiRerunDiagnosticKind::EvidenceUnavailable;
+    }
+    match failure.class {
         PrivateVcsFailureClass::TransientObservation => CiRerunDiagnosticKind::TransientObservation,
         PrivateVcsFailureClass::Transient => CiRerunDiagnosticKind::Transient,
         PrivateVcsFailureClass::CompletionObservationUnavailable => {

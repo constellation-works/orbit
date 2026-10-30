@@ -13,10 +13,10 @@ use super::super::super::git::git_output;
 use super::super::super::operations;
 
 use super::base_update::contains;
+use super::head::{CheckReadGap, prerequisite_log};
 use super::jobs::{
     answers, commit_jobs, excerpt, failed_step, same_job, transient_evidence, unsuccessful,
 };
-use super::log::job_log;
 
 /// Base commits, the starting one included, read for a job that ran to a
 /// result before the evidence counts as missing.
@@ -55,7 +55,8 @@ const BASE_WALK_LIMIT: usize = 8;
 /// diagnostic, or a transient log still returns `None` for the whole call;
 /// for a failure the base already fails the same way,
 /// [`unmoved_red_base`](super::unmoved_red_base) then holds instead of
-/// admitting a repair.
+/// admitting a repair. Log-read failures instead return a typed gap: throttles
+/// retain the exact prerequisite identity and all reads share deadline_ms.
 pub(in crate::executor::automation::vcs) fn base_tip_check_evidence<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
@@ -63,8 +64,11 @@ pub(in crate::executor::automation::vcs) fn base_tip_check_evidence<H: RuntimeHo
     base_branch: &str,
     tip: &str,
     failed: &[(Option<String>, String)],
-) -> Option<Value> {
-    let jobs = commit_jobs(host, workspace, head).ok()?;
+    deadline_ms: Option<u64>,
+) -> Result<Option<Value>, CheckReadGap> {
+    let Ok(jobs) = commit_jobs(host, workspace, head) else {
+        return Ok(None);
+    };
     let mut history = BaseHistory {
         host,
         workspace,
@@ -79,12 +83,17 @@ pub(in crate::executor::automation::vcs) fn base_tip_check_evidence<H: RuntimeHo
     // sibling, and completion then spent a repair on that inherited failure.
     let mut candidate_owned = false;
     for check in failed {
-        let job = jobs
+        let Some(job) = jobs
             .iter()
-            .find(|job| unsuccessful(job) && answers(job, check))?;
+            .find(|job| unsuccessful(job) && answers(job, check))
+        else {
+            return Ok(None);
+        };
         // Ambiguous workflow names, pending jobs and a history with no
         // result prove neither a passing base nor an inherited failure.
-        let (base_commit, base_job) = history.decisive(tip, job)?;
+        let Some((base_commit, base_job)) = history.decisive(tip, job) else {
+            return Ok(None);
+        };
         if base_job["conclusion"] == "success" {
             let fork_point = fork_point.get_or_insert_with(|| {
                 git_output(workspace, &["merge-base", head, tip])
@@ -103,24 +112,26 @@ pub(in crate::executor::automation::vcs) fn base_tip_check_evidence<H: RuntimeHo
                 .push(json!({"failed_job":job,"passing_job":base_job,"base_commit":base_commit}));
             continue;
         }
-        let log = job_log(
+        let (Some(run), Some(id), Some(base_run), Some(base_id)) = (
+            job["run_id"].as_u64(),
+            job["job_id"].as_u64(),
+            base_job["run_id"].as_u64(),
+            base_job["job_id"].as_u64(),
+        ) else {
+            return Ok(None);
+        };
+        let log = prerequisite_log(host, workspace, head, job, run, id, deadline_ms)?;
+        let base_log = prerequisite_log(
             host,
             workspace,
-            job["run_id"].as_u64()?,
-            job["job_id"].as_u64()?,
-            job,
-        )
-        .ok()?;
-        let base_log = job_log(
-            host,
-            workspace,
-            base_job["run_id"].as_u64()?,
-            base_job["job_id"].as_u64()?,
+            head,
             &base_job,
-        )
-        .ok()?;
+            base_run,
+            base_id,
+            deadline_ms,
+        )?;
         if transient_evidence(&log).is_some() || transient_evidence(&base_log).is_some() {
-            return None;
+            return Ok(None);
         }
         let signature = error_signature(&log, failed_step(job));
         let base_signature = error_signature(&base_log, failed_step(&base_job));
@@ -128,7 +139,7 @@ pub(in crate::executor::automation::vcs) fn base_tip_check_evidence<H: RuntimeHo
             || base_signature.step_fallback
             || signature.text != base_signature.text
         {
-            return None;
+            return Ok(None);
         }
         red = true;
         evidence.push(json!({"failed_job":job,"base_job":base_job,"base_commit":base_commit,"signature":signature.text,"log_excerpt":excerpt(&log)}));
@@ -137,12 +148,12 @@ pub(in crate::executor::automation::vcs) fn base_tip_check_evidence<H: RuntimeHo
     // failure that must keep the ordinary repair. A green-base sibling alone
     // would be a base refresh; beside a candidate-owned check it is not.
     if evidence.is_empty() || (!red && (candidate_owned || contains(workspace, tip, head))) {
-        return None;
+        return Ok(None);
     }
-    Some(
+    Ok(Some(
         json!({"failed_head":head,"landed_base":tip,"base_branch":base_branch,"source":"latest_push","checks":evidence,
         "path":if red {"known_red_base"} else {"base_refresh"}}),
-    )
+    ))
 }
 
 /// The base branch's latest push jobs, read once per commit in one call.

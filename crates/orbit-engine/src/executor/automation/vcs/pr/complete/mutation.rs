@@ -53,6 +53,7 @@ pub(super) fn observation_failure<H: RuntimeHost + ?Sized>(
                 operation: failure.operation.clone(),
                 class: PrivateVcsFailureClass::CompletionObservationUnavailable,
                 message: format!("completion_observation_unavailable: {error}"),
+                read_throttle: failure.read_throttle.clone(),
             }))
         }
         Ok(CompletionHistory::ReadOnly | CompletionHistory::Repaired) => {
