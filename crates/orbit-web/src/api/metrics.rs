@@ -158,6 +158,7 @@ impl MetricsInvocationsQuery {
             model: optional_query_string(self.model),
             tool_name: optional_query_string(self.tool_name),
             limit: bounded_limit(self.limit, INVOCATIONS_DEFAULT_LIMIT),
+            skip_tool_calls: false,
         })
     }
 }
