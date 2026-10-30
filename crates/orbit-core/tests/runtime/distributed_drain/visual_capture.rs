@@ -361,6 +361,30 @@ fn task_show_ignores_a_settle_for_another_candidate() {
     );
 }
 
+/// A verdict written before `rejection_reason` was carried still
+/// deserializes, with no ground (so it cannot mark a deviation accepted).
+#[test]
+fn a_verdict_without_rejection_reason_still_deserializes() {
+    let verdict: orbit_types::task::VisualFindingVerdict = serde_json::from_value(json!({
+        "verdict": "rejected",
+        "reasoning": "old record",
+        "deviation_rejected": false,
+    }))
+    .expect("verdict without rejection_reason deserializes");
+    assert_eq!(verdict.rejection_reason, None);
+    let with_reason: orbit_types::task::VisualFindingVerdict = serde_json::from_value(json!({
+        "verdict": "rejected",
+        "reasoning": "basis holds",
+        "deviation_rejected": false,
+        "rejection_reason": "premise_wrong",
+    }))
+    .expect("verdict with rejection_reason deserializes");
+    assert_eq!(
+        with_reason.rejection_reason.as_deref(),
+        Some("premise_wrong")
+    );
+}
+
 crate::scenario_table!(
     a_claimed_capture_is_checked_against_its_contract_scenarios,
     a_claimed_capture_matching_its_contract_is_accepted,

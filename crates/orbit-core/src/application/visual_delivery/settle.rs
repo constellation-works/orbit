@@ -21,7 +21,9 @@ use orbit_types::workflow::DeliveryRefusal;
 use serde_json::{Value, json};
 
 use super::contract::MockDigestSource;
-use super::verify::{catalog_of, collect_result_objects, visual_verdicts_by_finding};
+use super::verify::{
+    catalog_of, collect_result_objects, regions_overlap, visual_verdicts_by_finding,
+};
 use super::{attach_system_artifacts, json_artifact, read_record, required_string};
 use crate::OrbitRuntime;
 
@@ -282,6 +284,7 @@ fn review_record(
                 escalated,
                 reasoning: verdict.reasoning.clone(),
                 deviation_rejected: verdict.deviation_rejected,
+                rejection_reason: verdict.rejection_reason.clone(),
             };
         } else if initial.is_some() || escalation.is_some() {
             finding.verdict = VisualFindingVerdict {
@@ -292,6 +295,7 @@ fn review_record(
                 escalated,
                 reasoning: "the only verdicts returned were low confidence".to_string(),
                 deviation_rejected: false,
+                rejection_reason: None,
             };
         }
     }
@@ -380,9 +384,16 @@ fn partition_crews(prepared: &Value) -> std::collections::BTreeMap<String, Strin
 }
 
 /// Each declared deviation with the verdict its touching findings
-/// imply (§2.5): `rejected` when a CONFIRMED finding rejected its
-/// basis, `accepted` when a touching finding was REJECTED, else
-/// `unjudged`.
+/// imply (§2.5): `rejected` when a touching CONFIRMED finding rejected
+/// its basis, `accepted` only when a touching finding was REJECTED as
+/// `premise_wrong` (the verifier held its basis), else `unjudged`. A
+/// finding touches a deviation when it names the same mock and one of
+/// its evidence regions overlaps the deviation's region, or the
+/// deviation declares no region — the same rule `touching_deviations`
+/// applied when the verifier was shown the deviation. Rejections on
+/// other grounds (`duplicate`, `already_fixed`, `unreachable`, or a
+/// missing/off-enum reason) never judged the basis, so they leave the
+/// deviation `unjudged`.
 fn deviation_records(
     record: &Value,
     findings: &[VisualReviewFinding],
@@ -395,19 +406,29 @@ fn deviation_records(
         .into_iter()
         .filter_map(|deviation| {
             let mock = deviation.get("mock")?.as_str()?.to_string();
+            let deviation_region = deviation.get("region").and_then(super::verify::region_of);
             let touching: Vec<&VisualReviewFinding> = findings
                 .iter()
-                .filter(|finding| finding.mock == mock)
+                .filter(|finding| {
+                    finding.mock == mock
+                        && match deviation_region {
+                            None => true,
+                            Some(region) => finding
+                                .evidence
+                                .iter()
+                                .any(|evidence| regions_overlap(region, evidence.region)),
+                        }
+                })
                 .collect();
             let status = if touching.iter().any(|finding| {
                 finding.verdict.deviation_rejected
                     && finding.verdict.verdict == VisualVerdictKind::Confirmed
             }) {
                 "rejected"
-            } else if touching
-                .iter()
-                .any(|finding| finding.verdict.verdict == VisualVerdictKind::Rejected)
-            {
+            } else if touching.iter().any(|finding| {
+                finding.verdict.verdict == VisualVerdictKind::Rejected
+                    && finding.verdict.rejection_reason.as_deref() == Some("premise_wrong")
+            }) {
                 "accepted"
             } else {
                 "unjudged"
@@ -419,7 +440,7 @@ fn deviation_records(
                     .and_then(Value::as_str)
                     .unwrap_or("")
                     .to_string(),
-                region: deviation.get("region").and_then(super::verify::region_of),
+                region: deviation_region,
                 reason: deviation
                     .get("reason")
                     .and_then(Value::as_str)
@@ -453,4 +474,158 @@ fn settle_contract(
                 "visual review contract for {task_id} cannot be read: {detail}"
             ))
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use orbit_types::task::{VisualEvidence, VisualVerdictKind};
+
+    use super::*;
+
+    fn finding(
+        region: [u32; 4],
+        verdict: VisualVerdictKind,
+        rejection_reason: Option<&str>,
+        deviation_rejected: bool,
+    ) -> VisualReviewFinding {
+        VisualReviewFinding {
+            finding_id: "f1".to_string(),
+            source: "comparison".to_string(),
+            question: "1".to_string(),
+            mock: "mocks/checkout.png".to_string(),
+            title: "t".to_string(),
+            detail: "d".to_string(),
+            evidence: vec![VisualEvidence {
+                image: "visual/checkout/capture.png".to_string(),
+                region,
+                location: None,
+            }],
+            severity: "medium".to_string(),
+            verified_severity: None,
+            severity_source: None,
+            verdict: VisualFindingVerdict {
+                verdict,
+                crew: None,
+                confidence: Some("high".to_string()),
+                severity: None,
+                escalated: false,
+                reasoning: "r".to_string(),
+                deviation_rejected,
+                rejection_reason: rejection_reason.map(str::to_string),
+            },
+        }
+    }
+
+    fn status_of(region: Option<Value>, findings: &[VisualReviewFinding]) -> String {
+        let mut deviation = json!({
+            "mock": "mocks/checkout.png",
+            "element": "el",
+            "reason": "r",
+            "basis": "data",
+        });
+        if let Some(region) = region {
+            deviation["region"] = region;
+        }
+        let record = json!({ "deviations": [deviation] });
+        deviation_records(&record, findings)[0].status.clone()
+    }
+
+    #[test]
+    fn deviation_accepted_only_by_touching_premise_wrong_rejection() {
+        let region = Some(json!([0, 0, 10, 10]));
+        // Disjoint region on the same mock: not touching.
+        assert_eq!(
+            status_of(
+                region.clone(),
+                &[finding(
+                    [20, 20, 5, 5],
+                    VisualVerdictKind::Rejected,
+                    Some("premise_wrong"),
+                    false
+                )]
+            ),
+            "unjudged"
+        );
+        // Overlapping but rejected without judging the basis.
+        for reason in ["duplicate", "already_fixed", "unreachable"] {
+            assert_eq!(
+                status_of(
+                    region.clone(),
+                    &[finding(
+                        [5, 5, 5, 5],
+                        VisualVerdictKind::Rejected,
+                        Some(reason),
+                        false
+                    )]
+                ),
+                "unjudged",
+                "reason {reason}"
+            );
+        }
+        // Missing reason counts as not premise_wrong.
+        assert_eq!(
+            status_of(
+                region.clone(),
+                &[finding(
+                    [5, 5, 5, 5],
+                    VisualVerdictKind::Rejected,
+                    None,
+                    false
+                )]
+            ),
+            "unjudged"
+        );
+        // Overlapping premise_wrong holds the basis.
+        assert_eq!(
+            status_of(
+                region.clone(),
+                &[finding(
+                    [5, 5, 5, 5],
+                    VisualVerdictKind::Rejected,
+                    Some("premise_wrong"),
+                    false
+                )]
+            ),
+            "accepted"
+        );
+        // A deviation with no region is touched by any same-mock finding.
+        assert_eq!(
+            status_of(
+                None,
+                &[finding(
+                    [99, 99, 5, 5],
+                    VisualVerdictKind::Rejected,
+                    Some("premise_wrong"),
+                    false
+                )]
+            ),
+            "accepted"
+        );
+        // Confirmed with deviation_rejected still records rejected, but
+        // only when it touches.
+        assert_eq!(
+            status_of(
+                region.clone(),
+                &[finding(
+                    [5, 5, 5, 5],
+                    VisualVerdictKind::Confirmed,
+                    None,
+                    true
+                )]
+            ),
+            "rejected"
+        );
+        assert_eq!(
+            status_of(
+                region,
+                &[finding(
+                    [20, 20, 5, 5],
+                    VisualVerdictKind::Confirmed,
+                    None,
+                    true
+                )]
+            ),
+            "unjudged"
+        );
+    }
 }
