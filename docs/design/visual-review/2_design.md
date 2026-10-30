@@ -536,10 +536,12 @@ driver keeps each context open until its checks have run). Two kinds of check:
 | `color_scheme_leak` | A `color_scheme_invariant` app whose light-preference capture differs from its dark one. | medium |
 | `unstable_view` | §4.3; recorded against the manifest. | low |
 
-Checks report in `shadow` until phase 6. A UI rule disabled in `ux_rules.disabled` is not
-run here either. Check findings are passed to the reviewer as known issues, so it does not
-spend output re-describing them, and they go through the same verification (§11), because a
-rule can be wrong about intent.
+Checks report in `shadow` until phase 6. The capture driver still loads and runs every
+applicable UI rule. Orbit filters rules listed in `ux_rules.disabled` only after capture
+finishes and the driver writes `rules.json`, so disabling a rule does not avoid its
+capture-time work. Check findings are passed to the reviewer as known issues, so it does
+not spend output re-describing them, and they go through the same verification (§11),
+because a rule can be wrong about intent.
 
 ## 8. The comparison review
 
