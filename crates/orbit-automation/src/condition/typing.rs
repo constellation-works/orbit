@@ -154,8 +154,11 @@ impl Checker<'_> {
                  evaluation unknown",
             ),
             CelType::Object(kind) => {
-                if kind.field(&select.field).is_none() {
+                let Some(field) = kind.field(&select.field) else {
                     return self.fail(expr, unknown_field(kind, &select.field));
+                };
+                if kind == ObjectKind::Board {
+                    self.reads.board.insert(field.name);
                 }
                 Ok(CelType::Bool)
             }
