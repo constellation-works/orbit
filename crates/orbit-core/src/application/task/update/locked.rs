@@ -214,11 +214,7 @@ impl OrbitRuntime {
                     artifacts.retain(|stored| stored.path != upsert.path);
                     artifacts.push(upsert.clone());
                 }
-                if let Err(detail) = self.mock_admission_check_with(&effective, Some(artifacts)) {
-                    return Err(OrbitError::InvalidInput(format!(
-                        "task '{id}' cannot move to backlog: {detail}"
-                    )));
-                }
+                self.ensure_backlog_mock_admission(&effective, Some(artifacts))?;
             }
         }
         if params.discard_candidate && task.status == TaskStatus::InProgress {
