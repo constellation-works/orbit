@@ -281,7 +281,7 @@ changes no draws, pools, weights or configuration, and no routine runs it.
 2. **Snapshot.** The store table, the hourly routine, staleness rules, and readiness and doctor
    lines.
 3. **Weighted draws.** The `crew_performance*` keys, the factor beside pressure in the shared
-   draw helper (`pressure_weighted_candidates` becomes the general weighting seam), run
+   draw helper (`weighted_candidates` becomes the general weighting seam), run
    provenance and history. Default `off`.
 4. **Shadow trial.** `shadow_absolute` and `shadow_comparative` record the factor the draw
    would have used, with `applied: false`, and do not apply it. `orbit agents scorecard
