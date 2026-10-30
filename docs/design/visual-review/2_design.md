@@ -684,12 +684,14 @@ canary proves delivery, not judgement. Judgement is checked by verification (§1
 
 Budgets are checked before dispatch from the staged images, then measured after.
 
-- **Mocks:** `visual_review.max_mocks` (default 12) per delivery; the rest are listed
-  `over_budget` in `capture.json`, the prompt and the PR body. Order: the mocks named in the
-  task's acceptance criteria first, then by artifact name.
+- **Mocks:** `visual_review.max_mocks` (default 12) per delivery, selected by ascending
+  artifact name; the rest are listed `over_budget` in `capture.json`, the prompt and the
+  PR body.
 - **Images per invocation:** `visual_review.max_images` (default 32), and the executor's own
   `image_input.max_images`, whichever is lower. Each mock costs two images (mock and
   capture); the side-by-side is sent only when both would not fit. The canary is first.
+  Review image selection orders the mocks named in the task's acceptance criteria first,
+  then by artifact name.
 - **Estimated image tokens:** `visual_review.max_image_tokens` (default 48,000). Orbit
   estimates per provider. For Claude models, Anthropic documents roughly width × height / 750
   tokens per image, with large images downscaled first, so a 1440×900 image costs about
