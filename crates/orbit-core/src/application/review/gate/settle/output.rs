@@ -92,19 +92,10 @@ pub(super) fn settled_outcome(
         }
         return Ok(Settled::Blocked(Box::new(certificate)));
     }
+    validate_selection(&certificate, selection)?;
     apply_mutation_proposals(runtime, context, &certificate)?;
     let mut output = passed_output(&certificate);
     if let Some(selection) = selection {
-        if selection.head_sha != certificate.reviewed_candidate.commit
-            || selection.head_tree != certificate.reviewed_candidate.tree
-            || selection.base_sha != certificate.base.commit
-            || selection.base_tree != certificate.base.tree
-        {
-            return Err(OrbitError::CapabilityDenied(
-                "selection_stale: review certificate does not continue the selected candidate"
-                    .to_string(),
-            ));
-        }
         // Only trusted settlement may carry selection across reviewer repairs.
         output["selective_selection_head_sha"] = json!(certificate.final_candidate.commit);
         output["selective_receipt"] = json!(selection);
@@ -116,6 +107,27 @@ pub(super) fn settled_outcome(
             )?;
     }
     Ok(Settled::Passed(output))
+}
+
+/// A selection may advance only through the certificate that reviewed its
+/// original candidate. Check before publishing evidence or applying proposals.
+pub(super) fn validate_selection(
+    certificate: &ReviewCertificate,
+    selection: Option<&orbit_types::workflow::SelectiveReviewReceipt>,
+) -> Result<(), OrbitError> {
+    if let Some(selection) = selection {
+        if selection.head_sha != certificate.reviewed_candidate.commit
+            || selection.head_tree != certificate.reviewed_candidate.tree
+            || selection.base_sha != certificate.base.commit
+            || selection.base_tree != certificate.base.tree
+        {
+            return Err(OrbitError::CapabilityDenied(
+                "selection_stale: review certificate does not continue the selected candidate"
+                    .to_string(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// [granted-tools §4] Apply the mutation proposals this passed attempt's

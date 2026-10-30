@@ -601,6 +601,7 @@ fn settle(
             )?;
         }
     }
+    output::validate_selection(&certificate, admitted.selective_receipt.as_deref())?;
     store.review_certificate_record(&context.workspace_id, &certificate)?;
     publication::publish_certificate(runtime, context, &certificate)?;
     if certificate.verdict.passed() {

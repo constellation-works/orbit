@@ -124,6 +124,7 @@ pub(super) fn reconcile_settled(
     }
     // Settlement may have stopped before every task carried the evidence
     // or its known-red decisions. Both writes reconcile only missing entries.
+    output::validate_selection(&certificate, selection)?;
     publication::publish_certificate(runtime, context, &certificate)?;
     if certificate.verdict.passed() {
         baseline::record_known_red(runtime, &context.task_ids, &certificate.known_red)?;
