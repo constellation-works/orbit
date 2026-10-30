@@ -233,9 +233,12 @@ established. Failed/non-landed episodes are outside this outcome population.
 ![Separate size-response curves within low, medium and hard task complexity, with observed bins and task-bootstrap uncertainty](references/risk-size-curves.svg)
 
 Each curve independently fits `p = 1 - exp(-exp(a + b * ln(1 + lines)))`
-within one recorded task tier and exact model version. Slopes are unconstrained:
-the model permits a falling response. Dots show observed equal-count size-bin
-rates; shading is a pointwise 95% percentile band from 800 task-bootstrap refits.
+within one recorded task tier. Single-model curves use one exact model version;
+the labelled Low-tier small-model pool combines three versions (Luna + Haiku +
+Muse Spark; n=365, linked=17).
+Slopes are unconstrained: the model permits a falling response. Dots show
+observed equal-count size-bin rates; shading is a pointwise 95% percentile band
+from 800 task-bootstrap refits.
 Curves stop at each group's 5th–95th size percentiles. These curves do not adjust
 for task type, calendar, routing or review and cannot establish a causal size
 effect, different model growth laws or out-of-support behavior.
