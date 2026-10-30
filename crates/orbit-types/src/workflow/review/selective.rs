@@ -165,8 +165,10 @@ impl SelectiveBeforeLandingPolicy {
     /// Whether `other` states the same operator-configured predicates (mode,
     /// risk threshold, paths and unknown-risk behavior). The frozen risk-model
     /// identity, the digest derived from it and the provenance map are not
-    /// predicates: the identity records when and from what history the owner
-    /// fitted the model, so it differs between any two captures.
+    /// predicates: a fitted identity records when and from what history the
+    /// owner fitted the model, so it can differ across captures as time or
+    /// history changes, while an unavailable/no-fit identity carries no
+    /// timestamps and may repeat.
     pub fn same_predicates(&self, other: &Self) -> bool {
         self.mode == other.mode
             && self.risk_threshold == other.risk_threshold

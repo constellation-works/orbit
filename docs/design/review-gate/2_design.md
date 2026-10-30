@@ -1795,8 +1795,11 @@ snapshot, so follower-local coefficients are never accepted. The captured
 risk estimates remain unavailable until a durable owner snapshot seam exists;
 path predicates continue to use the complete owner-verifiable diff.
 
-The frozen identity embeds its fit window and the history it was fitted on, so
-it never equals a later resolution of the same configuration. Upgrade resume
+A fitted identity embeds its fit window and the history it was fitted on, so
+it can differ across captures as time or history changes. An
+unavailable/no-fit identity carries no timestamps and may repeat for the
+same configuration, and fitted captures in the same second with unchanged
+evidence can also match. Upgrade resume
 and completion observation therefore judge a captured selective policy changed
 only when an operator predicate (`mode`, `risk_threshold`, `paths`,
 `unknown_risk`) differs from today's. The frozen identity, the digest derived
