@@ -472,6 +472,12 @@ fn first_edit_readout_scores_the_first_implement_invocation() {
             expected: FirstEdit::Measured(1.0, 10.0),
         },
         Case {
+            name: "two-reads-then-native-file-change",
+            calls: Some(&[("read", 10), ("read", 20), ("file_change", 0)]),
+            terminal: true,
+            expected: FirstEdit::Measured(2.0, 30.0),
+        },
+        Case {
             name: "edit-at-first-call",
             calls: Some(&[("edit", 40)]),
             terminal: true,
