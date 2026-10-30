@@ -1,11 +1,11 @@
 ---
 title: "Scope: backlog forecast v2 from drain admission"
 owner: claude
-last_updated: 2026-10-29
-last_validated: 2026-10-27
+last_updated: 2026-10-30
+last_validated: 2026-10-30
 status: Draft
 stage: building
-next: "Review residual phases, shadow resource-fit counterfactuals, follower capacity and richer calibration remain open after the six v2 factors."
+next: "Residual rules (review phases, shadow resource-fit, follower capacity, richer calibration) are not filed"
 feature: backlog-forecast
 doc_role: scope
 type: design
@@ -389,7 +389,7 @@ No new admission settings. `lookback_days`, `concurrency` and `arrivals=on` reta
 
 - `GET /api/diagnostics/backlog_forecast?workspace=…[&lookback_days=…|&history_tasks=…][&concurrency=…][&arrivals=on][&refresh=1]`: existing read-only service apart from throttled snapshot writes. The canonical query serves the newest fresh stored snapshot; `refresh=1` computes live ([stored read path](#shipped-so-far)).
 - Analytics › Forecast: a history selector (default 30 days with the 50-completion floor, last 200, last 500, 90 days) naming the completions and their start beside the figures; existing time/USD/token tiles, complexity table, arrival and coverage/calibration panels; add effective parallelism, critical path, waits, completion/non-drain probability, rework and version/host labels. Per-task schedule details expose predicted start range/order with support, rather than a deterministic promise.
-- Tasks drain card: retain the p50–p90 line and whole-dollar cost when known, tooltip counts/exact cost/tokens and link to Analytics › Forecast [ORB-18533]. A failed/unavailable forecast leaves primary controls usable. With v2 incomplete/unknown totals, explain the reason instead of presenting a partial backlog as drained.
+- Tasks drain card: retain the p50–p90 line and whole-dollar cost when known, tooltip counts/exact cost/tokens and link to Analytics › Forecast [ORB-18533]. A failed/unavailable forecast leaves primary controls usable. With v2 incomplete/unknown totals, explain the reason instead of presenting a partial backlog as drained; [ORB-19963] shipped that explanation (the actual unavailable reason, plus a labelled pre-regression baseline) in Analytics › Forecast and the drain-card link.
 - Task rows/detail and their APIs: the shared `riskiness` object and support tooltip described above. Implementers update [user interface](../user-interface/2_design.md) with their shipped UI and capture screenshots then; this scope changes no rendered view. Shipped in the user interface design's Tasks section.
 
 ## Non-goals
@@ -430,7 +430,7 @@ All six implementation tasks carry `backlog-forecast-v2` and depend on this scop
 
 | Task | Deliverable |
 |---|---|
-| [ORB-18686] | Event-driven dependency/lock/footprint/reservation admission, shared adapter/order, dependency coverage, parallelism/critical path/start predictions, versioned scoring and latency evidence. |
+| [ORB-18686] | Shipped: event-driven dependency/lock/footprint/reservation admission, shared adapter/order, dependency coverage, parallelism/critical path/start predictions, versioned scoring and latency evidence. |
 | [ORB-18687] | Shipped: invocation/run-derived review-mode cells, pending/captured policy resolution, provenance and counted fallbacks (model 4, factor 1). |
 | [ORB-18688] | Shipped: status-history episode outcomes, censored age-conditioned blocked returns, incomplete probabilities and abandoned-aware scoring (model 5, factor 1). Review residual phases not shipped. |
 | [ORB-18689] | Shipped: this host's profile/capacity/baseline inputs and shared gap fit where the drain enforces it, mode/host status, profile coverage and resource waits (model 6, factor 1). Shadow counterfactual, follower capacity and remote telemetry transport not shipped. |
@@ -449,11 +449,16 @@ All six implementation tasks carry `backlog-forecast-v2` and depend on this scop
 - [ORB-18687] — implements review-mode sampling.
 - [ORB-18688] — implements blocked/failed/retry outcomes.
 - [ORB-18689] — implements resource-fit concurrency.
+- [ORB-18853] — keeps sub-second and same-instant blocked returns drawable (model 7).
+- [ORB-18856] — counts censored blocked waits in return-wait totals (model 8).
 - [ORB-18690] — shipped task riskiness APIs and UI.
 - [ORB-18691] — implements forecast regression rework.
 - [ORB-18859] — stores retry-inclusive per-task work and spend (model 10).
+- [ORB-19215] — holds scheduled tasks until `not_before` in the forecast (model 11).
 - [ORB-19361] — replaces the per-file riskiness estimator with the size-based fit (model 12).
+- [ORB-19376] — keeps finite riskiness fits at nearby sizes (estimator 3, model 13).
 - [ORB-19615] — serves the default read from the stored snapshot, with `refresh=1` for a live recompute.
 - [ORB-19961] — recovers legacy fix history and scopes regression support to the sampled pool (model 14).
+- [ORB-19963] — explains unavailable forecasts and labels the pre-regression baseline in the dashboard.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
