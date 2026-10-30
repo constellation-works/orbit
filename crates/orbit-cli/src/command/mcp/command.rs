@@ -3,6 +3,7 @@ use std::path::Path;
 use clap::{Args, Subcommand, ValueEnum};
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_mcp::{McpSessionAuthority, RemoteProxyArgs};
+use orbit_types::tool::McpToolsetSelection;
 
 use crate::command::{CommandOut, CommandOutput, Execute};
 
@@ -181,6 +182,26 @@ pub struct ServeArgs {
     /// with a new value, when the orchestrating crew actually changes.
     #[arg(long, value_name = "CREW")]
     pub orchestrator: Option<String>,
+    /// Advertise these opt-in toolsets beside the default one, as a
+    /// comma-separated list: `leases`, `experiments`, `analytics`,
+    /// `decision-channel`, or `all`.
+    ///
+    /// The default toolset (tasks, workflows and runs, automation, decision
+    /// list and show, codebase, friction, search, the UI and visual tools,
+    /// command execution and workspace discovery) is always advertised.
+    /// `leases` adds the lease tools; `experiments` the experiment tools;
+    /// `analytics` the agent and orchestrator scorecards and the crew
+    /// ladder; `decision-channel` a decision channel's submit and digest,
+    /// which only the bound channel plugin or the operator may call.
+    ///
+    /// Replaces the `machine.mcp.toolsets` host config for this server. A
+    /// toolset changes only what this server lists and dispatches: a call to a
+    /// tool outside it is refused with the toolset to enable, and `orbit tool
+    /// run`, activities and plugin callbacks reach every tool regardless.
+    /// `--mode remote` asks the destination for the same toolsets, and
+    /// `--mode federated` applies them to every destination.
+    #[arg(long, value_name = "TOOLSETS")]
+    pub toolset: Option<String>,
 }
 
 impl ServeArgs {
@@ -222,6 +243,7 @@ impl ServeArgs {
                     ssh_host,
                     orchestrator: self.orchestrator,
                     authority: requested_authority(self.operator),
+                    toolsets: resolve_mcp_toolsets(&global_root, self.toolset.as_deref())?,
                 })?
             }
             Some(ServeMode::Federated) => {
@@ -231,24 +253,77 @@ impl ServeArgs {
                          '{ssh_host}'; register remote hosts with `orbit host add <ssh-target>`"
                     )));
                 }
+                let toolsets = resolve_mcp_toolsets(&global_root, self.toolset.as_deref())?;
                 super::server::serve_mcp_federated_stdio(
                     global_root,
                     self.orchestrator,
                     requested_authority(self.operator),
+                    toolsets,
                 )?
             }
-            None => super::server::serve_mcp_stdio(
-                global_root,
-                self.remote_caller_machine_id,
-                requested_authority(self.operator),
-                self.workspace
-                    .or_else(orbit_core::runtime::managed_workspace_selector_from_env),
-                self.orchestrator,
-                self.internal_drain,
-                self.worker_host,
-            )?,
+            None => {
+                // An Orbit SSH route (the mux, a worker or drain route) names
+                // no toolset: its caller filters, so this end serves them all.
+                let toolsets = if self.toolset.is_none() && self.remote_caller_machine_id.is_some()
+                {
+                    McpToolsetSelection::all()
+                } else {
+                    resolve_mcp_toolsets(&global_root, self.toolset.as_deref())?
+                };
+                super::server::serve_mcp_stdio(
+                    global_root,
+                    self.remote_caller_machine_id,
+                    requested_authority(self.operator),
+                    self.workspace
+                        .or_else(orbit_core::runtime::managed_workspace_selector_from_env),
+                    self.orchestrator,
+                    super::server::StdioLaunch {
+                        internal_drain: self.internal_drain,
+                        worker_host: self.worker_host,
+                    },
+                    toolsets,
+                )?
+            }
         }
         Ok(CommandOutput::Silent)
+    }
+}
+
+/// The toolsets a server advertises: `--toolset` when given, else the
+/// `machine.mcp.toolsets` host config, else the default toolset alone.
+///
+/// An unreadable host config falls back to the default toolset with a warning
+/// rather than refusing to serve: a toolset trims context, it grants nothing.
+pub(super) fn resolve_mcp_toolsets(
+    global_root: &Path,
+    flag: Option<&str>,
+) -> Result<McpToolsetSelection, OrbitError> {
+    if let Some(flag) = flag {
+        return McpToolsetSelection::parse_list(flag)
+            .map_err(|error| OrbitError::InvalidInput(format!("--toolset: {error}")));
+    }
+    let config =
+        orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::global_only(global_root));
+    match config {
+        Ok(config) => McpToolsetSelection::from_names(
+            config
+                .snapshot
+                .machine_mcp_toolsets
+                .iter()
+                .map(String::as_str),
+        )
+        .map_err(|error| {
+            OrbitError::InvalidInput(format!("{}: {error}", orbit_mcp::MCP_TOOLSETS_CONFIG_KEY))
+        }),
+        Err(error) => {
+            tracing::warn!(
+                target: "orbit.mcp",
+                %error,
+                "could not read {}; serving the default MCP toolset",
+                orbit_mcp::MCP_TOOLSETS_CONFIG_KEY
+            );
+            Ok(McpToolsetSelection::default_only())
+        }
     }
 }
 

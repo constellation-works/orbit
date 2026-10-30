@@ -10,4 +10,6 @@ mod runtime_cache;
 mod serve;
 
 pub(crate) use serve::ID_RESOLVED_WORKSPACE_TOOLS;
-pub(super) use serve::{serve_mcp_federated_stdio, serve_mcp_listener, serve_mcp_stdio};
+pub(super) use serve::{
+    StdioLaunch, serve_mcp_federated_stdio, serve_mcp_listener, serve_mcp_stdio,
+};

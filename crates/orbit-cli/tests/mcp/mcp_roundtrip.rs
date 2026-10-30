@@ -917,7 +917,8 @@ fn task_update_refusal_names_a_reachable_status() {
 /// row. The fixture workspace holds no agent rows, as in the report.
 #[test]
 fn agents_show_missing_row_names_scorecard_and_window_recovery() {
-    let (_workspace, mut client) = McpWorkspace::served();
+    let workspace = McpWorkspace::init();
+    let mut client = workspace.serve_with_args(&["--toolset", "analytics"]);
 
     let scorecard = client.call_tool_ok(
         "orbit_agents_scorecard",
@@ -946,6 +947,89 @@ fn agents_show_missing_row_names_scorecard_and_window_recovery() {
         assert!(
             !message_contains(&refused, part),
             "the missing-row refusal must not mislabel the crew ({part}): {refused}"
+        );
+    }
+}
+
+/// Write the host's `machine.mcp.toolsets` selection.
+fn set_host_toolsets(workspace: &McpWorkspace, toolsets: &[&str]) {
+    let config_path = workspace.home.join(".orbit/config.toml");
+    let mut config: toml_edit::DocumentMut = std::fs::read_to_string(&config_path)
+        .unwrap_or_default()
+        .parse()
+        .expect("fixture config TOML");
+    config["machine"]["mcp"]["toolsets"] =
+        toml_edit::value(toml_edit::Array::from_iter(toolsets.iter().copied()));
+    std::fs::write(&config_path, config.to_string()).expect("write host toolsets");
+}
+
+/// [ORB-20234] Opt-in toolsets stay off the default `tools/list`, a call to
+/// one of their tools is refused with the toolset and the flag that enables
+/// it, in bound and federated sessions alike, and `--toolset` or the
+/// `machine.mcp.toolsets` host config restores exactly the named groups.
+#[test]
+fn opt_in_toolsets_are_withheld_by_default_and_restored_by_flag_or_config() {
+    const OPT_IN: [(&str, &str); 6] = [
+        ("orbit_lease_list", "leases"),
+        ("orbit_experiment_list", "experiments"),
+        ("orbit_agents_scorecard", "analytics"),
+        ("orbit_orchestrator_show", "analytics"),
+        ("orbit_crew_ladder", "analytics"),
+        ("orbit_decision_digest", "decision-channel"),
+    ];
+    let workspace = McpWorkspace::init();
+    for (case, args) in [
+        ("bound", &["--operator"][..]),
+        ("federated", &["--operator", "--mode", "federated"][..]),
+    ] {
+        let mut client = workspace.serve_with_args(args);
+        let listed = client.tools_list();
+        let names = tool_names(&listed);
+        for kept in [
+            "orbit_decision_list",
+            "orbit_decision_show",
+            "orbit_task_show",
+        ] {
+            assert!(
+                names.contains(&kept),
+                "{case}: {kept} left the default surface"
+            );
+        }
+        for (tool, toolset) in OPT_IN {
+            assert!(
+                !names.contains(&tool),
+                "{case}: {tool} is advertised by default"
+            );
+            let refused = client.assert_tool_error(tool, json!({}), "toolset_not_enabled");
+            assert_eq!(refused["toolset"], toolset, "{case} {tool}: {refused}");
+            assert_eq!(
+                refused["enable"]["flag"],
+                format!("--toolset {toolset}"),
+                "{case} {tool}: {refused}"
+            );
+        }
+    }
+
+    let mut flagged = workspace.serve_with_args(&[
+        "--operator",
+        "--toolset",
+        "leases,experiments,analytics,decision-channel",
+    ]);
+    let listed = flagged.tools_list();
+    let names = tool_names(&listed);
+    for (tool, _) in OPT_IN {
+        assert!(names.contains(&tool), "--toolset did not restore {tool}");
+    }
+
+    set_host_toolsets(&workspace, &["leases"]);
+    let mut configured = workspace.serve_with_args(&["--operator"]);
+    let listed = configured.tools_list();
+    let names = tool_names(&listed);
+    for (tool, toolset) in OPT_IN {
+        assert_eq!(
+            names.contains(&tool),
+            toolset == "leases",
+            "machine.mcp.toolsets = [\"leases\"] must restore exactly the lease tools: {tool}"
         );
     }
 }
@@ -1205,7 +1289,10 @@ fn mcp_server_hides_uncallable_governed_tools_but_preserves_direct_call_denials(
     use orbit_common::governance::authorization::governed_tool;
     use orbit_types::tool::{McpCapability, mcp_advertised_tool_name};
 
-    let (workspace, mut client) = McpWorkspace::served();
+    let workspace = McpWorkspace::init();
+    // Every canonical definition, opt-in toolsets included, for each session.
+    set_host_toolsets(&workspace, &["all"]);
+    let mut client = workspace.serve();
     let mut operator = workspace.serve_with_args(&["--operator"]);
     let operator_list = operator.tools_list();
     let operator_names = tool_names(&operator_list);
@@ -2925,7 +3012,7 @@ fn mcp_serve_error_paths_return_tool_errors_and_keep_serving() {
         "request_not_found",
     );
 
-    let mut operator = workspace.serve_with_args(&["--operator"]);
+    let mut operator = workspace.serve_with_args(&["--operator", "--toolset", "decision-channel"]);
     operator.assert_tool_error(
         "orbit_decision_submit",
         json!({

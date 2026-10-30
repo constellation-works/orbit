@@ -19,6 +19,9 @@ pub struct ToolInfo {
     pub active: bool,
     pub builtin: bool,
     pub parameters: Vec<orbit_types::tool::ToolParam>,
+    /// The `orbit mcp serve` toolset that advertises this tool; `None` for a
+    /// tool MCP never advertises.
+    pub mcp_toolset: Option<orbit_types::tool::McpToolset>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,6 +81,7 @@ impl OrbitRuntime {
                 let enabled = stored.is_none_or(|s| s.enabled);
                 let active = self.tool_registry().is_active(&schema.name);
                 ToolInfo {
+                    mcp_toolset: self.tool_registry().mcp_toolset(&schema.name),
                     name: schema.name.clone(),
                     description: schema.description.clone(),
                     enabled,
@@ -119,6 +123,7 @@ impl OrbitRuntime {
         let active = self.tool_registry().is_active(&schema.name);
 
         Ok(ToolInfo {
+            mcp_toolset: self.tool_registry().mcp_toolset(&schema.name),
             name: schema.name,
             description: schema.description,
             enabled,
@@ -414,5 +419,6 @@ fn stored_external_tool_info(stored: &StoredTool) -> ToolInfo {
         active: true,
         builtin: false,
         parameters: schema.parameters,
+        mcp_toolset: None,
     }
 }

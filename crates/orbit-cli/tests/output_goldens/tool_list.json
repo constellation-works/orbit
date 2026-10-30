@@ -6,7 +6,8 @@
     "active": true,
     "status": "active",
     "builtin": true,
-    "parameters": []
+    "parameters": [],
+    "mcp_toolset": null
   },
   {
     "name": "github.pr.list",
@@ -40,7 +41,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": null
   },
   {
     "name": "github.run.list",
@@ -86,7 +88,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": null
   },
   {
     "name": "github.run.logs",
@@ -156,7 +159,8 @@
         "param_type": "integer",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": null
   },
   {
     "name": "github.run.view",
@@ -178,7 +182,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": null
   },
   {
     "name": "orbit.agent.invoke",
@@ -236,7 +241,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "default"
   },
   {
     "name": "orbit.agents.scorecard",
@@ -288,7 +294,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "analytics"
   },
   {
     "name": "orbit.agents.show",
@@ -334,7 +341,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "analytics"
   },
   {
     "name": "orbit.auto_task.add",
@@ -374,7 +382,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "default"
   },
   {
     "name": "orbit.auto_task.list",
@@ -408,7 +417,8 @@
         "param_type": "integer",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "default"
   },
   {
     "name": "orbit.auto_task.mint",
@@ -436,7 +446,8 @@
         "param_type": "boolean",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "default"
   },
   {
     "name": "orbit.auto_task.update",
@@ -500,7 +511,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "default"
   },
   {
     "name": "orbit.automation.explain",
@@ -528,7 +540,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "default"
   },
   {
     "name": "orbit.codebase.analytics",
@@ -586,7 +599,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "default"
   },
   {
     "name": "orbit.codebase.related",
@@ -626,7 +640,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "default"
   },
   {
     "name": "orbit.codebase.show",
@@ -690,7 +705,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "default"
   },
   {
     "name": "orbit.command.exec",
@@ -730,7 +746,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "default"
   },
   {
     "name": "orbit.crew.ladder",
@@ -746,7 +763,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "analytics"
   },
   {
     "name": "orbit.decision.digest",
@@ -768,7 +786,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "decision-channel"
   },
   {
     "name": "orbit.decision.list",
@@ -802,7 +821,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "default"
   },
   {
     "name": "orbit.decision.show",
@@ -824,7 +844,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "default"
   },
   {
     "name": "orbit.decision.submit",
@@ -888,7 +909,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "decision-channel"
   },
   {
     "name": "orbit.drain.claim.bind",
@@ -916,7 +938,8 @@
         "param_type": "object",
         "required": true
       }
-    ]
+    ],
+    "mcp_toolset": null
   },
   {
     "name": "orbit.drain.claim.settle",
@@ -968,7 +991,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": null
   },
   {
     "name": "orbit.drain.claims",
@@ -977,7 +1001,8 @@
     "active": true,
     "status": "active",
     "builtin": true,
-    "parameters": []
+    "parameters": [],
+    "mcp_toolset": null
   },
   {
     "name": "orbit.drain.probe",
@@ -1011,7 +1036,8 @@
         "param_type": "boolean",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": null
   },
   {
     "name": "orbit.drain.receipt.lookup",
@@ -1039,7 +1065,8 @@
         "param_type": "integer",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": null
   },
   {
     "name": "orbit.experiment.abandon",
@@ -1067,7 +1094,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "experiments"
   },
   {
     "name": "orbit.experiment.assign",
@@ -1101,7 +1129,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "experiments"
   },
   {
     "name": "orbit.experiment.clone",
@@ -1135,7 +1164,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "experiments"
   },
   {
     "name": "orbit.experiment.conclude",
@@ -1169,7 +1199,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "experiments"
   },
   {
     "name": "orbit.experiment.create",
@@ -1251,7 +1282,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "experiments"
   },
   {
     "name": "orbit.experiment.list",
@@ -1273,7 +1305,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "experiments"
   },
   {
     "name": "orbit.experiment.pause",
@@ -1301,7 +1334,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "experiments"
   },
   {
     "name": "orbit.experiment.readout",
@@ -1329,7 +1363,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "experiments"
   },
   {
     "name": "orbit.experiment.resume",
@@ -1357,7 +1392,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "experiments"
   },
   {
     "name": "orbit.experiment.reweight",
@@ -1397,7 +1433,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "experiments"
   },
   {
     "name": "orbit.experiment.show",
@@ -1419,7 +1456,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "experiments"
   },
   {
     "name": "orbit.experiment.start",
@@ -1447,7 +1485,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "experiments"
   },
   {
     "name": "orbit.experiment.update",
@@ -1529,7 +1568,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "experiments"
   },
   {
     "name": "orbit.friction.add",
@@ -1569,7 +1609,8 @@
         "param_type": "string",
         "required": true
       }
-    ]
+    ],
+    "mcp_toolset": "default"
   },
   {
     "name": "orbit.friction.update",
@@ -1621,7 +1662,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "default"
   },
   {
     "name": "orbit.lease.check",
@@ -1643,7 +1685,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "leases"
   },
   {
     "name": "orbit.lease.expand",
@@ -1677,7 +1720,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "leases"
   },
   {
     "name": "orbit.lease.list",
@@ -1686,7 +1730,8 @@
     "active": true,
     "status": "active",
     "builtin": true,
-    "parameters": []
+    "parameters": [],
+    "mcp_toolset": "leases"
   },
   {
     "name": "orbit.lease.notices",
@@ -1714,7 +1759,8 @@
         "param_type": "u64",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "leases"
   },
   {
     "name": "orbit.lease.release",
@@ -1742,7 +1788,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "leases"
   },
   {
     "name": "orbit.lease.renew",
@@ -1764,7 +1811,8 @@
         "param_type": "u64",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "leases"
   },
   {
     "name": "orbit.lease.request",
@@ -1846,7 +1894,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "leases"
   },
   {
     "name": "orbit.lease.show",
@@ -1862,7 +1911,8 @@
         "param_type": "string",
         "required": true
       }
-    ]
+    ],
+    "mcp_toolset": "leases"
   },
   {
     "name": "orbit.orchestrator.scorecard",
@@ -1890,7 +1940,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "analytics"
   },
   {
     "name": "orbit.orchestrator.show",
@@ -1930,7 +1981,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "analytics"
   },
   {
     "name": "orbit.pipeline.invoke",
@@ -1982,7 +2034,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "default"
   },
   {
     "name": "orbit.pipeline.wait",
@@ -2022,7 +2075,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": null
   },
   {
     "name": "orbit.routine.control",
@@ -2098,7 +2152,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "default"
   },
   {
     "name": "orbit.search",
@@ -2162,7 +2217,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "default"
   },
   {
     "name": "orbit.task.add",
@@ -2310,7 +2366,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "default"
   },
   {
     "name": "orbit.task.artifact.get",
@@ -2350,7 +2407,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "default"
   },
   {
     "name": "orbit.task.artifact.put",
@@ -2384,7 +2442,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "default"
   },
   {
     "name": "orbit.task.block_triage",
@@ -2472,7 +2531,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "default"
   },
   {
     "name": "orbit.task.eligible",
@@ -2518,7 +2578,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "default"
   },
   {
     "name": "orbit.task.list",
@@ -2660,7 +2721,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "default"
   },
   {
     "name": "orbit.task.pull",
@@ -2742,7 +2804,8 @@
         "param_type": "boolean",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": null
   },
   {
     "name": "orbit.task.reconcile_review",
@@ -2800,7 +2863,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "default"
   },
   {
     "name": "orbit.task.recover_claim",
@@ -2846,7 +2910,8 @@
         "param_type": "string",
         "required": true
       }
-    ]
+    ],
+    "mcp_toolset": "default"
   },
   {
     "name": "orbit.task.requeue",
@@ -2880,7 +2945,8 @@
         "param_type": "boolean",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "default"
   },
   {
     "name": "orbit.task.retry_handoff",
@@ -2938,7 +3004,8 @@
         "param_type": "string",
         "required": true
       }
-    ]
+    ],
+    "mcp_toolset": "default"
   },
   {
     "name": "orbit.task.review_reset",
@@ -2978,7 +3045,8 @@
         "param_type": "boolean",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "default"
   },
   {
     "name": "orbit.task.revoke_handoff",
@@ -3024,7 +3092,8 @@
         "param_type": "string",
         "required": true
       }
-    ]
+    ],
+    "mcp_toolset": "default"
   },
   {
     "name": "orbit.task.show",
@@ -3112,7 +3181,8 @@
         "param_type": "integer",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "default"
   },
   {
     "name": "orbit.task.update",
@@ -3344,7 +3414,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "default"
   },
   {
     "name": "orbit.visual.capture",
@@ -3378,7 +3449,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "default"
   },
   {
     "name": "orbit.workflow.auto",
@@ -3490,7 +3562,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "default"
   },
   {
     "name": "orbit.workflow.run.list",
@@ -3548,7 +3621,8 @@
         "param_type": "boolean",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "default"
   },
   {
     "name": "orbit.workflow.run.resume",
@@ -3576,7 +3650,8 @@
         "param_type": "object",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "default"
   },
   {
     "name": "orbit.workflow.run.show",
@@ -3610,7 +3685,8 @@
         "param_type": "integer",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "default"
   },
   {
     "name": "orbit.workflow.ship",
@@ -3662,7 +3738,8 @@
         "param_type": "string",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": "default"
   },
   {
     "name": "proc.spawn",
@@ -3690,6 +3767,7 @@
         "param_type": "u64",
         "required": false
       }
-    ]
+    ],
+    "mcp_toolset": null
   }
 ]

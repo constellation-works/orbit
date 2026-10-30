@@ -16,6 +16,7 @@ use orbit_common::OrbitError;
 use orbit_common::governance::authorization::agent_context_declared;
 use orbit_common::process::shell::quote_posix_arg;
 use orbit_registry::{MachineIdentityState, inspect_machine_identity};
+use orbit_types::tool::McpToolsetSelection;
 
 use super::identity::McpSessionAuthority;
 
@@ -37,6 +38,10 @@ pub struct RemoteProxyArgs {
     /// Authority this client was started with, and therefore the authority the
     /// destination is asked to serve [ORB-12564].
     pub authority: McpSessionAuthority,
+    /// Toolsets the destination is asked to advertise. The proxy is
+    /// byte-faithful, so the destination applies them; an Orbit SSH route that
+    /// names none serves every toolset.
+    pub toolsets: McpToolsetSelection,
 }
 
 /// Relay this process's MCP stdio directly through one non-PTY SSH child.
@@ -77,12 +82,15 @@ pub fn serve_mcp_remote_proxy(args: RemoteProxyArgs) -> Result<(), OrbitError> {
 /// keeps this process out of the protocol entirely.
 fn ssh_command(args: &RemoteProxyArgs, caller_machine_id: &str) -> Result<Command, OrbitError> {
     let mut command = super::ssh_command(&args.ssh_host)?;
+    let mut remote = remote_serve_command(
+        caller_machine_id,
+        args.orchestrator.as_deref(),
+        args.authority,
+    );
+    remote.push_str(" --toolset ");
+    remote.push_str(&quote_posix_arg(&args.toolsets.to_list()));
     command
-        .arg(remote_serve_command(
-            caller_machine_id,
-            args.orchestrator.as_deref(),
-            args.authority,
-        ))
+        .arg(remote)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());

@@ -171,5 +171,6 @@ pub fn builtin_mcp_rules(name: &str) -> McpToolRules {
         declared_workspace_selector: name == "orbit.task.show",
         presentation_read,
         input_decoration,
+        ..McpToolRules::default()
     }
 }

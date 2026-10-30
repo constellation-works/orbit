@@ -13,7 +13,7 @@ use orbit_common::governance::task::TASK;
 use orbit_common::governance::visual::VISUAL;
 use orbit_common::governance::workflow::WORKFLOW;
 use orbit_common::governance::workspace_claim::WORKSPACE_CLAIM;
-use orbit_types::tool::McpToolScope;
+use orbit_types::tool::{McpToolScope, McpToolset};
 
 use super::{agent, command, operation, pipeline};
 use crate::ToolRegistry;
@@ -39,7 +39,9 @@ pub fn register(registry: &mut ToolRegistry) {
     // Workspace claims are coordination holds like task locks and remain off
     // the MCP surface.
     operation::register_noun(registry, &WORKSPACE_CLAIM);
-    operation::register_noun(registry, &LEASE);
+    // Leases, experiments and the analytics reads are opt-in `orbit mcp
+    // serve` toolsets; `orbit tool run` and activities reach them regardless.
+    operation::register_noun_in_toolset(registry, &LEASE, McpToolset::Leases);
     // Agent invocation is workspace-scoped: the admission is made against the
     // checkout that owns it, and Core is where that decision lives.
     registry.register_mcp(agent::OrbitAgentInvokeTool, McpToolScope::WorkspaceRequired);
@@ -61,19 +63,20 @@ pub fn register(registry: &mut ToolRegistry) {
     // Read-only codebase analytics, the dashboard Codebase view's rankings.
     operation::register_noun(registry, &CODEBASE);
     // Decision requests: list/show are read-only tools; answer registers
-    // inactive (operator CLI and dashboard only).
+    // inactive (operator CLI and dashboard only); the channel's submit and
+    // digest callbacks join the opt-in decision-channel toolset.
     operation::register_noun(registry, &DECISION);
     // Experiments: show/list are reads; every write is a governed,
     // operator-only operation.
-    operation::register_noun(registry, &EXPERIMENT);
+    operation::register_noun_in_toolset(registry, &EXPERIMENT, McpToolset::Experiments);
     // Read-only agent scorecards, the dashboard Agents view's payloads.
-    operation::register_noun(registry, &AGENTS);
+    operation::register_noun_in_toolset(registry, &AGENTS, McpToolset::Analytics);
     // The read-only crew ladder report.
-    operation::register_noun(registry, &CREW);
+    operation::register_noun_in_toolset(registry, &CREW, McpToolset::Analytics);
     // The read-only condition-trigger explain.
     operation::register_noun(registry, &AUTOMATION);
     // The deprecated orchestrator scorecard aliases of the agents tools.
-    operation::register_noun(registry, &ORCHESTRATOR);
+    operation::register_noun_in_toolset(registry, &ORCHESTRATOR, McpToolset::Analytics);
     // Workflow ship, run reads and resume, and the auto-drain control come
     // from the shared operation registry.
     operation::register_noun(registry, &WORKFLOW);
