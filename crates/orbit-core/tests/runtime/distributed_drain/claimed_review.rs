@@ -301,6 +301,15 @@ impl ReviewedLeaf {
         review: HandoffReview,
         head: &SourceRevision,
     ) -> Result<(), OrbitError> {
+        self.owner_accepts_review_with_light(review, head, Vec::new())
+    }
+
+    pub(super) fn owner_accepts_review_with_light(
+        &self,
+        review: HandoffReview,
+        head: &SourceRevision,
+        light_delivery: Vec<orbit_types::task::LightDeliveryDecision>,
+    ) -> Result<(), OrbitError> {
         let record = self.pair.admission(&self.leaf);
         let mut handoff = handoff(&record);
         handoff.candidate.repository = REPOSITORY.into();
@@ -319,7 +328,7 @@ impl ReviewedLeaf {
                 repository: REPOSITORY.into(),
             }),
             known_red: vec![],
-            light_delivery: Vec::new(),
+            light_delivery,
         };
         self.pair
             .wire

@@ -465,6 +465,99 @@ fn a_claimed_before_landing_review_confirms_baselines_against_the_owners_command
     );
 }
 
+/// ORB-20218: a selective receipt remains original-candidate evidence when
+/// the stronger landing reviewer certifies its own repair, even though the
+/// selective rule itself did not require that review.
+fn selective_observation_and_nonmatch_follow_a_certified_claimed_repair() {
+    for (mode, paths) in [("observe", "src/**"), ("enforce", "unrelated/**")] {
+        let mut leaf = ReviewedLeaf::admit_from(
+            &format!(
+                "[review]\nbefore_landing = true\nselective_before_landing.mode = {mode:?}\nselective_before_landing.paths = [{paths:?}]\n[operation]\nreview_crew = {REVIEW_CREW:?}\n"
+            ),
+            "",
+        );
+        leaf.gate_input["before_landing"] = json!(true);
+        let admitted = leaf.admit_review();
+        assert_eq!(admitted["applies"], true, "{admitted}");
+        let selection: orbit_types::workflow::SelectiveReviewReceipt =
+            serde_json::from_value(admitted["selective_receipt"].clone()).unwrap();
+        assert!(!selection.requires_review());
+        leaf.reviewer_reports(
+            admitted["attempt_id"].as_str().unwrap(),
+            ReviewVerdict::AcceptWithFixes,
+            true,
+        );
+        let settled = leaf.settle().expect("stronger review settles its repair");
+        let reviewed = revision(&leaf.pair.follower_repo, "HEAD");
+        assert_ne!(selection.head_sha, reviewed.commit);
+        assert_eq!(settled["selective_selection_head_sha"], reviewed.commit);
+        assert_eq!(settled["selective_receipt"], admitted["selective_receipt"]);
+        let evidence: HandoffReviewEvidence =
+            serde_json::from_value(settled["handoff_evidence"].clone()).unwrap();
+        let review = HandoffReview {
+            policy: ReviewTiming::BeforeLanding,
+            disposition: HandoffReviewDisposition::BeforeLanding(Box::new(evidence)),
+            selective_receipt: Some(selection),
+        };
+        leaf.owner_accepts_review(review, &reviewed)
+            .expect("owner verifies original selection through the stronger review certificate");
+        assert_eq!(leaf.pair.owner_status(&leaf.task), "review");
+    }
+}
+
+/// The claimed skip carries selection evidence without claiming a review
+/// certificate, and owner verification still checks the light-delivery tag.
+fn a_claimed_observed_light_skip_keeps_its_receipt_through_owner_acceptance() {
+    use orbit_types::task::{LightDeliveryDecision, LightDeliveryJudgement};
+    let mut leaf = ReviewedLeaf::admit_launched(
+        &format!(
+            "[review]\nbefore_landing = true\nselective_before_landing.mode = \"observe\"\nselective_before_landing.paths = [\"src/**\"]\n[operation]\nreview_crew = {REVIEW_CREW:?}\n[workflow]\nlight_delivery_paths = [\"src/**\"]\n"
+        ),
+        "",
+        |pair, drain| {
+            pair.wire
+                .owner
+                .update_task_with_identity(
+                    &pair.tasks[0],
+                    orbit_core::application::task::TaskUpdateParams {
+                        tags: Some(vec!["skip-review".into()]),
+                        ..Default::default()
+                    },
+                    Some("codex".into()),
+                    None,
+                )
+                .unwrap();
+            pair.launched_leaf(drain, 1, std::process::id())
+        },
+    );
+    leaf.gate_input["before_landing"] = json!(true);
+    let admitted = leaf.admit_review();
+    assert_eq!(admitted["applies"], false, "{admitted}");
+    assert_eq!(
+        admitted["reason"], "skip_review_light_delivery",
+        "{admitted}"
+    );
+    let settled = leaf.settle().unwrap();
+    assert!(settled["handoff_evidence"].is_null());
+    let receipt = serde_json::from_value(settled["selective_receipt"].clone()).unwrap();
+    let reviewed = revision(&leaf.pair.follower_repo, "HEAD");
+    let mut review = HandoffReview::not_required();
+    review.selective_receipt = Some(receipt);
+    let tags = vec!["skip-review".to_string()];
+    let light = LightDeliveryDecision::decide(
+        "skip-review",
+        &[(leaf.task.as_str(), tags.as_slice())],
+        &reviewed.commit,
+        LightDeliveryJudgement::Light { paths: 1 },
+    )
+    .unwrap();
+    leaf.owner_accepts_review_with_light(review, &reviewed, vec![light])
+        .expect(
+            "the independently verified skip accepts selection evidence without review evidence",
+        );
+    assert_eq!(leaf.pair.owner_status(&leaf.task), "review");
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     a_claimed_before_landing_review_reads_the_current_implementers_summary_scenarios,
@@ -473,5 +566,7 @@ crate::scenario_table!(
     a_reviewing_leaf_lets_its_full_drain_admit_a_replacement,
     before_landing_hosts_capture_landing_review_only_for_listed_machines,
     a_review_pool_owner_captures_one_reviewer_crew_per_claim,
-    a_claimed_before_landing_review_confirms_baselines_against_the_owners_commands
+    a_claimed_before_landing_review_confirms_baselines_against_the_owners_commands,
+    selective_observation_and_nonmatch_follow_a_certified_claimed_repair,
+    a_claimed_observed_light_skip_keeps_its_receipt_through_owner_acceptance
 );

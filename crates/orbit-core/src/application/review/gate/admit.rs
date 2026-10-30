@@ -332,7 +332,16 @@ fn admission_output(
         && light_review_skipped(runtime, &context)
             .map_err(|error| DispatchError::action_failed(action, error.to_string()))?
     {
-        return Ok(not_applicable(SKIP_REVIEW_REASON, Some(&admission)));
+        return Ok(match selective_receipt {
+            Some(receipt) => ReviewGateAdmissionOutput::NotApplicable(
+                ReviewGateNotApplicable::with_selective_receipt(
+                    SKIP_REVIEW_REASON,
+                    Some(&admission),
+                    receipt,
+                ),
+            ),
+            None => not_applicable(SKIP_REVIEW_REASON, Some(&admission)),
+        });
     }
     let mut awaiting_evidence = false;
     let outcome = awaiting_external_evidence(runtime, &context).and_then(|awaiting| {

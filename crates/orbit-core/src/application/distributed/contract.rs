@@ -156,9 +156,9 @@ impl crate::OrbitRuntime {
         let policy = self.operation_policy();
         let before_pr = self.local_review_before_pr();
         let before_landing = policy.reviews_before_landing_for(executor);
-        // A host-list match stays unconditional for that executor; other
-        // executors carry the selective policy to evaluate on the leaf.
-        let mut selective = if before_pr || before_landing {
+        // A stronger landing layer keeps its selective observation and
+        // obligation; only the incompatible legacy before-PR layer omits it.
+        let mut selective = if before_pr {
             None
         } else {
             policy.selective_before_landing_policy()

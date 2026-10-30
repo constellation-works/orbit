@@ -36,12 +36,12 @@ impl Fixture {
 
     /// The fixture with `review` appended to its `[review]` table.
     pub(super) fn new_with_config(required: &[&str], review: &str) -> Self {
-        Self::build(required, review, ReviewTiming::BeforePr, 10, None, &[])
+        Self::build(required, review, ReviewTiming::BeforePr, 10, None, &[], "")
     }
 
     /// The fixture whose captured `review.minutes` is `minutes` [ORB-15094].
     pub(super) fn new_with_review_minutes(minutes: u32) -> Self {
-        Self::build(&[], "", ReviewTiming::BeforePr, minutes, None, &[])
+        Self::build(&[], "", ReviewTiming::BeforePr, minutes, None, &[], "")
     }
 
     /// The fixture for a run that captured `review.before_landing` instead
@@ -53,20 +53,37 @@ impl Fixture {
     /// [`Self::before_landing`] with `review` appended to its `[review]`
     /// table.
     pub(super) fn before_landing_with_config(review: &str) -> Self {
-        Self::build(&[], review, ReviewTiming::BeforeLanding, 10, None, &[])
+        Self::build(&[], review, ReviewTiming::BeforeLanding, 10, None, &[], "")
     }
 
     /// The fixture whose task the `implementer` crew implemented, for a run
     /// that captured `operation.review_crew = ["implementer", "reviewers"]`
     /// whole [ORB-15195].
     pub(super) fn review_pool() -> Self {
-        Self::build(&[], "", ReviewTiming::BeforePr, 10, Some(""), &[])
+        Self::build(&[], "", ReviewTiming::BeforePr, 10, Some(""), &[], "")
     }
 
     /// The fixture whose task an operator granted `granted` at filing, for a
     /// run that captured `timing` [granted-tools §4].
     pub(super) fn granted(timing: ReviewTiming, granted: &[&str]) -> Self {
-        Self::build(&[], "", timing, 10, None, granted)
+        Self::build(&[], "", timing, 10, None, granted, "")
+    }
+
+    /// A stronger landing layer with an independent selective policy and
+    /// a genuinely light candidate, exercising the public skip-tag boundary.
+    pub(super) fn selective_landing(mode: &str, paths: &[&str]) -> Self {
+        let review = format!(
+            "selective_before_landing.mode = {mode:?}\nselective_before_landing.paths = {paths:?}\n"
+        );
+        Self::build(
+            &[],
+            &review,
+            ReviewTiming::BeforeLanding,
+            10,
+            None,
+            &[],
+            "light_delivery_paths = [\"candidate.txt\"]",
+        )
     }
 
     fn build(
@@ -76,6 +93,7 @@ impl Fixture {
         review_minutes: u32,
         selection: Option<&str>,
         granted: &[&str],
+        workflow: &str,
     ) -> Self {
         let pool = selection.is_some();
         let selection = selection.unwrap_or_default();
@@ -109,7 +127,7 @@ impl Fixture {
         std::fs::write(
             workspace.join("config.toml"),
             format!(
-                "[crews.reviewers]\nmodel = \"review-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n{implementer}[workflow]\ndefault_crew = \"reviewers\"\n{selection}\n{required_commands}[operation]\nreview_crew = {review_crew}\n[review]\n{switch} = true\n{review}"
+                "[crews.reviewers]\nmodel = \"review-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n{implementer}[workflow]\ndefault_crew = \"reviewers\"\n{workflow}\n{selection}\n{required_commands}[operation]\nreview_crew = {review_crew}\n[review]\n{switch} = true\n{review}"
             ),
         )
         .unwrap();
@@ -185,7 +203,7 @@ impl Fixture {
                 runtime.workflow_required_validation_commands().to_vec(),
             ),
             baseline_commands: runtime.review_baseline_commands().to_vec(),
-            selective_before_landing: None,
+            selective_before_landing: policy.selective_before_landing_policy(),
             captured_at: Utc::now(),
             host_evidence: Vec::new(),
         };
@@ -318,6 +336,7 @@ fn review_pool_admission_records_pressure_after_independence_filtering() {
         10,
         Some("crew_selection = \"usage_pressure\""),
         &[],
+        "",
     );
     crate::usage_pressure_draws::record_week(
         &fixture.runtime,

@@ -63,7 +63,7 @@ impl TaskCommitBoundary {
                 || receipt.mode != policy.mode
                 || receipt.base_sha != handoff.candidate.base.commit
                 || receipt.base_tree != handoff.candidate.base.tree
-                || ((!receipt.requires_review() || handoff.review.evidence().is_none())
+                || (handoff.review.evidence().is_none()
                     && (receipt.head_sha != handoff.candidate.candidate.commit
                         || receipt.head_tree != handoff.candidate.candidate.tree))
             {
@@ -115,7 +115,9 @@ impl TaskCommitBoundary {
         // light-delivery paths — or a mapped review-skip tag's candidate
         // within its profile whose guard passed — carries no review,
         // whatever the claim captured.
-        if handoff.review == HandoffReview::not_required()
+        if !selective_required
+            && handoff.review.policy == ReviewTiming::None
+            && handoff.review.evidence().is_none()
             && self.light_review_skip_applies(handoff, light)?
         {
             return Ok(Vec::new());
@@ -267,7 +269,6 @@ impl TaskCommitBoundary {
             ));
         }
         if let Some(selection) = &handoff.review.selective_receipt
-            && selection.requires_review()
             && (selection.head_sha != certificate.reviewed_candidate.commit
                 || selection.head_tree != certificate.reviewed_candidate.tree
                 || selection.base_sha != certificate.base.commit

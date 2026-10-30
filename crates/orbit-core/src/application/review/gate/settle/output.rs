@@ -115,17 +115,16 @@ pub(super) fn validate_selection(
     certificate: &ReviewCertificate,
     selection: Option<&orbit_types::workflow::SelectiveReviewReceipt>,
 ) -> Result<(), OrbitError> {
-    if let Some(selection) = selection {
-        if selection.head_sha != certificate.reviewed_candidate.commit
+    if let Some(selection) = selection
+        && (selection.head_sha != certificate.reviewed_candidate.commit
             || selection.head_tree != certificate.reviewed_candidate.tree
             || selection.base_sha != certificate.base.commit
-            || selection.base_tree != certificate.base.tree
-        {
-            return Err(OrbitError::CapabilityDenied(
-                "selection_stale: review certificate does not continue the selected candidate"
-                    .to_string(),
-            ));
-        }
+            || selection.base_tree != certificate.base.tree)
+    {
+        return Err(OrbitError::CapabilityDenied(
+            "selection_stale: review certificate does not continue the selected candidate"
+                .to_string(),
+        ));
     }
     Ok(())
 }
