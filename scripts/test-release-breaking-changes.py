@@ -19,6 +19,7 @@ import unittest
 from unittest import mock
 
 import self_test_hang
+from release_schema_oracle import INSTANCES, bounded_schema_pairs, schema_accepts_instance
 
 SCRIPT = Path(__file__).resolve().parent / "release-breaking-changes.py"
 
@@ -257,6 +258,32 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
 
     def signals(self, report):
         return {(s["task"], s["signal"], s["detail"]) for s in report["signals"]}
+
+    def test_mcp_schema_bounded_soundness_oracle(self):
+        # One real CLI survey batches independent tools so the bounded search
+        # adds no subprocess per pair. The validator shares no detector code.
+        before_tools, after_tools, witnesses = [], [], {}
+        for index, (before, after) in enumerate(bounded_schema_pairs()):
+            rejected = [value for value in INSTANCES
+                        if schema_accepts_instance(before, value)
+                        and not schema_accepts_instance(after, value)]
+            for surface in ("inputSchema", "outputSchema"):
+                name = f"oracle_{index}_{surface}"
+                before_tools.append({"name": name, surface: before})
+                after_tools.append({"name": name, surface: after})
+                if rejected:
+                    witnesses[name] = (before, after, rejected[0])
+        self.repo.write_mcp(before_tools)
+        self.repo.commit("chore: prepare bounded schema oracle [ORB-90]")
+        self.repo.git("tag", "-f", "v0.35.0")
+        self.repo.write_mcp(after_tools)
+        self.repo.commit("chore: survey bounded schema oracle [ORB-91]")
+        report = self.report()
+        signaled = {signal["detail"].split("`", 2)[1] for signal in report["signals"]
+                    if signal["signal"] == "mcp-schema"}
+        missed = {name: case for name, case in witnesses.items() if name not in signaled}
+        self.assertEqual(len(missed), 0, f"{len(missed)} unsound schema pairs; "
+                         f"first counterexamples (old, new, instance): {list(missed.items())[:10]}")
 
     def test_schema_bump_and_deny_unknown_field_decide_minor(self):
         # The v0.35.0..v0.36.0 shape: a SQLite migration and a new optional
