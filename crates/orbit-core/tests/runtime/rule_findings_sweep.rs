@@ -214,8 +214,65 @@ fn errors_file_one_task_per_rule() {
     assert_eq!(task.rule_fingerprint.as_deref(), Some("error|cli.example"));
 }
 
+fn duplicate_failing_fingerprint_in_one_document_files_once() {
+    let (_root, runtime) = fixture("");
+    let outcome = file(
+        &runtime,
+        document(vec![
+            result("fail", "low", "fp-dup", json!({"gap": 1})),
+            result("fail", "critical", "fp-dup", json!({"gap": 2})),
+            result("fail", "high", "fp-other", json!({"gap": 3})),
+        ]),
+        json!({}),
+    );
+    assert_eq!(outcome["counts"]["fail"], 3, "{outcome}");
+    assert_eq!(outcome["filed_count"], 2, "{outcome}");
+    let dup_filed: Vec<_> = outcome["filed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|entry| entry["fingerprint"] == "fp-dup")
+        .collect();
+    assert_eq!(dup_filed.len(), 1, "{outcome}");
+    // Highest severity wins deterministically for the repeated fingerprint.
+    assert_eq!(dup_filed[0]["severity"], "critical", "{outcome}");
+    let dup_task_id = dup_filed[0]["task_id"].as_str().unwrap();
+    assert_eq!(
+        runtime
+            .get_task(dup_task_id)
+            .unwrap()
+            .rule_fingerprint
+            .as_deref(),
+        Some("fp-dup")
+    );
+    // The duplicate is reported, not silently double-filed.
+    let skipped = outcome["skipped_existing"].as_array().unwrap();
+    assert_eq!(skipped.len(), 1, "{outcome}");
+    assert_eq!(skipped[0]["fingerprint"], "fp-dup", "{outcome}");
+    assert_eq!(skipped[0]["task_id"], dup_task_id, "{outcome}");
+
+    // Identical repeats in one document also file exactly once.
+    let (_root2, runtime2) = fixture("");
+    let identical = file(
+        &runtime2,
+        document(vec![
+            result("fail", "high", "fp-same", json!({"gap": 1})),
+            result("fail", "high", "fp-same", json!({"gap": 1})),
+        ]),
+        json!({}),
+    );
+    assert_eq!(identical["filed_count"], 1, "{identical}");
+    assert_eq!(
+        identical["skipped_existing"].as_array().unwrap().len(),
+        1,
+        "{identical}"
+    );
+    assert_eq!(identical["skipped_existing"][0]["fingerprint"], "fp-same");
+}
+
 crate::scenario_table!(
     rule_findings_sweep_scenarios,
+    duplicate_failing_fingerprint_in_one_document_files_once,
     failing_fingerprint_files_once_then_comments_on_change_and_pass,
     oscillating_measurements_comment_on_return_to_earlier_value,
     fail_pass_fail_pass_records_second_pass_transition,

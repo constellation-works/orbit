@@ -591,6 +591,42 @@ pub(crate) fn file_rule_findings(
         });
     }
 
+    // One task per fingerprint within this run: repeated results sharing a
+    // fingerprint (including an error/fail collision on the same fingerprint)
+    // keep the highest-severity candidate, first wins ties deterministically.
+    // Losers are reported below as skipped_existing once filing is known.
+    let mut duplicate_candidates: Vec<(String, String, String, bool)> = Vec::new();
+    let mut deduped_candidates: Vec<FilingCandidate> = Vec::with_capacity(candidates.len());
+    let mut candidate_positions: BTreeMap<String, usize> = BTreeMap::new();
+    for candidate in candidates {
+        match candidate_positions.get(&candidate.fingerprint) {
+            Some(&position) => {
+                if candidate.rank > deduped_candidates[position].rank {
+                    let replaced = &deduped_candidates[position];
+                    duplicate_candidates.push((
+                        replaced.fingerprint.clone(),
+                        replaced.rule.clone(),
+                        replaced.severity.clone(),
+                        replaced.error_task,
+                    ));
+                    deduped_candidates[position] = candidate;
+                } else {
+                    duplicate_candidates.push((
+                        candidate.fingerprint.clone(),
+                        candidate.rule.clone(),
+                        candidate.severity.clone(),
+                        candidate.error_task,
+                    ));
+                }
+            }
+            None => {
+                candidate_positions.insert(candidate.fingerprint.clone(), deduped_candidates.len());
+                deduped_candidates.push(candidate);
+            }
+        }
+    }
+    let mut candidates = deduped_candidates;
+
     // Highest severity first; fingerprint order breaks ties deterministically.
     candidates.sort_by(|a, b| b.rank.cmp(&a.rank).then(a.fingerprint.cmp(&b.fingerprint)));
     let mut filed: Vec<Value> = Vec::new();
@@ -618,6 +654,22 @@ pub(crate) fn file_rule_findings(
             "task_id": task.id, "fingerprint": fingerprint, "rule": candidate.rule,
             "severity": candidate.severity, "error_task": candidate.error_task,
         }));
+    }
+    for (fingerprint, rule, severity, error_task) in duplicate_candidates {
+        let status = if error_task { "error" } else { "fail" };
+        if let Some(entry) = filed
+            .iter()
+            .find(|entry| entry["fingerprint"] == fingerprint)
+        {
+            skipped_existing.push(json!({
+                "fingerprint": fingerprint, "task_id": entry["task_id"], "status": status,
+            }));
+        } else {
+            skipped_existing.push(json!({
+                "fingerprint": fingerprint, "rule": rule, "severity": severity,
+                "status": status, "reason": "duplicate_in_document",
+            }));
+        }
     }
 
     Ok(json!({
