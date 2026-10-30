@@ -441,6 +441,35 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         self.assertEqual(report["next_version"], "0.35.1")
         self.assertEqual(report["changelog_breaking"], [])
 
+    def test_new_properties_on_open_mcp_schema(self):
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"] = {}
+        self.repo.write_mcp(tools)
+        self.repo.commit("chore: Open input schema [ORB-80]")
+        self.repo.git("tag", "-f", "v0.35.0")
+
+        tools[0]["inputSchema"] = {"properties": {"a": {}, "b": True,
+                                                   "c": {"description": "free"},
+                                                   "d": {"properties": {"x": {}}}}}
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Describe open properties [ORB-81]")
+        report = self.report()
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+
+        for child in ({"type": "string"}, False,
+                      {"properties": {"nested": {"required": ["x"]}}}):
+            with self.subTest(child=child):
+                self.repo.git("reset", "--hard", "v0.35.0")
+                tools[0]["inputSchema"] = {"properties": {"a": child}}
+                self.repo.write_mcp(tools)
+                self.repo.commit("feat: Constrain property [ORB-82]")
+                report = self.report()
+                self.assertIn(("ORB-82", "mcp-schema",
+                               "`orbit_task_show` `inputSchema` properties constraint added"),
+                              self.signals(report))
+                self.assertEqual(report["bump"], "minor")
+
     def test_required_children_of_new_optional_mcp_object_decide_patch(self):
         tools = self.repo.mcp()
         tools[0]["inputSchema"]["properties"]["options"] = {
