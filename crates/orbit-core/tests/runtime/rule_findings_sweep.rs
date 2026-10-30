@@ -89,6 +89,63 @@ fn failing_fingerprint_files_once_then_comments_on_change_and_pass() {
     );
 }
 
+fn oscillating_measurements_comment_on_return_to_earlier_value() {
+    let (_root, runtime) = fixture("");
+    let first = file(
+        &runtime,
+        document(vec![result("fail", "high", "fp-osc", json!({"gap": 1}))]),
+        json!({}),
+    );
+    assert_eq!(first["filed_count"], 1, "{first}");
+    let changed = file(
+        &runtime,
+        document(vec![result("fail", "high", "fp-osc", json!({"gap": 2}))]),
+        json!({}),
+    );
+    assert_eq!(
+        changed["commented"].as_array().unwrap().len(),
+        1,
+        "{changed}"
+    );
+    assert_eq!(changed["commented"][0]["kind"], "measurements_changed");
+    // Returning to gap 1 repeats the filing description, but the latest
+    // recorded measurement was gap 2, so this must comment again.
+    let back = file(
+        &runtime,
+        document(vec![result("fail", "high", "fp-osc", json!({"gap": 1}))]),
+        json!({}),
+    );
+    assert_eq!(back["commented"].as_array().unwrap().len(), 1, "{back}");
+    assert_eq!(back["commented"][0]["kind"], "measurements_changed");
+}
+
+fn fail_pass_fail_pass_records_second_pass_transition() {
+    let (_root, runtime) = fixture("");
+    let first = file(
+        &runtime,
+        document(vec![result("fail", "high", "fp-flap", json!({"gap": 1}))]),
+        json!({}),
+    );
+    assert_eq!(first["filed_count"], 1, "{first}");
+    let passing = document(vec![result("pass", "high", "fp-flap", json!({"gap": 0}))]);
+    let second = file(&runtime, passing.clone(), json!({}));
+    assert_eq!(second["commented"].as_array().unwrap().len(), 1, "{second}");
+    assert_eq!(second["commented"][0]["kind"], "pass");
+    // The second fail repeats the filing description, but the latest marker
+    // is a pass, so it must record a fresh fail transition.
+    let refail = file(
+        &runtime,
+        document(vec![result("fail", "high", "fp-flap", json!({"gap": 1}))]),
+        json!({}),
+    );
+    assert_eq!(refail["commented"].as_array().unwrap().len(), 1, "{refail}");
+    assert_eq!(refail["commented"][0]["kind"], "measurements_changed");
+    // With the fresh fail marker recorded, the second pass must comment.
+    let repass = file(&runtime, passing, json!({}));
+    assert_eq!(repass["commented"].as_array().unwrap().len(), 1, "{repass}");
+    assert_eq!(repass["commented"][0]["kind"], "pass");
+}
+
 fn cap_takes_highest_severity_first_and_floor_records_only() {
     let (_root, runtime) = fixture("[ux_rules]\nmax_new_tasks = 1\nfile_at = \"low\"\n");
     let results = document(vec![
@@ -126,6 +183,8 @@ fn errors_file_one_task_per_rule() {
 crate::scenario_table!(
     rule_findings_sweep_scenarios,
     failing_fingerprint_files_once_then_comments_on_change_and_pass,
+    oscillating_measurements_comment_on_return_to_earlier_value,
+    fail_pass_fail_pass_records_second_pass_transition,
     cap_takes_highest_severity_first_and_floor_records_only,
     errors_file_one_task_per_rule
 );

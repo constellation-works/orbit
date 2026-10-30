@@ -506,10 +506,23 @@ pub(crate) fn file_rule_findings(
         if let Some(owner) = owners.get(&fingerprint) {
             let rendered = measurements.to_string();
             let comments = runtime.get_task_comments(&owner.id)?;
-            let unchanged = owner.description.contains(&rendered)
-                || comments
-                    .iter()
-                    .any(|comment| comment.message.contains(&rendered));
+            let fail_mark = fail_marker(fingerprint.as_str());
+            let pass_mark = pass_marker(fingerprint.as_str());
+            // Compare against the newest filer comment only: an older value
+            // repeating after a different latest value is still a change.
+            // A re-fail after a pass always records a transition, otherwise
+            // the next pass would see a stale pass marker and stay silent.
+            let last_is_pass = last_marker_kind(&comments, fingerprint.as_str()) == Some("pass");
+            let latest_recorded = comments.iter().rev().find(|comment| {
+                comment.message.contains(&fail_mark) || comment.message.contains(&pass_mark)
+            });
+            let unchanged = if last_is_pass {
+                false
+            } else if let Some(latest) = latest_recorded {
+                latest.message.contains(&rendered)
+            } else {
+                owner.description.contains(&rendered)
+            };
             if unchanged {
                 skipped_existing.push(json!({
                     "fingerprint": fingerprint, "task_id": owner.id, "status": "fail",
