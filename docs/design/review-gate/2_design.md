@@ -7,18 +7,19 @@ status: Accepted
 feature: review-gate
 doc_role: design
 type: design
-summary: Shipped review contract and a proposed selective before-landing extension using configurable candidate-risk thresholds and path rules, with captured policy, exact-head enforcement, lineage budgets and delivery coverage.
+summary: Shipped review contract, proposed staged before-PR deprecation preserving captured runs and evidence, then selective before-landing risk/path rules with exact-head enforcement.
 tags: [review-gate, review-policy, automation, delivery, operations]
 paths: ["crates/orbit-config/src/operation.rs", "crates/orbit-core/src/application/review/**", "crates/orbit-core/src/application/automation/after_landing.rs", "crates/orbit-store/src/driver/sqlite/review/**", "crates/orbit-automation/src/review/**", "crates/orbit-engine/src/executor/automation/vcs/review_gate.rs", "crates/orbit-store/src/repository/task/v2/artifacts.rs", "crates/orbit-store/src/repository/task/coordination/lifecycle/**"]
 related_features: [automation-triggers, activity-job, auditability]
-related_artifacts: [ORB-11333, ORB-11528, ORB-11545, ORB-13890, ORB-13896, ORB-13989, ORB-13992, ORB-14192, ORB-14849, ORB-20087]
+related_artifacts: [ORB-11333, ORB-11528, ORB-11545, ORB-13890, ORB-13896, ORB-13989, ORB-13992, ORB-14192, ORB-14849, ORB-20087, ORB-20099]
 ---
 
 # Review Gate — Design [ORB-11333]
 
-This file describes what shipped, except §3.3, which is a proposed extension
-and is not an available configuration surface yet. A preference edit grants
-no authority and changes no schedule; a verdict grants no merge permission.
+This file describes what shipped, except §1.1 and §3.3, which are proposed
+changes. The selective configuration is not available yet. A preference edit
+grants no authority and changes no schedule; a verdict grants no merge
+permission.
 
 ## 1. Preferences: three timings [ORB-13992] [ORB-14849]
 
@@ -104,6 +105,136 @@ warned about by name and ignored. The resolved-policy version is 5; the
 review-admission contract remains version 1 and refuses unsupported contract
 versions. A snapshot captured before the retirement still carries
 `reviewer_starts` or `repair_cycles`; it reads and the values are ignored.
+
+### 1.1 Proposed prerequisite: deprecate before-PR review
+
+**Proposed, not implemented.** Daniel's 2026-10-29 direction is to deprecate
+the `before_pr` review mode first, before selective before-landing review
+([ORB-20087]). [ORB-20099] owns this prerequisite; [ORB-20087] depends on it.
+This is a warning-and-migration stage. The old boolean
+`review.before_pr` was already deprecated; the new decision also deprecates
+the mode selected by `review.timing = "before_pr"` or `--review before-pr`.
+
+For new use, recommend `review.timing = "before_landing"` or an explicit
+`--review before-landing`. The PR opens first and review overlaps hosted CI;
+the existing exact-reviewed-head merge rule and budgets still apply. Keep
+`off` as the default and after-landing review independent. Do not enable
+selective review in this prerequisite implementation.
+
+#### Configuration, requests and diagnostics
+
+- New templates, normal examples, recommended choices and ordinary operator
+  guidance use `off` or `before_landing`. Mark the before-PR choice deprecated
+  in configuration/CLI/tool metadata and any existing-value display; do not
+  present it as a peer recommendation for new setups.
+- Compatibility readers and explicit legacy requests continue accepting
+  `before_pr` and `before-pr` during this stage, including the older boolean
+  and `operation.review_policy` spellings that resolve to it. Their resolved
+  behavior stays before-PR. Emit an actionable warning naming the deciding
+  key or run request, its physical config layer/source when applicable, and
+  the before-landing replacement. Warnings belong in existing diagnostic
+  channels and structured metadata, never as extra stdout that corrupts a
+  CLI JSON or MCP response. Bound repeated warnings per load/request.
+- Distinguish read compatibility from recommended choices without making
+  command help, registered schemas and actual parsing contradict each other.
+  A client that still sends the old value gets the same audited operation
+  and the deprecation diagnostic; do not silently reinterpret its request.
+- `orbit config show`, doctor and review diagnostics retain their existing
+  fields and show the legacy mode's actual effective value, provenance and
+  warning. Deprecation alone is not an unhealthy review gate and must not
+  make doctor fail; genuine missing crews, conflicting layers or unsupported
+  local routes retain their existing errors.
+- Ordinary saves, alias normalization, init/refresh of user-authored config
+  and `doctor --fix-retired-config-keys` must not migrate the review timing
+  as a side effect. Keep a legacy policy's canonical `before_pr` spelling
+  while merely normalizing its syntax; that preserves its semantics and
+  readability by long-lived older clients.
+
+#### Explicit migration in `config.toml`
+
+An operator intentionally changes the deciding physical configuration layer
+using the existing audited config writer. For example, replace:
+
+```toml
+[review]
+timing = "before_pr"
+```
+
+with:
+
+```toml
+[review]
+timing = "before_landing"
+```
+
+The existing `orbit config set review.timing before_landing` is the normal
+workspace migration. Inspect the effective source first and use the existing
+scope/selector mechanism for a global or another workspace's setting. Show
+the before/after timing and source; preserve review minutes, crews,
+validation requirements, host evidence, overrides and unrelated settings.
+A workspace override must not be mistaken for a migration of the global
+setting it masks. No bulk cross-host rewrite or live migration is authorized
+by filing or implementing the deprecation task.
+
+This deliberately changes when new runs publish their PR; it is an operator
+policy decision, not an equivalence-preserving alias rewrite. It affects only
+future independent admissions. Do not turn any legacy `before_pr` into
+`off`, change required checks or infer merge authority during migration.
+
+#### Preserve admitted work and review evidence
+
+An existing delivery run, drain, parent-authorized child, claim, resume,
+recovery or source-repair continuation keeps its captured timing, reviewer
+contract and consumed lineage budget. A child of an old before-PR admission
+still inherits before-PR review even after configuration migration. A
+before-PR review already admitted still finishes before publication, and
+completion/re-review still enforces the heads and evidence that its captured
+contract requires. Rejected, timed-out and evidence-held work remains in its
+existing recovery state; the warning cannot waive or restart its review.
+
+Retain `ReviewTiming::BeforePr`, its serialized spelling and all required
+historical execution/settlement handlers. Existing admission snapshots,
+policy digests, claim/handoff receipts, manifests, certificates, findings,
+validation records, preserved reviewer repairs and consumption/accounting
+records remain readable and unchanged. A before-PR certificate is never
+renamed into a before-landing certificate. Existing exact-tree and clean
+rebase coverage rules continue using the evidence's actual timing and
+identity; migration creates neither a certificate nor new coverage.
+
+Preserve owner/follower and long-lived CLI/MCP behavior through a mixed-build
+deployment. Do not bump persisted versions solely to add warnings, rewrite
+old snapshots or make new readers emit data that old active clients silently
+misread. Any unavoidable incompatible schema change must negotiate or
+refuse before state is changed. Filing this task does not authorize an
+upgrade, release or changing host configuration.
+
+#### Verification, ordering and later removal
+
+The prerequisite is complete when supported compatibility inputs retain
+their review semantics with visible deprecation diagnostics, new guidance
+points to before-landing, an explicit scoped config migration is documented,
+and public-path fixtures/manual QA establish preservation of existing runs
+and evidence. Include old/new config layering, canonical/alias/boolean/run
+request forms, JSON/MCP diagnostics, unrelated config writes, fresh versus
+inherited admission after migration, interrupted review and held recovery,
+mixed owner/follower builds, certificate/coverage readback, and rollback.
+Use existing fixtures and repository test-admission rules; unavailable live
+validation remains a named limitation, not a pass or a reason to erase state.
+
+Then [ORB-20087] implements selective rules solely for the before-landing
+gate, with the deprecated before-PR compatibility behavior fenced off rather
+than extended. Its operator must migrate any effective legacy before-PR
+policy before enabling selective mode. The selective implementation does
+not need a before-PR trigger mode, symbol trigger or a new migration framework.
+
+Removing the accepted configuration/request value or legacy execution
+branches is later, separately scoped work. It needs an explicit compatibility
+window and a read-only inventory of active/resumable runs and retained
+historical evidence; elapsed time alone is not proof that deleting handlers
+is safe. Refuse future unsupported input with a migration remedy rather
+than silently dropping review. Never delete old evidence to make removal
+possible. No release date or internal-handler deletion is required for this
+deprecation task or for [ORB-20087].
 
 ## 2. Captured timing
 
@@ -397,6 +528,9 @@ before-landing review selectively using configurable regression-risk and path
 rules; [ORB-20087] tracks implementation. Symbol-history triggers are
 deferred. This extends this gate; it does not add another reviewer, merge
 permission or a second review framework.
+Implement the staged before-PR deprecation in §1.1 first. Legacy before-PR
+inputs and captured runs remain compatibility obligations, not a new
+selective timing option.
 It gates managed landing, not execution of GitHub Actions on an unreviewed
 PR; it does not replace protected environments or the separate credential
 isolation required before disabling Copilot workflow-run approval.
@@ -453,13 +587,14 @@ before-landing review in `enforce` mode. Record every matching reason, not
 just the first one.
 
 - Non-off selective mode requires `review.timing = "off"`. Combining it with
-  unconditional `before_pr` or `before_landing` fails configuration rather
-  than creating two layers or silently discarding either policy.
+  unconditional `before_landing` fails configuration rather than creating
+  two layers. An effective deprecated `before_pr` policy also refuses the
+  combination, naming the explicit §1.1 migration; it is never auto-converted.
 - Existing `review.before_landing_hosts` matches remain unconditional for
   their claims. Other executors use the selective policy. Observe mode does
   not suppress a review already required by a host match.
 - An explicit run `--review` can still strengthen the policy. An explicit
-  before-landing request always reviews. An explicit before-PR request is
+  before-landing request always reviews. A deprecated before-PR request is
   incompatible with active selective before-landing enforcement and is
   refused before dispatch; it cannot relocate or evade a mandatory rule.
 - A positive enforced selective decision overrides `skip-review` and custom
@@ -1614,6 +1749,7 @@ so for a `codeql` or `linux` `host_sandbox_test` hold on its next tick.
 
 ## Task References
 
+- [ORB-20099] — proposed staged before-PR deprecation (§1.1), preserving legacy input semantics, admitted runs and review evidence; prerequisite to [ORB-20087].
 - [ORB-20087] — proposed configurable risk/path before-landing selection (§3.3), including observation, exact-head receipts and owner/follower compatibility; symbol triggers deferred.
 - [ORB-11333] — implements independent review policy, the before-PR gate, lineage budgets, and delivery coverage.
 - [ORB-11528] — adds validation-record roles to the certificate contract.
