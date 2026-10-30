@@ -43,6 +43,10 @@ pub(crate) const DEFAULT_TIMEOUT_MS: u64 = 120_000;
 pub(crate) const MAX_TIMEOUT_MS: u64 = 600_000;
 /// Bytes kept from each of stdout and stderr; the rest is read and dropped.
 const OUTPUT_LIMIT_BYTES: usize = 4 * 1024 * 1024;
+/// Fixed E2BIG recovery hint [ORB-20181]. Value-free: it never echoes argv,
+/// environment, program or paths, because the evidence does not say which input
+/// exceeded the limit.
+const ARG_LIST_TOO_LONG_MESSAGE: &str = "command could not start: its arguments or environment exceed the OS size limit; reduce argument size or count, or move the input to a file or stdin the program reads";
 
 /// Parameters for [`RuntimeKernel::execute_remote_command`], already parsed and
 /// typed by the tool-dispatch layer.
@@ -118,10 +122,16 @@ impl RuntimeKernel {
                 duration_ms: started.elapsed().as_millis() as u64,
                 output: None,
             }),
-            Err(BoundedRunError::Spawn(error)) => Err(OrbitError::Execution(format!(
-                "spawn '{program}' in '{}': {error}",
-                working_directory.display()
-            ))),
+            Err(BoundedRunError::Spawn(error)) => {
+                if is_arg_list_too_long(&error) {
+                    Err(OrbitError::Execution(ARG_LIST_TOO_LONG_MESSAGE.to_string()))
+                } else {
+                    Err(OrbitError::Execution(format!(
+                        "spawn '{program}' in '{}': {error}",
+                        working_directory.display()
+                    )))
+                }
+            }
             Err(BoundedRunError::Run(error)) => Err(OrbitError::Execution(format!(
                 "run '{program}' in '{}': {error}",
                 working_directory.display()
@@ -165,4 +175,22 @@ impl RuntimeKernel {
 
         result
     }
+}
+
+/// True when `error` is the OS argument/environment size refusal (E2BIG).
+fn is_arg_list_too_long(error: &std::io::Error) -> bool {
+    if error.kind() == std::io::ErrorKind::ArgumentListTooLong {
+        return true;
+    }
+    error.raw_os_error().is_some_and(is_e2big_errno)
+}
+
+#[cfg(unix)]
+fn is_e2big_errno(code: i32) -> bool {
+    code == libc::E2BIG
+}
+
+#[cfg(not(unix))]
+fn is_e2big_errno(_code: i32) -> bool {
+    false
 }
