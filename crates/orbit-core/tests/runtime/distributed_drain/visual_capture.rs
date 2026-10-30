@@ -6,7 +6,8 @@
 use orbit_core::bootstrap::browser_kit::PLAYWRIGHT_VERSION;
 use orbit_types::task::{
     HostOs, VisualCaptureImage, VisualCaptureOutcome, VisualCaptureRecord, VisualCapturedMock,
-    VisualKitPin, VisualReviewContract, mock_sha256_hex,
+    VisualKitPin, VisualNotEstablished, VisualReviewContract, VisualSettleOutcome,
+    VisualSettleRecord, VisualSettleRefusal, mock_sha256_hex,
 };
 
 use super::*;
@@ -243,8 +244,126 @@ fn a_claimed_capture_that_departs_from_its_contract_is_refused() {
     }
 }
 
+/// Task show reads the capture of record alone when the stored settle was
+/// made for another candidate: a stale `Refused` settle (held) must neither
+/// replace the summary nor surface as the task's settle, mirroring the
+/// mismatched-checks filter [ORB-20109].
+fn task_show_ignores_a_settle_for_another_candidate() {
+    let (pair, _kit, _drain, leaf, contract) = claimed_mock_task();
+    let record = pair.admission(&leaf);
+    let delivered = handoff(&record);
+    let task = delivered.task_id.clone();
+    let capture_sha = "a".repeat(40);
+    let stale_sha = "b".repeat(40);
+    let frozen = contract
+        .mocks
+        .first()
+        .expect("the contract freezes one mock");
+    let capture = VisualCaptureRecord {
+        schema_version: 1,
+        outcome: VisualCaptureOutcome::NotEstablished,
+        mode: contract.mode,
+        task_id: task.clone(),
+        host: FOLLOWER.into(),
+        kit: None,
+        candidate_sha: capture_sha.clone(),
+        manifests: contract
+            .manifests
+            .iter()
+            .map(|manifest| manifest.reference.clone())
+            .collect(),
+        frozen_instant: None,
+        mocks: vec![VisualCapturedMock {
+            artifact: frozen.artifact.clone(),
+            sha256: frozen.sha256.clone(),
+            view: frozen.view.clone(),
+            state: frozen.state.clone(),
+            theme: frozen.theme.clone(),
+            width: frozen.width,
+            capture: None,
+            error: None,
+        }],
+        over_budget: Vec::new(),
+        not_established: vec![VisualNotEstablished {
+            reason: "browser_kit_missing".into(),
+            detail: "the kit is missing".into(),
+        }],
+    };
+    let settle = VisualSettleRecord {
+        schema_version: 1,
+        candidate_sha: stale_sha,
+        outcome: VisualSettleOutcome::Refused,
+        refusals: vec![VisualSettleRefusal {
+            code: "stale_capture".into(),
+            mock: None,
+            detail: "the capture is of another candidate".into(),
+        }],
+        not_established: Vec::new(),
+        held: true,
+    };
+    let artifact = |path: &str, content: Vec<u8>| TaskArtifact {
+        path: path.into(),
+        content,
+        media_type: "application/json".into(),
+        created_by: None,
+    };
+    let context = ClaimInvocation::trusted_worker(
+        delivered.task_id.clone(),
+        delivered.claim_id.clone(),
+        delivered.machine_id.clone(),
+        Some(ClaimRun {
+            machine_id: delivered.machine_id.clone(),
+            run_id: delivered.run_id.clone(),
+        }),
+    );
+    for (mutation, path, value) in [
+        (
+            "visual-capture",
+            "visual/capture.json",
+            serde_json::to_vec(&capture).unwrap(),
+        ),
+        (
+            "visual-settle",
+            "visual/settle.json",
+            serde_json::to_vec(&settle).unwrap(),
+        ),
+    ] {
+        pair.wire
+            .owner
+            .mutate_execution_claim(
+                Some(&context),
+                mutation,
+                &ClaimMutation::Evidence(ClaimEvidence {
+                    artifacts: vec![artifact(path, value)],
+                    ..Default::default()
+                }),
+            )
+            .expect("the visual record reaches the owner");
+    }
+    let shown = pair.owner_task(&task);
+    let visual = &shown["visual_review"];
+    assert_eq!(
+        visual["candidate_sha"],
+        serde_json::json!(capture_sha),
+        "task show answers the capture's candidate: {shown}"
+    );
+    assert_eq!(
+        visual["summary"],
+        serde_json::json!(format!(
+            "{}: not established: browser_kit_missing",
+            contract.mode.as_str()
+        )),
+        "a stale refused, held settle never replaces the capture's summary: {shown}"
+    );
+    assert!(
+        visual.get("settle").is_none_or(Value::is_null),
+        "a settle for another candidate never surfaces: {shown}"
+    );
+}
+
 crate::scenario_table!(
     a_claimed_capture_is_checked_against_its_contract_scenarios,
     a_claimed_capture_matching_its_contract_is_accepted,
-    a_claimed_capture_that_departs_from_its_contract_is_refused
+    a_claimed_capture_that_departs_from_its_contract_is_refused,
+    task_show_ignores_a_settle_for_another_candidate
 );

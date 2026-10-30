@@ -4,7 +4,11 @@
 //! from the task's evidence ref.
 
 use super::*;
-use orbit_types::task::names_task_delivery_pull_request;
+use orbit_types::task::{
+    VISUAL_CAPTURE_ARTIFACT, VISUAL_SETTLE_ARTIFACT, VisualCaptureOutcome, VisualCaptureRecord,
+    VisualCapturedMock, VisualNotEstablished, VisualReviewMode, VisualSettleOutcome,
+    VisualSettleRecord, VisualSettleRefusal, names_task_delivery_pull_request,
+};
 use orbit_types::workflow::{
     DeliveryConventions, MissingSectionPolicy, PR_SECTION_GAP_EVENT, PR_SECTIONS_ARTIFACT,
     PrBodyTemplateSource, ScreenshotSection, default_branch_template,
@@ -666,6 +670,78 @@ fn pr_open_recovers_only_section_gap_drafts_on_resume() {
                     );
                 }
             }
+        },
+    );
+}
+
+/// The screenshots section reads the capture of record alone when the stored
+/// settle was made for another candidate: a stale `Refused` settle (held)
+/// must neither replace the summary nor append its hold, mirroring the
+/// mismatched-checks filter [ORB-20109].
+#[test]
+fn pr_open_ignores_a_visual_settle_for_another_candidate() {
+    isolated(
+        "conventions::pr_open_ignores_a_visual_settle_for_another_candidate",
+        |sandbox| {
+            let (fx, host) = fx_host(sandbox);
+            locked(&host.tasks).get_mut(TASK_ID).unwrap().tags = vec!["verify-mock-ui".into()];
+            let capture = VisualCaptureRecord {
+                schema_version: 1,
+                outcome: VisualCaptureOutcome::NotEstablished,
+                mode: VisualReviewMode::Shadow,
+                task_id: TASK_ID.into(),
+                host: "test".into(),
+                kit: None,
+                candidate_sha: "a".repeat(40),
+                manifests: Vec::new(),
+                frozen_instant: None,
+                mocks: vec![VisualCapturedMock {
+                    artifact: "mocks/checkout.png".into(),
+                    sha256: "0".repeat(64),
+                    view: "checkout".into(),
+                    state: "default".into(),
+                    theme: "light".into(),
+                    width: 1440,
+                    capture: None,
+                    error: None,
+                }],
+                over_budget: Vec::new(),
+                not_established: vec![VisualNotEstablished {
+                    reason: "browser_kit_missing".into(),
+                    detail: "the kit is missing".into(),
+                }],
+            };
+            let settle = VisualSettleRecord {
+                schema_version: 1,
+                candidate_sha: "b".repeat(40),
+                outcome: VisualSettleOutcome::Refused,
+                refusals: vec![VisualSettleRefusal {
+                    code: "stale_capture".into(),
+                    mock: None,
+                    detail: "the capture is of another candidate".into(),
+                }],
+                not_established: Vec::new(),
+                held: true,
+            };
+            host.put_artifact_bytes(
+                TASK_ID,
+                VISUAL_CAPTURE_ARTIFACT,
+                &serde_json::to_vec(&capture).unwrap(),
+            );
+            host.put_artifact_bytes(
+                TASK_ID,
+                VISUAL_SETTLE_ARTIFACT,
+                &serde_json::to_vec(&settle).unwrap(),
+            );
+            let opened = open_ok(&fx, &host);
+            assert_eq!(opened["pr_created"], true, "{opened}");
+            let body = fx.forge_state("pr-body").unwrap();
+            assert!(
+                body.contains("shadow: not established: browser_kit_missing"),
+                "{body}"
+            );
+            assert!(!body.contains("capture refused"), "{body}");
+            assert!(!body.contains("held:"), "{body}");
         },
     );
 }
