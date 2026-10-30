@@ -161,7 +161,7 @@
                 <button type="button" id="task-search-clear" aria-label="Clear task search and open result" title="Clear search and dismiss the open task">Clear</button>
               </div>
               <button type="button" id="tasks-settle-merged" class="action settle-merged-all">Settle merged PRs</button>
-              <button type="button" id="task-create-open" class="action primary" aria-controls="task-create-panel" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>New task</button>
+              <button type="button" id="task-create-open" class="action primary" aria-haspopup="dialog" aria-controls="task-create-panel" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>New task</button>
             </header>
             <div class="controls">
               <div id="task-filter" role="group" aria-label="Filter tasks by status"></div>
@@ -170,33 +170,6 @@
                 <button id="tasks-next" type="button" disabled>Next</button>
               </nav>
             </div>
-            <section id="task-create-panel" class="task-create" aria-labelledby="task-create-heading" hidden>
-              <h3 id="task-create-heading">Propose a task</h3>
-              <p>New tasks await approval before they can run.</p>
-              <form id="task-create-form">
-                <fieldset id="task-create-fields">
-                  <label for="task-create-workspace">Workspace</label>
-                  <select id="task-create-workspace" required></select>
-                  <label for="task-create-title">Title</label>
-                  <input id="task-create-title" required maxlength="32768" aria-describedby="task-create-feedback" />
-                  <label for="task-create-description">Description</label>
-                  <textarea id="task-create-description" rows="3" maxlength="32768"></textarea>
-                  <label for="task-create-complexity">Assessed complexity</label>
-                  <select id="task-create-complexity" required>
-                    <option value="">Select complexity</option><option value="low">Low</option><option value="medium">Medium</option><option value="hard">Hard</option><option value="xhard">Extra hard</option>
-                  </select>
-                  <label for="task-create-criteria">Acceptance criteria (one per line)</label>
-                  <textarea id="task-create-criteria" required rows="3" aria-describedby="task-create-feedback"></textarea>
-                </fieldset>
-                <p id="task-create-feedback" role="status" aria-live="polite" tabindex="-1"></p>
-                <a id="task-create-success" hidden></a>
-                <div class="task-create-actions">
-                  <button type="submit" id="task-create-submit" class="action save">Create proposed task</button>
-                  <button type="button" id="task-create-new" class="action" hidden>New proposal</button>
-                  <button type="button" id="task-create-cancel" class="action cancel">Cancel</button>
-                </div>
-              </form>
-            </section>
             <div class="filter-summary visually-hidden" id="task-filter-summary" role="status" aria-live="polite"></div>
             <div class="body" id="tasks-body" tabindex="0" role="region" aria-label="Task list" data-messages="tasks-messages">
               <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
@@ -303,6 +276,34 @@
           <div class="task-detail-body" id="task-detail-body"></div>
         </aside>
       </main>
+    <!-- Task creation is a modal dialog in the top layer, so it adds no height to the board or dock. -->
+    <dialog id="task-create-panel" class="task-create" aria-labelledby="task-create-heading" aria-describedby="task-create-intro">
+      <h3 id="task-create-heading">Propose a task</h3>
+      <p id="task-create-intro">New tasks await approval before they can run.</p>
+      <form id="task-create-form">
+        <fieldset id="task-create-fields">
+          <label for="task-create-workspace">Workspace</label>
+          <select id="task-create-workspace" required></select>
+          <label for="task-create-title">Title</label>
+          <input id="task-create-title" required maxlength="32768" aria-describedby="task-create-feedback" />
+          <label for="task-create-description">Description</label>
+          <textarea id="task-create-description" rows="3" maxlength="32768"></textarea>
+          <label for="task-create-complexity">Assessed complexity</label>
+          <select id="task-create-complexity" required>
+            <option value="">Select complexity</option><option value="low">Low</option><option value="medium">Medium</option><option value="hard">Hard</option><option value="xhard">Extra hard</option>
+          </select>
+          <label for="task-create-criteria">Acceptance criteria (one per line)</label>
+          <textarea id="task-create-criteria" required rows="3" aria-describedby="task-create-feedback"></textarea>
+        </fieldset>
+        <p id="task-create-feedback" role="status" aria-live="polite" tabindex="-1"></p>
+        <a id="task-create-success" hidden></a>
+        <div class="task-create-actions">
+          <button type="submit" id="task-create-submit" class="action save">Create proposed task</button>
+          <button type="button" id="task-create-new" class="action" hidden>New proposal</button>
+          <button type="button" id="task-create-cancel" class="action cancel">Cancel</button>
+        </div>
+      </form>
+    </dialog>
     </section>
     <section class="tab-pane" data-tab="run-detail" tabindex="0" role="region" aria-labelledby="topbar-crumb">
       <main style="grid-template-columns: 1fr;">

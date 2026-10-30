@@ -594,7 +594,7 @@ export function wireSearch(context) {
   document.addEventListener("keydown", (event) => {
     if (event.key !== "/" || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
     const target = event.target;
-    if (target && (target.isContentEditable || (target.closest && target.closest("input, textarea, select")))) return;
+    if (target && (target.isContentEditable || (target.closest && target.closest("input, textarea, select, dialog[open]")))) return;
     if (input.getClientRects().length === 0) return;
     event.preventDefault();
     input.focus();

@@ -1,5 +1,8 @@
 // One durable, frozen submission per browser tab. A lost response is retried
 // with the same key, body and addressed URL; scope changes only hide its UI.
+// The form is a native modal <dialog>: it paints in the top layer, so opening,
+// resizing or dismissing it never changes the board's or dock's layout, and
+// dismissing it never cancels a request already sent.
 import { captureWorkspaceVisit, getHost, getServingHost, getWorkspace, onWorkspaceChange, taskHref, withHost } from './common.js';
 
 const STORAGE = 'orbit.proposed-task.v1';
@@ -20,10 +23,7 @@ export function initTaskCreate({ getWorkspaces }) {
     else sessionStorage.removeItem(STORAGE);
     saved = value;
   };
-  const close = () => {
-    $('panel').hidden = true;
-    $('open').setAttribute('aria-expanded', 'false');
-  };
+  const close = () => { if ($('panel').open) $('panel').close(); };
   const paint = () => {
     const foreign = !inScope();
     $('fields').disabled = pending || Boolean(saved);
@@ -48,10 +48,12 @@ export function initTaskCreate({ getWorkspaces }) {
     $('description').value = saved.body.description;
     $('complexity').value = saved.body.complexity;
     $('criteria').value = saved.body.acceptance_criteria.join('\n');
-    if (!saved.receipt) feedback('The saved submission may already exist. Retry to recover its original receipt.');
+    if (pending) feedback('Creating proposed task…');
+    else if (!saved.receipt) feedback('The saved submission may already exist. Retry to recover its original receipt.');
   };
   $('open').addEventListener('click', () => {
     const select = $('workspace');
+    const chosen = $('title').value ? select.value : '';
     select.replaceChildren();
     const placeholder = document.createElement('option');
     placeholder.value = ''; placeholder.textContent = 'Select a workspace';
@@ -61,16 +63,44 @@ export function initTaskCreate({ getWorkspaces }) {
       option.value = workspace.id; option.textContent = workspace.name;
       select.append(option);
     }
-    select.value = getWorkspace() || '';
+    // An aggregate-scope pick survives only with a dismissed, unsent draft.
+    select.value = getWorkspace() || chosen;
     feedback('');
     fill(); paint();
-    $('panel').hidden = false;
+    if (!$('panel').open) $('panel').showModal();
     $('open').setAttribute('aria-expanded', 'true');
     (saved ? $('feedback') : $('title')).focus();
   });
+  // Escape and Cancel both land here: the native dialog closes, then focus
+  // returns to New task. Only Cancel discards an unsent draft.
+  $('panel').addEventListener('close', () => {
+    $('open').setAttribute('aria-expanded', 'false');
+    const active = document.activeElement;
+    if (!active || active === document.body || $('panel').contains(active)) $('open').focus();
+  });
+  // A modal dialog does not wrap Tab by itself: past its last control focus
+  // would leave for the browser's own chrome, so wrap it here.
+  $('panel').addEventListener('keydown', event => {
+    if (event.key !== 'Tab' || event.altKey || event.ctrlKey || event.metaKey) return;
+    const controls = [...$('panel').querySelectorAll('select, input, textarea, button, a[href]')]
+      .filter(node => !node.disabled && !node.closest('[hidden]') && node.getClientRects().length);
+    if (!controls.length) return;
+    const active = document.activeElement;
+    // Shift+Tab also leaves from the focusable feedback line when every field above it is disabled.
+    const atStart = active === controls[0] || !controls.some(node => node.compareDocumentPosition(active) & Node.DOCUMENT_POSITION_FOLLOWING);
+    if (event.shiftKey ? !atStart : active !== controls[controls.length - 1]) return;
+    event.preventDefault();
+    (event.shiftKey ? controls[controls.length - 1] : controls[0]).focus();
+  });
   $('cancel').addEventListener('click', () => {
     if (!saved) $('form').reset();
-    close(); $('open').focus();
+    close();
+  });
+  // Following the success link, or leaving Tasks, must not leave a modal over
+  // the destination. The saved receipt stays available on reopening.
+  $('success').addEventListener('click', close);
+  window.addEventListener('hashchange', () => {
+    if (!window.location.hash.startsWith('#tasks')) close();
   });
   $('new').addEventListener('click', () => {
     if (!saved?.receipt) return;
