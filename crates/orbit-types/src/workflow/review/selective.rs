@@ -99,6 +99,10 @@ pub struct SelectiveBeforeLandingPolicy {
     /// text so the captured contract stays exactly comparable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub risk_threshold: Option<String>,
+    /// Owner-captured model identity, including coefficients or an explicit unknown.
+    /// Never supplied by candidate configuration or inferred from a prior receipt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub risk_model_identity: Option<String>,
     /// Positive repository-relative path globs; empty disables the path
     /// predicate.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -125,6 +129,7 @@ impl SelectiveBeforeLandingPolicy {
         Self {
             mode,
             risk_threshold,
+            risk_model_identity: None,
             paths,
             unknown_risk,
             sources,
@@ -157,6 +162,33 @@ impl SelectiveBeforeLandingPolicy {
         format!("sha256:{hex}")
     }
 
+    /// Freeze the owner's risk snapshot and bind it to the policy digest.
+    pub fn freeze_risk_model(&mut self, identity: String) {
+        self.risk_model_identity = Some(identity);
+        self.digest = self.captured_digest();
+    }
+
+    fn captured_digest(&self) -> String {
+        let predicates = Self::digest_of(
+            self.mode,
+            self.risk_threshold.as_deref(),
+            &self.paths,
+            self.unknown_risk,
+        );
+        match &self.risk_model_identity {
+            None => predicates,
+            Some(identity) => {
+                let mut hasher = Sha256::new();
+                hasher.update(predicates.as_bytes());
+                hasher.update(b"\0owner-risk-model\0");
+                hasher.update(identity.as_bytes());
+                let digest = hasher.finalize();
+                let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+                format!("sha256:{hex}")
+            }
+        }
+    }
+
     /// Whether this policy evaluates candidates.
     pub fn is_active(&self) -> bool {
         self.mode.is_active()
@@ -178,14 +210,7 @@ impl SelectiveBeforeLandingPolicy {
     /// Check the captured policy is well formed and its digest honest.
     /// A policy that fails here must be refused, never dropped.
     pub fn validate(&self) -> Result<(), String> {
-        if self.digest
-            != Self::digest_of(
-                self.mode,
-                self.risk_threshold.as_deref(),
-                &self.paths,
-                self.unknown_risk,
-            )
-        {
+        if self.digest != self.captured_digest() {
             return Err("selective policy digest does not match its predicates".to_string());
         }
         if let Some(raw) = &self.risk_threshold {
@@ -581,7 +606,7 @@ pub fn evaluate_selective_review(
         || risk_selected
         || unknown_selected
         || (inputs.previously_selected && policy.is_enforced());
-    let result = if inputs.path_diff_gap.is_some() {
+    let result = if !gaps.is_empty() {
         SelectiveReviewResult::Unavailable
     } else if selected {
         SelectiveReviewResult::Required

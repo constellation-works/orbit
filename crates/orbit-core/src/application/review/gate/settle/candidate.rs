@@ -103,6 +103,7 @@ pub(super) fn reconcile_settled(
     runtime: &OrbitRuntime,
     context: &GateContext,
     certificate: ReviewCertificate,
+    selection: Option<&orbit_types::workflow::SelectiveReviewReceipt>,
 ) -> Result<Settled, OrbitError> {
     let attempt_id = certificate.attempt_id.as_str();
     if certificate.verdict.passed() {
@@ -127,5 +128,5 @@ pub(super) fn reconcile_settled(
     if certificate.verdict.passed() {
         baseline::record_known_red(runtime, &context.task_ids, &certificate.known_red)?;
     }
-    output::settled_outcome(runtime, context, certificate)
+    output::settled_outcome(runtime, context, certificate, selection)
 }

@@ -208,10 +208,9 @@ fn admission_output(
     } else {
         admission.gates_pr()
     };
-    if !applies {
+    if !applies || (landing_step && !preflight && selective_policy.is_some()) {
         if landing_step
             && !preflight
-            && admission.timing == ReviewTiming::None
             && let Some(policy) = &selective_policy
         {
             policy
@@ -236,7 +235,7 @@ fn admission_output(
             let context = GateContext::load(runtime, input, Some(admission.clone()))
                 .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
             match selective_gate_decision(runtime, &context, policy).map_err(refused_or_failed)? {
-                SelectiveGateDecision::NotRequired(receipt) => {
+                SelectiveGateDecision::NotRequired(receipt) if !applies => {
                     let reason = if receipt.mode == SelectiveBeforeLandingMode::Observe {
                         SELECTIVE_OBSERVE_REASON
                     } else {
@@ -250,12 +249,13 @@ fn admission_output(
                         ),
                     ));
                 }
-                SelectiveGateDecision::Required(receipt) => {
+                SelectiveGateDecision::Required(receipt)
+                | SelectiveGateDecision::NotRequired(receipt) => {
                     selective_receipt = Some(receipt);
                 }
             }
         }
-        if selective_receipt.is_none() {
+        if !applies && selective_receipt.is_none() {
             let reason = match admission.timing {
                 ReviewTiming::None if landing_step => "review_before_landing_off",
                 ReviewTiming::None if selective_policy.is_some() => "review_before_landing",
@@ -326,7 +326,9 @@ fn admission_output(
     // A positive enforced selective decision overrides skip-review and
     // custom review-skip tags, even inside the light-delivery paths.
     if !preflight
-        && selective_receipt.is_none()
+        && !selective_receipt
+            .as_ref()
+            .is_some_and(|receipt| receipt.requires_review())
         && light_review_skipped(runtime, &context)
             .map_err(|error| DispatchError::action_failed(action, error.to_string()))?
     {
@@ -354,13 +356,13 @@ fn admission_output(
             // while the run's captured admission keeps `none` plus the
             // selective policy that selected it.
             let effective = match &selective_receipt {
-                Some(_) => {
+                Some(receipt) if receipt.requires_review() && !admission.gates_landing() => {
                     let mut effective = admission.clone();
                     effective.timing = ReviewTiming::BeforeLanding;
                     effective.timing_source = "selective_before_landing".to_string();
                     effective
                 }
-                None => admission.clone(),
+                _ => admission.clone(),
             };
             admit(
                 runtime,

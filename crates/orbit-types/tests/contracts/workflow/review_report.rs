@@ -43,3 +43,41 @@ fn control_and_sources_tolerate_drift_and_name_an_unknown_kind() {
         "{error}"
     );
 }
+
+/// A complete Git diff may name a legal Git path that the selector cannot
+/// normalize. That uncertainty must never certify a non-match.
+#[test]
+fn unrepresentable_changed_path_holds_selection_and_owner_snapshot_is_bound() {
+    use orbit_types::workflow::{
+        SelectiveBeforeLandingMode, SelectiveBeforeLandingPolicy, SelectiveEvaluationInputs,
+        SelectiveReviewResult, SelectiveUnknownRisk, evaluate_selective_review,
+    };
+    let mut policy = SelectiveBeforeLandingPolicy::new(
+        SelectiveBeforeLandingMode::Enforce,
+        Some("0.5".into()),
+        vec!["**".into()],
+        SelectiveUnknownRisk::Skip,
+        Default::default(),
+    );
+    policy.freeze_risk_model("owner-risk-model/unknown".into());
+    policy.validate().expect("owner snapshot sealed");
+    let receipt = evaluate_selective_review(
+        &policy,
+        "workspace",
+        "run",
+        &["ORB-20087".into()],
+        ("base", "base-tree"),
+        ("head", "head-tree"),
+        SelectiveEvaluationInputs {
+            changed_paths: vec![(None, Some("~".into()))],
+            ..Default::default()
+        },
+    );
+    assert_eq!(receipt.result, SelectiveReviewResult::Unavailable);
+    assert!(!receipt.gaps.is_empty());
+    policy.risk_model_identity = Some("leaf intercept=-100 slope=0".into());
+    assert!(
+        policy.validate().is_err(),
+        "a receipt cannot substitute a leaf fit"
+    );
+}

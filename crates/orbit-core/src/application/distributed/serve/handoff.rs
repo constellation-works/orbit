@@ -163,6 +163,14 @@ impl OrbitRuntime {
                  carries no selection receipt",
             ));
         };
+        if policy.risk_threshold.is_some()
+            && (policy.risk_model_identity.is_none()
+                || receipt.risk_model_identity != policy.risk_model_identity)
+        {
+            return Err(refusal::refused(
+                "selection_unavailable: receipt risk model is not the frozen owner snapshot",
+            ));
+        }
         let pairs = orbit_engine::review_gate::changed_path_pairs(
             &self.paths().repo_root,
             &candidate.base.commit,
@@ -173,6 +181,15 @@ impl OrbitRuntime {
                 "selection_unavailable: owner cannot read the candidate path diff: {error}"
             ))
         })?;
+        if pairs
+            .iter()
+            .flat_map(|(old, new)| old.iter().chain(new.iter()))
+            .any(|path| orbit_types::policy::normalize_glob_path(path).is_err())
+        {
+            return Err(refusal::refused(
+                "selection_unavailable: owner cannot normalize the complete candidate path diff",
+            ));
+        }
         if receipt.result == SelectiveReviewResult::NotRequired {
             for (old, new) in &pairs {
                 for path in old.iter().chain(new.iter()) {
@@ -191,14 +208,32 @@ impl OrbitRuntime {
             }
             if let (Some(threshold), Some(identity)) = (
                 policy.risk_threshold_value(),
-                receipt.risk_model_identity.as_deref(),
+                policy.risk_model_identity.as_deref(),
             ) {
                 let coefficient = |name: &str| {
                     identity
                         .split_whitespace()
                         .find_map(|field| field.strip_prefix(name))
                         .and_then(|value| value.parse::<f64>().ok())
+                        .filter(|value| value.is_finite())
                 };
+                let unknown = identity == "owner-risk-model/unknown"
+                    || identity.split_whitespace().any(|field| field == "fit=none")
+                    || receipt.task_ids.len() != 1;
+                if unknown
+                    && policy.unknown_risk == orbit_types::workflow::SelectiveUnknownRisk::Review
+                {
+                    return Err(refusal::refused(
+                        "selective receipt contradicted: frozen owner risk is unknown and captured unknown_risk requires review",
+                    ));
+                }
+                if !unknown
+                    && (coefficient("intercept=").is_none() || coefficient("slope=").is_none())
+                {
+                    return Err(refusal::refused(
+                        "selection_unavailable: malformed frozen owner model",
+                    ));
+                }
                 if let (Some(intercept), Some(slope)) =
                     (coefficient("intercept="), coefficient("slope="))
                 {

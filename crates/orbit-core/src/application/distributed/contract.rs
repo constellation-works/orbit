@@ -158,11 +158,19 @@ impl crate::OrbitRuntime {
         let before_landing = policy.reviews_before_landing_for(executor);
         // A host-list match stays unconditional for that executor; other
         // executors carry the selective policy to evaluate on the leaf.
-        let selective = if before_pr || before_landing {
+        let mut selective = if before_pr || before_landing {
             None
         } else {
             policy.selective_before_landing_policy()
         };
+        // Probes carry no durable authenticated model snapshot. Freeze an
+        // explicit owner-side unknown instead of trusting a leaf's fit or
+        // allowing model refits between probe, claim and acceptance.
+        if let Some(policy) = &mut selective
+            && policy.risk_threshold.is_some()
+        {
+            policy.freeze_risk_model("owner-risk-model/unknown".to_string());
+        }
         AdmissionShipContract {
             mode: match self
                 .workspace_runtime_binding()

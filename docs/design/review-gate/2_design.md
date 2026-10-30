@@ -1775,3 +1775,28 @@ so for a `codeql` or `linux` `host_sandbox_test` hold on its next tick.
 - [ORB-15546] — settlement applies required validation's known-red rule to a confirmed red-base claim: a candidate failing only tests the base fails too settles accept, its record still failed, with the certificate's `known_red` as the evidence coverage reads.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
+
+
+### Selective contract compatibility and model capture
+
+Selective delivery authority is protected by breaking workspace layout migration
+4, `selective-review-contracts`. It rewrites no task, run or certificate. New
+binaries continue to honor legacy admissions with no selective policy; older
+clients must refuse the newer workspace generation instead of discarding the
+new contract fields. Use the guarded updater and upgrade long-lived clients
+before admitting selective work; do not bypass a live-client generation hold.
+
+Owner-local admissions freeze the existing diff-lines model (including an
+explicit unavailable/no-fit identity) in the immutable policy digest. A later
+candidate or receipt cannot replace or refit it. Claimed execution currently
+freezes `owner-risk-model/unknown`: probes do not durably authenticate a fitted
+snapshot, so follower-local coefficients are never accepted. The captured
+`unknown_risk` rule decides this case (default: review). Calibrated follower
+risk estimates remain unavailable until a durable owner snapshot seam exists;
+path predicates continue to use the complete owner-verifiable diff.
+
+Selection receipts retain their original candidate identity across trusted
+reviewer repairs. Only a passed host settlement can advance the completion pin
+to the certificate's final candidate; claimed acceptance verifies that the
+certificate's reviewed candidate is the original selection and its final
+candidate is the handed-off head. External pushes and rebases remain stale.

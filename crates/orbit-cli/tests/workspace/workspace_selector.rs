@@ -633,7 +633,7 @@ fn migrate_dry_run_honors_selected_checkout_and_confirm_uses_the_same_one() {
 
     let alpha_marker = alpha_repo.join(".orbit/state/layout.version");
     let beta_marker = beta_repo.join(".orbit/state/layout.version");
-    fs::write(&alpha_marker, "3\n").expect("make alpha current");
+    fs::write(&alpha_marker, "4\n").expect("make alpha current");
     fs::write(&beta_marker, "1\n").expect("make beta pending");
 
     let alpha_path = alpha_repo.to_str().expect("alpha path");
@@ -689,7 +689,7 @@ fn migrate_dry_run_honors_selected_checkout_and_confirm_uses_the_same_one() {
     );
     assert_eq!(
         fs::read_to_string(&alpha_marker).expect("read alpha marker after confirm"),
-        "3\n"
+        "4\n"
     );
 
     let unknown = run_orbit(

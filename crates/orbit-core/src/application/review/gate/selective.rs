@@ -60,6 +60,10 @@ fn evaluate_and_persist(
     let candidate = candidate_identity(&context.workspace_path, &context.base_sha()?)?;
     let prior = prior_receipt(runtime, context)?;
     if let Some(prior) = &prior
+        && prior.workspace_id == context.workspace_id
+        && prior.run_id == context.run_id
+        && prior.evaluator_version == orbit_types::workflow::SELECTIVE_REVIEW_RECEIPT_VERSION
+        && prior.risk_model_identity == policy.risk_model_identity
         && prior.covers(
             &policy.digest,
             &candidate.base.commit,
@@ -77,6 +81,7 @@ fn evaluate_and_persist(
 
     let mut inputs = SelectiveEvaluationInputs {
         previously_selected,
+        risk_model_identity: policy.risk_model_identity.clone(),
         ..SelectiveEvaluationInputs::default()
     };
     match changed_path_pairs(
@@ -105,24 +110,31 @@ fn evaluate_and_persist(
     inputs.diff_lines = lines;
 
     if policy.risk_threshold.is_some() && inputs.path_diff_gap.is_none() {
-        let frozen = prior
-            .as_ref()
-            .and_then(|prior| prior.risk_model_identity.as_deref())
-            .and_then(frozen_fit);
+        let identity = policy.risk_model_identity.as_deref().ok_or_else(|| {
+            OrbitError::CapabilityDenied("selection_unavailable: risk selection has no frozen owner model; obtain a fresh owner admission".to_string())
+        })?;
+        let frozen = frozen_fit(identity);
         let (probability, identity, model_gap) = match (lines, frozen) {
             (Some(lines), Some((intercept, slope, identity))) => (
                 Some(fit_probability(intercept, slope, lines)),
                 Some(identity),
                 None,
             ),
-            (Some(lines), None) => match runtime.task_riskiness_model() {
-                Ok(model) => (
-                    model.estimate_diff_lines(lines),
-                    Some(model.diff_model_identity()),
+            (Some(_), None)
+                if identity == "owner-risk-model/unknown"
+                    || identity.split_whitespace().any(|field| field == "fit=none") =>
+            {
+                (
                     None,
-                ),
-                Err(error) => (None, None, Some(format!("risk model unavailable: {error}"))),
-            },
+                    Some(identity.to_string()),
+                    Some("owner risk snapshot has no usable fit".to_string()),
+                )
+            }
+            (Some(_), None) => {
+                return Err(OrbitError::CapabilityDenied(
+                    "selection_unavailable: frozen owner risk model is malformed".to_string(),
+                ));
+            }
             _ => (
                 None,
                 None,
@@ -201,7 +213,9 @@ fn prior_receipt(
     else {
         return Ok(None);
     };
-    Ok(serde_json::from_slice(&artifact.content).ok())
+    serde_json::from_slice(&artifact.content).map(Some).map_err(|error| {
+        OrbitError::CapabilityDenied(format!("selection_unavailable: stored selection receipt is unreadable; preserve it for operator recovery: {error}"))
+    })
 }
 
 /// The `(intercept, slope, identity)` a prior receipt froze, so revised

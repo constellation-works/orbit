@@ -105,82 +105,91 @@ fn audit_count(workspace: &McpWorkspace, tool: &str) -> i64 {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn new_review_record_contract_refuses_a_live_old_client_before_mutation() {
-    let workspace = McpWorkspace::init();
-    let initialized = orbit_ok(
-        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args(["task", "list"]),
-    );
-    assert!(initialized.status.success());
-    let latest = orbit_core::composition::compiled_compatibility();
-    assert_eq!(latest.features.get("review"), Some(&4));
-    let stored_version = Connection::open(workspace.home.join(".orbit/orbit.db"))
-        .expect("review feature schema")
-        .query_row(
-            "SELECT MAX(version) FROM feature_schema_meta WHERE feature = 'review'",
-            [],
-            |row| row.get::<_, u32>(0),
+    for old_contract in ["review", "selective"] {
+        let workspace = McpWorkspace::init();
+        let initialized = orbit_ok(
+            McpWorkspace::orbit_command(&workspace.work, &workspace.home).args(["task", "list"]),
+        );
+        assert!(initialized.status.success());
+        let latest = orbit_core::composition::compiled_compatibility();
+        assert_eq!(latest.features.get("review"), Some(&4));
+        let stored_version = Connection::open(workspace.home.join(".orbit/orbit.db"))
+            .expect("review feature schema")
+            .query_row(
+                "SELECT MAX(version) FROM feature_schema_meta WHERE feature = 'review'",
+                [],
+                |row| row.get::<_, u32>(0),
+            )
+            .expect("review feature migration applied");
+        assert_eq!(stored_version, 4);
+        let mut old_identity = latest.clone();
+        if old_contract == "review" {
+            old_identity.features.insert("review".into(), 3);
+        } else {
+            assert_eq!(latest.workspace_layout.version, 4);
+            old_identity.workspace_layout.version = 3;
+            old_identity.workspace_layout.writer_floor = 3;
+            old_identity.workspace_layout.reader_floor = 3;
+        }
+
+        // Hold the authority as a process compiled with the pre-change review
+        // reader. The candidate CLI must not enter its store bootstrap while that
+        // participant is live, because its reconciliation JSON is unreadable to
+        // this client.
+        let digest = executable_generation(Path::new(env!("CARGO_BIN_EXE_orbit")))
+            .expect("fixture executable digest");
+        let participant = Participant {
+            digest: &digest,
+            identity: &old_identity,
+            role: ParticipantRole::McpServe,
+            access: Access::Write,
+            handover: None,
+            in_activity: false,
+        };
+        let _old_client = GenerationGuard::join(
+            &authority_root(&workspace),
+            &participant,
+            std::time::Duration::ZERO,
+            || Ok(0),
         )
-        .expect("review feature migration applied");
-    assert_eq!(stored_version, 4);
-    let mut old_identity = latest.clone();
-    old_identity.features.insert("review".into(), 3);
+        .expect("pre-change client joins its own compatibility generation");
 
-    // Hold the authority as a process compiled with the pre-change review
-    // reader. The candidate CLI must not enter its store bootstrap while that
-    // participant is live, because its reconciliation JSON is unreadable to
-    // this client.
-    let digest = executable_generation(Path::new(env!("CARGO_BIN_EXE_orbit")))
-        .expect("fixture executable digest");
-    let participant = Participant {
-        digest: &digest,
-        identity: &old_identity,
-        role: ParticipantRole::McpServe,
-        access: Access::Write,
-        handover: None,
-        in_activity: false,
-    };
-    let _old_client = GenerationGuard::join(
-        &authority_root(&workspace),
-        &participant,
-        std::time::Duration::ZERO,
-        || Ok(0),
-    )
-    .expect("pre-change client joins its own compatibility generation");
+        let before = store_bytes(&workspace);
+        let output = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+            .env(QUIESCE_TIMEOUT_ENV, "0")
+            .args([
+                "task",
+                "add",
+                "--title",
+                "Must not be written during a review schema switch",
+                "--complexity",
+                "low",
+                "--json",
+            ])
+            .output()
+            .expect("candidate writer");
+        assert_refused(&output);
+        assert_eq!(
+            store_bytes(&workspace),
+            before,
+            "incompatible admission must stop before store or workspace writes"
+        );
 
-    let before = store_bytes(&workspace);
-    let output = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
-        .env(QUIESCE_TIMEOUT_ENV, "0")
-        .args([
-            "task",
-            "add",
-            "--title",
-            "Must not be written during a review schema switch",
-            "--complexity",
-            "low",
-            "--json",
-        ])
-        .output()
-        .expect("candidate writer");
-    assert_refused(&output);
-    assert_eq!(
-        store_bytes(&workspace),
-        before,
-        "incompatible admission must stop before store or workspace writes"
-    );
-
-    drop(_old_client);
-    let added = orbit_ok(
-        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
-            "task",
-            "add",
-            "--title",
-            "Written after the old client quiesced",
-            "--complexity",
-            "low",
-            "--json",
-        ]),
-    );
-    let added: Value = serde_json::from_slice(&added.stdout).expect("task JSON");
-    assert_eq!(added["title"], "Written after the old client quiesced");
+        drop(_old_client);
+        let added = orbit_ok(
+            McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
+                "task",
+                "add",
+                "--title",
+                "Written after the old client quiesced",
+                "--complexity",
+                "low",
+                "--json",
+            ]),
+        );
+        let added: Value = serde_json::from_slice(&added.stdout).expect("task JSON");
+        assert_eq!(added["title"], "Written after the old client quiesced");
+    }
 }
 
 /// An idle stdio MCP server refuses a plain preflight, which renames nothing,

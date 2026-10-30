@@ -55,11 +55,17 @@ impl TaskCommitBoundary {
             };
             if receipt.schema_version != SELECTIVE_REVIEW_RECEIPT_VERSION
                 || receipt.policy_digest != policy.digest
+                || receipt.evaluator_version != SELECTIVE_REVIEW_RECEIPT_VERSION
+                || receipt.workspace_id != handoff.workspace_id
+                || receipt.run_id != handoff.run_id
+                || receipt.task_ids != vec![handoff.task_id.clone()]
+                || receipt.risk_model_identity != policy.risk_model_identity
                 || receipt.mode != policy.mode
                 || receipt.base_sha != handoff.candidate.base.commit
                 || receipt.base_tree != handoff.candidate.base.tree
-                || receipt.head_sha != handoff.candidate.candidate.commit
-                || receipt.head_tree != handoff.candidate.candidate.tree
+                || ((!receipt.requires_review() || handoff.review.evidence().is_none())
+                    && (receipt.head_sha != handoff.candidate.candidate.commit
+                        || receipt.head_tree != handoff.candidate.candidate.tree))
             {
                 return Err(review_refused(
                     R::ReviewContractMismatch,
@@ -258,6 +264,17 @@ impl TaskCommitBoundary {
             return Err(review_refused(
                 R::ReviewContractMismatch,
                 "certificate baseline commands differ from the owner's captured review contract",
+            ));
+        }
+        if let Some(selection) = &handoff.review.selective_receipt
+            && selection.requires_review()
+            && (selection.head_sha != certificate.reviewed_candidate.commit
+                || selection.head_tree != certificate.reviewed_candidate.tree
+                || selection.base_sha != certificate.base.commit
+                || selection.base_tree != certificate.base.tree)
+        {
+            return Err(certificate_refused(
+                "review certificate does not continue the selected candidate",
             ));
         }
         let reviewer_commit_matches = match &evidence.reviewer_commit {

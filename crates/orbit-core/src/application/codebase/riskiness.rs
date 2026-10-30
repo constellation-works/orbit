@@ -433,7 +433,7 @@ impl TaskRiskinessModel {
         match self.diff.fit {
             Some(fit) => format!(
                 "task-riskiness/v{} diff_lines window_days={} since={} observed_through={} \
-                 min_support={} observations={} regressed={} intercept={:.12} slope={:.12}",
+                 min_support={} observations={} regressed={} intercept={} slope={}",
                 TASK_RISKINESS_ESTIMATOR_VERSION,
                 self.window_days,
                 self.since.to_rfc3339_opts(SecondsFormat::Secs, true),

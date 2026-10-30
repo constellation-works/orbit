@@ -314,7 +314,9 @@ fn handoff_review(
                             "invalid selective review receipt: {error}"
                         ))
                     })?;
-                if receipt.head_sha != candidate.candidate.commit
+                let reviewed_continuation =
+                    receipt.requires_review() && present("landing_review_evidence").is_some();
+                if (receipt.head_sha != candidate.candidate.commit && !reviewed_continuation)
                     || receipt.base_sha != candidate.base.commit
                 {
                     return Err(refused(format!(

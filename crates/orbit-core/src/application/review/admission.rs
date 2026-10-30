@@ -400,6 +400,17 @@ pub(crate) fn snapshot(runtime: &OrbitRuntime) -> Result<ReviewAdmission, OrbitE
     if crew.is_some() {
         crew_pool.clear();
     }
+    let mut selective = policy.selective_before_landing_policy();
+    if let Some(selective) = &mut selective
+        && selective.risk_threshold.is_some()
+    {
+        selective.freeze_risk_model(
+            runtime
+                .task_riskiness_model()
+                .map(|model| model.diff_model_identity())
+                .unwrap_or_else(|_| "owner-risk-model/unknown".to_string()),
+        );
+    }
     Ok(ReviewAdmission {
         contract_version: REVIEW_CONTRACT_VERSION,
         policy_version: policy.version,
@@ -428,7 +439,7 @@ pub(crate) fn snapshot(runtime: &OrbitRuntime) -> Result<ReviewAdmission, OrbitE
         // Freeze the owner-resolved selective policy with its per-field
         // provenance and digest; candidate configuration edits and agent
         // run input cannot supply or weaken it.
-        selective_before_landing: policy.selective_before_landing_policy(),
+        selective_before_landing: selective,
         captured_at: Utc::now(),
     })
 }
