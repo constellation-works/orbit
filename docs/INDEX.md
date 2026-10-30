@@ -131,7 +131,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 
 | Feature | Next | Lead |
 | --- | --- | --- |
-| [Cloud Dispatch](./design/cloud-dispatch/1_scope.md) | Run the phase 0 manual cloud-session spike, then file phase 1 (no task yet) | claude |
+| [Cloud Dispatch](./design/cloud-dispatch/1_scope.md) | Review the Copilot existing-PR recovery companion; the Claude phase 0 spike remains pending | claude |
 | [Condition Triggers](./design/condition-triggers/1_scope.md) | Review this scope; then file phase 1 (CEL schema, load-time checking, automation explain) | claude |
 | [Conflict Budget](./design/conflict-budget/1_scope.md) | Settle the open questions (sum vs max, where weights live), then file phase 1 | claude |
 | [Script Steps](./design/script-steps/1_scope.md) | Phases 1 and 2 landed (manifests, grants, and Linux execution under `linux-bwrap-script-v1` with `script.execution` audit and `orbit script history`); next is phase 3, files and macOS | claude |
@@ -203,7 +203,7 @@ a conservative title/status fallback.
 | [Auto-tasks](./design/auto-tasks/1_overview.md) | Dynamically-defined recurring task templates minted by the host clock tick — periodic work as data, not code. | Accepted | claude |
 | [Automation Triggers](./design/automation-triggers/1_overview.md) | Proposed bounded state-driven triggers for routines and auto-tasks with durable work identity and honest coverage. | Draft | codex |
 | [Backlog Forecast](./design/backlog-forecast/1_scope.md) | Scope: simulate real drain admission, review modes, retry outcomes, host resource fit and regression rework; expose task riskiness and score each forecast model version separately | Draft | claude |
-| [Cloud Dispatch](./design/cloud-dispatch/1_scope.md) | Scope: a cloud delivery mode that ships a task through a Claude Code cloud session, polls GitHub for its PR, and adopts that PR's number and summary onto the task | Draft | claude |
+| [Cloud Dispatch](./design/cloud-dispatch/1_scope.md) | Proposed Claude cloud task delivery, with a companion scope for Copilot repair of existing PRs under shared repair ownership, budgets and exact-head evidence. | Draft | claude |
 | [Condition Triggers](./design/condition-triggers/1_scope.md) | Scope: a condition trigger kind whose predicate is a type-checked CEL expression over task, workspace, host and file state, fired once per subject edge with a durable fire identity, beside the typed trigger kinds | Draft | claude |
 | [Conflict Budget](./design/conflict-budget/1_scope.md) | Scope: let footprint admission run overlapping tasks together when the expected cost of repairing their landing conflicts fits an operator budget that can be high by day and low at night, scored per path from recorded conflict history | Draft | claude |
 | [Crew Credentials](./design/crew-credentials/1_scope.md) | Scope: a crew-level env list, so one crew can run on a different provider account (an API key with prepaid credits) than the rest of its provider | Draft | claude |
