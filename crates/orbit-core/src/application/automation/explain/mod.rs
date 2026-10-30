@@ -10,18 +10,20 @@ mod job;
 
 use std::collections::BTreeSet;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use orbit_automation::condition::{
     CheckedCondition, ClauseNode, ConditionEvaluator, TaskFacts, Truth, own_task_ids, self_facts,
 };
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::workflow::automation::{
-    CONDITION_SUBJECTS_PER_PASS, CONDITION_WORKSPACE_SUBJECT, ConditionScope,
+    CONDITION_SUBJECTS_PER_PASS, CONDITION_WORKSPACE_SUBJECT, ConditionScope, ConditionState,
 };
 use serde::Serialize;
 
 use super::condition::facts::{self, FactInputs};
-use super::condition::{ConditionStatus, Target, condition_consumer, condition_status};
+use super::condition::{
+    ConditionStatus, ConditionSubjectView, Target, condition_consumer, condition_status,
+};
 use crate::OrbitRuntime;
 pub use job::JobStepsExplain;
 
@@ -233,6 +235,11 @@ impl OrbitRuntime {
         let gathered = facts::gather(self, &checked.reads, now, &inputs)?;
         let evaluator = ConditionEvaluator::new(&gathered.facts);
         let tracking = condition_status(self, &condition, now)?;
+        let subject_state = SubjectState {
+            state: state.as_ref(),
+            hold: Duration::minutes(i64::try_from(condition.condition.for_minutes).unwrap_or(0)),
+            now,
+        };
         let mut report = Report::default();
         let mut selected = 1;
         let mut subjects = Vec::new();
@@ -256,7 +263,7 @@ impl OrbitRuntime {
                         Some(task),
                         &task.id,
                         Some(&task.title),
-                        &tracking,
+                        &subject_state,
                     );
                 }
             }
@@ -266,7 +273,7 @@ impl OrbitRuntime {
                 None,
                 WORKSPACE_SUBJECT,
                 None,
-                &tracking,
+                &subject_state,
             ),
         }
         let subject =
@@ -425,6 +432,12 @@ fn unknown_reason(truth: &Truth) -> Option<String> {
     }
 }
 
+struct SubjectState<'a> {
+    state: Option<&'a ConditionState>,
+    hold: Duration,
+    now: DateTime<Utc>,
+}
+
 #[derive(Default)]
 struct Report {
     evaluated: usize,
@@ -443,27 +456,38 @@ impl Report {
         task: Option<&TaskFacts>,
         key: &str,
         title: Option<&String>,
-        tracking: &ConditionStatus,
+        subject_state: &SubjectState<'_>,
     ) {
         self.evaluated += 1;
         match evaluator.truth(&checked.when, task) {
             Truth::True => {
                 self.matched += 1;
                 if self.matches.len() < MAX_LISTED {
-                    let tracked = tracking.subjects.iter().find(|subject| subject.key == key);
+                    let tracked = subject_state
+                        .state
+                        .and_then(|state| state.subjects.get(key))
+                        .map(|subject| {
+                            ConditionSubjectView::from_subject(
+                                key,
+                                subject,
+                                subject_state.hold,
+                                subject_state.now,
+                            )
+                        });
                     self.matches.push(ExplainMatch {
                         subject: key.to_string(),
                         title: title.cloned(),
-                        arm: tracked.map_or(
-                            if tracking.tracked {
+                        arm: tracked.as_ref().map_or(
+                            if subject_state.state.is_some() {
                                 "armed"
                             } else {
                                 "untracked"
                             },
                             |subject| subject.arm,
                         ),
-                        true_since: tracked.and_then(|subject| subject.true_since),
+                        true_since: tracked.as_ref().and_then(|subject| subject.true_since),
                         hold_remaining_minutes: tracked
+                            .as_ref()
                             .and_then(|subject| subject.hold_remaining_minutes),
                     });
                 }

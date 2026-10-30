@@ -234,3 +234,59 @@ fn excess_matches_refuse_enable_and_a_storm_stall_clears_only_by_an_operator() {
     let explained = fixture.json(&["automation", "explain", "storm", "--json"]);
     assert!(explained["tracking"]["stall"].is_null(), "{explained}");
 }
+
+#[test]
+fn explain_uses_durable_subjects_beyond_tracking_sample() {
+    const TEST: &str =
+        "condition_auto_task_cli::explain_uses_durable_subjects_beyond_tracking_sample";
+    if crate::isolated_test::run_in_child(TEST) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let mut subjects = (0..21)
+        .map(|n| {
+            let id = add_task(&fixture, &format!("Tracked subject {n}"));
+            tag(&fixture, &id, "tracked");
+            id
+        })
+        .collect::<Vec<_>>();
+    subjects.sort();
+    add_condition(
+        &fixture,
+        "tracked-sample",
+        json!({"scope": "task", "when": "'tracked' in task.tags", "max_matches": 21, "for_minutes": 60}),
+    );
+    fixture.json(&["auto-task", "toggle", "tracked-sample", "on", "--json"]);
+    tick(&fixture, "tracked-sample");
+
+    let db = rusqlite::Connection::open(fixture.root.join("orbit.db")).unwrap();
+    let (consumer, raw): (String, String) = db.query_row(
+        "SELECT consumer, state_json FROM automation_condition_states WHERE consumer LIKE '%/auto-task/tracked-sample'",
+        [], |row| Ok((row.get(0)?, row.get(1)?)),
+    ).unwrap();
+    let mut state: Value = serde_json::from_str(&raw).unwrap();
+    for (index, id) in subjects.iter().enumerate() {
+        state["subjects"][id] =
+            json!({"arm": "fired", "baselined": index == 0, "true_since": "2000-01-01T00:00:00Z"});
+    }
+    db.execute(
+        "UPDATE automation_condition_states SET state_json=?1 WHERE consumer=?2",
+        rusqlite::params![state.to_string(), consumer],
+    )
+    .unwrap();
+    drop(db);
+
+    let explained = fixture.json(&["automation", "explain", "tracked-sample", "--json"]);
+    let tracking = explained["tracking"]["subjects"].as_array().unwrap();
+    assert_eq!(tracking.len(), 20);
+    assert!(!tracking.iter().any(|row| row["key"] == subjects[0]));
+    let matches = explained["matches"].as_array().unwrap();
+    assert_eq!(matches.len(), 20);
+    let first = matches
+        .iter()
+        .find(|row| row["subject"] == subjects[0])
+        .unwrap();
+    assert_eq!(first["arm"], "fired", "{explained}");
+    assert_eq!(first["true_since"], "2000-01-01T00:00:00Z");
+    assert_eq!(first["hold_remaining_minutes"], 0);
+}

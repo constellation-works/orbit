@@ -25,8 +25,8 @@ use orbit_types::workflow::{AutoTaskDefinition, AutoTaskSchedule, RoutineDefinit
 use serde::Serialize;
 
 pub(crate) use host::{Target, render_placeholders};
-pub(crate) use status::condition_status;
 pub use status::{ConditionChainLink, ConditionFireView, ConditionListing, ConditionStatus};
+pub(crate) use status::{ConditionSubjectView, condition_status};
 
 use super::consumer_key;
 use crate::OrbitRuntime;

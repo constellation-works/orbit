@@ -9,6 +9,7 @@ use orbit_automation::condition::{ConditionCarrier, self_facts};
 use orbit_common::OrbitError;
 use orbit_types::workflow::automation::{
     ConditionArm, ConditionFire, ConditionPass, ConditionSkip, ConditionStall, ConditionState,
+    ConditionSubject,
 };
 use orbit_types::workflow::{AutoTaskDefinition, AutoTaskSchedule, RoutineDefinition};
 use serde::Serialize;
@@ -96,6 +97,30 @@ pub struct ConditionSubjectView {
     pub last_fired_at: Option<DateTime<Utc>>,
 }
 
+impl ConditionSubjectView {
+    pub(crate) fn from_subject(
+        key: &str,
+        subject: &ConditionSubject,
+        hold: Duration,
+        now: DateTime<Utc>,
+    ) -> Self {
+        Self {
+            key: key.to_string(),
+            arm: subject.arm.as_str(),
+            arm_sequence: subject.arm_sequence,
+            true_since: subject.true_since,
+            hold_remaining_minutes: subject.true_since.map(|since| {
+                (hold - now.signed_duration_since(since))
+                    .num_minutes()
+                    .max(0)
+            }),
+            deferred: subject.deferred.clone(),
+            baselined: subject.baselined,
+            last_fired_at: subject.last_fired_at,
+        }
+    }
+}
+
 /// `self` as the next pass reads it.
 #[derive(Debug, Clone, Serialize)]
 pub struct ConditionSelfView {
@@ -181,20 +206,7 @@ pub(crate) fn condition_status(
     let mut subjects = state
         .subjects
         .iter()
-        .map(|(key, subject)| ConditionSubjectView {
-            key: key.clone(),
-            arm: subject.arm.as_str(),
-            arm_sequence: subject.arm_sequence,
-            true_since: subject.true_since,
-            hold_remaining_minutes: subject.true_since.map(|since| {
-                (hold - now.signed_duration_since(since))
-                    .num_minutes()
-                    .max(0)
-            }),
-            deferred: subject.deferred.clone(),
-            baselined: subject.baselined,
-            last_fired_at: subject.last_fired_at,
-        })
+        .map(|(key, subject)| ConditionSubjectView::from_subject(key, subject, hold, now))
         .collect::<Vec<_>>();
     subjects.sort_by_key(|subject| {
         (
