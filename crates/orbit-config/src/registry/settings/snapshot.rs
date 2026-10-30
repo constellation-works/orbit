@@ -189,6 +189,11 @@ impl ConfigSnapshot {
             env_default,
             require_default_crew,
         )?;
+        crate::crew_ladder::admit_crew_ladder_rungs(&mut self.workflow_crew_ladder_rungs, crews)?;
+        crate::crew_ladder::check_crew_ladder_sample(
+            self.workflow_crew_ladder_look_every,
+            self.workflow_crew_ladder_max_sample,
+        )?;
         crate::provider_limit::validate_budget_crews(&self.workflow_provider_limit_budgets, crews)?;
         crate::provider_limit::validate_override_crews(
             &self.workflow_provider_limit_overrides,

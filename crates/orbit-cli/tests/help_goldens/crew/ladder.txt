@@ -1,0 +1,22 @@
+Show each tier's pool, floor, candidate rung and shadow trial
+
+Usage: orbit crew ladder [OPTIONS]
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header
+
+The floor is a tier's cheapest rung of workflow.crew_ladder.rungs among the enabled,
+weighted members of workflow.<tier>_complexity_crews; the candidate is the rung directly
+below it. With workflow.crew_ladder.mode = "shadow", each listed tier with a candidate
+keeps one shadow experiment owned by system:crew-ladder: its tasks are assigned to the
+control or candidate arm and recorded, and no task's crew changes. WOULD-BE counts the
+tasks assigned to the candidate arm. Trials are created, started and concluded at
+delivery admission; this command only reads them.

@@ -860,6 +860,56 @@ Marks reach the agent as `task.regression_risk` in the envelope: `window_days` a
 
 Each prompt that carries marks records them on the task as a `regression_risk_marked` history event whose decision names the run, the activity, the marked paths and the window, once per run, activity and paths. A claimed follower leaf reads task metadata through its authenticated owner and records no mark events, since it cannot write its owner's task. The Regressions ranking reads these events back and compares the marked paths' regression rate for tasks delivered with marks against the same paths' rate in the window before the first mark, counting each task against its declared footprint rather than its recorded sites, with the counts shown ([dashboard](design/user-interface/2_design.md)). Building marks scans task metadata and separately reads recent done-task history. Owner metadata reads omit description, acceptance criteria, plan and execution summary, while retaining titles, footprints, attribution and regression classifications and sites. The internal metadata protocol limits each page to 128 rows and 1 MiB of serialized page data, leaving room for MCP framing under the unchanged 64 MiB transport cap. Targeted metadata reads send bounded ID selections, without listing the whole workspace. The follower accepts only complete pages with matching scan identity, counts and advancing continuations; changed scans, malformed or incomplete pages, oversized individual rows and failed owner reads make marks unavailable. It never substitutes full task bodies or partial analytics. A scan that fails, or a record that cannot be written, is logged and never refuses dispatch. Settings are read when the runtime opens.
 
+### `[workflow.crew_ladder]` — shadow trials of a cheaper crew per tier
+
+```toml
+[workflow.crew_ladder]
+mode = "off"                       # or "shadow"
+rungs = []                         # crews, cheapest first, e.g. ["haiku", "sonnet", "opus"]
+tiers = []                         # tiers that opt in, e.g. ["low", "medium"]
+explore_rate = 0.10
+margin = 5
+look_every = 10
+max_sample = 60
+exclude_types = []
+watch_window = 30
+retry_after_days = 30
+delivery_quality = "off"
+quality_grade_margin = 10
+min_grade_coverage = 0.8
+```
+
+The crew ladder is opt-in: nothing runs until `mode = "shadow"` and `tiers` names at least one tier. With `mode = "off"`, or no tiers listed, no trial is created and crew draws are unchanged; `xhard` runs only when named. The crew ladder orders crews from cheapest to most capable and asks, per complexity tier, whether the rung below the tier's current crews would hold up. A tier's **floor** is the cheapest rung that is an enabled member of `workflow.<tier>_complexity_crews` with a positive weight; its **candidate** is the rung directly below the floor. A tier with no rung in its pool, or whose floor is the bottom rung, has no candidate.
+
+With `mode = "shadow"`, each tier in `tiers` that has a candidate keeps one standing [experiment](#experiments--experiments-over-agent-treatments) owned by `system:crew-ladder`, in experiment `shadow` mode, named `crew-ladder-<tier>-<n>`. Its `control` arm has no overlay and weight `1000 × (1 − explore_rate)`; its `candidate` arm overlays the crew pool with the one candidate rung at weight `1000 × explore_rate`. The population is the tier's complexity, minus the task types in `exclude_types`. Tasks are assigned and recorded as for any shadow experiment, so no task's crew, crew source or run changes.
+
+The trials are reconciled at each delivery admission while `experiments.enabled` is true, before the task is assigned:
+
+- A tier without a trial starts one. Trials count toward `experiments.max_running`; free slots go to tiers in `tiers` order, and a start the lifecycle refuses leaves no draft behind.
+- A trial whose candidate, arm weights or population no longer match the ladder (a changed pool, `rungs`, `explore_rate` or `exclude_types`) is concluded with no winner, which files no promotion task, and a new trial starts.
+- A tier covered by a running operator crew experiment (one whose population includes the tier, or names no complexity) gets no trial, and its open trial is concluded: operator experiments come first.
+- With `mode = "off"`, open ladder trials are concluded and none start. A workspace that never set the ladder reads its experiments and writes nothing, so its draws are exactly as before.
+
+`orbit crew ladder` (or the read-only MCP tool `orbit.crew.ladder`, and `--json` for the same payload) shows the ladder: per tier its pool, floor, candidate, the trial with its status and would-be count (tasks assigned to the candidate arm), or why the tier has no trial (`mode_off`, `tier_not_listed`, `no_ladder_rung`, `floor_is_bottom_rung`, `operator_experiment`, `experiments_disabled`, `max_running`, or `pending` until the next delivery admission). It reads and never writes.
+
+This release runs only the report and shadow trials. `margin`, `look_every`, `max_sample`, `watch_window`, `retry_after_days`, `quality_grade_margin` and `min_grade_coverage` are validated and recorded for the later phases, which will read them; `mode = "propose"`, `mode = "auto"`, `delivery_quality = "shadow"` and `delivery_quality = "guardrail"` are refused at load.
+
+| Key | Default | What it does |
+|---|---|---|
+| `workflow.crew_ladder.mode` | `off` | **Advanced.** `off` or `shadow`. `propose` and `auto` are refused at load as not available yet. |
+| `workflow.crew_ladder.rungs` | `[]` | **Advanced.** Crews, cheapest first. Each must be a defined, enabled crew, named once; an unknown or disabled crew fails load naming this key. |
+| `workflow.crew_ladder.tiers` | `[]` | **Advanced.** Complexity tiers (`low`, `medium`, `hard`, `xhard`) that may run a trial, each once. Empty means no tier runs a trial. |
+| `workflow.crew_ladder.explore_rate` | `0.10` | **Advanced.** Share of a tier's tasks assigned to the candidate arm, `0.02`–`0.25`. |
+| `workflow.crew_ladder.margin` | `5` | **Advanced.** Quality points the candidate may trail the floor by, greater than `0` and at most `100`. Recorded in each trial's hypothesis. |
+| `workflow.crew_ladder.look_every` | `10` | **Advanced.** Settled candidate tasks between a trial's looks (`1`–`1000`), no more than `max_sample`. |
+| `workflow.crew_ladder.max_sample` | `60` | **Advanced.** Candidate tasks after which a trial stops without promotion (`1`–`10000`). |
+| `workflow.crew_ladder.exclude_types` | `[]` | **Advanced.** Task types (`feature`, `bug`, `refactor`, `chore`) left out of every trial's population. Excluding all four is refused. |
+| `workflow.crew_ladder.watch_window` | `30` | **Advanced.** Settled tasks per learned ladder member in its demotion check (`1`–`1000`). |
+| `workflow.crew_ladder.retry_after_days` | `30` | **Advanced.** Days before a failed rung is trialled again (`1`–`365`). |
+| `workflow.crew_ladder.delivery_quality` | `off` | **Advanced.** How trials weigh delivery-quality grades. Only `off` is accepted; `shadow` and `guardrail` are refused at load as not available yet. |
+| `workflow.crew_ladder.quality_grade_margin` | `10` | **Advanced.** Grade points a candidate may trail its tier by under the delivery-quality check, greater than `0` and at most `100`. |
+| `workflow.crew_ladder.min_grade_coverage` | `0.8` | **Advanced.** Share of settled trial tasks that must carry a delivery-quality grade before the check reads them, greater than `0` and at most `1`. |
+
 ### `[workflow.explore]` — read-only exploration for implementing agents
 
 ```toml

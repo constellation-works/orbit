@@ -56,6 +56,8 @@
 //!   its one parser [ORB-12913].
 //! - `crew_performance` — the ordered `workflow.crew_performance_types` list
 //!   and the one task-type classification the scorecard and draw share.
+//! - `crew_ladder` — the `workflow.crew_ladder.*` ladder of crews, cheapest
+//!   first, and its standing-trial settings.
 //! - `provider_limit` — provider/account admission policy, with threshold and draw
 //!   policy in `policy`, budget declarations in `budget`, and shared targets in `target`.
 //! - `operation` — typed review preferences (`[review]` and
@@ -78,6 +80,7 @@
 mod aliases;
 /// Host-only bounded decision-assistance configuration.
 pub mod assistance;
+mod crew_ladder;
 mod crew_performance;
 mod crew_pools;
 mod experiment_keys;
@@ -111,6 +114,13 @@ use orbit_common::security::redaction::redact_home_dir;
 
 pub use aliases::{
     ShellProbeMode, WorkerContainmentMode, deprecated_key_rewrites, translate_deprecated_keys,
+};
+pub use crew_ladder::{
+    CREW_LADDER_DELIVERY_QUALITY_KEY, CREW_LADDER_EXCLUDE_TYPES_KEY, CREW_LADDER_EXPLORE_RATE_KEY,
+    CREW_LADDER_LOOK_EVERY_KEY, CREW_LADDER_MARGIN_KEY, CREW_LADDER_MAX_SAMPLE_KEY,
+    CREW_LADDER_MIN_GRADE_COVERAGE_KEY, CREW_LADDER_MODE_KEY, CREW_LADDER_QUALITY_GRADE_MARGIN_KEY,
+    CREW_LADDER_RUNGS_KEY, CREW_LADDER_TIERS_KEY, CREW_LADDER_WEIGHT_SCALE, CrewLadderMode,
+    CrewLadderSettings,
 };
 pub use crew_performance::{
     CREW_PERFORMANCE_CAP_KEY, CREW_PERFORMANCE_KEY, CREW_PERFORMANCE_STRENGTH_KEY,

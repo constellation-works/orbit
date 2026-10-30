@@ -291,6 +291,12 @@ impl RuntimeKernel {
     pub fn experiment_settings(&self) -> &orbit_config::ExperimentSettings {
         self.context.settings().experiments()
     }
+
+    /// `workflow.crew_ladder.*` as admitted: the ordered rungs, the tiers
+    /// that run trials and the trial knobs.
+    pub fn crew_ladder_settings(&self) -> &orbit_config::CrewLadderSettings {
+        self.context.settings().crew_ladder()
+    }
 }
 
 /// The shared wording for pass-listed variables missing from the launching

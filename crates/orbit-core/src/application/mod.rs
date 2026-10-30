@@ -24,6 +24,7 @@ pub mod change_watch;
 pub mod codebase;
 pub mod config;
 pub mod contracts;
+pub mod crew_ladder;
 pub mod distributed;
 pub(crate) mod executor;
 pub(crate) mod executor_host_os;

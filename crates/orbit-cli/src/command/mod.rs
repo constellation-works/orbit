@@ -5,6 +5,7 @@ pub mod browser_kit;
 pub mod clock;
 pub mod codebase;
 pub mod config;
+pub mod crew;
 pub mod decision;
 pub mod doctor;
 pub mod experiment;
@@ -111,6 +112,7 @@ Observe:
   audit        Query the audit event log
   codebase     Rank the repository paths that are risky for agents to change
   agents       Score orchestrators, implementers, reviewers and pilots by crew and model
+  crew         Show how crews are laddered across complexity tiers
   log          Tail the unified Orbit log feed
   doctor       Diagnose workspace health, provider CLIs, and filesystem access
 
@@ -179,6 +181,7 @@ pub enum Commands {
     Audit(audit::AuditCommand),
     Codebase(codebase::CodebaseCommand),
     Agents(agents::AgentsCommand),
+    Crew(crew::CrewCommand),
     Log(log::LogCommand),
     Doctor(doctor::DoctorCommand),
 

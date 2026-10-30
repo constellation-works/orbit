@@ -705,6 +705,22 @@
     ]
   },
   {
+    "name": "orbit.crew.ladder",
+    "description": "The workspace's crew ladder (workflow.crew_ladder): for each complexity tier, its configured pool, its floor (the cheapest ladder rung in that pool), the candidate rung directly below the floor, and the standing shadow trial for that candidate with its would-be assignment count, or the reason the tier has no trial (mode off, tier not listed, no ladder rung in the pool, floor already the bottom rung, a running operator crew experiment, experiments disabled, experiments.max_running reached, or pending until the next delivery admission). Read-only: trials are created, started and concluded at delivery admission.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "model",
+        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized.",
+        "param_type": "string",
+        "required": false
+      }
+    ]
+  },
+  {
     "name": "orbit.decision.digest",
     "description": "Raise the approval decision requests a decision channel's digest presents, and return the whole digest in one call. Callable only by the plugin the channel is bound to, through its callback session, or by the operator, never by an agent session. Repeated calls reuse requests for unchanged task bindings; newly eligible tasks can add requests. With the decision channel disabled, it returns no requests. The binding rules and result fields are in the orbit skill's references/tool-surface.md, section `Decision requests`.",
     "enabled": true,

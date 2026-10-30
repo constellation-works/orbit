@@ -26,6 +26,7 @@ fn builtin_annotations(canonical_name: &str) -> Option<McpToolAnnotations> {
         | "orbit.auto_task.show"
         | "orbit.codebase.analytics"
         | "orbit.codebase.show"
+        | "orbit.crew.ladder"
         | "orbit.drain.claims"
         | "orbit.friction.show"
         | "orbit.friction.stats"

@@ -494,6 +494,8 @@ pub struct OrbitRuntimeSettings {
     lease_policy: crate::task::locks::LeasePolicy,
     /// `experiments.*`: the workspace's experiment policy.
     experiments: orbit_config::ExperimentSettings,
+    /// `workflow.crew_ladder.*`: the ordered crew ladder and its trials.
+    crew_ladder: orbit_config::CrewLadderSettings,
     /// Admitted `machine.labels`: the capability labels this host carries,
     /// beside its OS as an implicit label.
     machine_labels: Vec<String>,
@@ -553,6 +555,7 @@ impl OrbitRuntimeSettings {
         decision_channel_enabled: bool,
         lease_policy: crate::task::locks::LeasePolicy,
         experiments: orbit_config::ExperimentSettings,
+        crew_ladder: orbit_config::CrewLadderSettings,
         machine_labels: Vec<String>,
     ) -> Self {
         Self {
@@ -605,6 +608,7 @@ impl OrbitRuntimeSettings {
             decision_channel_enabled,
             lease_policy,
             experiments,
+            crew_ladder,
             machine_labels,
         }
     }
@@ -627,6 +631,10 @@ impl OrbitRuntimeSettings {
 
     pub(crate) fn experiments(&self) -> &orbit_config::ExperimentSettings {
         &self.experiments
+    }
+
+    pub(crate) fn crew_ladder(&self) -> &orbit_config::CrewLadderSettings {
+        &self.crew_ladder
     }
 
     pub(crate) fn crew_performance_types(&self) -> &[orbit_config::CrewPerformanceType] {
