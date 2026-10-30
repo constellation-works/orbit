@@ -451,6 +451,7 @@ fn pull_request(probed: &Value, request_id: &str) -> Value {
         "caller_version": probed["binary_version"],
         "caller_schema": probed["protocol_schema"],
         "caller_before_pr": false,
+        "review_gate": true,
         "run_context": {
             "run_id": "follower-drain",
             "job_name": "workspace_pull_pipeline",
