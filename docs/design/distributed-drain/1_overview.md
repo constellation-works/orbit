@@ -5,7 +5,7 @@ last_updated: 2026-10-28
 last_validated: 2026-10-28
 status: Draft
 stage: building
-next: "Implement admission receipt compaction and accounting (ORB-19424)."
+next: "Owner review of the building stage now that receipt compaction and accounting have an operator caller (ORB-19424)."
 feature: distributed-drain
 doc_role: overview
 type: design
@@ -104,11 +104,12 @@ routine loads as retired and never fires. Owner dispatch is an `orbit run auto` 
 explicit `orbit run ship`; every entry point uses the same claim admission. No schedule is
 enabled by this design.
 
-The core execution and landing slices are done, but committed v1 scope remains
-incomplete: admission receipt compaction and storage accounting have no operational
-caller. [ORB-15332] removed the unused compactor and [ORB-17641] removed the unused
-accounting API; [ORB-19424] tracks the design/code divergence without withdrawing
-the requirement. This gap is why the feature is `building` despite its live runtime.
+The core execution and landing slices are done. Admission receipt compaction and storage
+accounting were first removed as unused ([ORB-15332], [ORB-17641]); [ORB-19424] restored both
+with an operator caller, `orbit doctor admission-receipts`. Without `--compact` the command
+reports receipt counts and logical payload bytes. With it, compaction moves idle and settled
+receipts to permanent tombstones and keeps full receipts for unsettled claims and for failed or
+revoked claims with a preserved PR. The feature remains `building` per its frontmatter stage.
 
 The separate fault-matrix audit [ORB-12501] was explicitly deferred by the owner and
 is now archived; [ORB-12617] completed the mixed-admission and end-to-end fixture
@@ -134,7 +135,7 @@ this reconciliation, after the pinned source checkout.
 | Claim-aware capacity accounting and interrupted-run recovery | [leaf_occupancy.rs](../../../crates/orbit-core/src/application/admission/leaf_occupancy.rs); [2_design.md §3](./2_design.md#3-pull-mode-drain-and-the-pulled-leaf-pipeline) | [ORB-12617] | done |
 | Mixed admission and end-to-end acceptance fixtures | [2_design.md §8](./2_design.md#8-required-validation-scenarios) | [ORB-12617] | done |
 | Full fault-matrix closing audit | [2_design.md §8](./2_design.md#8-required-validation-scenarios) | [ORB-12501] | deferred by owner; archived |
-| Admission receipt compaction and storage accounting | [2_design.md §2](./2_design.md#2-the-ready-queue-and-orbittaskpull); [specs/task-pull.md](./specs/task-pull.md#internal-storage-accounting) | [ORB-19424] | proposed; implementation missing |
+| Admission receipt compaction and storage accounting | [2_design.md §2](./2_design.md#2-the-ready-queue-and-orbittaskpull); [specs/task-pull.md](./specs/task-pull.md#internal-storage-accounting); `orbit doctor admission-receipts` | [ORB-19424] | done |
 | Reliable settlement and foreground agent checks | [2_design.md §3](./2_design.md#3-pull-mode-drain-and-the-pulled-leaf-pipeline) | [ORB-13639], [ORB-13663], [ORB-13664] | done |
 | Execution provenance on runs, tasks, artifacts | [2_design.md §6](./2_design.md#6-execution-provenance) | [ORB-13649] | done |
 | Retire epic machinery; `epic` becomes a tag | [2_design.md §7.1](./2_design.md#71-epic-machinery) | [ORB-12491] | done |
@@ -183,6 +184,6 @@ this reconciliation, after the pinned source checkout.
 - [ORB-19393] — implemented inherited-check waits and externally merged handoff reconciliation.
 - [ORB-15332] — removed the unused admission compaction helper without changing runtime behavior.
 - [ORB-17641] — removed the unused admission receipt accounting API.
-- [ORB-19424] — tracks the missing operational admission receipt compaction and accounting.
+- [ORB-19424] — added the operator caller (`orbit doctor admission-receipts`, with `--compact`) for admission receipt compaction and storage accounting.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

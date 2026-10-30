@@ -118,7 +118,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | Feature | Next | Lead |
 | --- | --- | --- |
 | [Backlog Forecast](./design/backlog-forecast/1_scope.md) | Review residual phases, shadow resource-fit counterfactuals, follower capacity and richer calibration remain open after the six v2 factors. | claude |
-| [Distributed Drain](./design/distributed-drain/1_overview.md) | Implement admission receipt compaction and accounting (ORB-19424). | claude |
+| [Distributed Drain](./design/distributed-drain/1_overview.md) | Owner review of the building stage now that receipt compaction and accounting have an operator caller (ORB-19424). | claude |
 | [Experiments](./design/experiments/1_scope.md) | Raise a concluded-or-due experiment through the human decision channel (open; decision requests are task-bound today) | claude |
 | [Explore Brief](./design/explore-brief/1_scope.md) | Finish the remaining trial prerequisites before starting the three-arm trial | claude |
 | [Human Decision Channel](./design/human-decision-channel/1_scope.md) | Mail transport in the orbit-decision-mail plugin (a stub today); polish ORB-18446 | claude |
