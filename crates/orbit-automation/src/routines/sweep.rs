@@ -308,6 +308,10 @@ fn sweep_routine(
     if pauses.contains_key(name) {
         return Ok(skipped(routine, "paused_locally"));
     }
+    // Conditions are checked and explained, never fired, in this release.
+    if definition.trigger.condition.is_some() {
+        return Ok(skipped(routine, "condition_not_evaluated"));
+    }
 
     let cron = parse_cron(&definition.trigger.cron)?;
     let now_local = now_utc.with_timezone(&Local);

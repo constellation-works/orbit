@@ -283,6 +283,10 @@ const ROOT_SCHEDULER: &[GroupedRow] = &[
         "auto-task",
         "Define recurring auto-task templates (the scheduler primitive)",
     ),
+    (
+        "automation",
+        "Explain what condition-triggered routines and auto-tasks would match",
+    ),
 ];
 
 const ROOT_SERVICES: &[GroupedRow] = &[

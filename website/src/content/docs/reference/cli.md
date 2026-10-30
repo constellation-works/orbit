@@ -224,6 +224,8 @@ reported as `skipped:owner_unreachable` (transport failure),
 |---|---|
 | `orbit job list` \| `show` \| `run` \| `replay` \| `resume` | List job definitions and the activity each step runs. Run a job by ID or YAML path, replay a previous run from step 0, or resume an interrupted run from its step checkpoints. See [Activities and Jobs](../../concepts/activities-jobs/). |
 | `orbit tool list` \| `show` \| `run` \| `add` \| `scaffold` \| `remove` \| `enable` \| `disable` \| `doctor` | List, inspect, and run registered tools; manage external tools and MCP plugins; check tool health. `scaffold` is a deprecated alias for `orbit plugin scaffold`. |
+| `orbit script list` \| `show` \| `grant` \| `revoke` \| `history` | Grant and inspect workspace scripts that a job step may run. A script is a manifest under `.orbit/resources/scripts/` whose `entry` names a program file, and a job step selects it with `target: script:<name>`. `grant` consents on this host to the current manifest and entry digests; editing either file makes the grant stale until granted again. A granted script step runs on Linux under a sandbox with no network. See [Script steps](../activity-job-yaml/#script-steps). |
+| `orbit visual capture --task <ID>` | Capture the working tree beside each of a task's mocks. For each mock it writes `mock.png`, `capture.png` and `side-by-side.png` under `--out`, plus `rules.json` with the workspace's UI rule results. `--mock <MOCK>` captures one mock artifact instead of all of them. Needs a verified browser kit (`orbit browser-kit install`) and a view manifest in `visual_review.manifests`. The captures are a self-check aid, not evidence of record. |
 
 ### Experiments
 
@@ -267,6 +269,7 @@ reported as `skipped:owner_unreachable` (transport failure),
 | `orbit auto-task add` \| `list` \| `show` \| `update` \| `toggle` \| `mint` | Define recurring auto-task templates and mint tasks from them. `list --include-inactive-plugins` (alias `--all`) also shows definitions seeded by a plugin that is switched off, marked inactive with the reason. |
 | `orbit auto-task delete` \| `restore` | `delete` removes a definition with its scheduler cursor and delivery consumer state (`--force` works even while a minted task is open). `restore` reinstates a deleted shipped default with its shipped content. A deleted shipped default stays out of later reseeds. |
 | `orbit auto-task recover` \| `reset` | Preview or apply an audited repair of a delivery consumer. `recover` unsticks one stalled by a settings change and keeps its coverage debt; `reset` forgets the debt and re-baselines at the branch head. |
+| `orbit automation explain <definition>` | Evaluate one routine's or auto-task's condition trigger over live state without writing anything: scope, prefilter, ownership verdict, up to 20 matches, up to 20 closest misses (subjects failing exactly one top-level clause), and one subject's clause tree with each clause's value and the values it read. `--subject <task ID>` picks the subject; `routine:<name>` or `auto-task:<name>` disambiguates a shared name. `--json` is the payload of the MCP tool `orbit.automation.explain`. Conditions do not fire yet, so arm state, holds, fires and `self` show as not yet tracked. See [Condition triggers](../scheduling-yaml/#condition-triggers). |
 
 See [Schedule Recurring Work](../../how-to/recurring-work/).
 

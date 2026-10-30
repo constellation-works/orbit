@@ -94,6 +94,9 @@ pub(super) fn execute(
         }
         OrbitBuiltinAction::Agents(verb) => super::agents_tools::dispatch(runtime, verb, input),
         OrbitBuiltinAction::Codebase(verb) => super::codebase_tools::dispatch(runtime, verb, input),
+        OrbitBuiltinAction::Automation(verb) => {
+            super::automation_tools::dispatch(runtime, verb, input)
+        }
         OrbitBuiltinAction::Crew(verb) => super::crew_tools::dispatch(runtime, verb, input),
         OrbitBuiltinAction::Visual(verb) => super::visual_tools::dispatch(runtime, verb, input),
         OrbitBuiltinAction::Decision(verb) => super::decision_tools::dispatch(

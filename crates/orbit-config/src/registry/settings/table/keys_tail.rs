@@ -568,7 +568,7 @@ macro_rules! with_tail_keys {
     },
     workflow_validation_env_cargo_incremental: bool => bool {
         key: "workflow.validation_env.cargo_incremental", value_type: "bool",
-        description: "Whether host validation forces Cargo incremental compilation off.",
+        description: "False forces CARGO_INCREMENTAL=0 for bound host validation; true leaves it untouched.",
         section: ConfigSection::Delivery, order: 66,
         tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(false)),
@@ -843,7 +843,7 @@ macro_rules! with_tail_keys {
     },
     ux_rules_disabled: Vec<String> => Vec<String> {
         key: "ux_rules.disabled", value_type: "array<string>",
-        description: "Rule ids the ux-rules runner does not run.",
+        description: "Rule ids whose results are recorded only, not filed; the runner still runs them.",
         section: ConfigSection::Housekeeping, order: 185,
         tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<Vec<String>>| resolve_name_list(raw, "ux_rules.disabled"),

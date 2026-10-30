@@ -38,14 +38,19 @@
 //! tag is edited, so `ResourceProfileCache` keeps them across admission passes
 //! and rebuilds when the freshness probe, the bounds, the crew-model map or
 //! those tags change. A tag edit finishes no run, so each pass re-reads the
-//! tags of the cached templates. Live load is never cached here.
+//! tags of the cached templates. The probe scans every retained minute row,
+//! so a pass skips it while the store's change counter, which triggers bump
+//! on every write that can move the probe, holds since the cached answer.
+//! Live load is never cached here.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
+use orbit_common::OrbitError;
 use orbit_types::workflow::AUTO_TASK_TAG_PREFIX;
 use serde::Serialize;
+use serde_json::value::RawValue;
 
 mod build;
 mod cache;
@@ -245,4 +250,44 @@ pub struct ProfileSet {
     /// The configured crews' models by crew name, so admission can look a
     /// task's assigned crew up by the model its profiles are keyed on.
     pub crew_models: BTreeMap<String, String>,
+    workspace_json: WorkspaceProfilesJson,
+}
+
+impl ProfileSet {
+    /// One workspace's union profiles, in key order, as a JSON array of the
+    /// objects `orbit run profiles --json` emits. A set never changes once
+    /// built, so each workspace's array is encoded on its first read and
+    /// served again while the cache keeps the set.
+    pub fn workspace_profiles_json(&self, workspace_id: &str) -> Result<Arc<RawValue>, OrbitError> {
+        let mut encoded = self
+            .workspace_json
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(json) = encoded.get(workspace_id) {
+            return Ok(Arc::clone(json));
+        }
+        let profiles: Vec<&ResourceProfile> = self
+            .profiles
+            .iter()
+            .filter(|profile| profile.key.workspace_id == workspace_id)
+            .map(Arc::as_ref)
+            .collect();
+        let json: Arc<RawValue> = serde_json::value::to_raw_value(&profiles)
+            .map_err(|error| OrbitError::Execution(format!("encode resource profiles: {error}")))?
+            .into();
+        encoded.insert(workspace_id.to_string(), Arc::clone(&json));
+        Ok(json)
+    }
+}
+
+/// [`ProfileSet::workspace_profiles_json`]'s arrays by workspace.
+#[derive(Debug, Default)]
+struct WorkspaceProfilesJson(Mutex<BTreeMap<String, Arc<RawValue>>>);
+
+impl Clone for WorkspaceProfilesJson {
+    /// A clone starts empty: its public fields may be edited after cloning.
+    fn clone(&self) -> Self {
+        Self::default()
+    }
 }

@@ -1,6 +1,7 @@
 pub mod agent;
 mod agents;
 mod auto_task;
+mod automation;
 mod codebase;
 pub mod command;
 mod crew;
