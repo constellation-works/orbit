@@ -8,6 +8,7 @@ use orbit_types::workflow::{
 };
 use serde_json::Value;
 
+use crate::activity_job::cli_runner::image_input::{ImageInputPlan, admit_image_input};
 use crate::activity_job::cli_runner::inspection::InspectionTools;
 use crate::activity_job::dispatcher::ResolvedCliExecutor;
 use crate::activity_job::workspace::DeclaredWorktreePair;
@@ -33,6 +34,7 @@ pub(super) struct PreparedCliDispatch<'a> {
     pub(super) trusted_host: Option<TrustedHostAdmission>,
     pub(super) cli_executor: ResolvedCliExecutor,
     pub(super) inspection_tools: Option<InspectionTools>,
+    pub(super) image_input: Option<ImageInputPlan>,
     pub(super) timeout_seconds: u64,
     pub(super) wall_clock_timeout: Duration,
     pub(super) stall_window: Option<Duration>,
@@ -142,6 +144,9 @@ pub(crate) fn run_cli_backend_for_step(
     let cli_executor = host.resolve_cli_executor(&provider)?;
     let inspection_tools =
         prepare_inspection_tools(&provider, input, cli_executor.inspection_args.as_deref())?;
+    // Like inspection, an image-input run its lane or crew cannot serve is
+    // refused before any session or checkout exists.
+    let image_input = admit_image_input(&provider, spec, input, cli_executor.image_input.as_ref())?;
     let timeout_seconds =
         invocation_timeout_seconds(spec, activity_name, trusted_host.as_ref(), input);
     let wall_clock_timeout = Duration::from_secs(timeout_seconds);
@@ -229,6 +234,7 @@ pub(crate) fn run_cli_backend_for_step(
             trusted_host,
             cli_executor,
             inspection_tools,
+            image_input,
             timeout_seconds,
             wall_clock_timeout,
             stall_window,

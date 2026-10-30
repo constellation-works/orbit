@@ -10,6 +10,7 @@ pub fn typed_crew_config(crew: &Crew) -> CrewConfig {
     CrewConfig {
         env: crew.env.clone(),
         account: crew.account().map(ToOwned::to_owned),
+        vision_disabled: !crew.vision,
         ..typed_crew_config_from_assignment(&crew.assignment)
     }
 }
@@ -53,5 +54,6 @@ fn typed_crew_config_from_assignment(raw: &CrewAssignment) -> CrewConfig {
         reasoning_effort: raw.effort,
         env: Vec::new(),
         account: None,
+        vision_disabled: false,
     }
 }

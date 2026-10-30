@@ -1210,6 +1210,7 @@ A crew is one provider-model assignment. An activity uses the crew named in its 
 | `description` | No | Summary. Trimmed; blank becomes absent. |
 | `tags` | No | Discovery labels. Trimmed, blanks dropped, sorted and deduplicated. |
 | `env` | No | Variables this crew's agents receive on top of `execution.env.pass`, as `NAME` or `NAME=SOURCE`. Global config only; see [per-crew credentials](#per-crew-credentials-env). |
+| `vision` | No | Default `true`. `false` opts a text-only model out of image input on an image-capable lane; see [executor image input](#executor-image-input-image_input). |
 
 ```toml
 [crews.sol]
@@ -1481,6 +1482,7 @@ Background commands cannot be turned off for a headless run. `agy` 1.3.3 has no 
 | Flags | `exec --json --approval-mode never --disable-request-user-input --no-foreign-personal-context --disable-reminders --no-session-log`. `--approval-mode never` and `--disable-request-user-input`: nobody can answer mid-turn, and neither is a security boundary. `--no-foreign-personal-context`: Muse otherwise loads your Claude Code and Codex personal rules and skills. `--disable-reminders`: otherwise every turn spawns skill, goal and verify reminder child agents. `--no-session-log`: no session log per run (this also disables Muse's local session messaging). `--trust-workspace` is not passed: a worktree is content Orbit does not vouch for, so its Muse skills and rules stay unloaded and agent delegation stays off; the envelope directs the agent to read `AGENTS.md`. `--max-model-steps` and `--disable-web-tools` are not passed; the activity deadline bounds the run. |
 | Sandbox | Write: the config root and `$XDG_DATA_HOME/muse` (else `~/.local/share/muse`: tracing, plugins, skills); on macOS also `~/Library/Application Support/Muse` (session-name authority). macOS: read `~/Library/Keychains`. Muse's own sandbox is on by default with network `proxy-only`; under Orbit's sandbox (or `sandbox: off`) Orbit appends `--disable-sandbox`, because a second Seatbelt profile cannot be applied inside Orbit's and Orbit's profile is the filesystem boundary. `--yolo` is never passed. |
 | MCP | Muse has a native MCP client (`mcpServers` in `settings.json`, or `-c KEY=VALUE` per run), but per-run injection of Orbit's server was not verified, so Orbit passes no `-c` and never writes `settings.json`; Orbit tools go through `orbit tool run` on `PATH`. `orbit mcp init` has no Muse target. |
+| Images | `muse exec --image <PATH>` (repeatable) attaches a local image. On Muse Code 1.4.14 (Linux) an authenticated canary probe passed for all three shipped crews, so the shipped executor declares [`image_input`](#executor-image-input-image_input) `attach_args` for PNG. |
 
 Orbit reads only string `payload.text` of the last `run.terminal.completed` record, and only when its `payload.terminal` is `completed`. Missing or non-string answer text cannot be replaced by `payload.message`, `payload.error`, or `payload.error.message`; those fields are fallback failure reasons for non-completed terminal diagnostics only. `failed`, `cancelled` and unknown values (the field is wire-open) fail the step, as do a missing terminal record, a stdout line that is not a JSON record with a `payload_type`, and a non-zero exit even with a completed record. The prompt echoes (`run.lifecycle.started`, `turn.input.user`), partial `run.output.delta` text and child-task records never count as completion. The terminal record carries no usage, so no provider token usage is reported. Account usage windows instead come from top-level usage records with `payload.kind = "run_usage"`: a `status` record (Muse Code 1.4.12) or, from Muse Code 1.4.13, a `run.usage` record (`payload_type` `run.usage`, `record_type` `status`, the same allowance shape). Orbit reads both and takes the last one. `payload.allowance.window` and `.weekly` report `used_percent` and `resets_at_ms` (epoch milliseconds). Orbit preserves the `window` / `weekly` labels, records them at run completion and gates them through the shared provider-limit policy; it does not infer a window duration or read per-model token usage from this record. `muse serve` (MSP over stdio) is not used.
 
@@ -2171,6 +2173,32 @@ spec:
 - Omitting the field means the executor has no known inspection surface. Inspection draws skip its crews (see [System work draws from the complexity pools](#system-work-draws-from-the-complexity-pools)), and an explicit or run crew that names it fails before launch with the non-retryable `InspectionToolsUnavailable` error, which names the executor and this field. Declare the arguments once the CLI's native tools are known to work non-interactively under the `reviewer` profile.
 - An installed definition that omits the field takes the shipped default executor's declaration of the same name, so existing `codex` and `claude` installs inspect without reseeding. A value set on the installed definition wins.
 - Read-only is enforced by the `reviewer` filesystem profile, not by these arguments.
+
+## Executor image input (`image_input`)
+
+An executor may declare `spec.image_input`: how image files reach its model. Images never travel in prompt text; they are staged as files in the run's scratch directory.
+
+```yaml
+spec:
+  image_input:
+    mode: attach_args          # or native_read
+    formats: [png, jpeg, webp] # png is required: it is the canary's format
+    max_images: 40             # canary included; at least 2
+    attach_args: ["--image", "{path}"]   # attach_args only: argv per image
+```
+
+- `native_read`: the CLI's own file-read tool presents image files to the model. The prompt lists the staged paths and tells the agent to read each one.
+- `attach_args`: the images are attached at launch, `attach_args` appended once per image with `{path}` replaced by the staged file. Only scratch paths reach argv, never content.
+- A definition with an invalid declaration fails to load with `invalid spec.image_input: …`: an unknown key, no `png` in `formats`, a repeated format, `max_images` below 2, `attach_args` with `native_read`, `attach_args` mode without `attach_args`, or a template without `{path}`.
+- Omitting the field means the executor cannot take images. An activity whose input asks for images (`image_input`) on such a crew, or on a crew that sets [`vision = false`](#crewsname--which-provider-model-runs-the-task), fails before launch with the non-retryable `image_input_unavailable` error, which names the executor and `spec.image_input`.
+- An installed definition that omits the field takes the shipped default executor's declaration of the same name, as `inspection_args` does. A value set on the installed definition wins.
+- Shipped declarations: **claude** `native_read` (PNG, JPEG, WebP, GIF), **codex** `attach_args` with `--image {path}` (PNG, JPEG, WebP) and **muse** `attach_args` with `--image {path}` (PNG). Each is declared only because its lane passed the canary probe below. The gemini, antigravity, grok and copilot executors declare none.
+
+**The canary.** Every image-input invocation is first given a canary: a generated PNG of a random six-character code, created per invocation in scratch and never written to a task. The agent must return the code as `result.canary`. A result without it, or with another code, is refused as `[image_not_seen]`, a retryable step failure, and each check emits an `activity.image_canary_checked` audit event with the crew, mode and `seen`. The canary proves delivery, not judgement.
+
+**Visual hold.** A crew whose newest two or more canary checks all missed is held for visual purposes until 30 minutes after its last miss, doubling with each further consecutive miss up to 24 hours, like a [provider failure hold](#provider-failure-holds). Its next passing check clears it. The hold is read from the audit events, so it covers probes and deliveries alike.
+
+**Probing.** `orbit agents vision-probe` runs the canary for every enabled crew outside any delivery (one `image_input_probe_pipeline` run each) and prints one row per crew: executor, model, mode, result and any visual hold. Results are `seen`, `image_not_seen`, `no_image_input`, `vision_off`, `no_cli_runtime`, `failed` or `timeout`. `--crew <name>` (repeatable) probes only those crews, and fails before launching anything when a named crew cannot take images. `--timeout-seconds` bounds the wait (default 900). Declare `image_input` on an executor only after its probe passes, and set `vision = false` on a crew whose model keeps returning `image_not_seen` on a lane that passes for others.
 
 ## `[execution.env]` — the agent subprocess environment
 

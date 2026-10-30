@@ -16,6 +16,7 @@ pub use experiments::{
 };
 mod executor_def;
 mod explore_brief;
+mod image_input;
 pub use explore_brief::{
     ExploreBriefAdmission, ExploreBriefDropReason, ExploreBriefOutcome, ExploreBriefRecord,
 };
@@ -95,6 +96,12 @@ pub use host_evidence::{
     HostEvidenceRefusal, HostSandboxCommand, PS_DENIED_DEFERRAL_PREFIX, PS_EXEC_REFUSAL,
     SEATBELT_APPLY_REFUSAL, SEATBELT_APPLY_REFUSAL_EXIT, SEATBELT_DEFERRAL_PREFIX,
     is_bubblewrap_namespace_refusal, judge_host_test_output,
+};
+pub use image_input::{
+    ExecutorImageInput, IMAGE_CANARY_RESULT_FIELD, IMAGE_INPUT_FIELD,
+    IMAGE_INPUT_UNAVAILABLE_ERROR_CODE, IMAGE_NOT_SEEN_ERROR_CODE, IMAGE_NOT_SEEN_MARKER,
+    IMAGE_PATH_PLACEHOLDER, ImageFormat, ImageInputMode, VISUAL_HOLD_CONSECUTIVE_MISSES,
+    is_image_not_seen, requested_images,
 };
 pub use job::{
     AgentResponseEnvelope, AgentRunError, Job, JobRun, JobRunStartOutcome, JobRunState, JobRunStep,

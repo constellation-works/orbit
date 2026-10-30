@@ -208,6 +208,12 @@ pub struct Crew {
     /// config file, so a workspace cannot route host secrets into agents.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub env: Vec<CrewEnvVar>,
+    /// `[crews.<name>] vision`: whether this crew may be given images. A
+    /// table without the key may, when its executor declares `image_input`;
+    /// `false` opts a text-only model out on an image-capable lane. Omitted
+    /// from the serialized form while `true`.
+    #[serde(default = "crew_enabled_default", skip_serializing_if = "is_enabled")]
+    pub vision: bool,
 }
 
 impl Crew {

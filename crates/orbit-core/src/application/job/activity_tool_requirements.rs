@@ -21,6 +21,7 @@ const NON_IMPLEMENTER_ACTIVITIES: &[&str] = &[
     "agent_invoke",
     "agent_review_repair",
     "final_recovery",
+    "image_input_probe",
     "pr_conflict_recovery",
     "review_reconciliation_review",
     "step_failure_recovery",

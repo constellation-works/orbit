@@ -3204,6 +3204,7 @@ fn agent_loop(instruction: &str) -> ActivityV2Spec {
         trusted_host_execution: false,
         crew_env: Vec::new(),
         crew_account: None,
+        crew_vision_disabled: false,
     })
 }
 
@@ -4343,6 +4344,7 @@ impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
             command: command.to_string_lossy().into_owned(),
             args: Vec::new(),
             inspection_args: None,
+            image_input: None,
         })
     }
 

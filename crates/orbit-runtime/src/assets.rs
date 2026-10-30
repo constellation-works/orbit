@@ -135,6 +135,10 @@ pub const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../orbit-core/assets/activities/agent_explore.yaml"),
     ),
     (
+        "image_input_probe",
+        include_str!("../../orbit-core/assets/activities/image_input_probe.yaml"),
+    ),
+    (
         "gate_starvation_defer",
         include_str!("../../orbit-core/assets/activities/gate_starvation_defer.yaml"),
     ),
@@ -344,6 +348,10 @@ pub const DEFAULT_JOB_FILES: &[(&str, &str)] = &[
     (
         "agent_invoke_pipeline",
         include_str!("../../orbit-core/assets/jobs/agent_invoke_pipeline.yaml"),
+    ),
+    (
+        "image_input_probe_pipeline",
+        include_str!("../../orbit-core/assets/jobs/image_input_probe_pipeline.yaml"),
     ),
     (
         "baseline_hold_refresh_pipeline",

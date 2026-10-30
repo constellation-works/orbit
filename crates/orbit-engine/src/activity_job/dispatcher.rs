@@ -30,6 +30,10 @@ pub struct ResolvedCliExecutor {
     /// when `args` already leave the native tools on. `None` declares no
     /// inspection surface, and such a run is refused before launch.
     pub inspection_args: Option<Vec<String>>,
+    /// How the executor gets staged images to its model
+    /// (`ExecutorDef::image_input`). `None` declares that it cannot take
+    /// images, and an image-input run is refused before launch.
+    pub image_input: Option<orbit_types::workflow::ExecutorImageInput>,
 }
 
 /// The registered `local_shell` executor definition behind a deterministic
@@ -265,6 +269,13 @@ pub enum DispatchError {
     #[error("inspection_tools_unavailable: provider `{provider}`: {reason}")]
     InspectionToolsUnavailable { provider: String, reason: String },
 
+    /// An image-input run cannot start: its executor declares no
+    /// `spec.image_input`, its crew sets `vision = false`, or it stages more
+    /// images or another format than the declaration admits. Configuration
+    /// errors never spend a provider session.
+    #[error("image_input_unavailable: executor `{executor}`: {reason}")]
+    ImageInputUnavailable { executor: String, reason: String },
+
     /// A host-owned Git child exceeded its finite budget. The supervisor has
     /// terminated its process group; recovery state must be inspected as-is.
     #[error("git {operation} timed out after {timeout_ms}ms in '{}': {diagnostic}", root.display())]
@@ -360,6 +371,7 @@ impl DispatchError {
                 | DispatchError::HostRequired(_)
                 | DispatchError::CliInvocationPermanent(_)
                 | DispatchError::InspectionToolsUnavailable { .. }
+                | DispatchError::ImageInputUnavailable { .. }
                 | DispatchError::GitTimeout { .. }
                 | DispatchError::WorktreeIntegrity { .. }
                 | DispatchError::RecoverableVcsConflict(_)
@@ -385,6 +397,7 @@ impl DispatchError {
             DispatchError::WorktreeIntegrity { code, .. } => code,
             DispatchError::RecoverableVcsConflict(_) => "recoverable_vcs_conflict",
             DispatchError::TaskCompletionLiveRun { .. } => "task_completion_live_run",
+            DispatchError::ImageInputUnavailable { .. } => wf::IMAGE_INPUT_UNAVAILABLE_ERROR_CODE,
             DispatchError::ReviewGateRefused { refusal, .. } => refusal.error_code(),
             DispatchError::DeliveryRefused { refusal, .. } => refusal.error_code(),
             _ if wf::is_validation_environment_failure(None, Some(&text())) => {

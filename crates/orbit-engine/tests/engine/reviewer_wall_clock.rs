@@ -58,6 +58,7 @@ impl orbit_engine::test_support::NullRuntimeHost for BoundingHost {
             command: self.command.to_string_lossy().into_owned(),
             args: Vec::new(),
             inspection_args: None,
+            image_input: None,
         })
     }
 

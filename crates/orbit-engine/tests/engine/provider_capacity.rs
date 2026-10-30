@@ -148,6 +148,7 @@ pub(super) fn agent_spec(provider: Provider) -> AgentLoopSpec {
         trusted_host_execution: false,
         crew_env: Vec::new(),
         crew_account: None,
+        crew_vision_disabled: false,
     }
 }
 
@@ -278,6 +279,7 @@ impl orbit_engine::test_support::NullRuntimeHost for CapacityHost {
             command: self.cli.to_string_lossy().into_owned(),
             args: Vec::new(),
             inspection_args: None,
+            image_input: None,
         })
     }
 

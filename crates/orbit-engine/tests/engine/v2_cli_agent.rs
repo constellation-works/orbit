@@ -1003,6 +1003,7 @@ pub(super) fn cli_agent_loop_spec(provider: Option<Provider>) -> AgentLoopSpec {
         trusted_host_execution: false,
         crew_env: Vec::new(),
         crew_account: None,
+        crew_vision_disabled: false,
     }
 }
 
@@ -1113,6 +1114,7 @@ fn synthetic_loop_session_job() -> JobV2 {
                 trusted_host_execution: false,
                 crew_env: Vec::new(),
                 crew_account: None,
+                crew_vision_disabled: false,
             }),
             activity_name: None,
             input_schema_json: None,
@@ -1219,6 +1221,7 @@ impl orbit_engine::test_support::NullRuntimeHost for ScriptHost {
             command: self.command.clone(),
             args: self.args.clone(),
             inspection_args: None,
+            image_input: None,
         })
     }
 

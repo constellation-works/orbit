@@ -20,6 +20,7 @@ pub(crate) fn seed_executor(
             command: Some(name.to_string()),
             args: vec!["exec".to_string(), "--json".to_string()],
             inspection_args: None,
+            image_input: None,
             stdout_format: None,
             model_pair_override: None,
             model_flag: None,

@@ -193,6 +193,7 @@ fn spec(timeout_seconds: u64) -> AgentLoopSpec {
         trusted_host_execution: false,
         crew_env: Vec::new(),
         crew_account: None,
+        crew_vision_disabled: false,
     }
 }
 

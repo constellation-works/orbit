@@ -24,6 +24,8 @@ pub struct CrewConfig {
     /// ([`orbit_types::identity::Crew::account`]); `None` for a crew on its
     /// provider's default login.
     pub account: Option<String>,
+    /// The crew sets `vision = false`: it may not be given images.
+    pub vision_disabled: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

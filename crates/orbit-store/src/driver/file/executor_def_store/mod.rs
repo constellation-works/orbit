@@ -83,6 +83,7 @@ impl ExecutorDefFileStore {
                     command: def.command.clone(),
                     args: def.args.clone(),
                     inspection_args: def.inspection_args.clone(),
+                    image_input: def.image_input.clone(),
                     stdout_format: def.stdout_format,
                     model_pair_override: def.model_pair_override.clone(),
                     model_flag: def.model_flag.clone(),

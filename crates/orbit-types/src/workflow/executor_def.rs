@@ -139,6 +139,13 @@ pub struct ExecutorDef {
     /// read the pinned source.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inspection_args: Option<Vec<String>>,
+    /// How this CLI gets staged image files to its model. `None` declares
+    /// that it cannot take images: visual draws pass over its crews, and a
+    /// run that asks for image input on one is refused before launch with
+    /// `image_input_unavailable`. Declared only for a lane whose canary probe
+    /// passed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_input: Option<super::ExecutorImageInput>,
     /// Expected stdout format, serialized as "envelope", "json", or "text".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stdout_format: Option<StdoutFormat>,
@@ -257,6 +264,7 @@ impl ExecutorDef {
             command,
             args,
             inspection_args,
+            image_input,
             stdout_format,
             model_pair_override,
             model_flag,
@@ -276,6 +284,7 @@ impl ExecutorDef {
             command,
             args,
             inspection_args,
+            image_input,
             stdout_format,
             model_pair_override,
             model_flag,

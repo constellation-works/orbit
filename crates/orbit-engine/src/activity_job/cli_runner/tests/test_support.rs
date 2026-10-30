@@ -59,6 +59,7 @@ impl crate::test_support::NullRuntimeHost for TestHost {
             command: self.command.clone(),
             args: Vec::new(),
             inspection_args: None,
+            image_input: None,
         })
     }
 
@@ -160,6 +161,7 @@ pub(in crate::activity_job::cli_runner) fn test_agent_loop_spec_for(
         trusted_host_execution: false,
         crew_env: Vec::new(),
         crew_account: None,
+        crew_vision_disabled: false,
     }
 }
 

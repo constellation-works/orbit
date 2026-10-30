@@ -180,6 +180,7 @@ pub(crate) fn default_crews() -> BTreeMap<String, Crew> {
                 tags: Vec::new(),
                 enabled: true,
                 env: Vec::new(),
+                vision: true,
             },
         );
     }
@@ -242,6 +243,7 @@ pub(crate) fn crews_from_raw(
             tags: normalized_crew_tags(&entry.tags),
             enabled: entry.enabled.unwrap_or(true),
             env: crew_env_from_raw(trimmed, entry.env.as_deref())?,
+            vision: entry.vision.unwrap_or(true),
         };
         if crews.insert(trimmed.to_string(), crew).is_some() {
             return Err(OrbitError::InvalidInput(format!(

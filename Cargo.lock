@@ -2062,6 +2062,7 @@ version = "0.39.0"
 dependencies = [
  "chrono",
  "chrono-tz",
+ "getrandom 0.3.4",
  "jsonschema",
  "libc",
  "orbit-agent",

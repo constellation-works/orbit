@@ -71,6 +71,7 @@ impl orbit_engine::test_support::NullRuntimeHost for TestHost {
             // As the shipped executors declare: inspection runs reach the
             // checks after the inspection-tools gate.
             inspection_args: Some(Vec::new()),
+            image_input: None,
         })
     }
 
@@ -197,6 +198,7 @@ pub(super) fn test_agent_loop_spec_for(provider: &str, timeout: Duration) -> Age
         trusted_host_execution: false,
         crew_env: Vec::new(),
         crew_account: None,
+        crew_vision_disabled: false,
     }
 }
 

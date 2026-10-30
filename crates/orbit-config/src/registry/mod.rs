@@ -32,6 +32,7 @@ pub(crate) const CREW_CONFIG_FIELDS: &[&str] = &[
     "model",
     "provider",
     "tags",
+    "vision",
 ];
 
 /// One live field on a named crew, as used by `orbit config get`/`set`.

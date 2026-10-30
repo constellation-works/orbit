@@ -1,0 +1,26 @@
+Check that each crew's model sees images.
+
+Runs one canary per crew outside any delivery: a generated PNG of a random six-character code is staged for the crew's executor through its spec.image_input declaration, and the agent must return the code. Prints one row per crew: its executor, the declared mode, and the result (seen, image_not_seen, no_image_input, vision_off, no_cli_runtime, failed or timeout), plus any visual hold two consecutive misses placed on it.
+
+Without --crew, every enabled crew is probed and a crew that cannot take images is reported as a row. A crew named with --crew that cannot take images fails the command before anything launches.
+
+Usage: orbit agents vision-probe [OPTIONS]
+
+Options:
+      --crew <NAME>
+          Probe only this crew (repeatable)
+
+      --timeout-seconds <SECONDS>
+          Seconds to wait for the probe runs to settle
+          
+          [default: 900]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header

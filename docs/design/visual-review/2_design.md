@@ -631,6 +631,12 @@ it.
 | `muse` | Unknown. The observed Muse Code contract takes the prompt from a file, has no Orbit-managed MCP, and documents no image attachment ([Muse Code CLI](../../CONFIG.md#muse-code-cli)). | No declaration; refused with `ImageInputUnavailable`. Phase 1 probes an authenticated `muse exec` for an attachment flag or an image-reading file tool. |
 | `ollama`, `openai_compat` | No CLI runtime. | Unsupported, as for every activity. |
 
+Phase 1 result ([ORB-19977], `orbit agents vision-probe` on Linux): the claude (`native_read`), codex
+(`attach_args`) and muse (`attach_args` `--image`, Muse Code 1.4.14) lanes passed and ship
+declarations; gemini was not authenticated on the probing host and ships none. Codex also has a
+native image read (`view_image`), so a codex implementer can read self-check images. Some codex
+models misread the canary on a passing lane; those crews opt out with `vision = false`.
+
 ### 9.3 Proving the model saw the images
 
 Each review invocation receives, first, a canary image: a generated PNG showing a random

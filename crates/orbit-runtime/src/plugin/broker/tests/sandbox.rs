@@ -278,6 +278,7 @@ impl BrokerHost {
             trusted_host_execution: false,
             crew_env: Vec::new(),
             crew_account: None,
+            crew_vision_disabled: false,
         };
         run_cli_backend(
             self,
@@ -331,6 +332,7 @@ impl orbit_engine::test_support::NullRuntimeHost for BrokerHost {
             command: self.command.display().to_string(),
             args: Vec::new(),
             inspection_args: None,
+            image_input: None,
         })
     }
 

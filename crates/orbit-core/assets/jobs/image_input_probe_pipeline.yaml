@@ -1,0 +1,16 @@
+# One image-input canary probe, submitted per crew by `orbit agents
+# vision-probe`. One step: no worktree, no lock, no task transition. The
+# step does not retry, so the probe reports each crew's first answer.
+schemaVersion: 2
+kind: Job
+metadata:
+  name: image_input_probe_pipeline
+spec:
+  state: enabled
+  kind: workflow
+  max_active_runs: 8
+
+  steps:
+    - id: probe
+      target: activity:image_input_probe
+      default_input: "{{ input }}"
