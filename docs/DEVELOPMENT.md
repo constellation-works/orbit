@@ -1,7 +1,7 @@
 ---
 type: context
 summary: "Orbit development reference: validation, tests, docs index, MSRV, supply chain, vendored JS"
-last_validated: 2026-10-26
+last_validated: 2026-10-30
 ---
 
 # Development Reference
@@ -13,7 +13,7 @@ The detailed rules behind [CONTRIBUTING.md](../CONTRIBUTING.md). Read the sectio
 | Handing off or reviewing a change | [Validation and CI](#validation-and-ci) |
 | Writing files or spawning processes in production code | [Filesystem writes](#filesystem-writes), [Child processes](#child-processes) |
 | Writing a test that mutates state, spawns processes or submits runs | [Safe Mutable CLI Fixtures](#safe-mutable-cli-fixtures), [Testing & Coverage](#testing--coverage) |
-| Running a mutating `orbit` command by hand for QA, from a managed lane | [Manual QA from a managed lane](#manual-qa-from-a-managed-lane) |
+| Running a candidate `orbit` build by hand for QA (any CLI command or `web serve`), from a managed lane | [Manual QA from a managed lane](#manual-qa-from-a-managed-lane) |
 | Changing the dashboard or website | [Dashboard fixtures](#dashboard-http-integration-fixtures), [Browser checks](#browser-checks-on-a-prepared-host) |
 | Changing the desktop app in `desktop/` | [Desktop app](#desktop-app) |
 | Changing toolchains, platforms or dependencies | [MSRV](#toolchain-msrv), [Windows](#windows), [Supply-chain](#supply-chain-cargo-deny), [Vendored JS](#vendored-dashboard-javascript) |
@@ -726,7 +726,7 @@ Detached-worker tests use `tests/support/workflow_gate.rs` to hold a step at a s
 
 ### Manual QA from a managed lane
 
-A managed lane exports Orbit routing and authority: `ORBIT_REGISTRY_ROOT`, `ORBIT_WORKSPACE`, `ORBIT_ROOT`, `ORBIT_MANAGED_RUN_CONTEXT`, `ORBIT_TASK_ID` and about two dozen more. Unsetting a few of them, or overriding only `HOME`, still lets a dev binary resolve the live global registry. Before a hand-run QA command that mutates state, clear the whole environment and point `HOME` at a disposable directory. Run the steps below as one shell session, from the managed checkout:
+A managed lane exports Orbit routing and authority: `ORBIT_REGISTRY_ROOT`, `ORBIT_WORKSPACE`, `ORBIT_ROOT`, `ORBIT_MANAGED_RUN_CONTEXT`, `ORBIT_TASK_ID` and about two dozen more. Unsetting a few of them, or overriding only `HOME`, still lets a dev binary resolve the live global registry. Run from a run worktree with the real home, a candidate build also opens the host's primary workspace `.orbit` and global store, and opening them applies the candidate's pending layout and schema migrations: a read-only command or `web serve` is enough. Once they advance, the installed binary is refused on that host. Orbit refuses a breaking migration from a build that is not the installed orbit ([upgrades runbook](runbooks/upgrades.md#a-build-that-is-not-the-installed-orbit)), but that guard is a backstop for hosts with an installed binary, not isolation. Run every candidate command, reads and `web serve` included, against a disposable home and its own workspace: clear the whole environment and point `HOME` at a disposable directory. Run the steps below as one shell session, from the managed checkout:
 
 ```bash
 CHECKOUT="$(git rev-parse --show-toplevel)"
@@ -748,6 +748,9 @@ cd "$QA_REPO"
 qa "$ORBIT_BIN" workspace init --name manual-qa
 qa "$ORBIT_BIN" config show --format json | jq -r '.global_root, .shared_root, .local_root'
 qa "$ORBIT_BIN" workspace show --format json | jq -r '.checkout.repo_root, .checkout.orbit_dir'
+
+# Dashboard QA: serve only the scratch registry, from the scratch repository.
+qa "$ORBIT_BIN" web serve --port 0
 ```
 
 The global root must print `$QA_HOME/.orbit`; the real `~/.orbit` must never appear. After `workspace init`, `shared_root` and `local_root` must be under `$QA_REPO`, and the workspace must report `$QA_REPO` as its checkout. Do not add `--confirm` until those paths match. Preview a destructive command first, then confirm it with the same `qa "$ORBIT_BIN" …` prefix. Stderr warnings such as "no actor identity resolved" are expected in a cleared environment.

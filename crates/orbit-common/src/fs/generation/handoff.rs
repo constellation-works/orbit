@@ -25,7 +25,7 @@ pub const RESUME_DRAIN_ADOPT: &str = "drain-adopt-v1";
 pub const RESUME_CAPABILITIES: &[&str] = &[RESUME_MCP_STDIO, RESUME_DRAIN_ADOPT];
 
 /// How long the candidate may take to describe its contract.
-const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+pub(super) const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The installed executable, when it no longer names this running image.
 ///
@@ -189,12 +189,13 @@ enum Probe {
     Unanswered,
 }
 
-enum Report {
+pub(super) enum Report {
     Answered(serde_json::Value),
     Unanswered,
 }
 
-fn contract_report(path: &Path, timeout: Duration) -> Report {
+/// Run `path update --contract --json`, bounded by `timeout`.
+pub(super) fn contract_report(path: &Path, timeout: Duration) -> Report {
     let Ok(mut child) = Command::new(path)
         .args(["update", "--contract", "--json"])
         .stdin(Stdio::null())

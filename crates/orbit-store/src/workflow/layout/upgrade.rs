@@ -5,7 +5,8 @@ use std::path::Path;
 use orbit_common::{OrbitError, StorageLayer};
 
 use super::marker::{
-    read_compat_record, read_marker, upgrade_lock_path, write_compat_record, write_marker,
+    layout_writer, read_compat_record, read_marker, record_layout_writer, upgrade_lock_path,
+    write_compat_record, write_marker,
 };
 use super::registry::{LAYOUT_MIGRATIONS, LayoutMigration, SUPPORTED_LAYOUT_VERSION};
 use crate::contracts::{
@@ -145,6 +146,7 @@ pub(crate) fn upgrade_with(
         })?;
         write_marker(orbit_dir, migration.version)?;
         write_compat_record(orbit_dir, migrations, migration.version)?;
+        record_layout_writer(orbit_dir, migration.version);
         version = migration.version;
         applied.push(LayoutMigrationInfo::from_entry(migration));
         orbit_common::tracing::info!(
@@ -167,7 +169,8 @@ pub(crate) fn upgrade_with(
 /// Decide a marker newer than `supported`: `Ok(None)` when it is not newer,
 /// `Ok(Some(report))` when it is newer by no breaking migration (nothing
 /// applied, marker untouched), and an error naming the first breaking
-/// migration this binary lacks otherwise.
+/// migration this binary lacks otherwise, with this executable and the one
+/// recorded as having advanced the layout.
 fn forward_compatible_report(
     orbit_dir: &Path,
     current: u32,
@@ -192,12 +195,25 @@ fn forward_compatible_report(
                 forward_compatible: Some(forward),
             }))
         }
-        Err(refusal) => Err(OrbitError::Migration(format!(
-            "workspace '{}' has .orbit layout version {current}, newer than the newest version \
-             this orbit binary supports ({supported}); {refusal}; upgrade orbit to open this \
-             workspace",
-            orbit_dir.display()
-        ))),
+        Err(refusal) => {
+            let running = std::env::current_exe()
+                .map(|path| format!(" ('{}')", path.display()))
+                .unwrap_or_default();
+            let writer = layout_writer(orbit_dir, current)
+                .map(|path| {
+                    format!(
+                        "; layout version {current} was written by '{}'",
+                        path.display()
+                    )
+                })
+                .unwrap_or_default();
+            Err(OrbitError::Migration(format!(
+                "workspace '{}' has .orbit layout version {current}, newer than the newest \
+                 version this orbit binary{running} supports ({supported}); {refusal}{writer}; \
+                 upgrade orbit to open this workspace",
+                orbit_dir.display()
+            )))
+        }
     }
 }
 

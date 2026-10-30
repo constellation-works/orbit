@@ -4,8 +4,8 @@ summary: Install a new Orbit release with `orbit update`, then review, apply, an
 tags: [operations, upgrades, migrations, recovery]
 paths: ["crates/orbit-cmd/src/update/**", "crates/orbit-common/src/fs/generation/**", "crates/orbit-store/src/workflow/layout/**", "crates/orbit-store/src/driver/sqlite/migration/**", "crates/orbit-store/src/contracts/compat.rs"]
 related_features: [orbit-core]
-related_artifacts: [ORB-10014, ORB-11280, ORB-11344, ORB-11695, ORB-11753, ORB-12013, ORB-12434, ORB-13631, ORB-14320]
-last_validated: 2026-10-19
+related_artifacts: [ORB-10014, ORB-11280, ORB-11344, ORB-11695, ORB-11753, ORB-12013, ORB-12434, ORB-13631, ORB-14320, ORB-20262]
+last_validated: 2026-10-30
 ---
 
 # Upgrade Orbit Safely
@@ -186,6 +186,43 @@ for incompatible clients to quiesce, as described below. Do not delete the recor
 the layout marker or admission files, and do not point a scratch home at a live
 checkout. Retrying from a fresh home does not help: releasing the other authority's
 clients does not authorize a process that does not protect the workspace.
+
+#### A build that is not the installed orbit
+
+Admission protects only processes that are live, and a short-lived CLI command rarely
+is. A development, candidate or QA build run under the operator's home opens the same
+global store, and from a run worktree the same primary workspace `.orbit`, as the
+installed binary. With nobody live it could apply a breaking migration, and every later
+installed command on the host would be refused as "behind" although no deploy was missed.
+
+So before a process that is not the installed executable applies a workspace layout or
+store schema migration that older writers cannot keep, it asks the installed `orbit` in the
+managed install directory (`$ORBIT_INSTALL_DIR`, default `~/.orbit/bin`) for its
+compatibility through `orbit update --contract --json`. When the installed binary would lose
+the state, the build refuses before writing anything:
+
+```text
+error: execution failed: upgrade admission refused: '<checkout>/target/debug/orbit' is not
+the installed orbit '~/.orbit/bin/orbit' and would migrate the workspace layout at
+'<primary>/.orbit' from v4 past v5, which the installed orbit cannot keep using: it supports
+workspace layout v4. Nothing was changed. Run development and QA builds under a disposable
+home with their own workspace, or install this build first with
+`orbit update --local-candidate` so the installed orbit applies the migration
+```
+
+- Additive migrations and a fresh workspace or store (version 0) are never refused, and
+  neither is the installed executable itself, however it is reached.
+- With no `orbit` in the managed install directory (a Homebrew, npm or `cargo install`
+  host, or a disposable QA home), or when it does not report its compatibility in time,
+  nothing is refused and the open logs a warning instead.
+- Run QA builds against their own home and workspace
+  ([Manual QA from a managed lane](../DEVELOPMENT.md#manual-qa-from-a-managed-lane)), or
+  deploy the build ([Deploy a locally built candidate](#deploy-a-locally-built-candidate-pinned-to-a-source-commit)),
+  after which the installed binary applies the migration.
+
+Each layout advance also records the executable that applied it in
+`.orbit/state/layout.writer`, so an older binary refused by that layout names it (see
+[Breaking-newer, or unclassified](#breaking-newer-or-unclassified-still-refused)).
 
 #### A migration older processes cannot keep: the quiesce wait
 
@@ -1041,9 +1078,15 @@ A breaking migration the binary lacks refuses the open, now naming that migratio
 
 ```text
 error: schema migration failed: workspace '….orbit' has .orbit layout version 4, newer
-than the newest version this orbit binary supports (3); migration v4 (relocate-run-state)
-is a breaking change this binary does not have; upgrade orbit to open this workspace
+than the newest version this orbit binary ('~/.orbit/bin/orbit') supports (3); migration v4
+(relocate-run-state) is a breaking change this binary does not have; layout version 4 was
+written by '<checkout>/target/debug/orbit'; upgrade orbit to open this workspace
 ```
+
+The `was written by` clause appears when the binary that advanced the layout recorded
+itself in `.orbit/state/layout.writer`. When it names a build other than an installed
+release, such as a candidate build in a run worktree, the refused binary was not missed by
+a deploy: that build advanced the shared workspace ahead of it.
 
 State written **before** this contract shipped carries no compatibility record, and so
 does state whose record is stale (a crash between stamping the version and writing the
@@ -1059,7 +1102,7 @@ orbit to open this workspace
 
 In every refusing case the remedy is the same as before: upgrade the binary that is
 reporting it — through its own install channel — and re-run. Never hand-edit
-`layout.version` or `layout.compat`, and never delete the record to force an open: that
+`layout.version`, `layout.compat` or `layout.writer`, and never delete the record to force an open: that
 converts a refusal into a binary operating on state it cannot interpret.
 
 ## Lexical search migration

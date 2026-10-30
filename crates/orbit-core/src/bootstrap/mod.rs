@@ -8,6 +8,7 @@ pub mod browser_kit {
 }
 pub(crate) mod global_defaults;
 pub mod init;
+pub(crate) mod installed_binary;
 /// Host capability probe shared by explicit onboarding and read-only diagnosis.
 /// Exec owns the probe shape; Core exposes it to command surfaces.
 pub mod linux_sandbox_host {
