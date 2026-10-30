@@ -162,7 +162,15 @@ impl Checker<'_> {
                 }
                 Ok(CelType::Bool)
             }
-            CelType::Map(key, _) if *key == CelType::String => Ok(CelType::Bool),
+            CelType::Map(key, _) if *key == CelType::String => {
+                if path_of(&select.operand).as_deref() == Some("board.by_status") {
+                    require_status(&select.field).map_err(|message| Failure {
+                        offset: self.offset(expr),
+                        message,
+                    })?;
+                }
+                Ok(CelType::Bool)
+            }
             other => self.fail(
                 expr,
                 format!(
@@ -208,7 +216,15 @@ impl Checker<'_> {
                 }
                 Ok(field.ty.cel_type())
             }
-            CelType::Map(key, value) if *key == CelType::String => Ok(*value),
+            CelType::Map(key, value) if *key == CelType::String => {
+                if path_of(&select.operand).as_deref() == Some("board.by_status") {
+                    require_status(&select.field).map_err(|message| Failure {
+                        offset: self.offset(expr),
+                        message,
+                    })?;
+                }
+                Ok(*value)
+            }
             other => self.fail(
                 expr,
                 format!("cannot select '{}' on {}", select.field, other.name()),
