@@ -63,12 +63,17 @@ impl OrbitRuntime {
     /// edited tags or context files route it to another type pool. `task`
     /// already carries the edited tags and context files; `complexity` is
     /// the tier the write leaves it at. The caller commits crew, source and
-    /// this history together.
+    /// this history together under the task write lock. Active or reserved
+    /// deliveries keep their admitted crew and source; a later fresh admission
+    /// evaluates the edited classification independently.
     pub(crate) fn rerate_task_crew(
         &self,
         task: &mut Task,
         complexity: Option<TaskComplexity>,
     ) -> Result<Option<TaskHistoryEntry>, OrbitError> {
+        if self.task_crew_has_admitted_delivery(task)? {
+            return Ok(None);
+        }
         let Some(source) = self.task_crew_source(task)? else {
             return Ok(None);
         };

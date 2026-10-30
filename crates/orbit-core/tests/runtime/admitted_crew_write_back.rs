@@ -564,9 +564,9 @@ fn a_complexity_rerate_after_admission_does_not_invent_a_control_mismatch() {
             None,
         )
         .unwrap();
-    // The rerate redraws onto the hard pool; that crew has no delivery
-    // under the old admission, so it must not be named a mismatch.
-    assert_eq!(crew_of(&fx, &control).0.as_deref(), Some("luna"));
+    // ORB-19929: the tier changes, while the admitted crew remains the
+    // readout's actual implementation identity.
+    assert_eq!(crew_of(&fx, &control).0.as_deref(), Some("sol"));
 
     let readout = fx.runtime.experiment_readout(&experiment, None).unwrap();
     assert!(
@@ -740,8 +740,8 @@ fn backfill_leaves_an_explicit_crew_newer_than_its_latest_run() {
 
 /// [ORB-19602] The backfill skips a latest run cancelled before it
 /// implemented: its crew selection never ran, so it must not replace the
-/// task's crew. The rerate redraw below is a system assignment, not an
-/// explicit one, so only the cancellation can spare the task.
+/// task's crew. The seeded legacy redraw below is a system assignment, not
+/// an explicit one, so only the cancellation can spare the task.
 #[test]
 fn backfill_skips_a_latest_run_cancelled_before_implementation() {
     if !isolated(
@@ -762,19 +762,9 @@ fn backfill_skips_a_latest_run_cancelled_before_implementation() {
         )
         .unwrap();
     fx.runtime.cancel_job_run(&submitted.run_id).unwrap();
-    // A system redraw after the cancelled run moves the task off the run's
-    // crew without an explicit assignment.
-    fx.runtime
-        .update_task_with_identity(
-            &task,
-            TaskUpdateParams {
-                complexity: Some(TaskComplexity::Hard),
-                ..Default::default()
-            },
-            None,
-            None,
-        )
-        .unwrap();
+    // Seed the historical system redraw that older binaries allowed after
+    // cancellation, without an explicit assignment.
+    seed_historical_scope_redraw(&fx, &task);
     assert_eq!(crew_of(&fx, &task).0.as_deref(), Some("luna"));
 
     let report = fx.runtime.backfill_admitted_task_crews().unwrap();
@@ -801,20 +791,9 @@ fn backfill_does_not_overwrite_an_explicit_crew_assigned_during_the_backfill() {
     let task = fx.tagged_task(&[], None).id;
     let input = submit(&fx, &job, json!({ "task_id": task }));
     assert_eq!(input["crew_selection"]["crew"], "sol", "{input}");
-    // A medium-to-hard rerate is a system redraw, not an explicit assignment:
-    // the task no longer names the sol its delivery ran, so the backfill has
-    // a crew to copy.
-    fx.runtime
-        .update_task_with_identity(
-            &task,
-            TaskUpdateParams {
-                complexity: Some(TaskComplexity::Hard),
-                ..Default::default()
-            },
-            None,
-            None,
-        )
-        .unwrap();
+    // Seed an older binary's scope redraw: the task no longer names the sol
+    // its delivery ran, so the backfill has a historical crew to repair.
+    seed_historical_scope_redraw(&fx, &task);
     assert_eq!(crew_of(&fx, &task).0.as_deref(), Some("luna"));
 
     let ran = std::rc::Rc::new(std::cell::Cell::new(false));
@@ -911,19 +890,10 @@ fn a_rerate_onto_a_superseded_delivery_crew_is_unavailable_not_a_mismatch() {
     assert_eq!(admitted["crew_selection"]["crew"], "sol", "{admitted}");
     assert_eq!(crew_of(&fx, &target).0.as_deref(), Some("sol"));
 
-    // A legitimate medium-to-hard rerate redraws onto the hard pool's luna
-    // without another delivery.
-    fx.runtime
-        .update_task_with_identity(
-            &target,
-            TaskUpdateParams {
-                complexity: Some(TaskComplexity::Hard),
-                ..Default::default()
-            },
-            None,
-            None,
-        )
-        .unwrap();
+    // Seed an older binary's medium-to-hard redraw without another delivery.
+    // Current scope updates preserve attribution, but readout must still
+    // handle these historical records without inventing a mismatch.
+    seed_historical_scope_redraw(&fx, &target);
     assert_eq!(crew_of(&fx, &target).0.as_deref(), Some("luna"));
 
     let readout = fx.runtime.experiment_readout(&experiment, None).unwrap();
@@ -941,4 +911,33 @@ fn a_rerate_onto_a_superseded_delivery_crew_is_unavailable_not_a_mismatch() {
         "{:?}",
         readout.warnings
     );
+}
+
+/// Seed the persisted ORB-19929 defect for historical repair/readout checks.
+/// New public scope updates no longer create this inconsistent attribution.
+fn seed_historical_scope_redraw(fx: &Fixture, task: &str) {
+    let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
+        &orbit_store::maintenance::task_registry::task_registry_path(&fx.runtime.global_root()),
+    )
+    .unwrap();
+    let backends = orbit_store::compose::workspace_coordinated_backends(
+        registry,
+        fx.runtime.workspace_id().unwrap(),
+        fx.runtime.sqlite_store().unwrap(),
+    )
+    .unwrap()
+    .task;
+    backends
+        .document
+        .update_task_document(
+            task,
+            orbit_store::contracts::TaskDocumentUpdateParams {
+                actor: "historical-scope-redraw-fixture".into(),
+                crew: Some(Some("luna".into())),
+                crew_source: Some(Some("pool:hard".into())),
+                complexity: Some(TaskComplexity::Hard),
+                ..Default::default()
+            },
+        )
+        .unwrap();
 }
