@@ -229,13 +229,14 @@ def _parse_flow(text: str, start: int, line: int) -> tuple[Any, int]:
             if text[index] == "]":
                 return items, index + 1
             if text[index] == ",":
-                index += 1
-                continue
+                raise YamlError("unexpected ',' in flow sequence", line)
             item, index = _parse_flow(text, index, line)
             items.append(item)
             index = _skip_space(text, index)
             if index < len(text) and text[index] == ",":
                 index += 1
+            elif index < len(text) and text[index] != "]":
+                raise YamlError("expected ',' or ']' in flow sequence", line)
         raise YamlError("unclosed flow sequence", line)
     if char == "{":
         mapping: dict[str, Any] = {}
@@ -247,8 +248,7 @@ def _parse_flow(text: str, start: int, line: int) -> tuple[Any, int]:
             if text[index] == "}":
                 return mapping, index + 1
             if text[index] == ",":
-                index += 1
-                continue
+                raise YamlError("unexpected ',' in flow mapping", line)
             key_obj, index = _parse_flow(text, index, line)
             if not isinstance(key_obj, str):
                 raise YamlError("flow mapping keys must be strings", line)
@@ -260,6 +260,8 @@ def _parse_flow(text: str, start: int, line: int) -> tuple[Any, int]:
             index = _skip_space(text, index)
             if index < len(text) and text[index] == ",":
                 index += 1
+            elif index < len(text) and text[index] != "}":
+                raise YamlError("expected ',' or '}' in flow mapping", line)
         raise YamlError("unclosed flow mapping", line)
 
     end = index

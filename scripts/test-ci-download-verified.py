@@ -9,9 +9,9 @@ import json
 import os
 from pathlib import Path
 import select
+import self_test_hang
 import shlex
 import shutil
-import signal
 import subprocess
 import ssl
 import sys
@@ -20,6 +20,8 @@ import tempfile
 import threading
 import time
 import unittest
+
+from self_test_hang_regression import assert_hang_group_identity
 
 import yaml
 
@@ -224,28 +226,6 @@ HANG_ABSOLUTE_SECONDS = 300
 SLOW_FIXTURE_SECONDS = 12
 
 
-def _kill_group(proc):
-    try:
-        os.killpg(proc.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        return
-    except PermissionError:
-        if proc.poll() is None:
-            try:
-                proc.kill()
-            except ProcessLookupError:
-                return
-    if proc.poll() is None:
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            try:
-                proc.kill()
-            except ProcessLookupError:
-                pass
-            proc.wait(timeout=5)
-
-
 def _read_chunk(stream):
     try:
         chunk = os.read(stream.fileno(), 65536)
@@ -282,15 +262,15 @@ def run_step(argv, *, step, env=None, cwd=None, text=False, check=False, hang_qu
     else:
         quiet_budget = hang_quiet
         absolute_budget = hang_quiet
-    proc = subprocess.Popen(
+    owned = self_test_hang.OwnedProcessGroup(
         argv,
         cwd=cwd,
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         bufsize=0,
-        start_new_session=True,
     )
+    proc = owned.process
     stdout_chunks = []
     stderr_chunks = []
     streams = [proc.stdout, proc.stderr]
@@ -303,7 +283,7 @@ def run_step(argv, *, step, env=None, cwd=None, text=False, check=False, hang_qu
         while proc.poll() is None or streams:
             now = time.monotonic()
             if now >= quiet_deadline or now >= absolute_deadline:
-                _kill_group(proc)
+                owned.kill()
                 for stream in list(streams):
                     bucket = stdout_chunks if stream is proc.stdout else stderr_chunks
                     _take(stream, bucket)
@@ -346,8 +326,7 @@ def run_step(argv, *, step, env=None, cwd=None, text=False, check=False, hang_qu
                 stream.close()
             except OSError:
                 pass
-        if proc.poll() is None:
-            _kill_group(proc)
+        owned.close()
     stdout = b"".join(stdout_chunks)
     stderr = b"".join(stderr_chunks)
     if text:
@@ -770,6 +749,10 @@ class VerifiedDownloadTests(unittest.TestCase):
         cpu_elapsed = time.process_time() - cpu_start
         self.assertLess(elapsed, 5, "hung step must fail within quiet budget, not wait out descendant")
         self.assertLess(cpu_elapsed, 1.0, "wait loop must not busy-spin once deadline has passed")
+
+    def test_exited_leader_timeout_preserves_group_identity(self):
+        assert_hang_group_identity(self, lambda: run_step(
+            ["fixture"], step="identity fixture", hang_quiet=1))
 
     def test_deterministic_slowdown_beyond_legacy_caps_still_passes(self):
         with self.subTest(step="verified download"):

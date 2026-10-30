@@ -510,6 +510,64 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         self.assertEqual(report["bump"], "minor")
         self.assertEqual(report["next_version"], "0.36.0")
 
+    def test_closing_additional_properties_decides_minor_and_reopening_is_additive(self):
+        tools = self.repo.mcp()
+        schema = tools[0]["inputSchema"]
+        schema["additionalProperties"] = True
+        self.repo.write_mcp(tools)
+        self.repo.commit("chore: prepare open object fixture [ORB-64]")
+        self.repo.git("tag", "-f", "v0.35.0")
+
+        schema["additionalProperties"] = False
+        self.repo.write_mcp(tools)
+        self.repo.commit("fix: Close MCP object [ORB-65]")
+        report = self.report()
+        self.assertEqual(report["bump"], "minor")
+        self.assertEqual(self.signals(report), {
+            ("ORB-65", "mcp-schema",
+             "`orbit_task_show` `inputSchema` additionalProperties closed"),
+        })
+
+        self.repo.git("tag", "-f", "v0.35.0")
+        del schema["additionalProperties"]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Reopen MCP object [ORB-66]")
+        report = self.report()
+        self.assertEqual(report["bump"], "patch")
+        self.assertEqual(report["signals"], [])
+
+    def test_removing_type_inside_oneof_decides_minor_with_additive_controls(self):
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"] = {"oneOf": [{"type": "string"}, {"type": "integer"}]}
+        tools[0]["outputSchema"] = {"type": "string"}
+        self.repo.write_mcp(tools)
+        self.repo.commit("chore: prepare oneOf type fixture [ORB-64]")
+        self.repo.git("tag", "-f", "v0.35.0")
+
+        # Integer 1 matched only the integer branch before; now it matches both.
+        del tools[0]["inputSchema"]["oneOf"][0]["type"]
+        del tools[0]["outputSchema"]["type"]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Relax MCP types [ORB-65]")
+        report = self.report()
+        self.assertEqual(report["bump"], "minor")
+        self.assertEqual(self.signals(report), {
+            ("ORB-65", "mcp-schema",
+             "`orbit_task_show` `inputSchema{oneOf0}` type constraint removed "
+             "inside oneOf alternative"),
+        })
+
+        tools[0]["inputSchema"]["oneOf"][0] = {"type": "string"}
+        self.repo.write_mcp(tools)
+        self.repo.commit("chore: restore disjoint alternatives [ORB-66]")
+        self.repo.git("tag", "-f", "v0.35.0")
+        tools[0]["inputSchema"]["oneOf"].insert(0, {"type": "boolean"})
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Add disjoint alternative [ORB-67]")
+        report = self.report()
+        self.assertEqual(report["bump"], "patch")
+        self.assertEqual(report["signals"], [])
+
     def test_oneof_branch_relaxations_decide_minor_but_root_relaxations_stay_patch(self):
         tools = self.repo.mcp()
         tools[0]["inputSchema"] = {
