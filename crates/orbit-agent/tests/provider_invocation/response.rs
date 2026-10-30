@@ -431,6 +431,63 @@ fn codex_tool_telemetry_correlates_ids_and_keeps_payloads_opaque() {
 }
 
 #[test]
+fn codex_file_change_telemetry_dedupes_by_item_id_and_keeps_order() {
+    let answer = json!({"schemaVersion": 1, "status": "success", "result": {}, "error": null});
+    // Observed Codex shape (ORB-20043): item_13 file_change started then
+    // completed with 3 changes; patch contents are not retained.
+    let patch = "SECRET_PATCH_CONTENT";
+    let raw = [
+        json!({"type": "item.started", "item": {"type": "command_execution", "id": "read-1"}}),
+        json!({"type": "item.completed", "item": {"type": "command_execution", "id": "read-1", "aggregated_output": "alpha"}}),
+        json!({"type": "item.started", "item": {"type": "mcp_tool_call", "id": "read-2", "name": "fixture.read"}}),
+        json!({"type": "item.completed", "item": {"type": "mcp_tool_call", "id": "read-2", "name": "fixture.read", "result": {"ok": true}}}),
+        json!({"type": "item.started", "item": {"type": "file_change", "id": "item_13", "status": "in_progress", "changes": [{"path": "a.rs", "kind": {"type": "update"}, "diff": patch}]}}),
+        json!({"type": "item.completed", "item": {"type": "file_change", "id": "item_13", "status": "completed", "changes": [{"path": "a.rs", "kind": {"type": "update"}, "diff": patch}, {"path": "b.rs", "kind": {"type": "add"}, "diff": patch}, {"path": "c.rs", "kind": {"type": "delete"}, "diff": patch}]}}),
+        // A second distinct item identity is a second edit call.
+        json!({"type": "item.started", "item": {"type": "file_change", "id": "item_14"}}),
+        json!({"type": "item.completed", "item": {"type": "file_change", "id": "item_14", "status": "completed", "changes": []}}),
+        // Bare top-level and assistant-content file_change objects are not
+        // provider item frames and must not be counted.
+        json!({"type": "file_change", "id": "bare", "changes": []}),
+        json!({"type": "assistant", "message": {"content": [{"type": "file_change", "id": "in-message"}]}}),
+        // JSON nested inside an agent message remains prose, not a frame.
+        json!({"type": "item.completed", "item": {"type": "agent_message", "text": json!({"type": "item.completed", "item": {"type": "file_change", "id": "nested"}}).to_string()}}),
+        json!({"type": "item.completed", "item": {"type": "agent_message", "text": answer.to_string()}}),
+        json!({"type": "turn.completed"}),
+    ].iter().map(Value::to_string).collect::<Vec<_>>().join("\n");
+    let normalized = normalize_cli_stdout("codex", raw.as_bytes());
+    let stdout = String::from_utf8(normalized.into_owned()).unwrap();
+    let (_, _, trace) = ParsedStdout::parse(&stdout)
+        .parse_and_validate(&execution(stdout.clone()))
+        .unwrap();
+    let actual = trace
+        .tool_calls
+        .iter()
+        .map(|call| (call.seq, call.tool_name.as_str(), call.result_bytes))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual,
+        vec![
+            (
+                1,
+                "command_execution",
+                serde_json::to_vec(&json!("alpha")).unwrap().len() as u64
+            ),
+            (
+                2,
+                "fixture.read",
+                serde_json::to_vec(&json!({"ok": true})).unwrap().len() as u64
+            ),
+            (3, "file_change", 0),
+            (4, "file_change", 0),
+        ]
+    );
+    // No patch payload is retained in the trace.
+    assert!(trace.tool_calls.iter().all(|c| c.result_payload.is_none()));
+    assert!(!format!("{:?}", trace.tool_calls).contains(patch));
+}
+
+#[test]
 fn tool_telemetry_preserves_direct_message_and_inline_contracts() {
     let answer = json!({"schemaVersion": 1, "status": "success", "result": {}, "error": null});
     let payload = json!({"type": "tool_use", "name": "quoted.not_executed"});

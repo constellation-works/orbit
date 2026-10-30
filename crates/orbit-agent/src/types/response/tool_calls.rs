@@ -38,10 +38,16 @@ impl ToolCallCollector {
                     return;
                 };
                 let item_kind = item.get("type").and_then(Value::as_str).unwrap_or_default();
-                if kind == Some("item.started") && is_tool_use_kind(item_kind) {
+                // Codex native file edits arrive only as item frames. Admit
+                // them here, not via `is_tool_use_kind`, so a bare top-level
+                // or assistant-content `file_change` object stays uncounted.
+                let is_file_change = item_kind == "file_change";
+                if kind == Some("item.started") && (is_tool_use_kind(item_kind) || is_file_change) {
                     self.record_tool_use(item);
                 } else if kind == Some("item.completed")
-                    && (is_tool_use_kind(item_kind) || is_tool_result_kind(item_kind))
+                    && (is_tool_use_kind(item_kind)
+                        || is_tool_result_kind(item_kind)
+                        || is_file_change)
                 {
                     self.record_tool_result(item);
                 }
@@ -112,7 +118,7 @@ impl ToolCallCollector {
     }
 
     fn record_tool_use(&mut self, map: &JsonMap) {
-        let tool_name = tool_name_or_kind(map);
+        let tool_name = recorded_tool_name(map);
         if tool_name.is_empty() {
             return;
         }
@@ -151,7 +157,7 @@ impl ToolCallCollector {
             return;
         }
 
-        let tool_name = tool_name_or_kind(map);
+        let tool_name = recorded_tool_name(map);
         if tool_name.is_empty() {
             return;
         }
@@ -179,6 +185,21 @@ fn tool_name_from_map(map: &JsonMap) -> String {
         .or_else(|| map.get("tool").and_then(Value::as_str))
         .unwrap_or_default()
         .to_string()
+}
+
+/// Name recorded for a provider frame. `file_change` frames carry no
+/// `name`; their canonical recorded name is the item kind itself. This is
+/// reached only from item frames (see `collect_frame`), because
+/// `tool_name_or_kind` (used to gate other frame kinds) does not admit it.
+fn recorded_tool_name(map: &JsonMap) -> String {
+    let name = tool_name_or_kind(map);
+    if !name.is_empty() {
+        return name;
+    }
+    if map.get("type").and_then(Value::as_str) == Some("file_change") {
+        return "file_change".to_string();
+    }
+    String::new()
 }
 
 fn tool_name_or_kind(map: &JsonMap) -> String {

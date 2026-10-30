@@ -48,6 +48,9 @@ const FILE_MUTATING: &[&str] = &[
     "create_file",
     "delete_file",
     "replace",
+    // Codex native file-change items, recorded as `file_change` by the
+    // provider invocation collector (item.started/item.completed frames).
+    "file_change",
 ];
 
 /// The first implement invocation linked to one task.
