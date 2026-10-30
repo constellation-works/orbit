@@ -1049,6 +1049,48 @@ fn malformed_unfiled_findings_fail_implement_one_before_delivery() {
         assert_valid_output_delivers(output);
     }
 }
+/// Malformed claimed artifact arrays fail at `implement_one` before delivery; valid, absent and null arrays still deliver.
+fn malformed_claimed_artifacts_fail_implement_one_before_delivery() {
+    for field in ["task_artifacts", "no_diff_artifacts"] {
+        for artifacts in [
+            json!([{ "path": "report.json", "name": ".orbit/tmp/report.json" }]),
+            json!([{ "path": "report.json" }]),
+            json!([{ "path": "report.json", "source_path": ".orbit/tmp/report.json", "extra": true }]),
+            json!([{ "path": 42, "source_path": ".orbit/tmp/report.json" }]),
+            json!([{ "path": "report.json", "source_path": 42 }]),
+            json!({ "path": "report.json", "source_path": ".orbit/tmp/report.json" }),
+        ] {
+            let case = artifacts.to_string();
+            let failure = assert_malformed_field_fails(&case, json!({ field: artifacts }), field);
+            assert!(
+                failure.contains(orbit_types::workflow::CONTRACT_REFUSAL_MARKER),
+                "{case}: refusal carries the contract marker: {failure}"
+            );
+            assert!(
+                failure.contains("[{\"path\": ..., \"source_path\": ...}]"),
+                "{case}: refusal names the expected shape: {failure}"
+            );
+        }
+    }
+
+    for output in [
+        json!({
+            "task_artifacts": [{ "path": "report.json", "source_path": ".orbit/tmp/report.json" }],
+            "no_diff_artifacts": [{ "path": "evidence.json", "source_path": ".orbit/tmp/evidence.json" }]
+        }),
+        json!({
+            "task_artifacts": [{ "path": "report.json", "source_path": ".orbit/tmp/report.json" }]
+        }),
+        json!({
+            "no_diff_artifacts": [{ "path": "evidence.json", "source_path": ".orbit/tmp/evidence.json" }]
+        }),
+        json!({ "task_artifacts": [], "no_diff_artifacts": [] }),
+        json!({ "task_artifacts": null, "no_diff_artifacts": null }),
+        json!({}),
+    ] {
+        assert_valid_output_delivers(output);
+    }
+}
 /// Malformed `regression_from` fails at `implement_one` before delivery, naming the omit-or-`null` empty case [ORB-17993]; absent, `null`, `[]` and valid IDs still deliver.
 fn malformed_regression_from_fails_implement_one_before_delivery() {
     for regression_from in [
@@ -1596,5 +1638,5 @@ macro_rules! runtime_contracts {
 runtime_contracts!(runtime_contracts_1: a_deterministic_step_binds_its_task_and_run_from_the_dispatch_not_the_tool_args, parallel_join_policy_decides_the_block_from_its_branches, fan_out_collects_outputs_in_item_order_within_the_worker_cap);
 runtime_contracts!(runtime_contracts_2: fan_in_join_policy_decides_the_block_from_its_workers, loop_iterates_until_break_failure_or_budget, items_expression_rejects_non_array_json, when_false_step_skips_log_below_warn_and_other_skips_keep_warn);
 runtime_contracts!(runtime_contracts_3: incomplete_conflict_diagnostics_survive_resumed_execution_and_success_checkpoint, the_shipped_review_step_retries_then_recovers_a_failing_reviewer, provider_unavailable_dispatch_errors_do_not_attempt_recovery, an_implementer_blocker_ends_implement_one_without_recovery);
-runtime_contracts!(runtime_contracts_4: an_upgrade_refusal_blocker_ends_the_step_as_upgrade_pending, an_upgrade_refusal_ends_any_step_but_a_task_blocker_only_the_implementers, a_malformed_blocker_is_not_a_stop_and_the_catalog_name_is, malformed_unfiled_findings_fail_implement_one_before_delivery, malformed_regression_from_fails_implement_one_before_delivery);
+runtime_contracts!(runtime_contracts_4: an_upgrade_refusal_blocker_ends_the_step_as_upgrade_pending, an_upgrade_refusal_ends_any_step_but_a_task_blocker_only_the_implementers, a_malformed_blocker_is_not_a_stop_and_the_catalog_name_is, malformed_unfiled_findings_fail_implement_one_before_delivery, malformed_claimed_artifacts_fail_implement_one_before_delivery, malformed_regression_from_fails_implement_one_before_delivery);
 runtime_contracts!(runtime_contracts_5: exhausted_review_preflight_stops_the_shipped_pipeline_before_implementation, fan_in_retains_position_aligned_errors_through_successful_join_and_resume, a_skipped_fan_out_does_not_overwrite_a_siblings_collection_on_resume, leaf_completion_records_file_and_store_waits_without_leaking_between_steps);
