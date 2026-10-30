@@ -507,3 +507,102 @@ fn bounded_listing_marks_unprojectable_rows_unavailable_without_failing() {
     );
     assert_eq!(fs::read_to_string(&cursor).unwrap(), "{broken");
 }
+
+#[test]
+fn bounded_listing_reports_malformed_definition() {
+    const TEST: &str = "auto_task_listing_cli::bounded_listing_reports_malformed_definition";
+    if !in_isolated_child(TEST) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let runtime = open_runtime(&fixture);
+    let dir = runtime.paths().orbit_dir.join("auto_tasks");
+    fs::write(dir.join("malformed.yaml"), "name: [broken\n").unwrap();
+    let page = bounded(&fixture);
+    assert!(page["total"].as_u64().unwrap() > 0, "{page}");
+    assert!(
+        page["items"]
+            .as_array()
+            .is_some_and(|items| !items.is_empty()),
+        "a valid sibling remains visible beside a malformed definition: {page}"
+    );
+    let errors = page["load_errors"].as_array().expect("load errors");
+    assert_eq!(errors.len(), 1, "{page}");
+    assert!(
+        errors[0]["path"]
+            .as_str()
+            .unwrap()
+            .contains("malformed.yaml")
+    );
+    assert!(!errors[0]["message"].as_str().unwrap().is_empty());
+    assert_eq!(page["load_errors_total"], 1);
+    assert_eq!(page["load_errors_truncated"], false);
+    assert!(
+        runtime
+            .run_tool_as_human("orbit.auto_task.list", json!({}))
+            .unwrap()
+            .is_array()
+    );
+
+    // More failures than the response budget do not change the catalog page.
+    let secret = format!("ghp_{}", "a".repeat(36));
+    fs::write(dir.join(format!("00-{secret}.yaml")), "name: [broken\n").unwrap();
+    for index in 0..21 {
+        fs::write(
+            dir.join(format!("broken-{index:02}.yaml")),
+            "name: [broken\n",
+        )
+        .unwrap();
+    }
+    let cursor = orbit_core::application::auto_tasks::cursor_state_path(&runtime.paths().state_dir);
+    fs::create_dir_all(cursor.parent().unwrap()).unwrap();
+    fs::write(cursor, "{broken").unwrap();
+    let input = json!({"view":"bounded","workspace":"audit-qa","offset":1,"limit":1}).to_string();
+    let output = fixture
+        .command(&["tool", "run", "orbit.auto_task.list", "--input", &input])
+        .env("ORBIT_OPERATOR", "1")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let paged: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(paged["total"], page["total"]);
+    assert_eq!(paged["items"].as_array().unwrap().len(), 1);
+    assert_eq!(paged["items"][0]["name"], page["items"][1]["name"]);
+    assert_eq!(paged["pagination"]["offset"], 1);
+    assert_eq!(paged["load_errors_total"], 23);
+    assert_eq!(paged["load_errors_truncated"], true);
+    assert_eq!(paged["load_errors"].as_array().unwrap().len(), 20);
+    assert!(paged["cursor_state_error"].is_string());
+    // A credential in a diagnostic path must not escape even when included.
+    let full = bounded(&fixture);
+    assert!(!full.to_string().contains(&secret));
+    assert!(
+        full["load_errors"]
+            .to_string()
+            .contains("[REDACTED_SECRET]")
+    );
+    let names = |value: &Value| {
+        value["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| (item["name"].clone(), item["state"] == "plugin_inactive"))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(names(&full), names(&page));
+
+    // Remove every valid definition from this isolated fixture by corrupting it.
+    for entry in fs::read_dir(&dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_some_and(|ext| ext == "yaml") {
+            fs::write(path, "name: [broken\n").unwrap();
+        }
+    }
+    fixture
+        .command(&["tool", "run", "orbit.auto_task.list", "--input", &input])
+        .env("ORBIT_OPERATOR", "1")
+        .assert()
+        .failure();
+}

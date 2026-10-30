@@ -58,6 +58,7 @@ pub(super) fn read(
     let mut notes = Vec::new();
     // Only the auto-task scope reads the host cursor state.
     let mut cursor_state_error: Option<Option<String>> = None;
+    let mut load_errors = None;
     // Auto-task and job controls keep the general coordination guard, so a
     // replica projects them unavailable with the owner named.
     let coordination_refusal = runtime
@@ -88,9 +89,10 @@ pub(super) fn read(
             rows
         }
         "auto_tasks"=>{
-            let (rows,error)=auto_task_rows(runtime, coordination_refusal.as_deref())?;
-            cursor_state_error=Some(error);
-            rows
+            let listing=auto_task_rows(runtime, coordination_refusal.as_deref())?;
+            cursor_state_error=Some(listing.cursor_state_error);
+            load_errors=Some((listing.errors,listing.error_total));
+            listing.rows
         }
         "jobs"=>runtime.list_job_catalog_with_last_run(true,JobCatalogFilter::All)?.iter().map(|(j,last)|{
             let runnable=j.supports_no_input_submission();
@@ -121,13 +123,25 @@ pub(super) fn read(
     if let Some(error) = cursor_state_error {
         result["cursor_state_error"] = json!(error);
     }
+    if let Some((errors, total)) = load_errors {
+        result["load_errors_truncated"] = json!(total > errors.len());
+        result["load_errors_total"] = json!(total);
+        result["load_errors"] = json!(errors);
+    }
     Ok(result)
 }
-/// The shared listing's rows, plus why the host cursor state was unreadable.
+struct AutoTaskProjection {
+    rows: Vec<Value>,
+    cursor_state_error: Option<String>,
+    errors: Vec<Value>,
+    error_total: usize,
+}
+
+/// The shared listing's rows and bounded diagnostics.
 fn auto_task_rows(
     runtime: &OrbitRuntime,
     coordination_refusal: Option<&str>,
-) -> Result<(Vec<Value>, Option<String>), OrbitError> {
+) -> Result<AutoTaskProjection, OrbitError> {
     use crate::application::auto_tasks::AutoTaskSkip;
     use crate::application::routines::ScheduleDisplayState;
     let listing = runtime.auto_task_listing_state(true, Utc::now())?;
@@ -145,7 +159,22 @@ fn auto_task_rows(
             "control_reason":coordination_refusal,
             "updated_at":d.updated_at})
     }).collect();
-    Ok((rows, listing.cursor_state_error.map(|error| text(&error))))
+    let total = listing.load_errors.len();
+    let errors = listing
+        .load_errors
+        .iter()
+        .take(20)
+        .map(|error| {
+            json!({"path": error.path.as_ref().map(|path| text(&path.to_string_lossy())),
+            "message": text(&error.message)})
+        })
+        .collect();
+    Ok(AutoTaskProjection {
+        rows,
+        cursor_state_error: listing.cursor_state_error.map(|error| text(&error)),
+        errors,
+        error_total: total,
+    })
 }
 
 fn invalid(message: &str) -> OrbitError {
