@@ -25,8 +25,19 @@ use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::task::{Task, TaskComment, TaskRelationType, TaskStatus, is_valid_orb_task_id};
 use serde_json::{Value, json};
 
-/// `match_kind` of a match that is a rejected owner, not an open one.
-pub(crate) const MATCH_REJECTED_OWNER: &str = "rejected_owner";
+/// Why a covering task owns a candidate, serialized snake_case at the report
+/// boundary (`exact_key`, `material_coverage`, `rejected_owner`,
+/// `confirmed_duplicate`, `open_compiler_diagnostics`, `covered_by_repair`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DuplicateMatchKind {
+    ExactKey,
+    MaterialCoverage,
+    RejectedOwner,
+    ConfirmedDuplicate,
+    OpenCompilerDiagnostics,
+    CoveredByRepair,
+}
 
 const MAX_EVIDENCE_FIELDS: usize = 6;
 const MAX_EVIDENCE_CHARS: usize = 160;
@@ -203,7 +214,7 @@ impl CoverageAnchor {
 #[derive(Debug, Clone)]
 pub(crate) struct DuplicateTaskMatch {
     pub task_id: String,
-    pub match_kind: &'static str,
+    pub match_kind: DuplicateMatchKind,
     pub evidence: Value,
 }
 
@@ -227,7 +238,7 @@ where
     if let Some(task) = exact_tasks.iter().find(|task| !task.status.is_terminal()) {
         return Ok(Some(DuplicateTaskMatch {
             task_id: task.id.clone(),
-            match_kind: "exact_key",
+            match_kind: DuplicateMatchKind::ExactKey,
             evidence: bounded_evidence(
                 "generated_key",
                 &[CoverageAnchor::new("dedupe_tag", &candidate.exact_tag)],
@@ -262,7 +273,7 @@ where
         {
             return Ok(Some(DuplicateTaskMatch {
                 task_id: task.id.clone(),
-                match_kind: "material_coverage",
+                match_kind: DuplicateMatchKind::MaterialCoverage,
                 evidence: bounded_evidence(fingerprint.name, &fingerprint.anchors),
             }));
         }
@@ -351,7 +362,7 @@ where
         anchors.extend(fingerprint.anchors.iter().cloned());
         return Ok(Some(DuplicateTaskMatch {
             task_id: task.id.clone(),
-            match_kind: MATCH_REJECTED_OWNER,
+            match_kind: DuplicateMatchKind::RejectedOwner,
             evidence: bounded_evidence(fingerprint.name, &anchors),
         }));
     }
@@ -377,7 +388,7 @@ where
             Ok(owner) if !owner.status.is_terminal() => {
                 return Ok(Some(DuplicateTaskMatch {
                     task_id: owner.id.clone(),
-                    match_kind: "confirmed_duplicate",
+                    match_kind: DuplicateMatchKind::ConfirmedDuplicate,
                     evidence: bounded_evidence(
                         evidence_name,
                         &[
