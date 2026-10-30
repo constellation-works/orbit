@@ -34,6 +34,9 @@ pub const ACTIVITY_REF_PREFIX: &str = "activity:";
 /// `script:<name>` prefix for the `target:` field on a [`TargetRef`].
 pub const SCRIPT_REF_PREFIX: &str = orbit_types::workflow::activity_job::SCRIPT_REF_PREFIX;
 
+/// `auto-task:<name>` prefix for the `target:` field on a [`TargetRef`].
+pub const AUTO_TASK_REF_PREFIX: &str = orbit_types::workflow::activity_job::AUTO_TASK_REF_PREFIX;
+
 #[derive(Debug, Default, Clone)]
 pub struct V2ActivityCatalog {
     inner: LayeredCatalog<ActivityV2>,
@@ -136,7 +139,9 @@ pub fn catalog_error_to_orbit(error: CatalogError) -> OrbitError {
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ResolveError {
-    #[error("step `{step_id}`: target `{target}` does not start with `activity:` prefix")]
+    #[error(
+        "step `{step_id}`: target `{target}` does not start with `activity:`, `script:` or `auto-task:`"
+    )]
     UnknownRefKind { step_id: String, target: String },
     #[error("step `{step_id}`: activity `{name}` not found in catalog")]
     ActivityNotInCatalog { step_id: String, name: String },
@@ -737,6 +742,13 @@ fn resolve_step(
         JobV2StepBody::Target(_) => Ok(()),
         JobV2StepBody::TargetRef(reference) if reference.target.starts_with(SCRIPT_REF_PREFIX) => {
             resolve_script_ref(&step.id, &reference.target, scripts)
+        }
+        // An auto-task ref is retained: Core resolves the named definition
+        // for inspection, and `validate_job` refuses to run it.
+        JobV2StepBody::TargetRef(reference)
+            if reference.target.starts_with(AUTO_TASK_REF_PREFIX) =>
+        {
+            Ok(())
         }
         JobV2StepBody::TargetRef(_) => {
             // Swap the body out so we can own the ref without cloning; the

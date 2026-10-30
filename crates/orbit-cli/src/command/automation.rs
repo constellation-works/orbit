@@ -3,7 +3,8 @@
 //! `explain` calls the read-only `orbit.automation.explain` tool, so `--json`
 //! is that tool's payload. What is left here is the text rendering: the
 //! definition and its condition, the matches and closest misses, and one
-//! subject's clause tree with the values each clause read.
+//! subject's clause tree with the values each clause read; or, for
+//! `job:<name>`, the job's auto-task steps.
 
 use clap::Args;
 use orbit_common::governance::automation::AutomationVerb;
@@ -27,6 +28,9 @@ impl Execute for AutomationCommand {
         let Invocation { spec, input } = self.command;
         let value = runtime.run_tool(spec.tool_name, Value::Object(input))?;
         let blocks = match spec.verb {
+            AutomationVerb::Explain if value["definition"]["kind"] == "job" => {
+                job_explain_blocks(&value)
+            }
             AutomationVerb::Explain => explain_blocks(&value),
         };
         Ok(Payload::blocks(value, blocks).into())
@@ -154,6 +158,95 @@ fn explain_blocks(value: &Value) -> Vec<Block> {
     blocks.push(Block::text(format!(
         "\nArm state, holds, fires and self: not yet tracked ({})",
         text(&value["tracking"]["note"])
+    )));
+    blocks
+}
+
+/// A job's auto-task steps: the outer bound, the revision pin, and per step
+/// its resolved target, guards, waits and reads.
+fn job_explain_blocks(value: &Value) -> Vec<Block> {
+    let definition = &value["definition"];
+    let expiry = &value["expire_when"];
+    let mut blocks = vec![Block::text(format!(
+        "job {} ({}), {}\nExpire when: {} ({})\nPinned revision: {}",
+        text(&definition["name"]),
+        text(&definition["path"]),
+        text(&value["state"]),
+        text(&expiry["source"]),
+        match expiry["at"].as_str() {
+            Some(at) => format!("at {at}"),
+            None => format!(
+                "{}s after job start",
+                expiry["after_start_seconds"].as_i64().unwrap_or_default()
+            ),
+        },
+        if value["pinned_revision"]["pinned"] == true {
+            "pinned at admission"
+        } else {
+            "not pinned"
+        },
+    ))];
+    for step in rows(&value["steps"]) {
+        let target = &step["target"];
+        let mut lines = vec![format!(
+            "\nStep {}{}{}",
+            text(&step["id"]),
+            step["parallel"]
+                .as_str()
+                .map(|parallel| format!(" (branch of {parallel})"))
+                .unwrap_or_default(),
+            step["prev"]
+                .as_str()
+                .map(|prev| format!(" · self.prev = {prev}"))
+                .unwrap_or_default(),
+        )];
+        let resolution = text(&target["resolution"]);
+        lines.push(format!(
+            "  Target: auto-task {} — {resolution}{}",
+            text(&target["auto_task"]),
+            match resolution.as_str() {
+                "resolved" => format!(
+                    " ({}, {}, digest {})",
+                    text(&target["path"]),
+                    if target["enabled"] == true {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    },
+                    text(&target["definition_digest"]),
+                ),
+                "missing" => " (admission would hold)".to_string(),
+                _ => format!(" ({})", text(&target["error"])),
+            },
+        ));
+        if let Some(when) = target["admission_guard"]["when"].as_str() {
+            lines.push(format!("  Admission guard: {when}"));
+        }
+        for (label, key) in [
+            ("When (skip)", "when"),
+            ("Wait until", "wait_until"),
+            ("Expire when", "expire_when"),
+            ("Reuse when", "reuse_when"),
+            ("Require result", "require_result"),
+        ] {
+            if let Some(field) = step[key].as_str() {
+                lines.push(format!("  {label}: {field}"));
+            }
+        }
+        let reads = &step["reads"];
+        if !is_empty(&reads["steps"]) || !is_empty(&reads["board"]) || !is_empty(&reads["tasks"]) {
+            lines.push(format!(
+                "  Reads: steps {} · board {} · tasks {}",
+                list(&reads["steps"], "none"),
+                list(&reads["board"], "none"),
+                list(&reads["tasks"], "none"),
+            ));
+        }
+        blocks.push(Block::text(lines.join("\n")));
+    }
+    blocks.push(Block::text(format!(
+        "\nNot evaluated: {}",
+        text(&value["runtime"]["note"])
     )));
     blocks
 }

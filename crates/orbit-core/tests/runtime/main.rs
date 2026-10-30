@@ -39,6 +39,7 @@ mod admitted_crew_write_back;
 mod agent_sandbox_mask;
 mod artifact_tools;
 mod audit_commit_report;
+mod auto_task_job_steps;
 mod auto_task_update;
 mod backlog_resource_fit;
 mod backlog_review_modes;

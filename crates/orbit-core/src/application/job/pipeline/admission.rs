@@ -139,6 +139,14 @@ impl OrbitRuntime {
         };
         let mut input = input;
         if let Ok(spec) = &spec {
+            // Auto-task steps are defined and explained only: refuse before
+            // reclamation, admission capture or a run record exists.
+            if spec.declares_auto_task_steps() {
+                return Err(OrbitError::InvalidInput(format!(
+                    "job '{job_name}' has auto-task steps, which this Orbit can define and \
+                     explain but cannot run yet; nothing was submitted"
+                )));
+            }
             delivery::normalize_delivery_input(spec, &mut input)?;
         }
         let reuse_admission = resume.is_some() && !source_repair;

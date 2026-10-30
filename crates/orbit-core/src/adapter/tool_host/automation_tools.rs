@@ -1,4 +1,4 @@
-//! The `orbit.automation.*` tools: the read-only condition explain.
+//! The `orbit.automation.*` tools: the read-only condition and job explain.
 use crate::OrbitRuntime;
 use orbit_common::{
     OrbitError,
@@ -16,7 +16,7 @@ pub(super) fn dispatch(
         AutomationVerb::Explain => {
             let definition = input.required_string("definition")?;
             let subject = input.optional_string("subject")?;
-            let report = runtime.explain_automation_condition(&definition, subject.as_deref())?;
+            let report = runtime.explain_automation(&definition, subject.as_deref())?;
             serde_json::to_value(report)
                 .map_err(|error| OrbitError::Execution(format!("automation explain: {error}")))
         }

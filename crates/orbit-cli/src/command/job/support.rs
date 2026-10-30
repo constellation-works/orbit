@@ -59,6 +59,16 @@ pub(super) fn write_v2_step(step: &JobV2Step, indent: usize, out: &mut String) {
     if let Some(retry) = &step.retry {
         let _ = writeln!(out, "{pad}{} {}", bold("Retry:"), format_retry(retry));
     }
+    for (label, field) in [
+        ("Wait Until:", &step.wait_until),
+        ("Expire When:", &step.expire_when),
+        ("Reuse When:", &step.reuse_when),
+        ("Require Result:", &step.require_result),
+    ] {
+        if let Some(field) = field {
+            let _ = writeln!(out, "{pad}{} {}", bold(label), field);
+        }
+    }
     match &step.body {
         JobV2StepBody::TargetRef(target) => {
             let _ = writeln!(

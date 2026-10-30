@@ -401,6 +401,10 @@ fn validation_step(id: &str, when: Option<&str>, body: JobV2StepBody) -> JobV2St
         retry: None,
         recovery_activity: None,
         resolved_recovery_activity: None,
+        wait_until: None,
+        expire_when: None,
+        reuse_when: None,
+        require_result: None,
         body,
     }
 }
@@ -583,6 +587,7 @@ fn synthetic_job_using_ref(target_name: &str) -> JobV2 {
         steering_gate: None,
         max_active_runs: 1,
         kind: JobKind::Workflow,
+        expire_when: None,
         steps: vec![JobV2Step {
             id: "the_step".to_string(),
             stage: None,
@@ -590,6 +595,10 @@ fn synthetic_job_using_ref(target_name: &str) -> JobV2 {
             retry: None,
             recovery_activity: None,
             resolved_recovery_activity: None,
+            wait_until: None,
+            expire_when: None,
+            reuse_when: None,
+            require_result: None,
             body: JobV2StepBody::TargetRef(TargetRef {
                 target: format!("activity:{}", target_name),
                 default_input: None,
@@ -615,6 +624,44 @@ fn stub_deterministic_activity(name: &str) -> ActivityV2 {
     }
 }
 
+/// [ORB-20157] An `auto-task:` ref survives resolution for Core to inspect,
+/// and execution validation, which runs before any step, refuses the job.
+fn auto_task_steps_resolve_but_never_run() {
+    let catalog = load_reference_catalog().unwrap();
+    let mut job = load_job_asset(
+        "schemaVersion: 2\nkind: Job\nmetadata:\n  name: readiness\nspec:\n  state: disabled\n  \
+         expire_when: \"now >= job.started_at + duration('24h')\"\n  steps:\n    \
+         - id: assess\n      target: activity:agent_assess_diff\n    \
+         - id: qa\n      target: auto-task:full-qa-sweep\n      wait_until: board.empty\n",
+    )
+    .unwrap()
+    .spec;
+    resolve_job_target_refs(&mut job, &catalog).unwrap();
+    assert!(matches!(&job.steps[0].body, JobV2StepBody::Target(_)));
+    let JobV2StepBody::TargetRef(reference) = &job.steps[1].body else {
+        panic!("auto-task ref was rewritten: {:?}", job.steps[1].body);
+    };
+    assert_eq!(reference.target, "auto-task:full-qa-sweep");
+    match validate_job(&job) {
+        Err(DispatchError::JobValidation(message)) => assert!(
+            message.contains("step `qa` targets auto-task `full-qa-sweep`")
+                && message.contains("no step ran"),
+            "{message}"
+        ),
+        other => panic!("auto-task job passed execution validation: {other:?}"),
+    }
+
+    job.steps.truncate(1);
+    match validate_job(&job) {
+        Err(DispatchError::JobValidation(message)) => {
+            assert!(message.contains("declares `expire_when`"), "{message}");
+        }
+        other => panic!("job expire_when passed execution validation: {other:?}"),
+    }
+    job.expire_when = None;
+    validate_job(&job).unwrap();
+}
+
 /// Behavior-distinct rows share one bounded family process.
 #[test]
 fn catalog_contracts_1() {
@@ -638,6 +685,10 @@ fn catalog_contracts_1() {
             (
                 "validate_job_checks_quorum_bounds",
                 validate_job_checks_quorum_bounds,
+            ),
+            (
+                "auto_task_steps_resolve_but_never_run",
+                auto_task_steps_resolve_but_never_run,
             ),
         ]);
     });

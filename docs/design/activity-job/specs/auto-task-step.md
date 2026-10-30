@@ -12,9 +12,12 @@ tags: [activity-job, condition-triggers, auto-tasks]
 
 # Spec: Auto-task steps and durable waiting
 
-This is a **proposed extension** to existing jobs. `target: auto-task:<name>`,
-`wait_until`, `expire_when` and the CEL facts below are not available today.
-It replaces the unmerged proposal for a separate auto-sequence definition type.
+This is an extension to existing jobs. Phase 1 (§7) has shipped:
+`target: auto-task:<name>`, `wait_until`, `expire_when`, `reuse_when`,
+`require_result` and the CEL facts below load, are checked and are explained,
+but no binary runs such a job yet. It must stay disabled, and submission is
+refused before any run or task exists. It replaces the unmerged proposal for
+a separate auto-sequence definition type.
 **Auto-sequence** may be an informal name for a job composing auto-tasks; it has
 no separate directory, loader, trigger carrier, commands or lifecycle.
 
@@ -376,11 +379,49 @@ drop `wait_until` or skip an unresolved target. Version pending/partial branch
 checkpoints and refuse older writers that cannot preserve them. Existing jobs
 and long-lived clients keep shipped behavior unless they opt into the extension.
 
-Deliver in phases: (1) disabled schema, target resolution and CEL explain;
+Deliver in phases: (1) disabled schema, target resolution and CEL explain
+(shipped, see "Phase 1 as built" below);
 (2) keyed bind/mint, parked waits, admission and partial-branch checkpoints;
 (3) QA, security and preparation readiness adapters plus disabled job/routine examples.
 None silently expands the already-filed condition-language phase-1 task. Actual
 enablement, provider work and release timing remain operator decisions.
+
+### Phase 1 as built
+
+- **Shape.** `orbit-types` parses the new keys. An auto-task step admits only
+  `id`, `stage`, `when`, `target` and the four wait keys, so a key this binary
+  does not know is refused, not dropped. `timeout_seconds: 0`, a serialized
+  ref's default, is the one exception. The wait keys are refused on any other
+  step. The engine keeps an `auto-task:` ref through target resolution, and
+  `validate_job` refuses the job before its first step.
+- **Checks.** `orbit-automation`'s condition checker gains a typed job scope
+  (`condition/job_wait.rs`), and Core runs it at catalog load, so a refused
+  job leaves the catalog with a per-file diagnostic, like a parse error. It
+  refuses `state: enabled`, a missing, non-restricted, non-positive or
+  over-168h `spec.expire_when`, more than 32 auto-task steps, a target inside
+  `loop` or `fan_out`, and an unregistered `require_result`. Inside the
+  expressions it also refuses type errors, unknown or computed `steps[]`
+  references, and forward, self, enclosing, sibling-branch and loop-nested
+  ones.
+- **Typing refinements.** A step with a previous sibling always has
+  `self.prev`, so it reads it without `has()`; on a first step or a parallel
+  branch the read is refused. `job.source_revision` is required-typed when a
+  step requires `release-readiness/v1`, which pins the revision at admission;
+  otherwise it needs `has()`. So does `result.revision`, except under that
+  contract. `board` adds `empty` to the condition board fields, and
+  `tasks['<ID>']` stays readable.
+- **Explain.** `orbit automation explain job:<name>` (MCP
+  `orbit.automation.explain`) reports the outer bound, the revision pin, and
+  each step's target, resolved now with its file digest, enabled state and
+  own condition guard, or reported `missing`. It also shows each step's
+  guards, waits and step reads. It writes nothing, and nothing is evaluated.
+  `orbit job show` lists the new fields.
+- **Older binaries.** An older Orbit cannot be changed, and no schemaVersion
+  bump is made ([4_decisions.md](../4_decisions.md) keeps schemaVersion 2 the
+  only family). Such a binary loads the file, shows the steps without the wait
+  fields, and refuses to submit it because it is disabled. An enabled copy
+  submitted there fails `auto-task:` target resolution in the worker before
+  its first step.
 
 ## 8. Acceptance and honest limitations
 

@@ -1,9 +1,9 @@
-Explain what condition-triggered routines and auto-tasks would match
+Explain what condition-triggered routines and auto-tasks would match, and jobs' auto-task steps
 
 Usage: orbit automation [OPTIONS] <COMMAND>
 
 Commands:
-  explain  Show a condition's matches, closest misses and clause tree over live state
+  explain  Show a condition's matches, closest misses and clause tree over live state, or a job's auto-task steps
 
 Options:
   -h, --help

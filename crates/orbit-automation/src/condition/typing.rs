@@ -11,20 +11,18 @@ use orbit_types::workflow::automation::ConditionScope;
 
 use super::ast::{path_of, string_list_literal, string_literal};
 use super::check::{ConditionReads, MAX_COMPREHENSION_NESTING};
-use super::schema::{self, CelType, ConditionCarrier, ObjectKind, require_status};
+use super::schema::{self, CelType, Environment, ObjectKind, Statuses, require_status};
 
-/// Type-check `ast` for `scope`, recording what it reads into `reads`. The
+/// Type-check `ast` in `env`, recording what it reads into `reads`. The
 /// whole expression must be `bool`.
 pub(super) fn check_types(
     ast: &IdedExpr,
     info: &SourceInfo,
-    scope: ConditionScope,
-    carrier: ConditionCarrier,
+    env: Environment<'_>,
     reads: &mut ConditionReads,
 ) -> Result<(), Failure> {
     let mut checker = Checker {
-        scope,
-        carrier,
+        env,
         info,
         locals: Vec::new(),
         guards: Vec::new(),
@@ -46,8 +44,7 @@ pub(super) struct Failure {
 }
 
 struct Checker<'a> {
-    scope: ConditionScope,
-    carrier: ConditionCarrier,
+    env: Environment<'a>,
     info: &'a SourceInfo,
     /// Comprehension variables, innermost last.
     locals: Vec<(String, CelType)>,
@@ -126,18 +123,27 @@ impl Checker<'_> {
         if let Some((_, ty)) = self.locals.iter().rev().find(|(local, _)| local == name) {
             return Ok(ty.clone());
         }
-        if let Some(ty) = schema::variable(self.scope, self.carrier, name) {
+        let (scope, carrier) = match self.env {
+            Environment::Condition { scope, carrier } => (scope, carrier),
+            Environment::JobWait(wait) => {
+                return match schema::wait_variable(wait, name) {
+                    Ok(ty) => Ok(ty),
+                    Err(why) => self.fail(expr, why),
+                };
+            }
+        };
+        if let Some(ty) = schema::variable(scope, carrier, name) {
             return Ok(ty);
         }
-        if let Some(why) = schema::unavailable_variable(self.scope, name) {
+        if let Some(why) = schema::unavailable_variable(scope, name) {
             return self.fail(expr, why);
         }
         self.fail(
             expr,
             format!(
                 "unknown identifier '{name}'; a {} condition reads {}",
-                self.scope.as_str(),
-                match self.scope {
+                scope.as_str(),
+                match scope {
                     ConditionScope::Task => "task, tasks['<ID>'], board, self and now",
                     _ => "tasks['<ID>'], board, self and now",
                 }
@@ -148,16 +154,20 @@ impl Checker<'_> {
     fn presence_test(&mut self, expr: &IdedExpr, select: &SelectExpr) -> Result<CelType, Failure> {
         let operand = self.check(&select.operand)?;
         match operand {
-            CelType::Object(ObjectKind::Tasks | ObjectKind::TagCounts) => self.fail(
-                expr,
-                "has() does not test a cross-read; an index that does not exist makes the \
-                 evaluation unknown",
-            ),
+            CelType::Object(ObjectKind::Tasks | ObjectKind::TagCounts | ObjectKind::Steps) => self
+                .fail(
+                    expr,
+                    "has() does not test a cross-read; an index that does not exist makes the \
+                     evaluation unknown",
+                ),
             CelType::Object(kind) => {
                 let Some(field) = kind.field(&select.field) else {
                     return self.fail(expr, unknown_field(kind, &select.field));
                 };
-                if kind == ObjectKind::Board {
+                if kind == ObjectKind::SelfStep && field.name == "prev" {
+                    self.require_prev(expr)?;
+                }
+                if kind.is_board() {
                     self.reads.board.insert(field.name);
                 }
                 Ok(CelType::Bool)
@@ -192,11 +202,21 @@ impl Checker<'_> {
                 expr,
                 "board.by_tag takes a string-literal index: write board.by_tag['<tag>']",
             ),
+            CelType::Object(ObjectKind::Steps) => self.fail(
+                expr,
+                "steps takes a string-literal index: write steps['<id>']",
+            ),
             CelType::Object(kind) => {
                 let Some(field) = kind.field(&select.field) else {
                     return self.fail(expr, unknown_field(kind, &select.field));
                 };
-                if field.optional {
+                // A step with a previous sibling always has one, so its
+                // `self.prev` needs no has() guard; a first step never does.
+                let is_prev = kind == ObjectKind::SelfStep && field.name == "prev";
+                if is_prev {
+                    self.require_prev(expr)?;
+                }
+                if field.optional && !is_prev {
                     let path = path_of(expr).unwrap_or_else(|| select.field.clone());
                     if !self.guards.contains(&path) {
                         return self.fail(
@@ -208,7 +228,7 @@ impl Checker<'_> {
                         );
                     }
                 }
-                if kind == ObjectKind::Board {
+                if kind.is_board() {
                     self.reads.board.insert(field.name);
                 }
                 if field.name == "status_since" {
@@ -456,13 +476,15 @@ impl Checker<'_> {
                         ),
                     );
                 }
-                if is_status_read(element, &self.types)
+                if let Some(statuses) = status_read(element, &self.types)
                     && let Some(literals) = string_list_literal(collection)
                 {
                     for literal in literals {
-                        require_status(&literal).map_err(|message| Failure {
-                            offset: self.offset(collection),
-                            message,
+                        schema::require_status_in(statuses, &literal).map_err(|message| {
+                            Failure {
+                                offset: self.offset(collection),
+                                message,
+                            }
                         })?;
                     }
                 }
@@ -601,6 +623,28 @@ impl Checker<'_> {
                 self.reads.task_ids.insert(id.to_owned());
                 Ok(CelType::Object(ObjectKind::Task))
             }
+            CelType::Object(ObjectKind::Steps) => {
+                let Some(id) = string_literal(index) else {
+                    return self.fail(
+                        index,
+                        "computed step reference: steps[...] takes a string literal, such as \
+                         steps['qa']",
+                    );
+                };
+                if let Environment::JobWait(wait) = self.env
+                    && !wait.visible_steps.contains(id)
+                {
+                    let why = wait
+                        .refused_steps
+                        .get(id)
+                        .cloned()
+                        .unwrap_or_else(|| format!("no step `{id}` in this job"));
+                    return self.fail(index, format!("steps['{id}']: {why}"));
+                }
+                self.check(index)?;
+                self.reads.steps.insert(id.to_owned());
+                Ok(CelType::Object(ObjectKind::StepObservation))
+            }
             CelType::Object(ObjectKind::TagCounts) => {
                 let Some(tag) = string_literal(index) else {
                     return self.fail(
@@ -647,15 +691,27 @@ impl Checker<'_> {
     /// Refuse a misspelled status where `subject` reads a task status and
     /// `other` is a string literal.
     fn check_status_literals(&self, subject: &IdedExpr, other: &IdedExpr) -> Result<(), Failure> {
-        if is_status_read(subject, &self.types)
+        if let Some(statuses) = status_read(subject, &self.types)
             && let Some(literal) = string_literal(other)
         {
-            require_status(literal).map_err(|message| Failure {
+            schema::require_status_in(statuses, literal).map_err(|message| Failure {
                 offset: self.offset(other),
                 message,
             })?;
         }
         Ok(())
+    }
+
+    /// Refuse a `self.prev` read where the step has no previous sibling.
+    fn require_prev(&self, expr: &IdedExpr) -> Result<(), Failure> {
+        match self.env {
+            Environment::JobWait(wait) if wait.prev.is_none() => self.fail(
+                expr,
+                "self.prev is always absent here: this step is first in its list or a \
+                 parallel branch; read an earlier step as steps['<id>'] instead",
+            ),
+            _ => Ok(()),
+        }
     }
 
     fn with_guards<T>(
@@ -700,12 +756,18 @@ fn facts_if_false(expr: &IdedExpr) -> Vec<String> {
     }
 }
 
-/// Whether `expr` reads the `status` of any task object.
-fn is_status_read(expr: &IdedExpr, types: &HashMap<u64, CelType>) -> bool {
-    matches!(&expr.expr, Expr::Select(select)
-        if !select.test
-            && select.field == "status"
-            && types.get(&select.operand.id) == Some(&CelType::Object(ObjectKind::Task)))
+/// The status vocabulary `expr` reads, when it reads the `status` of a task
+/// or step object.
+fn status_read(expr: &IdedExpr, types: &HashMap<u64, CelType>) -> Option<Statuses> {
+    match &expr.expr {
+        Expr::Select(select) if !select.test && select.field == "status" => {
+            match types.get(&select.operand.id) {
+                Some(CelType::Object(kind)) => kind.statuses(),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
 }
 
 fn unknown_field(kind: ObjectKind, field: &str) -> String {
