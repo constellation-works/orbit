@@ -32,8 +32,8 @@ use super::admission::{
     ensure_token_selector_count,
 };
 use super::holders::{PathHolders, selector_covers};
-use super::input::{parse_selectors, required_lease_id};
-use super::response::{ResponseBudget, lease_active, lease_json};
+use super::input::{LEASE_ID_PREFIX, parse_selectors, required_lease_id};
+use super::response::{PLACEHOLDER_TIMESTAMP, ResponseBudget, lease_active, lease_json};
 use crate::RuntimeKernel;
 
 const EXPAND_TOOL: &str = "orbit.lease.expand";
@@ -135,9 +135,19 @@ fn expand_as(
             // The largest answer with empty holder lists and no cycle yet.
             // `deadlock` is null here; the store spends the leftover budget
             // on the complete cycle or refuses the expansion before writing.
+            // Size it with the longest timestamps, lease id and queue fields
+            // the answer can carry, as the request path does, so the budget
+            // stays deterministic across the probe and the final lease and
+            // never underestimates the queued record the store will write.
             let mut provisional = current.clone();
             provisional.selectors.extend(surface.iter().cloned());
             provisional.queued_selectors.extend(surface.iter().cloned());
+            provisional.lease_id = format!("{LEASE_ID_PREFIX}{}", "0".repeat(64));
+            provisional.created_at = PLACEHOLDER_TIMESTAMP.to_string();
+            provisional.expires_at = PLACEHOLDER_TIMESTAMP.to_string();
+            provisional.heartbeat_at = PLACEHOLDER_TIMESTAMP.to_string();
+            provisional.queued_at = Some(PLACEHOLDER_TIMESTAMP.to_string());
+            provisional.queue_kind = Some(LeaseQueueKind::Expansion);
             ResponseBudget::for_token(
                 grant.max_response_bytes,
                 &json!({
