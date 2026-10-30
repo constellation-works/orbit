@@ -10,7 +10,7 @@ use serde_json::Value;
 use super::super::super::dispatcher::{DispatchError, ResolvedSandbox};
 use super::super::super::workspace::resolve_subprocess_cwd;
 use super::super::inspection::SourceInspection;
-use super::super::spawn::{PreparedSandbox, prepare_sandbox_for_dispatch};
+use super::super::spawn::{PreparedSandbox, UnavailableWrapper, prepare_sandbox_for_dispatch};
 use super::super::supervisor::DEFAULT_WALL_CLOCK_TIMEOUT_SECONDS;
 use crate::context::RuntimeHost;
 
@@ -169,14 +169,22 @@ pub(super) fn resolve_dispatch_sandbox(
 }
 
 /// Prepare the resolved sandbox for spawn, or record the trusted-host absence
-/// of one.
+/// of one. An explorer whose wrapper cannot start is not refused here: it
+/// continues unwrapped, and the provider dispatch refuses any provider without
+/// a read-only mode [ORB-16814].
 pub(super) fn prepare_dispatch_sandbox<'a>(
+    activity_name: &str,
     trusted_host: Option<&TrustedHostAdmission>,
     resolved_sandbox: Option<&'a ResolvedSandbox>,
 ) -> Result<PreparedSandbox<'a>, DispatchError> {
+    let on_unavailable = if activity_name == EXPLORE_ACTIVITY {
+        UnavailableWrapper::ProviderReadOnly
+    } else {
+        UnavailableWrapper::RefuseUnlessFallback
+    };
     Ok(match trusted_host {
         Some(_) => PreparedSandbox::none_trusted_host(),
-        None => prepare_sandbox_for_dispatch(resolved_sandbox)
+        None => prepare_sandbox_for_dispatch(resolved_sandbox, on_unavailable)
             .map_err(|error| DispatchError::CliInvocationPermanent(error.message))?,
     })
 }

@@ -7,6 +7,7 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
+use orbit_engine::test_support::with_bwrap_probe_unavailable;
 use orbit_engine::{DispatchOutcome, ResolvedSandbox};
 use orbit_store::Store;
 use orbit_types::policy::ResolvedFsProfile;
@@ -413,6 +414,100 @@ fn a_wrapped_explorer_still_dispatches() {
     assert!(
         provider_started(&audit_events(&store, run_id)),
         "the wrapped provider is spawned, not refused"
+    );
+}
+
+/// An executor whose Linux wrapper cannot start: the probe is forced to fail
+/// with `with_bwrap_probe_unavailable`, and no `allow_fallback` is declared.
+fn bwrap_executor_sandbox() -> ResolvedSandbox {
+    ResolvedSandbox {
+        kind: ExecutorSandboxKind::LinuxBwrap,
+        fs_profile: ResolvedFsProfile {
+            name: "reviewer".to_string(),
+            read: vec!["/**".to_string()],
+            modify: Vec::new(),
+        },
+        allow_fallback: false,
+        managed_worktree: false,
+        runtime_write_authority: Vec::new(),
+        mask: None,
+    }
+}
+
+#[test]
+fn an_explorer_whose_bwrap_probe_fails_runs_codex_read_only() {
+    let argv = with_bwrap_probe_unavailable(|| {
+        codex_argv(EXPLORE_ACTIVITY, Some(bwrap_executor_sandbox()))
+    });
+    assert_eq!(
+        sandbox_mode(&argv),
+        Some("read-only"),
+        "a failed wrapper probe must hand the explorer's write boundary to Codex's read-only \
+         mode, not refuse the run and not neutralize Codex's sandbox"
+    );
+}
+
+#[test]
+fn an_explorer_without_a_read_only_mode_is_refused_when_its_bwrap_probe_fails() {
+    let (temp, worktree, marker) = scratch_worktree(std::env::temp_dir().as_path());
+    let command = temp.path().join("claude");
+    write_executable(&command, &claude_that_attempts_write(&marker));
+    let run_id = "explore-probe-refuse";
+    let (outcome, store) = with_bwrap_probe_unavailable(|| {
+        dispatch_claude(
+            EXPLORE_ACTIVITY,
+            &worktree,
+            &command,
+            Some(bwrap_executor_sandbox()),
+            run_id,
+            temp.path(),
+        )
+    });
+    let error = outcome.expect_err("an unwrapped Claude explorer must be refused");
+    let DispatchError::CliInvocationPermanent(message) = &error else {
+        panic!("the refusal is permanent, so a retry cannot spawn the provider: {error}");
+    };
+    assert!(
+        message.contains("no enforced read-only sandbox") && message.contains("claude"),
+        "the refusal names the missing read-only mode and the provider, not the probe: {message}"
+    );
+    assert!(
+        !marker.exists(),
+        "the fake provider must not modify the caller's worktree"
+    );
+    assert!(
+        !provider_started(&audit_events(&store, run_id)),
+        "the provider is refused before spawn"
+    );
+}
+
+#[test]
+fn an_implementer_whose_bwrap_probe_fails_still_needs_allow_fallback() {
+    let (temp, worktree, marker) = scratch_worktree(std::env::temp_dir().as_path());
+    let command = temp.path().join("claude");
+    write_executable(&command, &claude_that_attempts_write(&marker));
+    let run_id = "implement-probe-refuse";
+    let (outcome, store) = with_bwrap_probe_unavailable(|| {
+        dispatch_claude(
+            "agent_implement",
+            &worktree,
+            &command,
+            Some(bwrap_executor_sandbox()),
+            run_id,
+            temp.path(),
+        )
+    });
+    let error = outcome.expect_err("an implementer with a failed wrapper is refused");
+    let DispatchError::CliInvocationPermanent(message) = &error else {
+        panic!("the refusal is permanent, so a retry cannot spawn the provider: {error}");
+    };
+    assert!(
+        message.contains("allow_fallback"),
+        "only a declared allow_fallback permits an implementer to run bare: {message}"
+    );
+    assert!(
+        !marker.exists() && !provider_started(&audit_events(&store, run_id)),
+        "an implementer is refused before spawn"
     );
 }
 

@@ -13,7 +13,7 @@ use orbit_exec::spawn_owned_supervised_cancellable;
 use orbit_types::workflow::{DeferralProbe, NamespaceProbe};
 
 use crate::activity_job::cli_runner::spawn::{
-    prepare_sandbox_for_dispatch, spawn_child_with_optional_sandbox,
+    UnavailableWrapper, prepare_sandbox_for_dispatch, spawn_child_with_optional_sandbox,
 };
 use crate::context::RuntimeHost;
 
@@ -52,8 +52,9 @@ fn spawn_probe<H: RuntimeHost + ?Sized>(
             .map_err(|error| format!("resolve the lane's sandbox: {error}"))?,
         None => None,
     };
-    let prepared = prepare_sandbox_for_dispatch(sandbox.as_ref())
-        .map_err(|error| format!("prepare the lane's sandbox: {}", error.message))?;
+    let prepared =
+        prepare_sandbox_for_dispatch(sandbox.as_ref(), UnavailableWrapper::RefuseUnlessFallback)
+            .map_err(|error| format!("prepare the lane's sandbox: {}", error.message))?;
     let (program, args) = probe
         .argv
         .split_first()

@@ -81,8 +81,11 @@ pub(super) fn dispatch_prepared_provider(
         subprocess_cwd.as_deref(),
         trusted_host.as_ref(),
     )?;
-    let prepared_sandbox =
-        prepare_dispatch_sandbox(trusted_host.as_ref(), resolved_sandbox.as_ref())?;
+    let prepared_sandbox = prepare_dispatch_sandbox(
+        activity_name,
+        trusted_host.as_ref(),
+        resolved_sandbox.as_ref(),
+    )?;
     let sandbox = prepared_sandbox.effective;
 
     let mut envelope_spec = spec.clone();
@@ -216,11 +219,11 @@ pub(super) fn dispatch_prepared_provider(
     // [ORB-16814] An explorer is read-only by contract. Wrapped by Orbit's
     // sandbox, its reviewer profile already denies every worktree write and a
     // second inner sandbox cannot nest (Seatbelt refuses it). Unwrapped,
-    // including an explicit executor opt-out and a bare fallback, the
-    // provider's own read-only sandbox is the boundary instead of being
-    // neutralized. A provider with no such mode must not start: the profile
-    // is not an OS boundary, and its native tools could write the caller's
-    // worktree.
+    // including an explicit executor opt-out, a bare fallback and a wrapper
+    // that cannot start on this host, the provider's own read-only sandbox is
+    // the boundary instead of being neutralized. A provider with no such mode
+    // must not start: the profile is not an OS boundary, and its native tools
+    // could write the caller's worktree.
     if activity_name == EXPLORE_ACTIVITY && sandbox.is_none() {
         if !apply_read_only_provider_sandbox(&provider, &mut provider_config) {
             return Err(DispatchError::CliInvocationPermanent(format!(

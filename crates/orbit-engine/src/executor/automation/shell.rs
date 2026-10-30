@@ -40,7 +40,7 @@ use orbit_exec::spawn_owned_supervised_cancellable;
 use serde_json::{Value, json};
 
 use crate::activity_job::cli_runner::spawn::{
-    prepare_sandbox_for_dispatch, spawn_child_with_optional_sandbox,
+    UnavailableWrapper, prepare_sandbox_for_dispatch, spawn_child_with_optional_sandbox,
 };
 use crate::activity_job::dispatcher::DispatchError;
 use crate::context::RuntimeHost;
@@ -166,8 +166,9 @@ fn execute_local_shell<H: RuntimeHost + Sync + ?Sized>(
                 config.executor
             ))
         })?;
-    let prepared = prepare_sandbox_for_dispatch(sandbox.as_ref())
-        .map_err(|error| OrbitError::Execution(error.to_string()))?;
+    let prepared =
+        prepare_sandbox_for_dispatch(sandbox.as_ref(), UnavailableWrapper::RefuseUnlessFallback)
+            .map_err(|error| OrbitError::Execution(error.to_string()))?;
 
     let spawned = spawn_child_with_optional_sandbox(
         &program,
