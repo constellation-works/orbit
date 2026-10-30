@@ -1,6 +1,7 @@
 # Orbit configuration. Omitted keys use their built-in defaults:
-# `orbit config keys` lists every key with its default and description, and
-# https://orbit-cli.com/reference/config/ explains them.
+# `orbit config keys` lists every key with its type and description;
+# `orbit config get <key>` and `orbit config show` show effective values
+# and defaults, and https://orbit-cli.com/reference/config/ explains them.
 
 [execution.env]
 # Agent subprocesses start from a cleared environment and receive only these

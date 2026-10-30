@@ -304,6 +304,37 @@ another ID and allocation/publication of a new task must not scan the malformed
 bundle. List and search remain fail-loud and return that diagnostic. None of
 these query paths may delete, move, repair, or quarantine bundle bytes.
 
+Long-lived readers of writable registries reuse the rows and envelope-proof fingerprints
+between commits. A dedicated read-only SQLite connection samples
+`PRAGMA data_version` before loading a snapshot; commits from any registry
+writer invalidate it on the next read. The version is compared only on that
+same connection, and a commit during loading forces another refresh rather
+than labelling older rows with a newer version. Each registry handle retains
+at most one partition snapshot, shared by its clones.
+The snapshot aligns bindings, index fields, fingerprints and recorded proofs
+once at refresh, so warm scans traverse one row vector without rebuilding
+lookup maps or formatting unchanged proof stamps.
+Registries admitted read-only retain their direct reads, including the
+existing immutable-main-file fallback when live WAL observation is unavailable.
+
+Within a process, a successful comparison of a parsed envelope with an
+immutable index row is also reused while that exact row and the envelope's
+file stamp remain unchanged. A refreshed registry snapshot supplies new row
+identities, and a replaced envelope retires its comparison, so this avoids
+rebuilding scalar/tag/parent projections on warm polls without relaxing their
+validation.
+Pending proofs remain attached to their immutable row and are retried when a
+busy registry writer prevented recording them; reuse never suppresses that
+later recording attempt.
+
+This reuse does not cache filesystem freshness. Every listing still probes
+every registered `task.yaml` for file identity, size and modification time.
+A persisted proof is accepted only when both that file stamp and the current
+index-row fingerprint match; a cached parse of an older file is discarded.
+Missing or changed envelopes still take the strict read and detect-and-repair
+path, so neither an external envelope replacement nor an index-only change
+waits for a timer or a process restart to become visible.
+
 ### Concurrent reads and lifecycle writes
 
 A lifecycle write publishes across more than one file — a status transition

@@ -68,8 +68,8 @@ host itself and records them in `~/.orbit/hosts.toml`. `orbit host list` shows
 every host with its live reachability, Orbit version, pull protocol and
 workspaces, and flags a version or protocol that differs from this machine's.
 `orbit host rename` and `orbit host remove` manage the entries. An older
-`~/.orbit/mcp-destinations.toml` is still read until the first of these
-commands migrates it.
+`~/.orbit/mcp-destinations.toml` is still read until the first
+`orbit host add`, `orbit host rename` or `orbit host remove` migrates it.
 
 Then register the federated server with a client:
 
@@ -139,6 +139,7 @@ Use the existing guides for the other public families:
 | `orbit.decision.list`, `orbit.decision.show`, `orbit.decision.digest`, `orbit.decision.submit` | [Decision channels](../decision-channels/) covers read-only inspection, operator registration and authenticated plugin callbacks. Agents cannot answer requests. |
 | `orbit.codebase.*` | [Dashboard views](../dashboard/). |
 | `orbit.ui.open`, `orbit.ui.inspect` | [Open the MCP Apps control center](../mcp-apps/). |
+| Plugin tools marked `agent_callable`, once the plugin is granted `agent_tools` | [Install and grant plugins](../plugins/). |
 
 The requests below are illustrative MCP `tools/call` bodies, not setup steps.
 Replace `ws_example` with an unchanged selector from `orbit_workspace_list`

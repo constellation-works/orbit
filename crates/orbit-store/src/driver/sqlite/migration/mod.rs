@@ -69,9 +69,9 @@ use invocation::{
 use job_run_tasks::apply_job_run_task_recency;
 use job_runs::{
     apply_execution_provenance, apply_flat_crew_model, apply_job_run_archive_stage,
-    apply_job_run_id_allocations, apply_job_run_states, apply_job_run_step_lock_wait,
-    apply_job_runs_created_index, apply_job_runs_job_created_and_retry_indexes,
-    apply_job_runs_recency_index,
+    apply_job_run_id_allocations, apply_job_run_states, apply_job_run_step_activity_window_index,
+    apply_job_run_step_lock_wait, apply_job_runs_created_index,
+    apply_job_runs_job_created_and_retry_indexes, apply_job_runs_recency_index,
 };
 use landed_diff_stats::apply_landed_diff_stats;
 use learning::{apply_learning_index_workspace_scope, apply_remove_native_learning_subsystem};
@@ -82,9 +82,10 @@ use plugins::{
     apply_plugins_and_audit_plugin_provenance,
 };
 use resource_minutes::{
-    apply_admission_forecasts, apply_forecast_attribution, apply_host_resource_minutes,
-    apply_pull_forecast_decisions, apply_resource_minute_regime, apply_run_resource_minutes,
-    apply_run_resource_minutes_freshness_index, apply_worker_cpu_accounting,
+    apply_admission_forecasts, apply_delivery_runs_stamp, apply_forecast_attribution,
+    apply_host_resource_minutes, apply_pull_forecast_decisions, apply_resource_minute_regime,
+    apply_run_resource_minutes, apply_run_resource_minutes_freshness_index,
+    apply_worker_cpu_accounting,
 };
 use retention_analytics::apply_retention_analytics;
 use routine::apply_routine_scheduler_schema;

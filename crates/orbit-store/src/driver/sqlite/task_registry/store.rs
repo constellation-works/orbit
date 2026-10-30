@@ -7,6 +7,7 @@ use orbit_common::storage::sqlite::{
 use orbit_common::{OrbitError, StorageLayer};
 use rusqlite::{Connection, OpenFlags};
 
+use super::index_snapshot::TaskIndexSnapshots;
 use super::schema::{assert_readable_schema, migrate_writable};
 use crate::driver::sqlite::read_pool::{ReadGuard, ReadPool};
 use crate::fs::path_safety::normalize_path;
@@ -31,6 +32,7 @@ fn workspaces_dir_of(path: &Path) -> PathBuf {
 /// that shares the registry file (orbit-web, the MCP server).
 #[derive(Clone)]
 pub struct TaskRegistryStore {
+    pub(super) index_snapshots: Arc<TaskIndexSnapshots>,
     /// The single writer connection. Every mutating statement and every
     /// transaction serializes here; reads go through [`Self::read`].
     pub(super) conn: Arc<Mutex<Connection>>,
@@ -106,6 +108,7 @@ impl TaskRegistryStore {
         }
 
         Ok(Self {
+            index_snapshots: Arc::new(TaskIndexSnapshots::new(path)),
             conn: Arc::new(Mutex::new(conn)),
             readers: (!read_only).then(|| Arc::new(ReadPool::new(path.to_path_buf()))),
             workspaces_dir,
@@ -129,6 +132,7 @@ impl TaskRegistryStore {
             .map_err(sqlite_store_error)?;
         let readable = assert_readable_schema(&conn, path)?;
         Ok(Self {
+            index_snapshots: Arc::new(TaskIndexSnapshots::new(path)),
             conn: Arc::new(Mutex::new(conn)),
             readers: None,
             workspaces_dir,

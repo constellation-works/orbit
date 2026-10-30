@@ -15,6 +15,7 @@ workspace = true
 orbit-common = { path = "../orbit-common" }
 orbit-types = { path = "../orbit-types" }
 orbit-store = { path = "../orbit-store" }
+cel.workspace = true
 chrono.workspace = true
 croner.workspace = true
 serde.workspace = true

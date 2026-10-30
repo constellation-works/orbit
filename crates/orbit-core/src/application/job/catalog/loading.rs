@@ -176,6 +176,57 @@ impl OrbitRuntime {
             })
     }
 
+    /// Fill the ux-rules pipeline's run inputs from explicitly configured
+    /// `ux_rules.*` config when the caller did not supply them, so scheduled
+    /// routines and direct runs measure the configured surfaces with the
+    /// configured runner and UI URL. Explicit caller values (including an
+    /// empty `surfaces` list) win; a `null` is treated as unsupplied,
+    /// matching the filer's handling of its optional inputs. Built-in
+    /// defaults are never injected, so the job's literal `default_input`
+    /// remains the fallback when a key is unset in config.
+    pub(crate) fn resolve_ux_rules_input(&self, input: &mut Value) -> Result<(), OrbitError> {
+        if input.is_null() {
+            *input = serde_json::json!({});
+        }
+        let Some(input_object) = input.as_object_mut() else {
+            return Err(OrbitError::InvalidInput(
+                "ux-rules run input must be an object".to_string(),
+            ));
+        };
+        let needs = ["surfaces", "runner", "ui_base_url"]
+            .iter()
+            .any(|key| input_object.get(*key).is_none_or(Value::is_null));
+        if !needs {
+            return Ok(());
+        }
+        let config = orbit_config::load_effective_config(&orbit_config::ConfigRoots::new(
+            self.global_root(),
+            self.shared_root(),
+        ))?;
+        for (input_key, config_key) in [
+            ("surfaces", "ux_rules.surfaces"),
+            ("runner", "ux_rules.runner"),
+            ("ui_base_url", "ux_rules.ui_base_url"),
+        ] {
+            if input_object.get(input_key).is_none_or(Value::is_null) {
+                let configured_value = config
+                    .values()
+                    .iter()
+                    .find(|entry| {
+                        entry.key == config_key
+                            && entry.source.kind() != orbit_config::ConfigValueSourceKind::BuiltIn
+                    })
+                    .map(|entry| entry.value.clone());
+                if let Some(value) = configured_value {
+                    input_object.insert(input_key.to_string(), value);
+                } else {
+                    input_object.remove(input_key);
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn list_job_catalog_with_last_run(
         &self,
         include_disabled: bool,

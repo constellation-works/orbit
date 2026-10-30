@@ -203,6 +203,7 @@ pub(crate) fn build_profiles(
         crew_profiles,
         class_profiles,
         crew_models,
+        workspace_json: Default::default(),
     }
 }
 

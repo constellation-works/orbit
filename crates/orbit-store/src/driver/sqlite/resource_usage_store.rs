@@ -8,7 +8,7 @@
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
-use rusqlite::{TransactionBehavior, params, params_from_iter};
+use rusqlite::{OptionalExtension, TransactionBehavior, params, params_from_iter};
 
 use crate::Store;
 use crate::contracts::{
@@ -235,6 +235,29 @@ impl ResourceUsageStoreBackend for Store {
                 .map_err(sqlite_store_error)?,
             finished_runs: unsigned(finished),
         })
+    }
+
+    fn delivery_runs_stamp(&self) -> Result<Option<i64>, OrbitError> {
+        let conn = self.read()?;
+        // A write-free reader may open a store migrated before the counter.
+        let kept: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                               WHERE type = 'table' AND name = 'delivery_runs_stamp')",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(sqlite_store_error)?;
+        if !kept {
+            return Ok(None);
+        }
+        conn.query_row(
+            "SELECT stamp FROM delivery_runs_stamp WHERE id = 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(sqlite_store_error)
     }
 
     fn host_resource_minutes(
@@ -604,7 +627,6 @@ impl crate::contracts::WorkerResourceLimitStoreBackend for Store {
         workspace_id: &str,
         run_id: &str,
     ) -> Result<Option<crate::contracts::WorkerResourceLimitEvidence>, OrbitError> {
-        use rusqlite::OptionalExtension;
         self.read()?.query_row(
             "SELECT evidence_json FROM worker_resource_limits WHERE workspace_id = ?1 AND run_id = ?2",
             params![workspace_id, run_id],

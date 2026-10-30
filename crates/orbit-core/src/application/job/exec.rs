@@ -227,6 +227,9 @@ impl OrbitRuntime {
             ));
         }
         let mut input = input;
+        if job_name == "ux_rules_pipeline" {
+            self.resolve_ux_rules_input(&mut input)?;
+        }
         super::delivery::normalize_delivery_input(&spec, &mut input)?;
         self.install_auto_concurrency(
             &job_name,

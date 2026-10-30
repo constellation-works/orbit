@@ -41,7 +41,7 @@ impl Tool for RoutineControlTool {
             parameter("enabled", "boolean", false, "Required for toggle: desired enabled state"),
             parameter("target", "string", false, "Required for toggle and set_trigger: observed routine target"),
             parameter("expected_trigger", "object", false, "Required for set_trigger: observed trigger object, as listed"),
-            parameter("trigger", "object", false, "Required for set_trigger: replacement trigger, exactly one of `cron` (with optional `missed_run`), `state` or `deliveries_landed`"),
+            parameter("trigger", "object", false, "Required for set_trigger: replacement trigger, exactly one of `cron` (with optional `missed_run`), `state`, `deliveries_landed` or `condition` (checked and explained but never fired in this release; routine must stay disabled)"),
             parameter("offset", "integer", false, "List offset; default 0"),
             parameter("limit", "integer", false, "List size 1 through 50; default 25"),
             parameter("model", "string", false, "Diagnostic model attribution; never grants authority"),

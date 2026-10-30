@@ -386,10 +386,7 @@ async fn answer_locally(
     // clean extension set that carries only the browser session the inner
     // session handlers read; method, headers, query and body stay untouched
     // and the inner router's origin guard still runs.
-    let browser_sessions = parts
-        .extensions
-        .get::<axum::Extension<Arc<BrowserSessions>>>()
-        .cloned();
+    let browser_sessions = parts.extensions.get::<Arc<BrowserSessions>>().cloned();
     parts.extensions = Default::default();
     if let Some(sessions) = browser_sessions {
         parts.extensions.insert(sessions);

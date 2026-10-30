@@ -3,6 +3,7 @@ use std::collections::BTreeSet;
 use orbit_common::OrbitError;
 use orbit_common::governance::agents::AgentsVerb;
 use orbit_common::governance::auto_task::AutoTaskVerb;
+use orbit_common::governance::automation::AutomationVerb;
 use orbit_common::governance::codebase::CodebaseVerb;
 use orbit_common::governance::crew::CrewVerb;
 use orbit_common::governance::decision::DecisionVerb;
@@ -401,6 +402,12 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
                 ..NO_REDACTION
             },
         },
+        OrbitBuiltinAction::Automation(verb) => match verb {
+            AutomationVerb::Explain => ActionPolicy {
+                declared: verb.spec().params,
+                ..NO_REDACTION
+            },
+        },
         OrbitBuiltinAction::Crew(verb) => match verb {
             CrewVerb::Ladder => ActionPolicy {
                 declared: verb.spec().params,
@@ -482,6 +489,9 @@ fn is_covered_mutating_action(action: OrbitBuiltinAction) -> bool {
         },
         OrbitBuiltinAction::Agents(verb) => match verb {
             AgentsVerb::Scorecard | AgentsVerb::Show => false,
+        },
+        OrbitBuiltinAction::Automation(verb) => match verb {
+            AutomationVerb::Explain => false,
         },
         OrbitBuiltinAction::Crew(verb) => match verb {
             CrewVerb::Ladder => false,
@@ -678,23 +688,34 @@ fn sanitize_string(
             let env_scrubbed = redact_sensitive_env_text(raw);
             let pattern_scrubbed = redact_all(raw);
             let sanitized = redact_home_dir(&pattern_scrubbed);
-            let mut kinds = BTreeSet::new();
-            let mut classes = BTreeSet::new();
-            if env_scrubbed != raw {
-                kinds.insert(ArtifactRedactionKind::Env);
-                classes.insert("sensitive_environment_value");
-            }
-            if pattern_scrubbed != env_scrubbed {
-                kinds.insert(ArtifactRedactionKind::Pattern);
-                classes.extend(pattern_redaction_classes(&env_scrubbed, &pattern_scrubbed));
-            }
-            if sanitized != pattern_scrubbed {
-                kinds.insert(ArtifactRedactionKind::HomeDir);
-                classes.insert("home_directory");
-            }
+            let (kinds, classes) =
+                classify_redaction_evidence(raw, &env_scrubbed, &pattern_scrubbed, &sanitized);
             Ok((sanitized, kinds, classes))
         }
     }
+}
+
+fn classify_redaction_evidence(
+    raw: &str,
+    env_scrubbed: &str,
+    pattern_scrubbed: &str,
+    sanitized: &str,
+) -> (BTreeSet<ArtifactRedactionKind>, BTreeSet<&'static str>) {
+    let mut kinds = BTreeSet::new();
+    let mut classes = BTreeSet::new();
+    if env_scrubbed != raw {
+        kinds.insert(ArtifactRedactionKind::Env);
+        classes.insert("sensitive_environment_value");
+    }
+    if pattern_scrubbed != env_scrubbed {
+        kinds.insert(ArtifactRedactionKind::Pattern);
+        classes.extend(pattern_redaction_classes(env_scrubbed, pattern_scrubbed));
+    }
+    if sanitized != pattern_scrubbed {
+        kinds.insert(ArtifactRedactionKind::HomeDir);
+        classes.insert("home_directory");
+    }
+    (kinds, classes)
 }
 
 fn pattern_redaction_classes(before: &str, after: &str) -> BTreeSet<&'static str> {
@@ -719,20 +740,12 @@ fn sanitize_response_value(value: &mut Value, path: &str, report: &mut ArtifactR
             let env_scrubbed = redact_sensitive_env_text(raw);
             let pattern_scrubbed = redact_all(&env_scrubbed);
             let sanitized = redact_home_dir(&pattern_scrubbed);
-            let mut kinds = BTreeSet::new();
-            let mut classes = BTreeSet::new();
-            if env_scrubbed != *raw {
-                kinds.insert(ArtifactRedactionKind::Env);
-                classes.insert("sensitive_environment_value");
-            }
-            if pattern_scrubbed != env_scrubbed {
-                kinds.insert(ArtifactRedactionKind::Pattern);
-                classes.extend(pattern_redaction_classes(&env_scrubbed, &pattern_scrubbed));
-            }
-            if sanitized != pattern_scrubbed {
-                kinds.insert(ArtifactRedactionKind::HomeDir);
-                classes.insert("home_directory");
-            }
+            let (kinds, classes) = classify_redaction_evidence(
+                raw.as_str(),
+                &env_scrubbed,
+                &pattern_scrubbed,
+                &sanitized,
+            );
             if sanitized != *raw {
                 *raw = sanitized;
                 report.push(path.to_string(), kinds, classes);
