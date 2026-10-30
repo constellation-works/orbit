@@ -750,7 +750,8 @@ spec:
     # candidate lands. A candidate a review commit changed is recaptured and
     # its checks rerun; a finding at or above `visual_review.block_at` left
     # unfixed, still failing its check, or disputed without the operator
-    # accepting the dispute ends the run held
+    # accepting the dispute, or the final candidate lacks complete evidence
+    # for each budgeted mock, ends the run held
     # (`delivery_visual_review_unresolved`), the PR open and unmerged.
     - id: visual_recapture
       when: "{{ steps.visual_capture.output.applies }} == true && {{ steps.commit.output.skipped_no_diff_expected }} != true"

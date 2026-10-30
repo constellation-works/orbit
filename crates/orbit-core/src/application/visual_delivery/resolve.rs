@@ -7,7 +7,8 @@
 //! rerun, and a blocking check finding still present stays unresolved. A
 //! must-address finding left unfixed, or disputed without the operator
 //! accepting the dispute (`orbit visual accept-dispute`), holds the
-//! candidate for the operator. A blocking finding the review gate issued
+//! candidate for the operator, as does a final candidate whose budgeted
+//! mocks lack complete evidence. A blocking finding the review gate issued
 //! no reviewer for (selective `not_required`, a review-skip tag) cannot be
 //! resolved, so it becomes a `high` follow-up instead of a hold.
 
@@ -270,7 +271,8 @@ impl OrbitRuntime {
 /// task's live visual findings before the candidate lands, recapturing a
 /// candidate a review commit changed. Refuses with
 /// `delivery_visual_review_unresolved`, holding the candidate, while a
-/// must-address finding is unresolved.
+/// must-address finding is unresolved or the final candidate lacks the
+/// evidence its budgeted mocks need.
 pub(crate) fn visual_recapture_step(
     runtime: &OrbitRuntime,
     action: &str,
@@ -289,25 +291,21 @@ pub(crate) fn visual_recapture_step(
         })
         .unwrap_or_else(|| "run".to_string());
     let mut resolved = Vec::new();
-    let mut unresolved = Vec::new();
+    let mut holds = VisualHolds::default();
     for task_id in step_task_ids(input) {
         let entry = resolve_task(runtime, &task_id, &workspace, &run_id)
             .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
         if let Some((entry, held)) = entry {
-            unresolved.extend(held);
+            holds.findings.extend(held.findings);
+            holds.evidence.extend(held.evidence);
             resolved.push(entry);
         }
     }
-    if !unresolved.is_empty() {
+    if !holds.is_empty() {
         return Err(DispatchError::DeliveryRefused {
             action: action.to_string(),
             refusal: DeliveryRefusal::VisualReviewUnresolved,
-            message: format!(
-                "confirmed visual findings at or above `visual_review.block_at` are unresolved, \
-                 so the candidate is held for the operator: {}. Fix them, or accept a disputed \
-                 one with `orbit visual accept-dispute`",
-                unresolved.join("; ")
-            ),
+            message: holds.message(),
         });
     }
     Ok(json!({
@@ -316,14 +314,49 @@ pub(crate) fn visual_recapture_step(
     }))
 }
 
-/// One task's resolution entry and the unresolved blocking findings it
-/// holds on; `None` when the task has no live review to resolve.
+/// What holds one task's candidate: its unresolved blocking findings and the
+/// evidence its final candidate lacks, each entry naming its task.
+#[derive(Default)]
+struct VisualHolds {
+    findings: Vec<String>,
+    evidence: Vec<String>,
+}
+
+impl VisualHolds {
+    fn is_empty(&self) -> bool {
+        self.findings.is_empty() && self.evidence.is_empty()
+    }
+
+    /// The refusal message, naming each cause the candidate is held on.
+    fn message(&self) -> String {
+        let mut causes = Vec::new();
+        if !self.findings.is_empty() {
+            causes.push(format!(
+                "confirmed visual findings at or above `visual_review.block_at` are unresolved, \
+                 so the candidate is held for the operator: {}. Fix them, or accept a disputed \
+                 one with `orbit visual accept-dispute`.",
+                self.findings.join("; ")
+            ));
+        }
+        if !self.evidence.is_empty() {
+            causes.push(format!(
+                "visual evidence for the final candidate is missing, incomplete or stale, so the \
+                 candidate is held for the operator: {}.",
+                self.evidence.join("; ")
+            ));
+        }
+        causes.join(" ")
+    }
+}
+
+/// One task's resolution entry and what holds its candidate; `None` when the
+/// task has no live review to resolve.
 fn resolve_task(
     runtime: &OrbitRuntime,
     task_id: &str,
     workspace: &Path,
     run_id: &str,
-) -> Result<Option<(Value, Vec<String>)>, OrbitError> {
+) -> Result<Option<(Value, VisualHolds)>, OrbitError> {
     let task = runtime.get_task(task_id)?;
     if runtime.visual_review_settings().mode != VisualReviewMode::Live
         || !has_verify_mock_ui_tag(&task.tags)
@@ -333,7 +366,10 @@ fn resolve_task(
     let missing = |reason: &str| {
         Some((
             json!({"task_id":task_id,"unresolved":1}),
-            vec![format!("{task_id}: {reason}")],
+            VisualHolds {
+                evidence: vec![format!("{task_id}: {reason}")],
+                ..VisualHolds::default()
+            },
         ))
     };
     let Some(mut record) = live_review_record(runtime, task_id)? else {
@@ -427,21 +463,24 @@ fn resolve_task(
             &record,
         )?],
     )?;
-    let mut held: Vec<String> = record
-        .unresolved_blocking()
-        .iter()
-        .map(|finding| {
-            format!(
-                "{task_id} {} ({}, {}): {}",
-                finding.finding_id,
-                finding.severity_of_record(),
-                finding
-                    .resolution
-                    .map_or("unresolved", VisualResolution::as_str),
-                finding.title
-            )
-        })
-        .collect();
+    let mut holds = VisualHolds {
+        findings: record
+            .unresolved_blocking()
+            .iter()
+            .map(|finding| {
+                format!(
+                    "{task_id} {} ({}, {}): {}",
+                    finding.finding_id,
+                    finding.severity_of_record(),
+                    finding
+                        .resolution
+                        .map_or("unresolved", VisualResolution::as_str),
+                    finding.title
+                )
+            })
+            .collect(),
+        evidence: Vec::new(),
+    };
     let pass = if changed {
         VisualPass::Recapture
     } else {
@@ -456,7 +495,9 @@ fn resolve_task(
                 recapture.candidate_sha != head || recapture.outcome != "passed"
             }))
     {
-        held.push(format!("{task_id}: visual evidence is missing, incomplete or stale for the final candidate {head}"));
+        holds.evidence.push(format!(
+            "{task_id}: visual evidence is missing, incomplete or stale for the final candidate {head}"
+        ));
     }
     let (blocking, optional, _) = record.disposition_counts();
     Ok(Some((
@@ -465,11 +506,11 @@ fn resolve_task(
             "candidate_sha": head,
             "candidate_changed": changed,
             "blocking": blocking,
-            "unresolved": held.len(),
+            "unresolved": holds.findings.len() + holds.evidence.len(),
             "optional": optional,
             "recapture": record.recapture,
         }),
-        held,
+        holds,
     )))
 }
 
@@ -553,7 +594,6 @@ fn recapture(
     let established = capture.record.outcome == VisualCaptureOutcome::Captured
         && capture.record.candidate_sha == head
         && capture.record.not_established.is_empty()
-        && capture.record.over_budget.is_empty()
         && !capture.record.mocks.is_empty()
         && capture.record.mocks.iter().all(|mock| {
             mock.error.is_none()
@@ -648,20 +688,22 @@ fn recapture(
     Ok(())
 }
 
-/// Every frozen mock must have rendered the exact candidate before it can land.
+/// Every budgeted mock must have rendered the exact candidate before it can
+/// land. Mocks over `visual_review.max_mocks` are never captured: they are
+/// listed over budget and do not hold the candidate.
 fn capture_matches_final_contract(
     capture: &VisualCaptureRecord,
     contract: &VisualReviewContract,
     head: &str,
 ) -> bool {
+    let (budgeted, _over_budget) = contract.budgeted_mocks();
     capture.task_id == contract.task_id
         && capture.candidate_sha == head
         && capture.outcome == VisualCaptureOutcome::Captured
         && capture.not_established.is_empty()
-        && capture.over_budget.is_empty()
-        && !contract.mocks.is_empty()
-        && capture.mocks.len() == contract.mocks.len()
-        && contract.mocks.iter().all(|expected| {
+        && !budgeted.is_empty()
+        && capture.mocks.len() == budgeted.len()
+        && budgeted.iter().all(|expected| {
             capture.mocks.iter().any(|mock| {
                 mock.artifact == expected.artifact
                     && mock.sha256 == expected.sha256

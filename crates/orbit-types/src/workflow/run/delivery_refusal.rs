@@ -48,7 +48,8 @@ pub enum DeliveryRefusal {
     /// A `verify-mock-ui` delivery in `visual_review.mode = "live"` still has
     /// a confirmed finding at or above `visual_review.block_at` the code
     /// reviewer did not fix, or disputed without the operator accepting the
-    /// dispute; the candidate is held for the operator.
+    /// dispute, or lacks complete visual evidence for its budgeted mocks; the
+    /// candidate is held for the operator.
     VisualReviewUnresolved,
 }
 
