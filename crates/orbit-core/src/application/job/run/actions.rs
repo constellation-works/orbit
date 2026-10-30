@@ -142,7 +142,7 @@ impl OrbitRuntime {
     /// The settle-only pass a cancellation owes: every pending settlement
     /// when a pull drain was cancelled, the leaf's own when a claimed leaf
     /// was. A run that is neither reads nothing from the owner.
-    fn pull_settlements_after_cancel(
+    pub(super) fn pull_settlements_after_cancel(
         &self,
         run_id: &str,
     ) -> Vec<crate::application::contracts::PullSettlementEntry> {
@@ -509,7 +509,7 @@ impl OrbitRuntime {
         )
     }
 
-    fn persist_task_cancellation_policy(
+    pub(super) fn persist_task_cancellation_policy(
         &self,
         run: &JobRun,
         policy: TaskCancellationPolicy,
@@ -695,7 +695,7 @@ impl OrbitRuntime {
     /// Cascading is best effort. A child that already terminalized, or that
     /// refuses cancellation, is recorded as such and never blocks the parent's
     /// own cancellation from completing.
-    fn settle_child_dispatches_on_cancel(
+    pub(super) fn settle_child_dispatches_on_cancel(
         &self,
         run: &JobRun,
         request: CancellationRequest<'_>,

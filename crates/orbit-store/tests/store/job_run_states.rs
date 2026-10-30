@@ -271,3 +271,59 @@ fn stored_step_wait_is_updated_and_hydrated_by_single_and_batched_reads() {
         );
     }
 }
+
+// [ORB-20120] A queued-only cancel and a start decide in the same immediate
+// transaction: whichever commits first wins, and the loser writes nothing.
+#[test]
+fn pending_only_cancel_and_start_never_both_win() {
+    use orbit_store::contracts::PendingJobRunCancellation;
+    use orbit_types::workflow::JobRunStartOutcome;
+
+    let store = Store::open_in_memory().expect("memory store");
+    let jobs = workspace_job_run_store(store, "ws_a");
+    let owner = std::process::id();
+
+    let started = jobs
+        .insert_job_run("workspace_auto_pipeline", 1, Utc::now(), None, None)
+        .unwrap();
+    assert_eq!(
+        jobs.mark_job_run_running(&started.run_id, Utc::now(), owner)
+            .unwrap(),
+        JobRunStartOutcome::Started
+    );
+    let before = jobs.get_job_run(&started.run_id).unwrap().unwrap();
+    assert_eq!(
+        jobs.cancel_pending_job_run(&started.run_id, Utc::now())
+            .unwrap(),
+        PendingJobRunCancellation::NotPending(JobRunState::Running)
+    );
+    assert_eq!(
+        jobs.get_job_run(&started.run_id).unwrap().unwrap(),
+        before,
+        "a cancel that lost to the start leaves the running run untouched"
+    );
+
+    let queued = jobs
+        .insert_job_run("workspace_auto_pipeline", 1, Utc::now(), None, None)
+        .unwrap();
+    assert_eq!(
+        jobs.cancel_pending_job_run(&queued.run_id, Utc::now())
+            .unwrap(),
+        PendingJobRunCancellation::Cancelled
+    );
+    let cancelled = jobs.get_job_run(&queued.run_id).unwrap().unwrap();
+    assert_eq!(cancelled.state, JobRunState::Cancelled);
+    assert!(cancelled.finished_at.is_some() && cancelled.started_at.is_none());
+    assert!(
+        matches!(
+            jobs.mark_job_run_running(&queued.run_id, Utc::now(), owner),
+            Err(OrbitError::JobRunStartConflict(_))
+        ),
+        "a start that lost to the cancel gets no execution authority"
+    );
+    assert_eq!(
+        jobs.cancel_pending_job_run("jrun-missing", Utc::now())
+            .unwrap(),
+        PendingJobRunCancellation::Missing
+    );
+}

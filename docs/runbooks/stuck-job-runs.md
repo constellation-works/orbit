@@ -482,6 +482,8 @@ A running follower pull drain (`workspace_pull_pipeline`) is cancelled gracefull
 
 `--force` on a local auto drain (`workspace_auto_pipeline`) also cancels the task runs it started, which a plain cancel leaves running. A child whose stop cannot be confirmed is listed with its reason and makes the command exit 1. For any other run it changes nothing.
 
+The dashboard's queued-window **Cancel** is queued-only (`POST /api/runs/<id>/cancel` with `queued_only: true`): it cancels the run only while it is still `pending`, deciding in the same store transaction that starts runs, and refuses a run that started first with 409 without recording, signalling or stopping anything. Cancel a running window from its run view or with `orbit run cancel`.
+
 Cancelling a task leaf returns its task to the backlog with the reason and keeps the candidate available to resume. `--block` keeps the task blocked for the existing manual recovery flow, including for the leaves and children a `--force` or cascading cancel stops; a pull drain's released claims always return to the owner's backlog.
 
 ## Operator agent invocations

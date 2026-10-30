@@ -18,7 +18,7 @@
 // `syncNodes`, so a poll that answers the same payload leaves the page exactly
 // as it was.
 
-import { bindTaskLink, captureWorkspaceVisit, onWorkspaceChange, el, fetchJson, isAggregateView, renderPanelPlaceholder, requestPanel, scopedHashHref, syncNodes, formatDateTime } from './common.js';
+import { bindTaskLink, captureWorkspaceVisit, copyText, onWorkspaceChange, el, fetchJson, isAggregateView, renderPanelPlaceholder, requestPanel, scopedHashHref, syncNodes, formatDateTime } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -92,8 +92,8 @@ let route = { view: "hotspots", path: null };
 // What the reader picked on the page: every ranked path or the top of each
 // signal, the path search, whether release files are grouped, the lock sort
 // (`wait` or `rate`), whether every regressed task is listed, and which path
-// was last copied.
-let view = { showAll: false, search: "", groupRelease: true, lockSort: "wait", allTasks: false, copied: null };
+// was last copied or failed to copy.
+let view = { showAll: false, search: "", groupRelease: true, lockSort: "wait", allTasks: false, copied: null, copyFailed: null };
 let lastData = null;
 let lastPayloadKey = null;
 let paintedView = null;
@@ -144,7 +144,7 @@ function normalizedRoute(viewName, path) {
 }
 
 function setRoute(next) {
-  if (next.path !== route.path) view = { ...view, allTasks: false, copied: null };
+  if (next.path !== route.path) view = { ...view, allTasks: false, copied: null, copyFailed: null };
   route = next;
 }
 
@@ -760,13 +760,12 @@ function hotspotNodes(model) {
 
 // ---- file -------------------------------------------------------------------
 
-function copyPath(path) {
-  const clipboard = globalThis.navigator && globalThis.navigator.clipboard;
-  if (!clipboard || typeof clipboard.writeText !== "function") return;
-  clipboard.writeText(path).then(() => {
-    view = { ...view, copied: path };
-    paint();
-  }, () => {});
+// The shared copy falls back to a selection copy where the async clipboard is
+// missing (plain-HTTP LAN pages) or refuses, and reports a copy that failed.
+async function copyPath(path) {
+  const copied = await copyText(path);
+  view = { ...view, copied: copied ? path : null, copyFailed: copied ? null : path };
+  paint();
 }
 
 function fileHead(model, path) {
@@ -779,10 +778,10 @@ function fileHead(model, path) {
         el("span", { class: "codebase-path-dir codebase-file-dir", text: dir }),
         el("h3", { id: "codebase-file-path", class: "codebase-path-base codebase-file-base", text: base }),
       ]),
-      el("div", { class: "codebase-actions" }, [actionButton(view.copied === path ? "Copied" : "Copy path", () => copyPath(path), "small")]),
+      el("div", { class: "codebase-actions" }, [actionButton(view.copied === path ? "Copied" : view.copyFailed === path ? "Copy failed" : "Copy path", () => copyPath(path), "small")]),
     ]),
   ]);
-  return keyed(head, "file-head", { path, rollup: model.data.rollup, copied: view.copied === path, back: buildCodebaseHash({ view: "hotspots" }) });
+  return keyed(head, "file-head", { path, rollup: model.data.rollup, copied: view.copied === path, copyFailed: view.copyFailed === path, back: buildCodebaseHash({ view: "hotspots" }) });
 }
 
 function fileTiles(model, path) {

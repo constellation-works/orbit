@@ -121,13 +121,15 @@ pub(super) enum Basis {
     Cell,
     /// Drop crew while preserving complexity and review mode.
     ReviewComplexity,
-    /// Drop complexity too, preserving review mode.
+    /// Drop complexity too, preserving review mode. An unassessed task's
+    /// first pool, since it has no complexity to match.
     ReviewWorkspace,
     /// Review support was thin: the mode-pooled complexity × crew cell.
     ModePooledCell,
     /// The cell was thin: every delivery of its complexity.
     Complexity,
-    /// Unassessed, or its complexity has no history: every delivery.
+    /// Unassessed, or its complexity has no history, and no pool kept the
+    /// review mode: every delivery.
     Workspace,
     /// The lookback holds no delivery at all.
     None,
