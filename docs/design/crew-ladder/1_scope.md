@@ -36,8 +36,8 @@ crew pool, read outcomes per arm (done rate, first-pass acceptance, repairs, rec
 escaped regressions, `cost_usd`) and file a proposed promotion task on an operator's
 conclusion. `exp-4e3e0399` (half of medium to luna, haiku and muse-spark) is the first crew
 experiment, run by hand, with a verdict expected around 2026-11-18. The proposed
-delivery-quality grader (**decision-assistance/specs/delivery-quality.md**, ORB-20000,
-PR constellation-works/orbit#7031, design only; link it here once that PR merges) would grade each delivered code
+[delivery-quality grader](../decision-assistance/specs/delivery-quality.md) (ORB-20000,
+design only) would grade each delivered code
 change on six anchored dimensions (scope fit, robustness, structure, standards, verification,
 maintainability), with abstention and coverage. It forbids any ranking or routing use until a
 separate evaluated proposal and an explicit adoption decision; §
@@ -165,7 +165,7 @@ the experiment readout does by complexity.
 ### Code quality (opt-in, gated)
 
 The outcome score above cannot see code quality. When the workspace opts in, trials also
-read the delivery-quality profile (the grader proposal above) of
+read the [delivery-quality profile](../decision-assistance/specs/delivery-quality.md) of
 their tasks, as a **guardrail**, never as a score term:
 
 - **Per dimension, no composite.** For each of the six dimensions, the share of the arm's
