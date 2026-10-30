@@ -40,34 +40,6 @@
         "## Rules and command surfaces",
         "## What to check"
       ],
-      "digest": "c3153e102d547e9db0735493e988be6ffe5d6fe1d9fa62e4672117f9aa5619da",
-      "revision": "a65afab3d1bcea7d789e72dcf770a25e69c5cda1",
-      "settings": {
-        "complexity": "medium",
-        "dedupe": "skip_if_open",
-        "enabled": false,
-        "priority": "low",
-        "schedule": {
-          "every_minutes": 4320
-        },
-        "tags": [
-          "agent-guidance-audit",
-          "no-diff-expected"
-        ]
-      }
-    },
-    {
-      "comments": [
-        "## Discover guidance files",
-        "## Duplicates",
-        "## Filing",
-        "## Generated mirrors",
-        "## Handoff",
-        "## Pin one commit",
-        "## Rolling batch",
-        "## Rules and command surfaces",
-        "## What to check"
-      ],
       "digest": "c7da7d1ac3f28f5379f0daa67f1639838af5070faed9014a4e92dcfd2672f931",
       "revision": "fba85e3aff95642842b1b9145e09a4821b7c6815",
       "settings": {
@@ -405,31 +377,6 @@
         "## Report",
         "## Rules and command surfaces"
       ],
-      "digest": "2fe771ef6e0837fe1a027156abe722a7a1c9306b96d79d037065e2f00506dbf4",
-      "revision": "60303c5cf814995408196a49351585b96107d7eb",
-      "settings": {
-        "complexity": "medium",
-        "dedupe": "skip_if_open",
-        "enabled": false,
-        "priority": "medium",
-        "schedule": {
-          "cron": "45 1 * * *"
-        },
-        "tags": [
-          "ci-budget-watch",
-          "no-diff-expected"
-        ]
-      }
-    },
-    {
-      "comments": [
-        "## Decide",
-        "## Discover the documented budget",
-        "## Discover the measured job",
-        "## Measure and compare",
-        "## Report",
-        "## Rules and command surfaces"
-      ],
       "digest": "85a8400452f133b3330c3772ada3f983a8fbed1bc5f537a8b0ea1e4cacbc9aa1",
       "revision": "ff7de70fa52d78f9c40e834bdb111622efe8ff77",
       "settings": {
@@ -665,7 +612,7 @@
         "## Rules and command surfaces"
       ],
       "digest": "0ce296fcf805c8a48c6c841ce82bea3f1b2ff5f52d9f31134ca7118b152b0830",
-      "revision": "3ca11eee7494c6a8c1c2583020815ad83fe7b8e3",
+      "revision": "24e5260a7981617375bd1fefe08c86aae35a4f1b",
       "settings": {
         "complexity": "hard",
         "dedupe": "skip_if_open",
@@ -1050,34 +997,6 @@
         "## Review the two selected modules in full",
         "## Rules and command surfaces"
       ],
-      "digest": "89a76d758a22092acfb1fdb577ac27b4979843ca45ceacf9724893610e608722",
-      "revision": "75692b4c526690c43e859bc66f5d336390ed1927",
-      "settings": {
-        "complexity": "hard",
-        "dedupe": "skip_if_open",
-        "enabled": false,
-        "priority": "medium",
-        "schedule": {
-          "cron": "40 */6 * * *"
-        },
-        "tags": [
-          "code-review",
-          "no-diff-expected"
-        ]
-      }
-    },
-    {
-      "comments": [
-        "## Attribute each finding to the task that introduced it",
-        "## Build the last-reviewed map and select two modules",
-        "## File confirmed findings",
-        "## Findings that narrow a shared invariant",
-        "## Partition the tree into modules",
-        "## Pin the commit",
-        "## Record the rotation and the cursor",
-        "## Review the two selected modules in full",
-        "## Rules and command surfaces"
-      ],
       "digest": "8c68d9265b1def42b78f30a3476da11ec60955bb13a36b5260b210f9d483b15a",
       "revision": "24f34a13c0393a54df474fdf7c80d8c062ae526a",
       "settings": {
@@ -1385,11 +1304,10 @@
         "## Authority and complete reads",
         "## Measure and compare",
         "## Persist",
-        "## Prepare bounded supported revisions",
-        "## Re-run the committed analysis before recommending revisions"
+        "## Prepare bounded supported revisions"
       ],
-      "digest": "a39a2e80ac66446bb14f8b37fe6cf87ed7fac63010b6c1c40146f83f15436251",
-      "revision": "85b19a1547c0d349dd89d58dd1dd2aefc547b4f0",
+      "digest": "a3d5e4d435ee3364e54285c582dd324f5da4afd3577feb029edaae0671232c9a",
+      "revision": "b7449f89501d938bcee77b7786c11f9843bdc183",
       "settings": {
         "complexity": "medium",
         "dedupe": "skip_if_open",
@@ -2046,7 +1964,7 @@
         "## Select features"
       ],
       "digest": "a65b6570fa620076ceae2ba97647154454d781fb0b196dfd688ba658b2f5a7b5",
-      "revision": "62af41540e6f177764108079a34e4685330ae3cb",
+      "revision": "380518a070c0a10d6952607b26d15d74278543dd",
       "settings": {
         "complexity": "medium",
         "dedupe": "skip_if_open",
@@ -4022,32 +3940,6 @@
     },
     {
       "comments": [
-        "## 1. Windows",
-        "## 2. Measure the rate",
-        "## 3. Find the classes that drive it",
-        "## 4. Check coverage and effectiveness",
-        "## 5. Filing",
-        "## 6. Report and cursor",
-        "## Rules and command surfaces"
-      ],
-      "digest": "2d787b3821453cc4e7ec528081fadb7e2e5931cfd5f83c89003ecc0903275212",
-      "revision": "4c2156286b6bb8d009514dc38ac7d268324cc2c4",
-      "settings": {
-        "complexity": "medium",
-        "dedupe": "skip_if_open",
-        "enabled": false,
-        "priority": "medium",
-        "schedule": {
-          "cron": "20 7 * * 1"
-        },
-        "tags": [
-          "run-failure-patterns",
-          "no-diff-expected"
-        ]
-      }
-    },
-    {
-      "comments": [
         "## Check coverage before filing",
         "## Cluster by normalized signature",
         "## Collect failure evidence",
@@ -4307,7 +4199,7 @@
         "## Rules and command surfaces"
       ],
       "digest": "ee4536628f677d0fdc05681bceeedf14cf82fb075f06f7050278dc710e553435",
-      "revision": "fc4b455b0a277a5dc364cfc6caef63fad64e9144",
+      "revision": "31d3700607fa4547714f5db41601c4e5c89aac9c",
       "settings": {
         "complexity": "medium",
         "dedupe": "skip_if_open",
