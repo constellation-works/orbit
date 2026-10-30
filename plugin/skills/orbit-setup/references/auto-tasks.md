@@ -368,10 +368,10 @@ plugin being removed.
 
 <a id="the-twenty-three-seeded-definitions"></a>
 
-## The twenty-four seeded definitions
+## The seeded definitions
 
 `orbit workspace init` seeds the defaults selected by `seeding.auto_tasks`
-(`"all"` by default) from this twenty-three-definition catalog, disabled,
+(`"all"` by default) from this catalog, disabled,
 except any you deleted (see [Deleting a definition](#deleting-a-definition)).
 For ongoing selection and reconciliation, follow [Seeding policy](configuration.md#seeding-policy):
 
