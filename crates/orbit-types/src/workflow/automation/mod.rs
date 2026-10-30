@@ -4,6 +4,7 @@ pub mod members;
 pub mod recovery;
 
 mod batch;
+mod condition;
 mod delivery;
 mod evidence;
 mod ownership;
@@ -11,6 +12,10 @@ mod state;
 
 pub use batch::{
     ActionReissue, BatchAttempt, BatchState, BatchWaiver, CoverageBatch, WaiveBatchRequest,
+};
+pub use condition::{
+    ConditionFileIdentity, ConditionGroupBy, ConditionOnEnable, ConditionScope, ConditionTrigger,
+    condition_enabled_refusal,
 };
 pub use delivery::{
     CoverageClass, Delivery, DeliveryExclusion, DeliveryTrigger, ExcludedDelivery, SourcePage,

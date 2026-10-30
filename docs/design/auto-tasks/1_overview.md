@@ -44,8 +44,8 @@ becomes just the first definition.
 - **Definition** — a `.orbit/auto_tasks/<name>.yaml` record; `name` is identity.
   Modeled on the file-backed routine convention (directory scan, fail-closed
   parse, `deny_unknown_fields`), not the SQLite-indexed artifact convention.
-- **Schedule (cadence)** — a 5-field `cron`, an `every_minutes` interval, or a
-  `deliveries_landed` trigger in the definition's `schedule` field. Time-based
+- **Schedule (cadence)** — a 5-field `cron`, an `every_minutes` interval, a
+  `deliveries_landed` trigger, or a `condition` predicate in the definition's `schedule` field. A `condition` is checked and explained but never fired in this release, so the definition must stay `enabled: false`. Time-based
   catch-up always collapses: a downtime gap mints one make-up task, not one per
   slot. Delivery triggers use verified landings and coverage checkpoints.
   Cadence is per-definition data, not

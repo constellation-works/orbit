@@ -68,15 +68,25 @@ fn implement_one_trend(
     succeeded_only: bool,
 ) -> Result<Value, orbit_core::OrbitError> {
     let complexity_since = Utc::now() - Duration::days(COMPLEXITY_ACTORS_DAYS);
-    let records = runtime.workspace_invocation_records(InvocationQuery {
-        succeeded_candidate_only: succeeded_only,
-        since: TrendWindow::read_since(range).map(|since| since.min(complexity_since)),
-        activity_id: Some(ACTIVITY.to_string()),
-        limit: RECORD_LIMIT,
-        ..Default::default()
+    // The task complexity map is independent of the invocation rows, so it
+    // is read alongside them rather than after.
+    let (records, complexity_by_task) = std::thread::scope(|scope| {
+        let complexity = scope.spawn(|| runtime.task_complexity_by_id());
+        let records = runtime.workspace_invocation_records(InvocationQuery {
+            succeeded_candidate_only: succeeded_only,
+            since: TrendWindow::read_since(range).map(|since| since.min(complexity_since)),
+            activity_id: Some(ACTIVITY.to_string()),
+            limit: RECORD_LIMIT,
+            // The trend reads durations, actors and task links only.
+            skip_tool_calls: true,
+            ..Default::default()
+        });
+        let complexity = complexity
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+        Ok::<_, orbit_core::OrbitError>((records?, complexity?))
     })?;
     let truncated = records.len() >= RECORD_LIMIT;
-    let complexity_by_task = runtime.task_complexity_by_id()?;
     let runs: Vec<Run> = records
         .into_iter()
         .map(|record| Run {

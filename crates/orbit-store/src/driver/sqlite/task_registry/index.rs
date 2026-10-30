@@ -195,22 +195,43 @@ impl TaskRegistryStore {
 
     /// Which of `task_ids` carry `tag`, in any workspace on the host. Task IDs
     /// are globally unique, so the lookup needs no partition.
+    ///
+    /// Reads every task carrying `tag` with one index range per workspace
+    /// (stepping workspaces through `idx_task_bundle_tags_workspace_tag`) and
+    /// keeps those in `task_ids`. Every resource-profile cache hit asks this
+    /// for all of the host's template tasks, so one statement step per id
+    /// would grow with retained history.
     pub fn task_ids_with_tag(
         &self,
         tag: &str,
         task_ids: &BTreeSet<String>,
     ) -> Result<BTreeSet<String>, OrbitError> {
+        if task_ids.is_empty() {
+            return Ok(BTreeSet::new());
+        }
         let conn = self.read()?;
         let mut stmt = conn
-            .prepare_cached("SELECT 1 FROM task_bundle_tags WHERE task_id = ?1 AND tag = ?2")
+            .prepare_cached(
+                "WITH RECURSIVE workspaces(id) AS (
+                    SELECT MIN(workspace_id) FROM task_bundle_tags
+                    UNION ALL
+                    SELECT (SELECT MIN(workspace_id) FROM task_bundle_tags
+                            WHERE workspace_id > workspaces.id)
+                    FROM workspaces WHERE workspaces.id IS NOT NULL
+                 )
+                 SELECT tags.task_id FROM workspaces
+                 JOIN task_bundle_tags tags
+                   ON tags.workspace_id = workspaces.id AND tags.tag = ?1",
+            )
+            .map_err(sqlite_store_error)?;
+        let rows = stmt
+            .query_map(rusqlite::params![tag], |row| row.get::<_, String>(0))
             .map_err(sqlite_store_error)?;
         let mut tagged = BTreeSet::new();
-        for task_id in task_ids {
-            if stmt
-                .exists(rusqlite::params![task_id, tag])
-                .map_err(sqlite_store_error)?
-            {
-                tagged.insert(task_id.clone());
+        for row in rows {
+            let task_id = row.map_err(sqlite_store_error)?;
+            if task_ids.contains(&task_id) {
+                tagged.insert(task_id);
             }
         }
         Ok(tagged)
