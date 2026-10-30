@@ -156,12 +156,24 @@ export async function startFixtureServer(app, fixture, repoRoot) {
       }
     }
   };
+  // Race `promise` against a timer that is cleared once the race settles. A
+  // timer left armed after a prompt close would keep the driver process alive
+  // until it fired.
+  const waitAtMost = (promise, ms) => {
+    let timer;
+    return Promise.race([
+      promise,
+      new Promise((resolve) => {
+        timer = setTimeout(resolve, ms);
+      }),
+    ]).finally(() => clearTimeout(timer));
+  };
   const stop = () => {
     if (!stopPromise) {
       signalGroup("SIGTERM");
       stopPromise = (async () => {
         try {
-          await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 100))]);
+          await waitAtMost(exited, 100);
           signalGroup("SIGKILL");
           // Release our ends of the pipes after the kill. An escaped
           // descendant holding the far ends open would otherwise keep the
@@ -171,10 +183,7 @@ export async function startFixtureServer(app, fixture, repoRoot) {
           child.unref();
           // Bound the post-KILL wait so a signal handler awaiting stop()
           // cannot hang termination on a wedged fixture server.
-          await Promise.race([
-            exited,
-            new Promise((resolve) => setTimeout(resolve, 5000)),
-          ]);
+          await waitAtMost(exited, 5000);
         } finally {
           activeFixtureStops.delete(stop);
         }

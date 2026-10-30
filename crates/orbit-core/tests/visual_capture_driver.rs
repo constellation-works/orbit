@@ -289,6 +289,91 @@ if (elapsedMs >= 10000) {
     );
 }
 
+// ORB-20101: stop() left its post-KILL bound timer armed after the fixture had
+// already closed, so a driver whose fixture stopped normally lingered for the
+// full bound before exiting. The probe does not call process.exit(); it
+// reports how long the event loop stayed alive after stop() resolved.
+#[cfg(unix)]
+#[test]
+fn stopped_fixture_lets_driver_process_exit_promptly() {
+    use std::io::Read as _;
+
+    let temp = tempfile::tempdir().unwrap();
+    let pid_file = temp.path().join("setup.pid");
+    let probe = r#"
+import { writeSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+const pidFile = process.argv[1];
+const driver = await import(pathToFileURL(process.argv[2]).href);
+const setup = `
+const fs = require('node:fs');
+fs.writeFileSync(process.argv[1], String(process.pid));
+console.log('ORBIT_VISUAL_URL=http://127.0.0.1:9/');
+setInterval(() => {}, 1000);
+`;
+const server = await driver.startFixtureServer(
+  { name: "prompt", setup: ["node", "-e", setup, pidFile], setup_timeout_s: 10 },
+  "fixture",
+  process.cwd(),
+);
+await server.stop();
+const stoppedAt = Date.now();
+process.on("exit", () => writeSync(1, String(Date.now() - stoppedAt)));
+"#;
+
+    let mut child = Command::new("node")
+        .arg("--input-type=module")
+        .arg("-e")
+        .arg(probe)
+        .arg(&pid_file)
+        .arg(DRIVER)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|error| panic!("node must be on PATH to load the capture driver: {error}"));
+
+    let deadline = Duration::from_secs(20);
+    let started = Instant::now();
+    let status = loop {
+        if let Ok(Some(status)) = child.try_wait() {
+            break status;
+        }
+        if started.elapsed() >= deadline {
+            cleanup_child(&mut child);
+            kill_pid_file(&pid_file);
+            panic!("capture driver probe did not exit within {deadline:?} of stop() (ORB-20101)");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    kill_pid_file(&pid_file);
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+    child
+        .stdout
+        .take()
+        .unwrap()
+        .read_to_string(&mut stdout)
+        .unwrap();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut stderr)
+        .unwrap();
+    assert!(
+        status.success(),
+        "stop() probe failed with {status:?}: {stderr} (ORB-20101)"
+    );
+    let lingering_ms: u64 = stdout.trim().parse().unwrap_or_else(|_| {
+        panic!("probe reported no exit timing; stdout: {stdout:?} (ORB-20101)")
+    });
+    assert!(
+        lingering_ms < 2000,
+        "driver process stayed alive {lingering_ms}ms after a promptly stopped fixture; \
+         the post-KILL bound timer must not outlive a fixture that already closed (ORB-20101)"
+    );
+}
+
 #[cfg(unix)]
 fn pid_file_alive(pid_file: &std::path::Path) -> bool {
     let Ok(text) = std::fs::read_to_string(pid_file) else {
