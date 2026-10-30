@@ -196,6 +196,7 @@ fn load_layered_resolved_with_staged(
     if let Some(workspace_document) = &workspace {
         reject_workspace_machine_table(&workspace_document.value, &workspace_document.path)?;
         reject_workspace_crew_env(&workspace_document.value, &workspace_document.path)?;
+        reject_workspace_lease_intake(&workspace_document.value, &workspace_document.path)?;
     }
 
     // Missing files still admit an empty document: environment defaults and
