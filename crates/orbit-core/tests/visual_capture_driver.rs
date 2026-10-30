@@ -134,3 +134,59 @@ fn rules_run_only_at_declared_widths() {
         assert_eq!(actual, expected, "{label}");
     }
 }
+
+#[test]
+fn timed_out_fixture_setup_process_is_stopped_before_rejection() {
+    let temp = tempfile::tempdir().unwrap();
+    let pid_file = temp.path().join("setup.pid");
+    let probe = r#"
+import { readFile } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
+const pidFile = process.argv[1];
+const driver = await import(pathToFileURL(process.argv[2]).href);
+const setup = "require('node:fs').writeFileSync(process.argv[1], String(process.pid)); setInterval(() => {}, 1000);";
+let failure;
+try {
+  await driver.startFixtureServer(
+    { name: "leaky", setup: ["node", "-e", setup, pidFile], setup_timeout_s: 1 },
+    "fixture",
+    process.cwd(),
+  );
+} catch (error) {
+  failure = error;
+}
+if (!failure || !failure.message.includes("timed out")) {
+  throw new Error(`expected setup timeout, received ${failure?.message ?? "success"}`);
+}
+const pid = Number(await readFile(pidFile, "utf8"));
+let alive = false;
+try {
+  process.kill(pid, 0);
+  alive = true;
+} catch (error) {
+  if (error.code !== "ESRCH") throw error;
+}
+if (alive) {
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch {
+    try { process.kill(pid, "SIGKILL"); } catch {}
+  }
+  throw new Error(`setup process ${pid} remained alive after timeout rejection`);
+}
+"#;
+
+    let output = Command::new("node")
+        .arg("--input-type=module")
+        .arg("-e")
+        .arg(probe)
+        .arg(&pid_file)
+        .arg(DRIVER)
+        .output()
+        .unwrap_or_else(|error| panic!("node must be on PATH to load the capture driver: {error}"));
+    assert!(
+        output.status.success(),
+        "setup cleanup probe failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
