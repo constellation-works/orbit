@@ -285,6 +285,7 @@ impl Fixture {
                     repo_root: repo.clone(),
                     ship_mode: ShipMode::Pr,
                     base_branch: Some("main".into()),
+                    generation_authority: None,
                 },
             )
             .unwrap()

@@ -1,8 +1,9 @@
 //! The registry-neutral workspace binding a runtime is constructed with.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
+use orbit_common::fs::generation::authority_root;
 use orbit_store::workspace_id_for_orbit_dir;
 use orbit_types::workflow::{ShipMode, resolved_ship_mode};
 use orbit_types::workspace::{Workspace, WorkspaceCheckout, WorkspaceCheckoutRole};
@@ -37,10 +38,18 @@ pub struct WorkspaceRuntimeBinding {
     pub ship_mode: ShipMode,
     /// Registered integration branch; absent for standalone runtimes.
     pub base_branch: Option<String>,
+    /// Canonical generation authority whose workspace catalog registered this
+    /// checkout. Composition accepts it as the authority protecting a
+    /// workspace that has not yet recorded one, so a layout upgrade under a
+    /// different authority cannot pass as a registered open. Absent for
+    /// bindings no catalog produced.
+    pub generation_authority: Option<PathBuf>,
 }
 
-/// Build the neutral Core binding for one registered local checkout.
+/// Build the neutral Core binding for one checkout registered in the
+/// workspace catalog under `global_root`.
 pub fn workspace_runtime_binding(
+    global_root: &Path,
     workspace: &Workspace,
     checkout: &WorkspaceCheckout,
 ) -> Result<WorkspaceRuntimeBinding, OrbitError> {
@@ -52,5 +61,6 @@ pub fn workspace_runtime_binding(
         repo_root: checkout.repo_root.clone(),
         ship_mode: resolved_ship_mode(workspace),
         base_branch: Some(workspace.base_branch.clone()),
+        generation_authority: Some(authority_root(global_root)?),
     })
 }

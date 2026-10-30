@@ -25,6 +25,7 @@ fn binding(repo: &Path, logical: &str, partition: &str) -> WorkspaceRuntimeBindi
         repo_root: repo.into(),
         ship_mode: ShipMode::Local,
         base_branch: Some("main".into()),
+        generation_authority: None,
     }
 }
 

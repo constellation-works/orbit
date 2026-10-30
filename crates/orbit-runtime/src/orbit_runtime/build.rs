@@ -191,6 +191,7 @@ impl RuntimeKernel {
             repo_root: data_root.to_path_buf(),
             ship_mode: ShipMode::Local,
             base_branch: None,
+            generation_authority: None,
         };
         let context = builder::build_context_from_roots(
             data_root,

@@ -49,6 +49,7 @@ impl Fixture {
                 repo_root: self.root.path().join("repo"),
                 ship_mode: ShipMode::Pr,
                 base_branch: Some("agent-main".into()),
+                generation_authority: None,
             },
         )
         .unwrap()

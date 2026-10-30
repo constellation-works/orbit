@@ -61,7 +61,7 @@ impl MigrateCommand {
                 // Validate the checkout-local identity without opening a
                 // runtime: missing or malformed identity is a re-homing
                 // boundary, not permission to inspect a different root.
-                workspace_runtime_binding(&selected.workspace, &selected.checkout)?;
+                workspace_runtime_binding(&global_root, &selected.workspace, &selected.checkout)?;
                 (global_root, selected.checkout.orbit_dir)
             }
             None => {

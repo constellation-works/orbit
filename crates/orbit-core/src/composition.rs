@@ -18,6 +18,8 @@ use crate::bootstrap::init::ensure_orbit_root_initialized;
 use crate::bootstrap::policy::seed_default_policies;
 use crate::bootstrap::product_profile::ProductProfile;
 use crate::bootstrap::task_migration::apply_configured_id_start;
+use crate::bootstrap::workspace_authority::admit_workspace_layout_authority;
+pub use crate::bootstrap::workspace_authority::verify_workspace_layout_authority;
 #[cfg(target_os = "macos")]
 use crate::runtime::run_input::managed_dispatch_context_from_env;
 use crate::runtime::run_input::managed_run_context_from_env;
@@ -50,7 +52,16 @@ impl OrbitRuntime {
         ])?;
         // Library consumers must also refuse before bootstrap can migrate or
         // reconcile resources under a participating persistent CLI/MCP client.
-        let _generation = pin_executable_generation(&roots.global_root, false)?;
+        let generation = pin_executable_generation(&roots.global_root, false)?;
+        if !generation.joined_foreign_generation() {
+            // The workspace's clients may participate in another authority:
+            // refuse before bootstrap writes under them [ORB-20244].
+            verify_workspace_layout_authority(
+                &roots.global_root,
+                &roots.shared_root,
+                binding.as_ref(),
+            )?;
+        }
         ensure_orbit_root_initialized(&roots.global_root, &roots.shared_root)?;
         build_runtime(
             &roots.global_root,
@@ -323,7 +334,19 @@ fn build_runtime(
     ProductProfile::Orbit.validate_roots(&[global_root, shared_root, local_root])?;
     let generation = pin_executable_generation(global_root, read_only)?;
     let write_free = generation.joined_foreign_generation();
+    let authority = if write_free {
+        None
+    } else {
+        Some(admit_workspace_layout_authority(
+            global_root,
+            shared_root,
+            binding.as_ref(),
+        )?)
+    };
     let layout_report = observe_or_upgrade_layout(shared_root, write_free)?;
+    if let Some(authority) = authority {
+        authority.record(shared_root);
+    }
     let runtime_config = if write_free {
         ResolvedConfig::load(&ConfigRoots::new(global_root, shared_root))?
     } else {
