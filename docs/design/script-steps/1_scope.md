@@ -1,11 +1,11 @@
 ---
 title: "Scope: Script steps"
 owner: claude
-last_updated: 2026-10-29
-last_validated: 2026-10-27
+last_updated: 2026-10-30
+last_validated: 2026-10-30
 status: Draft
-stage: designing
-next: "Phases 1 and 2 landed (manifests, grants, and Linux execution under `linux-bwrap-script-v1` with `script.execution` audit and `orbit script history`); next is phase 3, files and macOS"
+stage: building
+next: "Phases 1-2 landed ([ORB-19983], [ORB-19985]); phase 3 (files, macOS profile) is not yet filed"
 feature: script-steps
 doc_role: scope
 type: design
@@ -15,7 +15,7 @@ tags: [script-steps, activity-job, routines, sandbox, grants, policy-sandbox]
 
 # Scope: Script steps
 
-Status: proposed; phases 1 and 2 (Phasing) have landed. Phase 1 added the `Script`
+Status: proposed; phases 1 and 2 (Phasing) have landed. Phase 1 ([ORB-19983]) added the `Script`
 manifest and its loader, `target: script:` parsing, the `script_grant` table and
 witness, `orbit script grant|revoke|list|show`, the governed rows and doctor
 findings. Phase 2 ([ORB-19985]) runs a granted step on Linux under
@@ -25,7 +25,8 @@ refuse with `script_sandbox_unavailable`. This doc is the design deliverable of 
 [The v2 shell activity surface is removed, not sandboxed](../activity-job/4_decisions.md#the-v2-shell-activity-surface-is-removed-not-sandboxed)
 ([ORB-00374]) by taking the alternative that decision recorded and set aside:
 "retrofit the sandbox/policy/cwd pipeline". It also narrows the reach of
-[Routine targets are catalog references only](../routines/4_decisions.md#routine-targets-are-catalog-references-only--no-inline-command-payloads):
+[Routine targets are catalog references only](../routines/4_decisions.md#routine-targets-are-catalog-references-only--no-inline-command-payloads)
+([ORB-10021]):
 routines still name only `job:<name>`, and a job may now contain a step that names a
 granted script. Phase 2 recorded the superseding decision,
 [Granted script steps run under the script profile](../activity-job/4_decisions.md#granted-script-steps-run-under-the-script-profile).
@@ -34,9 +35,10 @@ Bearing: Orbit already has these pieces, read from source at `a5b5408ea` (the `l
 bullet was rechecked at `d10fae79b`).
 
 - **Job steps name catalog targets by prefix.** A job step's `target:` is a
-  namespace-prefixed reference. Today only `activity:<name>` resolves
-  (`ACTIVITY_REF_PREFIX` and `resolve_ref`, `crates/orbit-engine/src/activity_job/catalog.rs`).
-  Any other prefix is a load error (`ResolveError::UnknownRefKind`). `TargetRef`
+  namespace-prefixed reference. At that commit only `activity:<name>` resolved
+  (`ACTIVITY_REF_PREFIX` and `resolve_ref`, `crates/orbit-engine/src/activity_job/catalog.rs`),
+  and any other prefix was a load error (`ResolveError::UnknownRefKind`); phase 1
+  ([ORB-19983]) added `script:` resolution alongside it. `TargetRef`
   (`crates/orbit-types/src/workflow/activity_job/job_v2.rs`) was made prefixed so that
   "future kinds land without a breaking shape change". A step already carries
   `timeout_seconds`, `retry` (`RetrySpec`) and `when`.
@@ -615,7 +617,7 @@ the run, isn't kept with the run and can't be read from another host's dashboard
   ordinary catalog job, so the routine design and the catalog-only decision hold
   unchanged: the scheduler adds no execution surface, and the job's steps carry their
   own authority.
-- **Condition triggers.** Their phase 2 actions are routine job runs
+- **Condition triggers** ([ORB-19288] designed them). Their phase 2 actions are routine job runs
   ([condition triggers §6](../condition-triggers/1_scope.md#6-actions)). A condition
   whose routine runs a job with a script step passes its `subject` as job input, and
   the script reads it on stdin. A script step that needs the operator gate a release
@@ -952,35 +954,35 @@ A script that rewrites itself during a run changes nothing for that run (§2,
 
 ## Phasing
 
-1. **Catalog and grants, nothing executing.** This phase adds:
+1. **Catalog and grants, nothing executing.** Landed in [ORB-19983]. This phase adds:
    - the `Script` manifest, its loader and validation (`entry` resolution, argument
      templates, interpreter forms);
    - `target: script:` parsing, with a step that resolves but refuses at dispatch
-     (`script_steps_unavailable`);
+     (`script_steps_unavailable`, since replaced by phase 2 execution);
    - the `script_grant` table, the witness, `orbit script grant`, `revoke`, `list` and
      `show`, and the governed rows;
    - doctor findings.
 
    Operators can grant and see staleness before anything runs.
-2. **Linux execution.** This phase adds:
+2. **Linux execution.** Landed in [ORB-19985]. This phase adds:
    - the `linux-bwrap-script-v1` profile in `orbit-exec`;
    - a new `RuntimeHost` capability that Core implements for the grant check, snapshot
      and spawn;
    - stdin and stdout, the log, `Ok(success = false)` with its restored audit-message
-     coverage, per-step scopes, `script_execution` audit, `orbit run show` and
+     coverage, per-step scopes, `script.execution` audit, `orbit run show` and
      `script history`.
 
    It covers use cases A (without network) and C, and lands the decision record that
    supersedes ORB-00374's removal.
-3. **Files and macOS.** This phase adds `files.inputs` and `files.outputs` with
+3. **Files and macOS.** Not yet filed. This phase adds `files.inputs` and `files.outputs` with
    `steps.<id>.files`, a deterministic action that attaches those files to a task as
    artifacts, the `macos-sandbox-script-v1` profile, `RLIMIT_*` limits, the
    root probes and TCC reporting, and nested-sandbox refusal. It covers use case B, and
    orbit-office items 4 and 5.
-4. **Grant requests.** This phase adds the `script_grant` decision request, answers
+4. **Grant requests.** Not yet filed. This phase adds the `script_grant` decision request, answers
    from registered channels (orbit-office item 1), and the dashboard Scripts view with
    its grant action. `office.script-run` can then become a thin wrapper.
-5. **Network.** `https` and `any` on Linux, with `env_pass` and the redaction of passed
+5. **Network.** Not yet filed. `https` and `any` on Linux, with `env_pass` and the redaction of passed
    values. It covers the off-site part of use case A.
 6. **Later.** Each of these is filed only when needed: a grant-time `prepare` (fetch)
    phase, plugin-store roots, routine `script:` sugar, and macOS network once
@@ -1051,6 +1053,7 @@ A script that rewrites itself during a run changes nothing for that run (§2,
 ## Task References
 
 - [ORB-19294] — designs script steps (this doc).
+- [ORB-19983] — phase 1: added script manifests, `target: script:` parsing, the grant store and `orbit script grant|revoke|list|show`; nothing executes.
 - [ORB-19985] — phase 2: Linux execution under `linux-bwrap-script-v1`, `script.execution` audit and `orbit script history`.
 - [ORB-00374] — removed the v2 `shell` activity instead of sandboxing it; this doc takes its retrofit alternative.
 - [ORB-00363] — found that the shell allowlist came from the YAML it guarded.
