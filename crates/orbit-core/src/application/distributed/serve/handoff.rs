@@ -171,10 +171,34 @@ impl OrbitRuntime {
                 "selection_unavailable: receipt risk model is not the frozen owner snapshot",
             ));
         }
+        // Selection describes the original candidate. A stronger review may
+        // certify repairs at a later head; Store verifies that certificate's
+        // original/final linkage before acceptance changes any task state.
+        let selected = orbit_engine::review_gate::candidate_identity_at(
+            &self.paths().repo_root,
+            &receipt.base_sha,
+            &receipt.head_sha,
+        )
+        .map_err(|error| {
+            refusal::refused(format!(
+                "selection_unavailable: owner cannot read the selected candidate identity: {error}"
+            ))
+        })?;
+        if selected.base.commit != candidate.base.commit
+            || selected.base.commit != receipt.base_sha
+            || selected.base.tree != receipt.base_tree
+            || selected.head.commit != receipt.head_sha
+            || selected.head.tree != receipt.head_tree
+            || (selected.head != candidate.candidate && handoff.review.evidence().is_none())
+        {
+            return Err(refusal::refused(
+                "selection_stale: receipt does not pin the original candidate or carry review evidence for its continuation",
+            ));
+        }
         let pairs = orbit_engine::review_gate::changed_path_pairs(
             &self.paths().repo_root,
-            &candidate.base.commit,
-            &candidate.candidate.commit,
+            &selected.base.commit,
+            &selected.head.commit,
         )
         .map_err(|error| {
             refusal::refused(format!(
@@ -239,8 +263,8 @@ impl OrbitRuntime {
                 {
                     let lines = orbit_engine::review_gate::diff_lines_between(
                         &self.paths().repo_root,
-                        &candidate.base.commit,
-                        &candidate.candidate.commit,
+                        &selected.base.commit,
+                        &selected.head.commit,
                     )
                     .map_err(|error| {
                         refusal::refused(format!(

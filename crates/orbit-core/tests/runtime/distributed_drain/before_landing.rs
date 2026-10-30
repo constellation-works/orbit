@@ -469,7 +469,11 @@ fn a_claimed_before_landing_review_confirms_baselines_against_the_owners_command
 /// the stronger landing reviewer certifies its own repair, even though the
 /// selective rule itself did not require that review.
 fn selective_observation_and_nonmatch_follow_a_certified_claimed_repair() {
-    for (mode, paths) in [("observe", "src/**"), ("enforce", "unrelated/**")] {
+    for (mode, paths, add_matching_path) in [
+        ("observe", "src/**", false),
+        ("enforce", "unrelated/**", false),
+        ("enforce", "src/selection-sensitive.rs", true),
+    ] {
         let mut leaf = ReviewedLeaf::admit_from(
             &format!(
                 "[review]\nbefore_landing = true\nselective_before_landing.mode = {mode:?}\nselective_before_landing.paths = [{paths:?}]\n[operation]\nreview_crew = {REVIEW_CREW:?}\n"
@@ -487,6 +491,13 @@ fn selective_observation_and_nonmatch_follow_a_certified_claimed_repair() {
             ReviewVerdict::AcceptWithFixes,
             true,
         );
+        if add_matching_path {
+            std::fs::write(
+                leaf.pair.follower_repo.join("src/selection-sensitive.rs"),
+                "pub fn reviewed_repair() {}\n",
+            )
+            .unwrap();
+        }
         let settled = leaf.settle().expect("stronger review settles its repair");
         let reviewed = revision(&leaf.pair.follower_repo, "HEAD");
         assert_ne!(selection.head_sha, reviewed.commit);
