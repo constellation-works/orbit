@@ -458,6 +458,15 @@ spec:
       file and record the mapping and evidence in `assessment_rationale`. Add
       no whole generated tree, unrelated goldens, or outputs of sources
       consulted only as evidence. Companions are regenerated, never hand-edited.
+    - Unit-test ratchet: if the workspace documents a generated unit-test
+      identity baseline, follow its inventory scope. When a planned test
+      function is added, renamed, moved or retired within that scope, declare
+      the exact baseline as a `file:` companion and cite the planned test and
+      ratchet in `assessment_rationale`. Regenerate it with the workspace's
+      documented command, never by hand, and raise it only for tests admitted
+      by its test strategy. Tests outside that scope, tests only read or run,
+      body-only edits and plans with no unit-test identity change do not trigger
+      this declaration.
     - Handwritten expected-value fixtures: when a planned source change
       necessarily invalidates an exact existing handwritten expectation (a
       hand-maintained inventory, table or fixture whose asserted values the

@@ -306,6 +306,15 @@ known missing companion; a generator relationship alone grants no creation
 intent. Task-pilot records an expected missing output without authorization
 as an evidence gap rather than proposing an undeclared missing selector.
 
+If the workspace documents a generated unit-test identity baseline, follow its
+inventory scope. When a plan adds, renames, moves or retires a test function
+within that scope, declare the exact baseline as a `file:` companion and cite
+the planned test and ratchet in the description or authoring evidence.
+Regenerate it with the workspace's documented command, never by hand, and raise
+it only for tests admitted by its test strategy. Tests outside that scope, tests
+only read or run, body-only edits and plans with no unit-test identity change do
+not trigger this declaration.
+
 Follow a planned source change into any exact existing handwritten
 expected-value fixture it necessarily invalidates: a hand-maintained
 inventory, table or fixture whose asserted values the change must extend or
