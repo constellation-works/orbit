@@ -75,13 +75,21 @@ fn initial_prepare(
         let mut invalid_evidence_dropped = 0u32;
         let mut over_max_findings_dropped = 0u32;
         let mut findings: Vec<Value> = Vec::new();
-        let reported = review_results
+        let Some(reported) = review_results
             .iter()
             .find(|result| result.get("task_id").and_then(Value::as_str) == Some(&task_id))
             .and_then(|result| result.get("findings"))
             .and_then(Value::as_array)
             .cloned()
-            .unwrap_or_default();
+        else {
+            record["outcome"] = json!("not_established");
+            record["not_established"] = json!([{
+                "reason": "review_result_missing",
+                "detail": "the comparison reviewer returned no findings array for this task",
+            }]);
+            records.push(record);
+            continue;
+        };
         for raw in &reported {
             match comparison_finding(raw, &catalog, workspace) {
                 Ok(finding) => {

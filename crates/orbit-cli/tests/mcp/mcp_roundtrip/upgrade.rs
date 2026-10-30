@@ -107,8 +107,8 @@ fn audit_count(workspace: &McpWorkspace, tool: &str) -> i64 {
 fn new_review_record_contract_refuses_a_live_old_client_before_mutation() {
     // Each old client lacks one breaking contract: the review feature schema,
     // layout 4 (selective review contracts) or layout 5 (schemaVersion 3
-    // auto-task jobs, ORB-20237).
-    for old_contract in ["review", "selective", "auto-task-job-schema"] {
+    // auto-task jobs, ORB-20237), or layout 6 (live visual contracts).
+    for old_contract in ["review", "selective", "auto-task-job-schema", "visual-live"] {
         let workspace = McpWorkspace::init();
         let initialized = orbit_ok(
             McpWorkspace::orbit_command(&workspace.work, &workspace.home).args(["task", "list"]),
@@ -129,8 +129,12 @@ fn new_review_record_contract_refuses_a_live_old_client_before_mutation() {
         if old_contract == "review" {
             old_identity.features.insert("review".into(), 3);
         } else {
-            assert_eq!(latest.workspace_layout.version, 5);
-            let old_layout = if old_contract == "selective" { 3 } else { 4 };
+            let old_layout = match old_contract {
+                "selective" => 3,
+                "auto-task-job-schema" => 4,
+                "visual-live" => 5,
+                _ => unreachable!(),
+            };
             old_identity.workspace_layout.version = old_layout;
             old_identity.workspace_layout.writer_floor = old_layout;
             old_identity.workspace_layout.reader_floor = old_layout;

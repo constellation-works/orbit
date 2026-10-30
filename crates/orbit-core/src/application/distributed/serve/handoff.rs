@@ -51,6 +51,19 @@ impl OrbitRuntime {
         accepted: Option<&orbit_types::workflow::handoff::AcceptedHandoff>,
     ) -> Result<HandoffObservation, OrbitError> {
         let receipt = self.claim_receipt(&handoff.claim_id)?;
+        if receipt
+            .visual_review
+            .as_ref()
+            .is_some_and(|contract| contract.mode == orbit_types::task::VisualReviewMode::Live)
+            || (self.visual_review_settings().mode == orbit_types::task::VisualReviewMode::Live
+                && orbit_types::task::has_verify_mock_ui_tag(
+                    &self.get_task(&handoff.task_id)?.tags,
+                ))
+        {
+            return Err(refusal::refused(
+                "visual_live_claim_unsupported: the owner cannot verify final-candidate visual resolutions for this claimed delivery",
+            ));
+        }
         let candidate = match handoff.candidate.delivery {
             HandoffDelivery::NoDiff { .. } => orbit_engine::observe_no_diff_candidate(
                 self,

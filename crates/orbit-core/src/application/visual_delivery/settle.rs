@@ -95,8 +95,14 @@ fn settle_task(
     let checks = read_record::<VisualChecksRecord>(runtime, task_id, &pass.checks_artifact())?
         .map(|(checks, _)| checks)
         .filter(|checks| checks.candidate_sha == record.candidate_sha);
-    let head = crate::application::tag_instructions::commit_at(workspace, "HEAD")
-        .map_err(|reason| OrbitError::Execution(format!("candidate head: {reason}")))?;
+    let head = if pass == VisualPass::Measure {
+        // Capture pinned this revision from the durable completion checkpoint.
+        // The delivery checkout may still be at the pre-merge PR head.
+        record.candidate_sha.clone()
+    } else {
+        crate::application::tag_instructions::commit_at(workspace, "HEAD")
+            .map_err(|reason| OrbitError::Execution(format!("candidate head: {reason}")))?
+    };
     let mut refusals = Vec::new();
     if record.candidate_sha != head {
         refusals.push(VisualSettleRefusal {

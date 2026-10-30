@@ -843,14 +843,75 @@ impl OrbitRuntime {
                 .get_task_artifact(task_id, &pass.review_artifact())?
                 .and_then(|artifact| serde_json::from_slice(&artifact.content).ok()))
         };
-        let landed_mismatches = read(VisualPass::Measure)?.map(|record| {
-            record
-                .findings
-                .iter()
-                .filter(|finding| finding.verdict.verdict == VisualVerdictKind::Confirmed)
-                .map(|finding| visual_severity_weight(finding.severity_of_record()))
-                .sum()
-        });
+        let capture = self
+            .get_task_artifact(task_id, &VisualPass::Measure.capture_artifact())?
+            .and_then(|artifact| {
+                serde_json::from_slice::<orbit_types::task::VisualCaptureRecord>(&artifact.content)
+                    .ok()
+            });
+        let landed = match self.get_task(task_id)?.job_run_id {
+            Some(run) => crate::application::visual_delivery::visual_measurement_landed_revision(
+                self, task_id, &run,
+            )?,
+            None => None,
+        };
+        let settle = self
+            .get_task_artifact(task_id, &VisualPass::Measure.settle_artifact())?
+            .and_then(|artifact| {
+                serde_json::from_slice::<orbit_types::task::VisualSettleRecord>(&artifact.content)
+                    .ok()
+            });
+        let landed_mismatches = read(VisualPass::Measure)?
+            .filter(|record| {
+                landed.as_deref() == Some(record.candidate_sha.as_str())
+                    && record.task_id == task_id
+                    && record.purpose == orbit_types::task::VISUAL_MEASURE_PURPOSE
+                    && record.outcome == "reviewed"
+                    && record.not_established.is_empty()
+                    && record.budget.not_shown.is_empty()
+                    && record.invalid_evidence_dropped == 0
+                    && record.over_max_findings_dropped == 0
+                    && record
+                        .findings
+                        .iter()
+                        .all(|finding| finding.verdict.verdict != VisualVerdictKind::Unverified)
+                    && settle.as_ref().is_some_and(|settle| {
+                        settle.candidate_sha == record.candidate_sha
+                            && settle.outcome == orbit_types::task::VisualSettleOutcome::Established
+                            && settle.refusals.is_empty()
+                            && settle.not_established.is_empty()
+                    })
+                    && capture.as_ref().is_some_and(|capture| {
+                        capture.outcome == orbit_types::task::VisualCaptureOutcome::Captured
+                            && capture.candidate_sha == record.candidate_sha
+                            && capture.task_id == task_id
+                            && capture.not_established.is_empty()
+                            && capture.over_budget.is_empty()
+                            && !capture.mocks.is_empty()
+                            && capture.mocks.iter().all(|mock| {
+                                record
+                                    .budget
+                                    .shown
+                                    .iter()
+                                    .any(|shown| shown.mock == mock.artifact)
+                            })
+                            && capture.mocks.iter().all(|mock| {
+                                mock.error.is_none()
+                                    && mock
+                                        .capture
+                                        .as_ref()
+                                        .is_some_and(|image| image.commit == record.candidate_sha)
+                            })
+                    })
+            })
+            .map(|record| {
+                record
+                    .findings
+                    .iter()
+                    .filter(|finding| finding.verdict.verdict == VisualVerdictKind::Confirmed)
+                    .map(|finding| visual_severity_weight(finding.severity_of_record()))
+                    .sum()
+            });
         let delivery = read(VisualPass::Delivery)?;
         let repairs = delivery.as_ref().map(|record| {
             record

@@ -164,8 +164,27 @@ pub(super) fn capture_task(
     let Some(contract) = contract else {
         return Ok(None);
     };
-    let candidate_sha = crate::application::tag_instructions::commit_at(workspace, "HEAD")
-        .map_err(|reason| OrbitError::Execution(format!("candidate head: {reason}")))?;
+    let candidate_sha = if pass == VisualPass::Measure {
+        match visual_measurement_landed_revision(runtime, task_id, run_id)? {
+            Some(commit) => {
+                match orbit_engine::review_gate::fetch_landed_commit(workspace, &commit) {
+                    Ok(()) => commit,
+                    Err(error) => {
+                        unreadable = Some(format!("landed revision cannot be fetched: {error}"));
+                        commit
+                    }
+                }
+            }
+            None => {
+                unreadable =
+                    Some("no durable completion identifies this task's landed revision".into());
+                String::new()
+            }
+        }
+    } else {
+        crate::application::tag_instructions::commit_at(workspace, "HEAD")
+            .map_err(|reason| OrbitError::Execution(format!("candidate head: {reason}")))?
+    };
     let mut scratch = runtime
         .paths()
         .repo_root
@@ -631,4 +650,54 @@ fn git(repo: &Path, args: &[&str]) -> Result<(), OrbitError> {
         args.join(" "),
         String::from_utf8_lossy(&output.stderr).trim()
     )))
+}
+
+/// Read the latest successful completion checkpoint, never a mutable ref.
+pub(crate) fn visual_measurement_landed_revision(
+    runtime: &OrbitRuntime,
+    task_id: &str,
+    run_id: &str,
+) -> Result<Option<String>, OrbitError> {
+    let Some(state) = runtime.stores().jobs().read_run_state(run_id)? else {
+        return Ok(None);
+    };
+    if state.run_id != run_id
+        || state.job_id != "task_pr_pipeline"
+        || !state
+            .initial_input
+            .get("task_ids")
+            .and_then(Value::as_array)
+            .is_some_and(|ids| ids.iter().any(|id| id.as_str() == Some(task_id)))
+    {
+        return Ok(None);
+    }
+    for step in [
+        "complete_reviewed_pr_2",
+        "complete_reviewed_pr",
+        "complete_pr",
+    ] {
+        let Some(output) = state.pipeline.get(step) else {
+            continue;
+        };
+        let successful = state.step_output_entries().any(|(index, recorded)| {
+            state.step_states.get(&index) == Some(&orbit_types::workflow::JobRunState::Success)
+                && recorded == output
+        });
+        if !successful
+            || output.get("phase").and_then(Value::as_str) != Some("complete")
+            || output
+                .get("completed_task_ids")
+                .and_then(Value::as_array)
+                .is_none_or(|ids| !ids.iter().any(|id| id.as_str() == Some(task_id)))
+            || output.pointer("/merge/merged").and_then(Value::as_bool) != Some(true)
+        {
+            continue;
+        }
+        let commit = output
+            .pointer("/merge/landed_commit")
+            .and_then(Value::as_str)
+            .filter(|sha| sha.len() == 40 && sha.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        return Ok(commit.map(str::to_string));
+    }
+    Ok(None)
 }

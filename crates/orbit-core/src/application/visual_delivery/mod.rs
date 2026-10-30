@@ -6,13 +6,11 @@
 //! (`visual_review_prepare`, the `visual_review` and `visual_verify`
 //! agents, `visual_verify_prepare`), and settle the capture against the
 //! candidate and the frozen mocks (`visual_settle`, which also writes
-//! `visual/review.json`). Everything is written by the system writer under
-//! the reserved `visual/` prefix. In this phase nothing blocks, nothing is
-//! filed and nothing reaches the code reviewer; only
-//! `visual_review.require_established` holds a delivery whose capture is
-//! not established.
+//! `visual/review.json`). The system writer owns the reserved `visual/`
+//! prefix. Live delivery resolves confirmed findings and establishes the
+//! final candidate before every landing attempt; shadow records only.
 //!
-//! A claimed leaf captures against the visual review contract its owner
+//! A shadow claimed leaf captures against the visual review contract its owner
 //! captured at admission, and the owner checks what the leaf returns before
 //! it accepts the handoff (`visual_capture_mismatch`).
 
@@ -28,7 +26,7 @@ mod settle;
 mod tests;
 mod verify;
 
-pub(crate) use capture::visual_capture_step;
+pub(crate) use capture::{visual_capture_step, visual_measurement_landed_revision};
 pub(crate) use checks::visual_checks_step;
 pub(crate) use landed::visual_landed_step;
 pub(crate) use resolve::visual_recapture_step;

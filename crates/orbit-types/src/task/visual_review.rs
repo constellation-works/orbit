@@ -953,7 +953,7 @@ impl VisualReviewRecord {
 
     /// The confirmed findings still unresolved before landing: blocking
     /// ones not fixed and not accepted by the operator, and fixed blocking
-    /// check findings the recapture still finds or could not check (§1).
+    /// findings whose recapture failed, is absent, or still finds them (§1).
     #[must_use]
     pub fn unresolved_blocking(&self) -> Vec<&VisualReviewFinding> {
         self.findings
@@ -961,10 +961,10 @@ impl VisualReviewRecord {
             .filter(|finding| finding.must_address())
             .filter(|finding| match finding.resolution {
                 Some(VisualResolution::DisputeAccepted) => false,
-                Some(VisualResolution::Fixed) => self
-                    .recapture
-                    .as_ref()
-                    .is_some_and(|recapture| recapture.still_failing.contains(&finding.finding_id)),
+                Some(VisualResolution::Fixed) => self.recapture.as_ref().is_none_or(|recapture| {
+                    recapture.outcome != "passed"
+                        || recapture.still_failing.contains(&finding.finding_id)
+                }),
                 _ => true,
             })
             .collect()
