@@ -227,7 +227,7 @@ fn capture_task(
                     } else {
                         record.not_established.push(VisualNotEstablished {
                             reason: "capture_failed".to_string(),
-                            detail: "no mock rendered a capture".to_string(),
+                            detail: "no mock produced an attachable capture".to_string(),
                         });
                     }
                 }
@@ -363,6 +363,10 @@ fn capture_mocks(
             error: Some(VisualCaptureError {
                 code: "mock_missing".to_string(),
                 message: "the mock artifact is no longer stored on the task".to_string(),
+                stability: None,
+                diff_region: None,
+                off_loopback_requests: Vec::new(),
+                color_scheme_leak: None,
             }),
         });
     }
@@ -377,6 +381,10 @@ fn capture_mocks(
                 Some(VisualCaptureError {
                     code: error.code.clone(),
                     message: error.message.clone(),
+                    stability: entry.stability.clone(),
+                    diff_region: entry.diff_region,
+                    off_loopback_requests: entry.off_loopback_requests.clone().unwrap_or_default(),
+                    color_scheme_leak: entry.color_scheme_leak,
                 }),
             ),
             None => {

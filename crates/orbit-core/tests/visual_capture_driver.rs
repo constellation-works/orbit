@@ -45,11 +45,17 @@ const outDir = process.argv[1];
 const driver = await import(pathToFileURL(process.argv[2]).href);
 const mockFile = path.join(outDir, "mock.png");
 await writeFile(mockFile, Buffer.alloc(128, 2));
+let captureNumber = 0;
 const makeBrowser = (captureBytes, sideBySideBytes) => ({
   newContext: async () => {
     const page = {
       on() {},
-      route: async () => {},
+      route: async (_pattern, handler) => {
+        await handler({
+          request: () => ({ url: () => "https://outside.example/resource", method: () => "GET" }),
+          abort: async () => {},
+        });
+      },
       clock: { install: async () => {}, pauseAt: async () => {}, runFor: async () => {} },
       addInitScript: async () => {},
       goto: async () => {},
@@ -64,7 +70,10 @@ const makeBrowser = (captureBytes, sideBySideBytes) => ({
         return undefined;
       },
       screenshot: async (options = {}) => {
-        const bytes = Buffer.alloc(options.path ? sideBySideBytes : captureBytes, 1);
+        const bytes = Buffer.alloc(
+          options.path ? sideBySideBytes : captureBytes,
+          ++captureNumber,
+        );
         if (options.path) await writeFile(options.path, bytes);
         return bytes;
       },
@@ -78,12 +87,19 @@ const cases = [
   { name: "capture", captureBytes: 2048, sideBySideBytes: 512 },
   { name: "side-by-side", captureBytes: 512, sideBySideBytes: 2048 },
 ];
+const PNG = {
+  sync: {
+    read(bytes) {
+      return { width: 1, height: 1, data: Buffer.alloc(4, bytes[0]) };
+    },
+  },
+};
 const rows = [];
 for (const testCase of cases) {
   const name = testCase.name;
   const request = {
     out_dir: path.join(outDir, name),
-    captures_per_mock: 1,
+    captures_per_mock: 2,
     frozen_instant: "2026-01-01T12:00:00.000Z",
     max_image_bytes: 1024,
   };
@@ -91,19 +107,22 @@ for (const testCase of cases) {
     artifact: `mocks/${name}.png`, name, view: "example", state: "default",
     theme: "dark", width: 1440, mock_ext: "png", mock_file: mockFile,
     view_def: { fixture: "fixture", route: "/", ready: "body", responsive: true },
-    app_def: { name: "example" },
+    app_def: { name: "example", color_scheme_invariant: true },
   };
   const entry = await driver.captureMock({
     browser: makeBrowser(testCase.captureBytes, testCase.sideBySideBytes),
-    PNG: {}, request, mock, server: { baseUrl: "http://127.0.0.1:1234", placeholders: {} },
+    PNG, request, mock, server: { baseUrl: "http://127.0.0.1:1234", placeholders: {} },
     ruleModules: [], ruleResults: [],
   });
   const captureJson = JSON.parse(JSON.stringify({ mocks: [entry] }));
   const reported = captureJson.mocks[0];
   rows.push({
-    error: reported.error,
+    error_code: reported.error?.code,
     claims_capture: Object.hasOwn(reported, "capture"),
     claims_side_by_side: Object.hasOwn(reported, "side_by_side"),
+    stability: reported.stability,
+    color_scheme_leak: reported.color_scheme_leak,
+    off_loopback_requests: reported.off_loopback_requests,
   });
 }
 process.stdout.write(JSON.stringify(rows));
@@ -230,27 +249,18 @@ fn images_over_the_limit_are_reported_without_capture_paths() {
         String::from_utf8_lossy(&output.stderr)
     );
     let rows: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(
-        rows,
-        json!([
-            {
-                "error": {
-                    "code": "image_over_budget",
-                    "message": "capture image remains over the 1024-byte artifact limit after WebP encoding"
-                },
-                "claims_capture": false,
-                "claims_side_by_side": false
-            },
-            {
-                "error": {
-                    "code": "image_over_budget",
-                    "message": "side-by-side image remains over the 1024-byte artifact limit after WebP encoding"
-                },
-                "claims_capture": false,
-                "claims_side_by_side": false
-            }
-        ])
-    );
+    assert_eq!(rows.as_array().map(Vec::len), Some(2));
+    for row in rows.as_array().unwrap() {
+        assert_eq!(row["error_code"], "image_over_budget");
+        assert_eq!(row["claims_capture"], false);
+        assert_eq!(row["claims_side_by_side"], false);
+        assert_eq!(row["stability"], "unstable");
+        assert_eq!(row["color_scheme_leak"], true);
+        assert_eq!(
+            row["off_loopback_requests"],
+            json!(["https://outside.example/resource"])
+        );
+    }
 }
 
 #[test]

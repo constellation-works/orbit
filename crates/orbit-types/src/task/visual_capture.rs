@@ -273,6 +273,19 @@ pub struct VisualCaptureError {
     /// `setup_failed`, `render_timeout` or `image_over_budget`.
     pub code: String,
     pub message: String,
+    /// `stable`, `stable_after_retry` or `unstable`, when rendering finished
+    /// before an image encoding failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stability: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff_region: Option<[u32; 4]>,
+    /// Off-loopback requests observed before image encoding failed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub off_loopback_requests: Vec<String>,
+    /// Whether a colour-scheme-invariant view changed under the opposite
+    /// preference, when that check ran before image encoding failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_scheme_leak: Option<bool>,
 }
 
 /// One mock in `visual/capture.json`.

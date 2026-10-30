@@ -406,8 +406,11 @@ whose `sha256` differs from the digest read at admission is refused as `mock_cha
   PNG). The driver encodes PNG first; over the limit, lossless WebP; still over, WebP at
   quality 90 with `lossy: true`. If quality 90 still exceeds the limit, the driver records an
   `image_over_budget` error for that mock and names no capture images in `capture.json`, so no
-  over-limit bytes are attached. Pixel comparison always runs on the decoded captures in
-  scratch before encoding.
+  over-limit bytes are attached. The error record retains any stability, off-loopback and
+  colour-scheme results gathered before encoding, so `checks.json` can report them without an
+  attached image. When every mock lacks an attachable image, the capture summary reports that
+  outcome without claiming that rendering failed. Pixel comparison always runs on the decoded
+  captures in scratch before encoding.
 - **Count.** At most `max_mocks` mocks, each with one capture and one side-by-side.
 - **Retention.** Captures are task artifacts and live as long as the task. `pr_open` puts
   each side-by-side image in the PR's screenshots section, ahead of implementer

@@ -111,21 +111,37 @@ fn capture_findings(record: &VisualCaptureRecord) -> Vec<VisualCheckFinding> {
                 None,
             ));
         }
-        let Some(capture) = &mock.capture else {
-            continue;
-        };
-        if !capture.off_loopback_requests.is_empty() {
+        let off_loopback_requests = mock
+            .capture
+            .as_ref()
+            .map(|capture| capture.off_loopback_requests.as_slice())
+            .or_else(|| {
+                mock.error
+                    .as_ref()
+                    .map(|error| error.off_loopback_requests.as_slice())
+            })
+            .unwrap_or_default();
+        if !off_loopback_requests.is_empty() {
             findings.push(finding(
                 "off_loopback_request",
                 &mock.artifact,
                 "medium",
                 "The view requested an address off loopback",
-                &capture.off_loopback_requests.join(", "),
+                &off_loopback_requests.join(", "),
                 "change",
                 None,
             ));
         }
-        if capture.color_scheme_leak == Some(true) {
+        let color_scheme_leak = mock
+            .capture
+            .as_ref()
+            .and_then(|capture| capture.color_scheme_leak)
+            .or_else(|| {
+                mock.error
+                    .as_ref()
+                    .and_then(|error| error.color_scheme_leak)
+            });
+        if color_scheme_leak == Some(true) {
             findings.push(finding(
                 "color_scheme_leak",
                 &mock.artifact,
@@ -137,7 +153,21 @@ fn capture_findings(record: &VisualCaptureRecord) -> Vec<VisualCheckFinding> {
                 None,
             ));
         }
-        if capture.stability == "unstable" {
+        let stability = mock
+            .capture
+            .as_ref()
+            .map(|capture| capture.stability.as_str())
+            .or_else(|| {
+                mock.error
+                    .as_ref()
+                    .and_then(|error| error.stability.as_deref())
+            });
+        if stability == Some("unstable") {
+            let diff_region = mock
+                .capture
+                .as_ref()
+                .and_then(|capture| capture.diff_region)
+                .or_else(|| mock.error.as_ref().and_then(|error| error.diff_region));
             findings.push(finding(
                 "unstable_view",
                 &mock.artifact,
@@ -146,7 +176,7 @@ fn capture_findings(record: &VisualCaptureRecord) -> Vec<VisualCheckFinding> {
                 "three captures in fresh contexts did not agree; the view's fixture, mask or \
                  ready selector needs fixing in the view manifest",
                 "manifest",
-                capture.diff_region,
+                diff_region,
             ));
         }
     }
