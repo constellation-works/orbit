@@ -1,7 +1,7 @@
 ---
 type: context
 summary: "Orbit agent guide: rules, branching, gates, code and test standards, local CodeQL"
-last_validated: 2026-10-27
+last_validated: 2026-10-30
 ---
 
 # Orbit — agent guide
@@ -51,7 +51,7 @@ Loaded as both `AGENTS.md` and `CLAUDE.md`. For any Orbit lifecycle work, invoke
 - Every test exercises behavior a guarantee depends on. No text-matching tests (`include_str!` + `contains()` over source, assets or UI copy), except a narrow structural safety guard (CSP, sanitizer wrapper, no raw `innerHTML`) whose message names what it protects. Don't pin config or prompt policy (crew, model, schedule, complexity, wording); if a pin is warranted, cite its incident in the assertion message.
 - The Check / Clippy / Test job has a hard budget of 10 minutes wall time at p90 over PR runs (queue wait reported separately). Fix slow or flaky tests at their cause; retries, hidden skips, weaker assertions or dropped checks don't count. Retire redundant cases with measured changes that name the surviving coverage, never the only guard of a security invariant, recovery path or known incident.
 - Admitted unit tests live in a sibling `tests/` dir mirroring source filenames ([`test_layout.md`](docs/design-patterns/test_layout.md)); crate-root `tests/` is integration only. Fixtures that mutate Orbit state run in an isolated child process ([DEVELOPMENT.md](docs/DEVELOPMENT.md#safe-mutable-cli-fixtures)).
-- Do manual QA through the real CLI, MCP, API or UI, including failure paths, when it can reveal defects, and record steps, expected and actual results and evidence. Docs-only, mechanical or already covered changes may skip it with a reason.
+- Do manual QA through the real CLI, MCP, API or UI, including failure paths, when it can reveal defects, and record steps, expected and actual results and evidence. Docs-only, mechanical or already covered changes may skip it with a reason. Run a candidate build (any CLI command or `web serve`) only under a disposable home with its own workspace, never the real home or the live checkout: opening state migrates it past the installed binary ([Manual QA from a managed lane](docs/DEVELOPMENT.md#manual-qa-from-a-managed-lane)).
 - A diff that changes something users see (dashboard, web pages, docs site, desktop UI) attaches screenshots of each changed view with `orbit.task.artifact.put`, at paths like `screenshots/<view>-<theme>-<width>.png`, captured under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`). Cover every supported theme (the dashboard is dark-only), 375px width for responsive layouts, and a base-revision before shot when practical. Stay under the 1 MiB artifact limit (viewport captures, or JPEG/WebP). List the paths at handoff; if the host has no browser kit or the view can't render, say so. Reviewers treat unexplained missing screenshots as missing evidence. These task artifacts are review evidence; an empty optional PR `## Screenshots` section never blocks PR opening. Exception: in a workspace with `visual_review.mode = "live"`, a `verify-mock-ui` task's mocked views need no implementer screenshots, because Orbit captures them beside the mocks as the evidence of record; every other changed view still does.
 - Dashboard implementers start from the [dashboard map](docs/agents/dashboard-map.md).
 

@@ -119,6 +119,9 @@ pub const INHERITED_AUTHORITY_ENV: &[&str] = &[
     "ORBIT_WORKTREE_ROOT",
     "ORBIT_JOB_DIR",
     "ORBIT_ACTIVITY_DIR",
+    // The installation a child treats as the host's installed orbit, whose
+    // supported state bounds the migrations a build may apply.
+    "ORBIT_INSTALL_DIR",
     // Managed-run trust boundary and run identity. Clearing the marker alone
     // would be enough to disarm routing today; clearing the whole envelope
     // keeps the fixture correct if that coupling ever changes.

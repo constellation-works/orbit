@@ -25,6 +25,7 @@ use orbit_common::fs::generation::authority_root;
 use orbit_store::workflow::layout::{SUPPORTED_LAYOUT_VERSION, current_layout_version};
 use serde::{Deserialize, Serialize};
 
+use crate::bootstrap::installed_binary::verify_installed_binary_keeps_state;
 use crate::runtime::WorkspaceRuntimeBinding;
 
 /// Record of the authority protecting a workspace, relative to its `.orbit`.
@@ -44,7 +45,8 @@ pub(crate) struct LayoutAuthorityAdmission {
 }
 
 /// Refuse a workspace layout upgrade that `global_root`'s generation authority
-/// does not protect, without writing anything.
+/// does not protect, or a layout or store schema migration the installed orbit
+/// could not keep using, without writing anything.
 ///
 /// Command surfaces call this before their own incidental writes; runtime
 /// composition repeats it before bootstrap and records the authority.
@@ -61,6 +63,9 @@ pub(crate) fn admit_workspace_layout_authority(
     shared_root: &Path,
     binding: Option<&WorkspaceRuntimeBinding>,
 ) -> Result<LayoutAuthorityAdmission, OrbitError> {
+    // A build that is not the installed orbit may not migrate past it, even
+    // under the authority protecting the workspace [ORB-20262].
+    verify_installed_binary_keeps_state(global_root, shared_root)?;
     let process = authority_root(global_root)?;
     let version = current_layout_version(shared_root)?;
     let pending = version > 0 && version < SUPPORTED_LAYOUT_VERSION;

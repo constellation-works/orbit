@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use orbit_common::fs::io::atomic_write_text;
 use orbit_common::{OrbitError, StorageLayer};
+use serde::{Deserialize, Serialize};
 
 use super::registry::LayoutMigration;
 use crate::contracts::{CompatibilityRecord, CompatibilityRefusal};
@@ -22,6 +23,11 @@ const MARKER_FILE: &str = "layout.version";
 /// parse would be a worse failure than the one this contract replaces.
 const COMPAT_FILE: &str = "layout.compat";
 
+/// The executable that last advanced the marker, relative to `state/`, so a
+/// binary refused by a newer layout can name what advanced it [ORB-20262].
+/// Diagnostic only: nothing decides admission from it.
+const WRITER_FILE: &str = "layout.writer";
+
 /// Advisory lock serializing concurrent upgraders, relative to `state/`.
 const UPGRADE_LOCK_FILE: &str = "layout.lock";
 
@@ -31,6 +37,46 @@ fn marker_path(orbit_dir: &Path) -> PathBuf {
 
 pub(super) fn upgrade_lock_path(orbit_dir: &Path) -> PathBuf {
     orbit_dir.join("state").join(UPGRADE_LOCK_FILE)
+}
+
+fn writer_path(orbit_dir: &Path) -> PathBuf {
+    orbit_dir.join("state").join(WRITER_FILE)
+}
+
+#[derive(Serialize, Deserialize)]
+struct LayoutWriter {
+    layout_version: u32,
+    executable: PathBuf,
+}
+
+/// Record this executable as the one that advanced the layout to `version`.
+/// Best effort: the record only improves a later refusal's diagnosis.
+pub(super) fn record_layout_writer(orbit_dir: &Path, version: u32) {
+    let Ok(executable) = std::env::current_exe() else {
+        return;
+    };
+    let path = writer_path(orbit_dir);
+    let written = serde_json::to_string(&LayoutWriter {
+        layout_version: version,
+        executable,
+    })
+    .map_err(std::io::Error::other)
+    .and_then(|record| atomic_write_text(&path, &format!("{record}\n")));
+    if let Err(error) = written {
+        orbit_common::tracing::warn!(
+            target: "orbit.store.layout",
+            path = %path.display(),
+            error = %error,
+            "skipped layout writer record"
+        );
+    }
+}
+
+/// The executable recorded as having advanced the layout to `version`.
+pub(super) fn layout_writer(orbit_dir: &Path, version: u32) -> Option<PathBuf> {
+    let raw = std::fs::read_to_string(writer_path(orbit_dir)).ok()?;
+    let writer = serde_json::from_str::<LayoutWriter>(raw.trim()).ok()?;
+    (writer.layout_version == version).then_some(writer.executable)
 }
 
 fn compat_path(orbit_dir: &Path) -> PathBuf {
