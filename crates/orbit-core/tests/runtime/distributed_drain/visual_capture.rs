@@ -11,6 +11,7 @@ use orbit_types::task::{
 };
 
 use super::*;
+use orbit_types::tool::WorkerInvocation;
 
 const CONFIG: &str = "[visual_review]\nmode = \"shadow\"\nmanifests = [\"views.toml\"]\n";
 const MANIFEST: &str = "schema_version = 1\n\n[app.web]\nthemes = [\"light\", \"dark\"]\n\n\
@@ -385,9 +386,220 @@ fn a_verdict_without_rejection_reason_still_deserializes() {
     );
 }
 
+fn over_budget_fixture() -> (Pair, String, VisualReviewContract, OrbitRuntime) {
+    let (pair, _kit, _drain, leaf, contract) = claimed_mock_task();
+    let admission = pair.admission(&leaf);
+    let delivered = handoff(&admission);
+    let head = delivered.candidate.candidate.commit.clone();
+    let mock = &contract.mocks[0];
+    let record = VisualCaptureRecord {
+        schema_version: 1,
+        outcome: VisualCaptureOutcome::NotEstablished,
+        mode: contract.mode,
+        task_id: contract.task_id.clone(),
+        host: FOLLOWER.into(),
+        kit: None,
+        candidate_sha: head,
+        manifests: contract
+            .manifests
+            .iter()
+            .map(|m| m.reference.clone())
+            .collect(),
+        frozen_instant: None,
+        mocks: vec![VisualCapturedMock {
+            artifact: mock.artifact.clone(),
+            sha256: mock.sha256.clone(),
+            view: mock.view.clone(),
+            state: mock.state.clone(),
+            theme: mock.theme.clone(),
+            width: mock.width,
+            capture: None,
+            error: Some(orbit_types::task::VisualCaptureError {
+                code: "image_over_budget".into(),
+                message: "over budget".into(),
+            }),
+        }],
+        over_budget: Vec::new(),
+        not_established: Vec::new(),
+    };
+    let context = ClaimInvocation::trusted_worker(
+        delivered.task_id.clone(),
+        delivered.claim_id.clone(),
+        delivered.machine_id.clone(),
+        Some(ClaimRun {
+            machine_id: delivered.machine_id.clone(),
+            run_id: delivered.run_id.clone(),
+        }),
+    );
+    pair.wire
+        .owner
+        .mutate_execution_claim(
+            Some(&context),
+            "visual-capture",
+            &ClaimMutation::Evidence(ClaimEvidence {
+                artifacts: vec![TaskArtifact {
+                    path: "visual/capture.json".into(),
+                    content: serde_json::to_vec(&record).unwrap(),
+                    media_type: "application/json".into(),
+                    created_by: None,
+                }],
+                ..Default::default()
+            }),
+        )
+        .expect("capture evidence reaches owner");
+    let claim = admission.receipt.as_ref().unwrap().claim.as_ref().unwrap();
+    let bound = pair
+        .follower
+        .clone()
+        .with_worker_invocation(
+            WorkerInvocation {
+                owner_machine_id: OWNER.into(),
+                owner_workspace_id: admission.destination.owner_workspace_id.clone(),
+                owner_destination: admission.destination.selector.clone(),
+                task_id: claim.task_id.clone(),
+                claim_id: claim.claim_id.clone(),
+                execution: claim.executed_on.clone(),
+                bound_run_id: leaf,
+            },
+            Arc::new(super::claimed_review::ToOwner(pair.wire.owner.clone())),
+        )
+        .unwrap();
+    (pair, delivered.task_id, contract, bound)
+}
+
+// ORB-20108: completed UI rules survive when every image is over budget.
+fn over_budget_capture_keeps_completed_rule_results() {
+    let (pair, task, contract, bound) = over_budget_fixture();
+    let mock = &contract.mocks[0];
+    let scratch = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    std::fs::create_dir(scratch.path().join("out")).unwrap();
+    std::fs::write(scratch.path().join("out/rules.json"), serde_json::to_vec(&json!({"source":"fixture", "results":[{"rule":"ui.example", "status":"fail", "mock":mock.artifact}]})).unwrap()).unwrap();
+    let input = json!({"capture":{"captures":[{"task_id":task, "scratch_dir":scratch.path()}]}});
+    bound
+        .run_deterministic("visual_checks", &json!({}), &input, ToolContext::default())
+        .expect("check through runtime");
+    let artifact = pair
+        .wire
+        .owner
+        .get_task_artifact(&task, "visual/checks.json")
+        .unwrap()
+        .expect("checks artifact");
+    let checks: Value = serde_json::from_slice(&artifact.content).unwrap();
+    assert_eq!(checks["rule_results"]["fail"], 1, "{checks}");
+    assert!(checks["rules_unavailable"].is_null(), "{checks}");
+    assert!(
+        checks["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["check"] == "rule:ui.example"),
+        "{checks}"
+    );
+}
+
+// ORB-20149: settlement must judge a deviation only from a touching finding.
+fn deviation_settlement_uses_only_touching_verdicts() {
+    let (pair, task, _contract, bound) = over_budget_fixture();
+    for (region, evidence, verdict, reason, deviation_rejected, expected) in [
+        (
+            Some([0, 0, 10, 10]),
+            [20, 20, 5, 5],
+            "rejected",
+            Some("premise_wrong"),
+            false,
+            "unjudged",
+        ),
+        (
+            Some([0, 0, 10, 10]),
+            [5, 5, 5, 5],
+            "rejected",
+            Some("duplicate"),
+            false,
+            "unjudged",
+        ),
+        (
+            Some([0, 0, 10, 10]),
+            [5, 5, 5, 5],
+            "rejected",
+            Some("already_fixed"),
+            false,
+            "unjudged",
+        ),
+        (
+            Some([0, 0, 10, 10]),
+            [5, 5, 5, 5],
+            "rejected",
+            Some("unreachable"),
+            false,
+            "unjudged",
+        ),
+        (
+            Some([0, 0, 10, 10]),
+            [5, 5, 5, 5],
+            "rejected",
+            None,
+            false,
+            "unjudged",
+        ),
+        (
+            Some([0, 0, 10, 10]),
+            [5, 5, 5, 5],
+            "rejected",
+            Some("premise_wrong"),
+            false,
+            "accepted",
+        ),
+        (
+            None,
+            [99, 99, 5, 5],
+            "rejected",
+            Some("premise_wrong"),
+            false,
+            "accepted",
+        ),
+        (
+            Some([0, 0, 10, 10]),
+            [5, 5, 5, 5],
+            "confirmed",
+            None,
+            true,
+            "rejected",
+        ),
+        (
+            Some([0, 0, 10, 10]),
+            [20, 20, 5, 5],
+            "confirmed",
+            None,
+            true,
+            "unjudged",
+        ),
+    ] {
+        let mut deviation =
+            json!({"mock":"mocks/checkout.png", "element":"el", "reason":"r", "basis":"data"});
+        if let Some(region) = region {
+            deviation["region"] = json!(region);
+        }
+        let finding = json!({"finding_id":"f1", "source":"comparison", "question":"1", "mock":"mocks/checkout.png", "title":"t", "detail":"d", "evidence":[{"image":"visual/checkout/capture.png", "region":evidence}], "severity":"medium", "verdict":{"verdict":verdict, "reasoning":"r", "deviation_rejected":deviation_rejected, "rejection_reason":reason}});
+        let input = json!({"workspace_path":pair.owner_repo, "capture":{"captures":[{"task_id":task}]}, "verified":{"records":[{"task_id":task, "deviations":[deviation], "findings":[finding]}]}});
+        bound
+            .run_deterministic("visual_settle", &json!({}), &input, ToolContext::default())
+            .expect("settle through runtime");
+        let artifact = pair
+            .wire
+            .owner
+            .get_task_artifact(&task, "visual/review.json")
+            .unwrap()
+            .expect("review artifact");
+        let review: Value = serde_json::from_slice(&artifact.content).unwrap();
+        assert_eq!(review["deviations"][0]["status"], expected, "{review}");
+    }
+}
+
 crate::scenario_table!(
     a_claimed_capture_is_checked_against_its_contract_scenarios,
     a_claimed_capture_matching_its_contract_is_accepted,
     a_claimed_capture_that_departs_from_its_contract_is_refused,
-    task_show_ignores_a_settle_for_another_candidate
+    task_show_ignores_a_settle_for_another_candidate,
+    deviation_settlement_uses_only_touching_verdicts,
+    over_budget_capture_keeps_completed_rule_results
 );

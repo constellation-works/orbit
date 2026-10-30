@@ -57,16 +57,21 @@ fn check_task(runtime: &OrbitRuntime, capture: &Value) -> Result<Value, OrbitErr
         .get("scratch_dir")
         .and_then(Value::as_str)
         .map(Path::new);
-    let (rule_findings, rule_results, rules_unavailable) =
-        if record.outcome == VisualCaptureOutcome::Captured {
-            rule_findings(runtime, scratch)
-        } else {
-            (
-                Vec::new(),
-                BTreeMap::new(),
-                Some("the capture is not established".to_string()),
-            )
-        };
+    let (rule_findings, rule_results, rules_unavailable) = if record.outcome
+        == VisualCaptureOutcome::Captured
+        || record.mocks.iter().any(|mock| {
+            mock.error
+                .as_ref()
+                .is_some_and(|error| error.code == "image_over_budget")
+        }) {
+        rule_findings(runtime, scratch)
+    } else {
+        (
+            Vec::new(),
+            BTreeMap::new(),
+            Some("the capture is not established".to_string()),
+        )
+    };
     let mut findings = capture_findings(&record);
     let image_budget_mocks: BTreeSet<&str> = record
         .mocks
