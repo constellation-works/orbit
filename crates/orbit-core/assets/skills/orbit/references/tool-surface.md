@@ -263,6 +263,24 @@ a managed worker cannot dispatch/resume another workflow or use operator command
 execution. An allowlisted tool still has to pass runtime policy, filesystem,
 subprocess, and external authentication checks.
 
+### MCP toolsets
+
+`orbit mcp serve` and `orbit mcp listen` advertise the `default` toolset plus
+the opt-in toolsets the host enables: `leases` (path leases), `experiments`
+(experiment tools), `analytics` (agent scorecards, orchestrator scorecard and
+show, crew ladder) and `decision-channel` (decision submit and digest; decision
+list and show stay default). Enable them per server with
+`--toolset leases,analytics` (or `all`), or for the host with
+`orbit config set --global machine.mcp.toolsets '["experiments"]'`; the flag
+replaces the config. A call to a tool outside the server's toolsets is refused
+`toolset_not_enabled`, naming the tool's `toolset` and the `enable` flag and
+config key. A federated mux filters every row the same way. The toolset of each
+tool is in `orbit tool show <name> --json` (`mcp_toolset`).
+
+Toolsets change only what an MCP server lists. `orbit tool run`, CLI commands,
+activity `required_tools` and task grants, and a decision-channel plugin's
+callback session reach every tool regardless.
+
 ### Host agent invocation
 
 `orbit_agent_invoke` submits one asynchronous agent run for exploration or
@@ -429,7 +447,8 @@ way.
 ### Decision requests
 
 `orbit_decision_submit` (`orbit.decision.submit`) and `orbit_decision_digest`
-(`orbit.decision.digest`) are governed. Both are callable only by the plugin the
+(`orbit.decision.digest`) are governed. Over MCP they are in the `decision-channel`
+toolset. Both are callable only by the plugin the
 channel is bound to, through its callback session, or by the operator; an agent
 session is refused `caller_not_allowed`.
 
@@ -474,7 +493,8 @@ nothing, writes nothing and returns no requests.
 
 ### Agent scorecards
 
-`orbit_agents_scorecard` ranks one agent role's crews and models over the window.
+`orbit_agents_scorecard` ranks one agent role's crews and models over the window. Over
+MCP it is in the `analytics` toolset.
 
 - **Score.** Each term's count per 100 units of work is weighted and summed.
   Implementers start at 100 and score actual counts against fleet expectations
@@ -549,8 +569,8 @@ it returns a new linked run; preserve both IDs.
 ## Path leases
 
 `orbit.lease.request`, `.renew`, `.expand`, `.release`, `.show`, `.list`,
-`.check` and `.notices` are active tools on MCP (advertised as `orbit_lease_request`, etc.) and
-`orbit tool run`. They all answer for the owner's coordination store and
+`.check` and `.notices` are `orbit tool run` tools, and MCP tools (advertised as
+`orbit_lease_request`, etc.) on a server that enables the `leases` toolset. They all answer for the owner's coordination store and
 require an identified agent, operator or runner. Federated calls must target
 the owner; replicas refuse the `control_plane` class, including lease reads.
 Enable `lease.enabled` in the workspace first.

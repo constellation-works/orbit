@@ -21,6 +21,7 @@ mod listener;
 mod presentation_definition;
 mod remote;
 mod stdio_session;
+mod toolset;
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -40,6 +41,7 @@ pub use remote::{
     serve_mcp_remote_proxy, warn_ignored_caller_authorization, workspace_list_includes_crews,
 };
 pub use stdio_session::{LIFECYCLE_INTERVAL_ENV, RESUME_ENV, StdioExit, stdin_supports_handover};
+pub use toolset::{MCP_TOOLSETS_CONFIG_KEY, TOOLSET_NOT_ENABLED_CODE, with_mcp_toolsets};
 
 /// Back-end for the complete MCP tool surface.
 ///

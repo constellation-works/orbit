@@ -25,6 +25,12 @@ macro_rules! with_tail_keys {
         section: ConfigSection::Machine, order: 81,
         resolve: |raw: Option<u32>| resolve_bounded_range(raw, 43_200, 1, 604_800, "machine.web_session.ttl"),
     },
+    machine_mcp_toolsets: Vec<String> => Vec<String> {
+        key: "machine.mcp.toolsets", value_type: "array<string>",
+        description: "Opt-in MCP toolsets orbit mcp serve and listen advertise beside the default: leases, experiments, analytics, decision-channel or all.",
+        section: ConfigSection::Machine, order: 85,
+        resolve: |raw: Option<Vec<String>>| resolve_mcp_toolsets(raw),
+    },
     decision_channel_enabled: bool => bool {
         key: "decision_channel.enabled", value_type: "bool",
         description: "Raise decision requests for work held on a human decision.",

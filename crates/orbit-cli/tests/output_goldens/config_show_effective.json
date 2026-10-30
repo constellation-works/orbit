@@ -448,6 +448,13 @@
       "path": null,
       "shadowed_by": []
     },
+    "machine.mcp.toolsets": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
     "machine.name": {
       "scope": "built-in",
       "state": "unset",

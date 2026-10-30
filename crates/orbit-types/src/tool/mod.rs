@@ -4,7 +4,8 @@ mod definition;
 mod error;
 mod invocation;
 mod mcp_rules;
-pub use error::WorkerBindingError;
+mod mcp_toolset;
+pub use error::{McpToolsetError, WorkerBindingError};
 pub use invocation::{
     AGENT_CONTRACT_TOOLS, CLAIMED_MODE_DENIED_TOOLS, CLAIMED_OWNER_TOOLS, WorkerInvocation,
     is_claimed_owner_tool,
@@ -13,6 +14,7 @@ pub use mcp_rules::{
     McpIdRoute, McpInputCondition, McpInputDecoration, McpPresentationRead, McpToolRules,
     McpWorkspaceEcho,
 };
+pub use mcp_toolset::{McpToolset, McpToolsetSelection};
 
 pub use definition::{
     ExecutionResult, McpCapability, McpToolAnnotations, McpToolDefinition, McpToolDefinitionError,

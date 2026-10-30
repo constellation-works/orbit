@@ -17,6 +17,9 @@ pub struct McpToolRules {
     pub presentation_read: Option<McpPresentationRead>,
     /// Additional input constraints and workspace taxonomy decoration.
     pub input_decoration: McpInputDecoration,
+    /// The `orbit mcp serve` toolset that advertises this tool.
+    #[serde(default)]
+    pub toolset: super::McpToolset,
 }
 
 /// When the adapter must require and echo a workspace selector.

@@ -283,6 +283,7 @@ fn invoke() -> Result<(), orbit_common::OrbitError> {
             ssh_host: "orbit-fixture".to_string(),
             orchestrator: None,
             authority: McpSessionAuthority::Agent,
+            toolsets: orbit_types::tool::McpToolsetSelection::default_only(),
         })
     } else {
         let probe = SshDestinationProbe::new(

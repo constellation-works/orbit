@@ -104,6 +104,36 @@ passes its own `orchestrator`. This is attribution only: it grants no
 authority and does not choose the crew that executes a task. The same flag
 works with `--mode remote <ssh-host>` and `--mode federated`.
 
+## Toolsets
+
+Every tool schema a server lists costs context in each agent session, so
+`orbit mcp serve` lists a default toolset and keeps occasional groups opt-in:
+
+| Toolset | Tools |
+|---|---|
+| `default` (always on) | Tasks, workflows and runs, `orbit.pipeline.invoke`, `orbit.agent.invoke`, routines and auto-tasks, `orbit.automation.explain`, `orbit.decision.list` and `orbit.decision.show`, codebase, friction, search, the UI and visual tools, `orbit.command.exec` and workspace discovery. |
+| `leases` | `orbit.lease.*` |
+| `experiments` | `orbit.experiment.*` |
+| `analytics` | `orbit.agents.*`, `orbit.orchestrator.show`, `orbit.orchestrator.scorecard` and `orbit.crew.ladder` |
+| `decision-channel` | `orbit.decision.submit` and `orbit.decision.digest`, which only the bound channel plugin or the operator may call |
+
+Enable groups per server with `--toolset`, or for every server on the host
+with the global `machine.mcp.toolsets` config key; the flag replaces the
+config. `all` enables every toolset.
+
+```bash
+orbit mcp serve --toolset leases,analytics
+orbit config set --global machine.mcp.toolsets '["experiments"]'
+```
+
+A toolset changes only what that server lists and dispatches. Calling a tool
+outside it returns a `toolset_not_enabled` error naming the toolset and the
+flag to enable it, so a long-lived client learns how to reach it. The tools
+stay registered: `orbit tool run`, activities that require them, and a
+decision channel plugin's callback session reach every tool. `--mode remote`
+asks the destination for the same toolsets, and `--mode federated` applies
+them to every destination.
+
 ## Serve on a socket
 
 ```bash

@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use orbit_common::OrbitError;
 use orbit_types::tool::{
-    McpToolDefinition, McpToolDefinitionError, McpToolScope, ToolSchema, mcp_advertised_tool_name,
-    validate_mcp_tool_definitions,
+    McpToolDefinition, McpToolDefinitionError, McpToolScope, McpToolset, ToolSchema,
+    mcp_advertised_tool_name, validate_mcp_tool_definitions,
 };
 use serde_json::Value;
 
@@ -29,6 +29,9 @@ struct ToolEntry {
     tool: Arc<dyn Tool>,
     availability: ToolAvailability,
     mcp_scope: Option<McpToolScope>,
+    /// The `orbit mcp serve` toolset that advertises this entry. Plugin and
+    /// most builtin entries are in the default toolset.
+    toolset: McpToolset,
     /// Set for a plugin-backed entry: provenance for the audit row and, on
     /// an inactive entry, the diagnostic naming the missing step.
     plugin: Option<Arc<PluginToolBinding>>,
@@ -54,7 +57,18 @@ impl ToolRegistry {
 
     /// Register one active builtin for MCP advertisement at the given scope.
     pub fn register_mcp<T: Tool + 'static>(&mut self, tool: T, scope: McpToolScope) {
-        self.register_with_availability(tool, ToolAvailability::Active, Some(scope));
+        self.register_mcp_in_toolset(tool, scope, McpToolset::Default);
+    }
+
+    /// Register one active builtin for MCP advertisement in an opt-in
+    /// `orbit mcp serve` toolset. Only advertisement depends on the toolset.
+    pub fn register_mcp_in_toolset<T: Tool + 'static>(
+        &mut self,
+        tool: T,
+        scope: McpToolScope,
+        toolset: McpToolset,
+    ) {
+        self.register_entry(tool, ToolAvailability::Active, Some(scope), toolset, None);
     }
 
     pub fn register_inactive<T: Tool + 'static>(&mut self, tool: T) {
@@ -69,7 +83,13 @@ impl ToolRegistry {
         mcp_scope: Option<McpToolScope>,
         binding: Arc<PluginToolBinding>,
     ) {
-        self.register_entry(tool, ToolAvailability::Active, mcp_scope, Some(binding));
+        self.register_entry(
+            tool,
+            ToolAvailability::Active,
+            mcp_scope,
+            McpToolset::Default,
+            Some(binding),
+        );
     }
 
     /// Register a plugin tool the host could not activate. The binding's
@@ -79,7 +99,13 @@ impl ToolRegistry {
         tool: T,
         binding: Arc<PluginToolBinding>,
     ) {
-        self.register_entry(tool, ToolAvailability::Inactive, None, Some(binding));
+        self.register_entry(
+            tool,
+            ToolAvailability::Inactive,
+            None,
+            McpToolset::Default,
+            Some(binding),
+        );
     }
 
     fn register_with_availability<T: Tool + 'static>(
@@ -88,7 +114,7 @@ impl ToolRegistry {
         availability: ToolAvailability,
         mcp_scope: Option<McpToolScope>,
     ) {
-        self.register_entry(tool, availability, mcp_scope, None);
+        self.register_entry(tool, availability, mcp_scope, McpToolset::Default, None);
     }
 
     fn register_entry<T: Tool + 'static>(
@@ -96,6 +122,7 @@ impl ToolRegistry {
         tool: T,
         availability: ToolAvailability,
         mcp_scope: Option<McpToolScope>,
+        toolset: McpToolset,
         plugin: Option<Arc<PluginToolBinding>>,
     ) {
         let schema = tool.schema();
@@ -155,6 +182,7 @@ impl ToolRegistry {
                 tool: Arc::new(tool),
                 availability,
                 mcp_scope,
+                toolset,
                 plugin,
             },
         );
@@ -255,6 +283,15 @@ impl ToolRegistry {
             .and_then(|binding| binding.diagnostic.clone())
     }
 
+    /// The `orbit mcp serve` toolset of one MCP-advertised entry, active or
+    /// not; `None` for an entry MCP never advertises.
+    pub fn mcp_toolset(&self, name: &str) -> Option<McpToolset> {
+        self.tools
+            .get(name)
+            .filter(|entry| entry.mcp_scope.is_some())
+            .map(|entry| entry.toolset)
+    }
+
     /// Advertised MCP scope of one entry, active or not.
     pub fn mcp_scope(&self, name: &str) -> Option<McpToolScope> {
         self.tools.get(name).and_then(|entry| entry.mcp_scope)
@@ -292,7 +329,8 @@ impl ToolRegistry {
                 entry.mcp_scope.map(|scope| {
                     let schema = entry.tool.schema();
                     let annotations = mcp_annotations(&schema, entry.tool.execution_kind());
-                    let rules = mcp_rules(&schema);
+                    let mut rules = mcp_rules(&schema);
+                    rules.toolset = entry.toolset;
                     McpToolDefinition::new(schema, scope)
                         .with_rules(rules)
                         .with_input_schema(entry.tool.input_schema())

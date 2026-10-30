@@ -33,6 +33,7 @@ impl Execute for ToolListArgs {
                     "status": tool_status(t),
                     "builtin": t.builtin,
                     "parameters": &t.parameters,
+                    "mcp_toolset": t.mcp_toolset,
                 })
             })
             .collect();

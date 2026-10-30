@@ -761,6 +761,14 @@ pub(super) fn resolve_pr_body_template(
 }
 
 /// Trimmed, non-empty entries in first-seen order without duplicates.
+/// `machine.mcp.toolsets`: every entry names a toolset (or `all`).
+pub(super) fn resolve_mcp_toolsets(raw: Option<Vec<String>>) -> Result<Vec<String>, OrbitError> {
+    let names = raw.unwrap_or_default();
+    orbit_types::tool::McpToolsetSelection::from_names(names.iter().map(String::as_str))
+        .map_err(|error| OrbitError::InvalidInput(format!("machine.mcp.toolsets: {error}")))?;
+    Ok(names.iter().map(|name| name.trim().to_string()).collect())
+}
+
 pub(super) fn resolve_name_list(
     raw: Option<Vec<String>>,
     key: &str,
