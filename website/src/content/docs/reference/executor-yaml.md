@@ -337,10 +337,14 @@ crews cannot take images.
 
 Only regular files are staged. A requested image that is a FIFO, socket,
 directory, device or another non-regular file — including a symlink that
-resolves to one — is refused before launch with a `stage image …: not a
-regular file` error that names the path. The source is opened without
-blocking, so a named pipe with no writer cannot stall preparation before
-provider supervision starts.
+resolves to one — is refused before launch with a `stage image …` error
+that names the path. When the source opens, the refusal reports
+`not a regular file (found <kind>)`; when opening the source itself fails
+— as it does for a Unix-domain socket on Linux, refused with its OS error
+such as `No such device or address (os error 6)` — the staging error retains
+that open error instead. The source is opened without blocking, so a named
+pipe with no writer cannot stall preparation before provider supervision
+starts.
 
 A crew can also opt out on an image-capable lane. A crew that sets
 `vision = false` in `config.toml` is never given images, even when its
