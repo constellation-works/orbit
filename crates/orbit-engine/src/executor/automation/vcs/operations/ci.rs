@@ -261,7 +261,10 @@ pub(super) fn ci_job_log(input: &Value) -> Result<Value, OrbitError> {
         "truncated": read.log.truncated,
         "source_complete": read.log.source_complete,
         "diagnostic": read.log.diagnostic,
+        "diagnostic_command": read.log.diagnostic_command,
         "failure_regions": read.log.failure_regions,
+        "source_bytes": read.log.total_bytes,
+        "source_jobs": read.source_jobs,
         "source": read.source,
         "fallback_error": read.fallback_error,
     }))

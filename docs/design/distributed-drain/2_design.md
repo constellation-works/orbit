@@ -1135,6 +1135,31 @@ An independent candidate failure vetoes the shared action and keeps its ordinary
 unreadable, pending, unknown or ambiguous evidence holds without granting retry or repair authority.
 Neither matching text nor sharing a run proves a dependency.
 
+Retry authentication distinguishes a shortened display from an incomplete source. A fully
+scanned source can supply a complete failing command (up to 256 KiB), or complete selected
+failure regions (up to 64 KiB), without retaining its entire output. Every region must have
+both command-completion and selection-completion proof. The authorization retains source
+kind, original byte counts/ranges when available, run/job references, provider failed-step
+identity and the binding used; omitted bytes never become complete source evidence. Dependency
+authentication requires the complete producer command or complete failed-step log, because
+selected regions could hide a second record. The existing 8 MiB scan limit, process timeouts,
+absolute completion deadline and 512 KiB authorization limit still apply.
+
+For gh failed-step logs, every retained line must name the exact job and its unique failed
+step. When gh returns no text, the verified completed job API fallback can also authenticate
+evidence: the collector must have found exactly one complete failed command and retained its
+complete bounded runner command display (up to 64 KiB). Its literal script must match exactly
+one named step in the unchanged, accepted workflow job and that provider job's unique failed
+step. Runner shell metadata and the closing display boundary are required; timestamps and
+record contents alone prove no step identity. The first physical runner timestamps of retained
+source lines must also fit the failed provider step's interval, with at least one witness
+attributable to that step alone among all executed provider steps. Provider timestamp seconds
+that overlap remain ambiguous; quoted timestamps cannot supply a witness. Missing timestamps,
+short steps with no exclusive witness, dynamic scripts, duplicate scripts or step names,
+unsupported workflow mappings and missing/oversized displays hold with a reason asking for
+step-column logs. This grants no new infrastructure-recovery authorization: missing-check
+prerequisite recovery keeps its separate read-only workflow and full-log requirements.
+
 The generic `orbit-dependency-evidence:` v1 producer record is emitted only for an actual
 `dependency_failed` result. It binds repository, workflow execution revision/ref, producer source
 revision, run/attempt, waiter job and failed step, and exact dependency identities/conclusions.

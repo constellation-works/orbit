@@ -472,7 +472,7 @@ impl StreamedLogCollector {
         } else {
             self.diagnostic.source_complete()
         };
-        let (diagnostic, mut failure_regions) = self.diagnostic.finish();
+        let (diagnostic, mut failure_regions, diagnostic_command) = self.diagnostic.finish();
         if let Some(nextest) = nextest {
             if truncated
                 && self.selection.is_none()
@@ -491,6 +491,7 @@ impl StreamedLogCollector {
             checkout_evidence: evidence,
             source_complete,
             diagnostic,
+            diagnostic_command,
             failure_regions,
             selected_bytes: if self.selection.is_some() {
                 self.selected_bytes
