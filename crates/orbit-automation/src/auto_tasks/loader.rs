@@ -282,12 +282,15 @@ pub fn check_auto_task_conditions(definition: &AutoTaskDefinition) -> Result<(),
 
 /// A `task` condition evaluated against the task its own template would mint.
 /// The subject carries the template's status, tags (plus the definition's
-/// provenance tag), title, type, priority, complexity and crew; the id and
-/// timestamps are load-time placeholders, dependencies are empty and the
-/// parent is absent. Board and self use default facts, so a board read is
-/// unknown and only a definite true is an error. Origin is evaluated both
-/// absent and with a placeholder mint origin, and only a true under both
-/// shapes is a self-match, so origin-dependent definitions keep loading.
+/// provenance tag), title, type, priority and complexity, and the crew the
+/// mint would write: a template still naming the retired `system` crew maps
+/// to no crew under the default crew set, mirroring the mint's
+/// `crew_unless_retired` ([ORB-15663]); the id and timestamps are load-time
+/// placeholders, dependencies are empty and the parent is absent. Board and
+/// self use default facts, so a board read is unknown and only a definite
+/// true is an error. Origin is evaluated both absent and with a placeholder
+/// mint origin, and only a true under both shapes is a self-match, so
+/// origin-dependent definitions keep loading.
 fn reject_self_match(
     definition: &AutoTaskDefinition,
     checked: &CheckedCondition,
@@ -314,7 +317,16 @@ fn reject_self_match(
             .as_ref()
             .map(persisted_name)
             .unwrap_or_else(|| "unassessed".to_string()),
-        crew: template.crew.clone(),
+        // Mirror the mint (`template_params` maps the template crew through
+        // `crew_unless_retired`): under the default crew set no
+        // `[crews.system]` table exists, so a template still naming the
+        // retired `system` crew (see `orbit_config::RETIRED_SYSTEM_CREW`)
+        // mints an unassigned task whose facts omit `task.crew`. The loader
+        // sees no configured crews, so it assumes that default set here.
+        crew: match template.crew.as_deref() {
+            Some(crew) if crew.trim() == "system" => None,
+            other => other.map(str::to_string),
+        },
         parent_id: None,
         dependencies: Vec::new(),
         created_at: now,
