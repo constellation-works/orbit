@@ -376,6 +376,65 @@ fn zero_timeout_is_refused_before_the_command_runs() {
     );
 }
 
+#[cfg(unix)]
+fn oversized_argv_reports_actionable_size_limit() {
+    // [ORB-20181] E2BIG at spawn must explain the OS size limit without echoing values.
+    let _env = unmanaged_tool_env_guard();
+    let (_root, runtime, repo_root) = test_runtime();
+    let token = acquire_claim(&runtime, "claude");
+    let marker = repo_root.join("must-not-run");
+    // A single 2 MiB argument exceeds Linux MAX_ARG_STRLEN (128 KiB) and macOS
+    // ARG_MAX (1 MiB), so both refuse spawn with E2BIG. `touch` names an
+    // existing program so the kernel reports size, not a missing program.
+    let oversized = "x".repeat(2 * 1024 * 1024);
+    let marker_arg = marker.display().to_string();
+
+    let error = run_tool_as_operator(
+        &runtime,
+        "orbit.command.exec",
+        json!({
+            "argv": ["touch", marker_arg, oversized],
+            "working_directory": repo_root.display().to_string(),
+            "claim_token": token,
+            "model": "claude",
+        }),
+    )
+    .expect_err("oversized argv must fail at spawn");
+
+    let message = match &error {
+        OrbitError::Execution(message) => message.clone(),
+        other => panic!("expected an execution failure, got {other:?}"),
+    };
+    assert!(
+        message.contains("size limit"),
+        "E2BIG must name the OS size limit: {message}"
+    );
+    assert!(
+        message.contains("reduce") && message.contains("file") && message.contains("stdin"),
+        "E2BIG must say how to reduce or move input: {message}"
+    );
+    assert!(
+        !message.contains("touch"),
+        "E2BIG must not echo the program: {message}"
+    );
+    assert!(
+        !message.contains(&marker_arg),
+        "E2BIG must not echo argument values: {message}"
+    );
+    assert!(
+        !message.contains(&oversized[..64]),
+        "E2BIG must not echo argument values: {message}"
+    );
+    assert!(
+        !message.contains(&repo_root.display().to_string()),
+        "E2BIG must not echo paths: {message}"
+    );
+    assert!(
+        !marker.exists(),
+        "a spawn refusal must not start the command"
+    );
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     managed_run_environment_denies_command_exec_scenarios,
@@ -390,5 +449,6 @@ crate::scenario_table!(
 crate::scenario_table!(
     working_directory_symlink_that_escapes_is_refused_scenarios,
     working_directory_symlink_that_escapes_is_refused,
-    command_past_its_timeout_is_killed_with_its_process_group
+    command_past_its_timeout_is_killed_with_its_process_group,
+    oversized_argv_reports_actionable_size_limit
 );
