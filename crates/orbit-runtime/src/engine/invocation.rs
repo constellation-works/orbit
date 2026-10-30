@@ -259,21 +259,6 @@ impl RuntimeKernel {
             .list_tool_invocation_metrics(self.stores().jobs().workspace_id())
     }
 
-    /// Recorded model of the latest invocation of an activity in each run.
-    /// Run identities are scoped to this runtime's workspace; no detailed
-    /// invocation traces or tool calls are hydrated.
-    pub fn recorded_activity_models(
-        &self,
-        activity_id: &str,
-        run_ids: &[String],
-    ) -> Result<HashMap<String, Option<String>>, OrbitError> {
-        open_invocation_store(self)?.latest_activity_models(
-            self.stores().jobs().workspace_id(),
-            activity_id,
-            run_ids,
-        )
-    }
-
     /// Lists invocation records. A run id only names a run within one
     /// workspace, so a `job_run_id` filter without a workspace is scoped to
     /// this runtime's.
