@@ -10,23 +10,40 @@ last_validated: 2026-10-27
 
 # Operate the Review Gate
 
-Use this runbook when `review.timing` is `before_pr` or `before_landing` and
-you need to read what a review did to a delivery, or a task is
-`blocked` with a `review_gate_escalation` or
+Use this runbook when `review.timing` is `before_pr` (deprecated) or
+`before_landing` and you need to read what a review did to a delivery, or a
+task is `blocked` with a `review_gate_escalation` or
 `review_timeout_requeue_exhausted` event, requeued after a reviewer timeout,
 `in-progress` while awaiting named external evidence, or in `review` with an
 open PR after a before-landing review did not approve it.
 
-Review has three timings. Before-PR review (`review.timing = "before_pr"`)
-holds PR creation for the reviewer. Before-landing review (`review.timing =
-"before_landing"`) opens the PR first and reviews it while hosted CI runs. After-landing review is
-the `delivery-code-review` auto-task. There is one review layer before
-landing, so `review.timing` selects at most one of them. Both share
+Review has three timings. Before-PR review (deprecated `review.timing =
+"before_pr"`) holds PR creation for the reviewer. Before-landing review
+(`review.timing = "before_landing"`, recommended when a pre-landing review is
+wanted) opens the PR first and reviews it while hosted CI runs. After-landing
+review is the `delivery-code-review` auto-task. There is one review layer
+before landing, so `review.timing` selects at most one of them. Both share
 `review.minutes` and one reviewer pool, `workflow.purpose_crews.pre_landing_review`
 (else `workflow.purpose_crews.review`, which after-landing review tasks always
 use), and neither runs on a workspace that ships locally:
 readiness holds that backlog as `local_route_before_pr` or
 `local_route_before_landing`, and `orbit doctor` fails its `review` check.
+
+> Staged deprecation [ORB-20099]: `before_pr` (and `before-pr`, `--review
+> before-pr`) is deprecated but still honoured with a bounded warning naming
+> the deciding key/request and source (config file on load; `global` /
+> `workspace` / `run-option` at submission); the effective value and
+> provenance stay truthful, deprecation alone never fails `orbit doctor`, and
+> already-admitted runs, claims, resumes, interrupted/held evidence, and
+> certificates keep their captured before-PR behavior byte-for-byte. New
+> setups use `off` or `before_landing` and new requests use `--review
+> before-landing`. Migrate only with an explicit `orbit config set
+> review.timing before_landing` (add `--global` only for the global layer),
+> preserving minutes, crews, validation, host evidence, and unrelated
+> settings. Ordinary writes, alias normalization, default refresh, and doctor
+> retired-key repair never perform that migration. Removal of accepted
+> `before_pr` input and internal handlers is deferred to ORB-20087, which
+> consumes this deprecation.
 
 ## 1. What the gate does
 

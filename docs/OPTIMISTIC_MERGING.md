@@ -49,10 +49,10 @@ Optimistic merging is the preferred default, not the only option. Operators who 
 | Mode | Config | Behaviour |
 | --- | --- | --- |
 | After landing (preferred) | `delivery-code-review` auto-task enabled | Batches review of landed changes; confirmed findings become follow-up bug tasks. |
-| Before PR | `review.timing = "before_pr"` | A fresh reviewer fixes findings before the PR is opened. |
-| Before landing | `review.timing = "before_landing"` | The PR opens first; only the head the review settled is merged. |
+| Before landing (supported when a pre-landing gate is wanted) | `review.timing = "before_landing"` | The PR opens first; only the head the review settled is merged. |
+| Before PR (deprecated) | `review.timing = "before_pr"` | A fresh reviewer fixes findings before the PR is opened. Deprecated but still honoured with a bounded warning; new gates use `off` or `before_landing`. |
 
-The legacy `operation.review_policy` values (`after-landing`, `before-pr`, `none`) and the `review.before_pr` and `review.before_landing` booleans are still accepted with a deprecation warning. New configuration uses `review.timing` and the `delivery-code-review` auto-task flag. Before-PR and before-landing review hold a task's declared footprint for the length of the review, which is the throughput cost described above.
+The legacy `operation.review_policy` values (`after-landing`, `before-pr`, `none`) and the `review.before_pr` and `review.before_landing` booleans are still accepted with a deprecation warning, and `review.timing = "before_pr"` (and `"before-pr"`) is itself deprecated but still honoured with a bounded warning naming the deciding key/request and source. New configuration uses `review.timing = "off"` or `"before_landing"` and the `delivery-code-review` auto-task flag; new run requests use `--review before-landing`. Before-PR and before-landing review hold a task's declared footprint for the length of the review, which is the throughput cost described above. This staged deprecation (shipped) is ORB-20087's prerequisite; removal of accepted `before_pr` input and internal before-PR handlers is deferred to that later separately scoped task.
 
 ## Decision lens
 

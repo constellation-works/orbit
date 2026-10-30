@@ -59,10 +59,12 @@ impl Execute for ConfigShowArgs {
     }
 }
 
-/// Every automatic-review switch with its source [ORB-13992]: before-PR
-/// review (`review.timing = before_pr`, minutes, crew), before-landing review
-/// (`review.timing = before_landing`) and after-landing review (the
-/// `delivery-code-review` auto-task, its next batch and health).
+/// Every automatic-review switch with its source [ORB-13992] [ORB-20099]:
+/// before-PR review (deprecated `review.timing = before_pr`, minutes, crew),
+/// before-landing review (`review.timing = before_landing`) and after-landing
+/// review (the `delivery-code-review` auto-task, its next batch and health).
+/// The before-PR line marks its deprecated timing; deprecation alone is never
+/// an error.
 struct ReviewView {
     json: JsonValue,
     text: String,

@@ -55,7 +55,8 @@ pub struct ShipCommand {
     #[arg(long = "allow-crew", value_name = "CREW", value_delimiter = ',')]
     pub allow_crew: Vec<String>,
     /// Add a review layer before landing to this run when workspace policy
-    /// applies none. Only adds review.
+    /// applies none. Only adds review. `before-landing` is recommended;
+    /// `before-pr` is deprecated but still holds PR creation for a reviewer.
     #[arg(long, value_enum, value_name = "LAYER")]
     pub review: Option<orbit_types::workflow::ReviewLayer>,
     /// Require a systemd user scope for this run and every worker it starts.

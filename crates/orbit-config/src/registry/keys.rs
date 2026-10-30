@@ -165,7 +165,8 @@ const SWEEP_POOL_NOTE: &str = "translated to workflow.purpose_crews.sweep_tasks,
      from; move the value there";
 
 const REVIEW_TIMING_NOTE: &str = "translated to review.timing: before_pr = true is \"before_pr\", \
-     before_landing = true is \"before_landing\", both off is \"off\"; set review.timing instead";
+     before_landing = true is \"before_landing\", both off is \"off\"; set review.timing instead. \
+     review.timing = before_pr itself is deprecated (use off or before_landing) but still honoured";
 
 const SHELL_PROBE_NOTE: &str = "translated to workflow.validation_env.shell_probe: login_shell = \
      false is \"off\", interactive = false is \"login\", otherwise \"interactive\"; set \

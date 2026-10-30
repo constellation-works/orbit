@@ -359,7 +359,7 @@ macro_rules! assemble_config_settings {
     },
     review_timing: String => String {
         key: "review.timing", value_type: "string",
-        description: "When a fresh reviewer runs before landing: off, before_pr, or before_landing.",
+        description: "When a fresh reviewer runs before landing: off or before_landing (recommended); before_pr is deprecated but still holds PR creation for a reviewer.",
         section: ConfigSection::Review, order: 10,
         resolve: |raw: Option<String>| operation::ReviewTimingSetting::parse(raw.as_deref().unwrap_or("off")).map(|timing| timing.as_str().to_string()),
     },

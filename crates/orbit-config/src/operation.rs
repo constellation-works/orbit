@@ -1,13 +1,19 @@
 //! Typed review preferences [ORB-11333] [ORB-13992].
 //!
-//! Review timing is one key, `review.timing`: `off` (default), `before_pr`
-//! (hold PR creation for a reviewer) or `before_landing` (review the open
-//! pull request while hosted CI runs on it) [ORB-14849]. There is one review
-//! layer before landing, so the two timings are values of one key rather than
-//! two switches. Both are bounded by `review.minutes` per candidate, and
-//! `workflow.purpose_crews.review` names the crew of automatic review: one
-//! crew, or a pool written like the complexity pools that each review draws
-//! one crew from [ORB-15195].
+//! Review timing is one key, `review.timing`: `off` (default, recommended),
+//! `before_landing` (recommended when review before landing is wanted), or the
+//! deprecated `before_pr` (hold PR creation for a reviewer) [ORB-14849].
+//! There is one review layer before landing, so the two timings are values of
+//! one key rather than two switches. Both are bounded by `review.minutes` per
+//! candidate, and `workflow.purpose_crews.review` names the crew of automatic
+//! review: one crew, or a pool written like the complexity pools that each
+//! review draws one crew from [ORB-15195].
+//!
+//! `before_pr` (and its `before-pr` alias) is deprecated but fully honoured:
+//! an explicit `before_pr` keeps before-PR semantics until an operator
+//! intentionally migrates it with `orbit config set review.timing
+//! before_landing`. New setups use `off` or `before_landing`, and new run
+//! requests use `--review before-landing`.
 //! `workflow.purpose_crews.pre_landing_review`, written the same way, names
 //! the before-PR and before-landing reviewer on its own and falls back to
 //! `workflow.purpose_crews.review` while unset, so the after-landing review
@@ -75,9 +81,16 @@ pub const OPERATION_POLICY_VERSION: u32 = 5;
 
 const MAX_REVIEW_MINUTES: u32 = 1_440;
 
-/// When automatic review runs before landing: `off`, `before_pr` or
-/// `before_landing`.
+/// When automatic review runs before landing: `off`, `before_landing`
+/// (both recommended), or the deprecated `before_pr`.
 pub const REVIEW_TIMING_KEY: &str = "review.timing";
+/// Actionable deprecation note for an explicit `before_pr` value, naming the
+/// deciding key and the recommended replacement. Emitted as a bounded warning;
+/// effective behavior stays before-PR.
+pub const BEFORE_PR_VALUE_DEPRECATION_NOTE: &str = "review.timing = `before_pr` (or `before-pr`) is \
+     deprecated but still holds PR creation for a reviewer; new setups use `off` or \
+     `before_landing`, and new run requests use `--review before-landing`. Migrate only with an \
+     explicit `orbit config set review.timing before_landing` (add `--global` only for the global layer)";
 /// The deprecated before-PR switch, translated to [`REVIEW_TIMING_KEY`].
 pub const LEGACY_REVIEW_BEFORE_PR_KEY: &str = "review.before_pr";
 /// The deprecated before-landing switch, translated to [`REVIEW_TIMING_KEY`].
@@ -119,11 +132,16 @@ pub enum ReviewCrewSetting {
 /// `review.timing`: which review layer, if any, runs before landing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReviewTimingSetting {
-    /// No review before landing (the default).
+    /// No review before landing (the default, recommended).
     Off,
     /// Hold PR creation for a reviewer that fixes what it finds.
+    ///
+    /// Deprecated but fully honoured: keep for existing before-PR runs until
+    /// an intentional `orbit config set review.timing before_landing`.
+    /// New setups use `off` or `before_landing`.
     BeforePr,
-    /// Review the open pull request before it lands.
+    /// Review the open pull request before it lands (recommended when a
+    /// pre-landing review is wanted).
     BeforeLanding,
 }
 
@@ -190,6 +208,12 @@ impl ReviewTimingSetting {
     /// The `(before_pr, before_landing)` switches this timing turns on.
     pub fn switches(self) -> (bool, bool) {
         (self == Self::BeforePr, self == Self::BeforeLanding)
+    }
+
+    /// Whether this timing is deprecated but still honoured (`before_pr` in
+    /// any spelling). Deprecation never changes the resolved behavior.
+    pub fn is_deprecated(self) -> bool {
+        self == Self::BeforePr
     }
 }
 

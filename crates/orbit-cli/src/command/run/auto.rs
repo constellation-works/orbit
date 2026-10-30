@@ -42,6 +42,8 @@ pub struct AutoCommand {
     #[arg(long)]
     pub auto_fix: bool,
     /// Add a review layer before landing when workspace policy has none.
+    /// `before-landing` is recommended; `before-pr` is deprecated but still
+    /// holds PR creation for a reviewer.
     #[arg(long, value_enum, value_name = "LAYER")]
     pub review: Option<orbit_types::workflow::ReviewLayer>,
     /// Start only tasks on these crews (repeatable, comma-separated).
