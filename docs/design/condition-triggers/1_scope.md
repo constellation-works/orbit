@@ -1,8 +1,8 @@
 ---
 title: "Scope: Condition triggers"
 owner: claude
-last_updated: 2026-10-29
-last_validated: 2026-10-29
+last_updated: 2026-10-30
+last_validated: 2026-10-30
 status: Draft
 stage: designing
 next: "Review this scope; then file phase 1 (CEL schema, load-time checking, automation explain)"
@@ -231,6 +231,15 @@ Every expression may also read the following. Nothing else is in the schema.
 | `group` (file scope with `group_by: stem`) | `dir`, `stem`, `files` (list of `file`, at most 16), `stable` | Root rescan |
 | `now` | Timestamp of the pass, UTC. CEL's timezone accessors give local time. | Pass clock |
 | `self` | The definition's own history: `last_fired` (timestamp of the latest fire that admitted an action, optional), `last_minted` (timestamp of the latest acknowledged mint, optional; auto-tasks only), `last_minted_task` (ID, optional), `fires_24h` (int). Test the optional fields with `has()`. | The definition's fire records in its fenced checkpoint (§3) |
+
+**Proposed composition extension.** [Auto-sequences](../auto-sequence/1_scope.md)
+reuse this language and add `board.empty` (the explicit unfinished-task view),
+literal `auto_tasks['name']` accepted-completion reads, and execution-local
+`self.prev`, `steps[...]`, `sequence` and typed `result` facts. Their `when` and
+`expire_when` policies share CEL but distinguish readiness from terminal expiry.
+Those additions belong to the sequence phases; they are not part of the schema
+or phase-1 implementation scope listed above. They grant no access to free text
+or arbitrary artifacts. See that design for exact binding and admission rules.
 
 Rules:
 
@@ -549,6 +558,9 @@ already runs a job.
   independently, so a failed notification never re-mints. Two non-notify actions on
   one edge are two definitions with the same condition, each with its own edge state.
   A shared, named condition is an open question.
+  An auto-sequence condition starts one durable coordination job; composing its
+  member auto-tasks is that job's responsibility, not an `actions[]` extension
+  to an ordinary condition carrier.
 - **Task transitions stay pipeline-only.** No phase lets a condition move a task (for
   example `blocked` to `backlog`, or `proposed` to approved). The reasons:
   - **Authority.** Re-backlogging a blocked task is "a deliberate human transition"
@@ -821,8 +833,13 @@ through the records the first one's action leaves.
 - **Depth.** `depth` is the origin fire's depth plus one, and the chain-depth guard in
   §8 refuses fires past 5. Explain shows each fire's upstream chain (§9).
 - **Ordered work.** Multi-step work with retries and stops belongs in a job. One
-  trigger starts it, and the job's steps carry the order. Triggers are not a
-  workflow engine.
+  trigger starts it, and the job's steps carry the order. The proposed
+  [auto-sequence](../auto-sequence/1_scope.md) is a named composition of existing
+  auto-tasks backed by that durable job. Members with conditions are independently
+  eligible; members without conditions default to the previous step completing.
+  CEL expresses previous-step, board, time and expiry checks. It preserves task
+  identities and accepted evidence instead of adding direct trigger-to-trigger
+  links. Triggers themselves are not a workflow engine.
 
 **Rejected alternatives.**
 
@@ -892,6 +909,12 @@ root, and refuses to enable.
 ## Use cases, walked through
 
 ### A. Board empty → release prep
+
+This is the single-task case. For release preparation that first obtains full
+QA and security evidence, see the proposed
+[release-readiness auto-sequence](../auto-sequence/1_scope.md#configuration-release-readiness).
+That example adds conditional members, 24-hour completion freshness, optional
+30-minute spacing and explicit expiry; these are not supplied by this example.
 
 ```yaml
 # .orbit/auto_tasks/release-prep.yaml
