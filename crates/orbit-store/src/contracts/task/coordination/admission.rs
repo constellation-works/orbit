@@ -28,6 +28,11 @@ pub struct CapturedExploreBrief {
 pub struct AdmissionTaskGuidance {
     pub experiments: orbit_types::workflow::CapturedExperiments,
     pub explore_brief: Option<CapturedExploreBrief>,
+    /// System artifacts the owner publishes in the same commit as the
+    /// claim (for example the frozen `verify-mock-ui` mock digests). They
+    /// ride the claim commit's evidence because an ordinary task write is
+    /// refused once the claim protects the task.
+    pub artifacts: Vec<orbit_types::task::TaskArtifact>,
 }
 
 /// Owner-side facts admission reads, separate from the executor's wire

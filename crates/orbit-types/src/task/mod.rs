@@ -87,7 +87,7 @@ pub use mock_review::{
     MockDeviations, MockDigest, MockDigestRecord, MockRefusal, MockRefusalCode, ResolvedMock,
     VERIFY_MOCK_UI_TAG, ViewManifestSet, changed_mock_artifacts, has_verify_mock_ui_tag,
     is_mock_artifact, mock_refusals_detail, mock_sha256_hex, parse_mock_name, record_mock_digests,
-    validate_task_mocks,
+    record_mock_digests_for_admission, validate_task_mocks,
 };
 pub use model::{
     AdmissionAffinityReach, ArtifactPresentation, CANDIDATE_DISCARDED_EVENT,

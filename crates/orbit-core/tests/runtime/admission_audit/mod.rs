@@ -120,6 +120,7 @@ mod managed_assets;
 mod lease_operations;
 mod lock_overlap;
 mod mock_approval;
+mod mock_freeze;
 
 mod recovery_git;
 

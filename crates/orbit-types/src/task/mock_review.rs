@@ -495,6 +495,14 @@ impl MockDeviations {
 #[serde(deny_unknown_fields)]
 pub struct MockDigestRecord {
     pub schema_version: u32,
+    /// The delivery admission that froze this baseline: `run:<run_id>` for a
+    /// local delivery run, `claim-request:<request_id>` for the pull
+    /// admission request that created the claim. It keys
+    /// the record to its owning delivery so a refused or later submission
+    /// cannot rewrite an active delivery's baseline. Records frozen before
+    /// the field existed carry none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admission_id: Option<String>,
     pub mocks: Vec<MockDigest>,
 }
 
@@ -519,8 +527,21 @@ pub fn record_mock_digests(
     resolved: &[ResolvedMock],
     artifacts: &[TaskArtifact],
 ) -> MockDigestRecord {
+    record_mock_digests_for_admission(resolved, artifacts, None)
+}
+
+/// Freeze the digests of `resolved` mocks for the delivery admission
+/// `admission_id` (`run:<run_id>` / `claim-request:<request_id>`), from
+/// the exact `artifacts` bytes that were validated.
+#[must_use]
+pub fn record_mock_digests_for_admission(
+    resolved: &[ResolvedMock],
+    artifacts: &[TaskArtifact],
+    admission_id: Option<String>,
+) -> MockDigestRecord {
     MockDigestRecord {
         schema_version: 1,
+        admission_id,
         mocks: resolved
             .iter()
             .filter_map(|mock| {

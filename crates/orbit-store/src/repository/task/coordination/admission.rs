@@ -299,6 +299,7 @@ impl TaskCommitBoundary {
                         assignments: Vec::new(),
                     },
                     explore_brief: None,
+                    artifacts: Vec::new(),
                 })
             },
         )
@@ -512,6 +513,10 @@ impl TaskCommitBoundary {
             let guidance = guidance_capture(&task)?;
             receipt.experiments = Some(guidance.experiments);
             receipt.explore_brief = guidance.explore_brief;
+            let guidance_evidence = ClaimEvidence {
+                artifacts: guidance.artifacts,
+                ..ClaimEvidence::default()
+            };
             let params = TaskCoordinationCommitParams {
                 task_id: task.id.clone(),
                 actor: receipt.machine_id.clone(),
@@ -599,7 +604,7 @@ impl TaskCommitBoundary {
                     ])
                 },
                 &effects,
-                &Default::default(),
+                &guidance_evidence,
                 None,
             )?;
             if !matches!(committed, TaskCoordinationCommitOutcome::Committed(_)) {

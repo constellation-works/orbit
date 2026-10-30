@@ -304,16 +304,14 @@ impl OrbitRuntime {
                 )));
             }
             // A `verify-mock-ui` task's mocks are validated again at
-            // delivery admission, and their digests frozen for this
-            // delivery (visual-review §2.3, §2.4).
-            match self.mock_admission_check(&task) {
-                Ok(Some(resolved)) => self.record_admitted_mock_digests(&task, &resolved)?,
-                Ok(None) => {}
-                Err(detail) => {
-                    return Err(OrbitError::PolicyDenied(format!(
-                        "explicit ship task '{task_id}' is not admitted: {detail}"
-                    )));
-                }
+            // delivery admission (visual-review §2.3, §2.4). Their digests
+            // are frozen only once admission is granted (below, past the
+            // in-flight guard), so a refused duplicate cannot rewrite the
+            // running delivery's baseline.
+            if let Err(detail) = self.mock_admission_check(&task) {
+                return Err(OrbitError::PolicyDenied(format!(
+                    "explicit ship task '{task_id}' is not admitted: {detail}"
+                )));
             }
             if let Some(allowlist) = allowlist.as_ref() {
                 // [ORB-12606] Report against the crew admission will draw, not
@@ -345,6 +343,41 @@ impl OrbitRuntime {
         let overrider = actor.unwrap_or(&self.actor().label).to_string();
         for (task_id, not_before) in &overridden {
             self.record_schedule_override(task_id, *not_before, &overrider)?;
+        }
+        // Freeze each named `verify-mock-ui` task's mock digests now that
+        // admission has been granted: every refusal above, including the
+        // in-flight duplicate guard, returns before this point, so a
+        // rejected submission can never rewrite the active delivery's
+        // baseline. Like the schedule override, the freeze lands before
+        // submission because the worker starts as soon as the run is
+        // persisted. Each freeze is keyed to a token carried in this run's
+        // input, so the leaf's workflow admission recognises the record as
+        // this delivery's and keeps it instead of re-freezing.
+        let mut mock_admissions = serde_json::Map::new();
+        for task_id in task_ids {
+            let task = self.get_task(task_id)?;
+            if !orbit_types::task::has_verify_mock_ui_tag(&task.tags) {
+                continue;
+            }
+            let admission_id = format!(
+                "ship:{}",
+                orbit_types::task::mock_sha256_hex(
+                    format!(
+                        "{task_id}|{}|{}",
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map_or(0, |duration| duration.as_nanos()),
+                        std::process::id()
+                    )
+                    .as_bytes()
+                )
+            );
+            let mode = Self::mock_freeze_mode_for_ship(&task);
+            self.record_admitted_mock_digests(&task, Some(admission_id.clone()), mode)?;
+            mock_admissions.insert(task_id.clone(), json!(admission_id));
+        }
+        if !mock_admissions.is_empty() {
+            input["__mock_admissions"] = Value::Object(mock_admissions);
         }
         self.submit_pipeline_run_with_trigger(workflow.job_id, input, None, actor, trigger)
     }
