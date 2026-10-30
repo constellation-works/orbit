@@ -696,7 +696,7 @@ impl OrbitRuntime {
         // here too means CRUD never persists a schedule the scheduler would
         // reject at fire time.
         validate_schedule(&definition.schedule)?;
-        orbit_automation::auto_tasks::loader::check_auto_task_conditions(&definition.schedule)
+        orbit_automation::auto_tasks::loader::check_auto_task_conditions(definition)
             .map_err(OrbitError::InvalidInput)?;
         // A definition still naming the retired `system` crew stays editable;
         // its mints route through the complexity pools [ORB-15663].
