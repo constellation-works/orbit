@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "purpose": "Preserve the exact exploratory protocol and source hashes before the portable scripts-dir refactor",
+  "as_of": "2026-10-30T06:31:09.268706+00:00",
+  "source_task": "ORB-20095",
+  "artifacts_prefix": "backtest-2026-10-29/",
+  "files": {
+    "export.py": {
+      "bytes": 6718,
+      "sha256": "e8975604ce24446ee2ae70984f273f87e96f9e6230c332bdd629c3afa2771c06"
+    },
+    "analyze.py": {
+      "bytes": 9125,
+      "sha256": "bfd5c94d1b1dab2f6ff1eb11969444b044a0016387f4fc50a518f05ec6d4d6d4"
+    },
+    "within_tier.py": {
+      "bytes": 8542,
+      "sha256": "983751829af1daa19fc82b876c47ad380f717bf159d69ac1479d46685f60ba49"
+    },
+    "plot_curves.py": {
+      "bytes": 8973,
+      "sha256": "f4858fc6d074b421233df6d6fd2f1efb73e53630741aa5adb86a18298c9f24cf"
+    },
+    "input.json": {
+      "bytes": 1940734,
+      "sha256": "d6445bfd33beea3e350597945be1fc95a69c58ee393ed5e5872ea93af7e7811d"
+    },
+    "results.json": {
+      "bytes": 20039,
+      "sha256": "2f4c1cf081539f0283eeb2b6d4659a088b4b123a5a3804a9d2f4e51dbf095a17"
+    },
+    "within-tier-results.json": {
+      "bytes": 63207,
+      "sha256": "589b9d6dc18b55dbe628d587ee8f762651e119e7594643cbe93effe7bd186588"
+    },
+    "curve-fits.json": {
+      "bytes": 150077,
+      "sha256": "19885ae8bafe926430f4db5ae9ff9e1e1b573937b22095ee79a3825ed60cb554"
+    }
+  },
+  "key_checks": {
+    "primary_cohort_mature_post_oct8": 1275,
+    "medium_sol": {
+      "tasks": 376,
+      "linked": 38
+    },
+    "medium_grok": {
+      "tasks": 89,
+      "linked": 25
+    },
+    "medium_sonnet": {
+      "tasks": 67,
+      "linked": 13
+    },
+    "hard_sol": {
+      "tasks": 42,
+      "linked": 12
+    },
+    "hard_opus": {
+      "tasks": 207,
+      "linked": 59
+    },
+    "low_small_pool": {
+      "tasks": 365,
+      "linked": 17,
+      "members": {
+        "gpt-6-luna": 204,
+        "claude-haiku-5-5": 155,
+        "muse-spark-1.3-contributor": 6
+      }
+    }
+  },
+  "limits": [
+    "Exact old scripts contain host-specific setup and fixed model/cutoff choices; keep this manifest and record all portability changes.",
+    "The input corpus is private task evidence and must not be committed to the repository.",
+    "Seven-day exploratory links are not fourteen-day ladder quality or thirty-day calibration."
+  ]
+}

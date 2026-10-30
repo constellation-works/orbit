@@ -457,6 +457,19 @@ definition of the same name.
   and never builds or runs tests. A test-reduction task keeps that file's
   coverage — every scenario survives or is named with a reason — and
   reports the test count before and after.
+- `crew-ladder-review` — disabled-by-default monthly (`0 9 1 * *`, host-local)
+  medium no-diff chore, seeded through both shipped registries like the other
+  24 defaults. Reviews per-tier exact model/effort/digest mature ladder and
+  operator trial evidence. Runs an available workspace reporting helper and
+  attaches snapshot, manifest, numeric comparisons, supported figures and report;
+  helper/dependency/evidence gaps remain explicit. Every run attaches
+  `crew-ladder-review.json` and fetches the prior review for deltas. At most three
+  duplicate-checked proposed configuration revisions or bounded evaluation tasks
+  carry exact targets, evidence and `spawned_from`. It never changes live routing,
+  effort, ordering, mode, grading or experiment lifecycle. Shadow projections and
+  seven-day observational curves cannot substitute for mature actual trial
+  quality. See [monthly ladder review](../crew-ladder/1_scope.md#monthly-evidence-review).
+
 - `auto-task-yield-review` — disabled-by-default monthly review of whether
   this workspace's enabled auto-task definitions pay for themselves. For
   each enabled definition over the last 30 days it reports minted chores

@@ -45,6 +45,51 @@ maintainability), with abstention and coverage. It forbids any ranking or routin
 separate evaluated proposal and an explicit adoption decision; §
 [Code quality](#code-quality-opt-in-gated) is that consumer's side.
 
+## Monthly evidence review
+
+`crew-ladder-review` is a shipped, disabled monthly auto-task seeded by ordinary
+`orbit init` / `orbit workspace init`, with existing `all` / `none` / explicit
+seeding selection, settings preservation, fork and deletion opt-out behavior.
+Its `0 9 1 * *` schedule means the first day at 09:00 host-local; enabling the
+review does not enable the ladder. It mints a medium, backlog, no-diff chore
+with `skip_if_open` deduplication through the existing scheduler.
+
+The review reads the actual ladder configuration/report, complete standing and
+applicable operator experiment readouts, newly settled evidence since the previous
+review, at least 30 days of context and full trial denominators. It separates task
+complexity, exact execution model, effort and configuration digest, assignments,
+actual execution, settlement and horizon maturity. It reports quality and label
+coverage, failures/repairs/recoveries, mature escaped regressions, supported total
+delivery cost/tokens/time, exclusions, SRM, drift, guardrails and unknowns. Effort
+comparisons require actual same-model, same-tier experiment support. Shadow
+would-be assignments never measure candidate quality. Grading applies only when
+independently enabled and adopted, and missing grades never become passes.
+
+Before proposing revisions it reruns a committed/configured workspace helper when
+available. Orbit's first consumer is [scripts/crew-risk/report.py](../../../scripts/crew-risk/README.md),
+which exports read-only facts and produces same-tier observational size-response
+analysis with explicit provenance. Other workspaces need not contain this helper.
+Missing helper, dependencies or mature support is recorded without installing
+anything or fabricating plots. The helper's seven-day exploratory link endpoint
+is distinct from the ladder's fourteen-day quality guardrail and any future
+thirty-day calibration. It cannot establish model/effort causality.
+
+Every run attaches `crew-ladder-review.json` with configuration/trial digests,
+cutoff/window/timezone, coverage/maturity, per-tier/model/effort comparisons,
+helper snapshot/manifest/results/PNG/SVG/PDF/report artifacts, prior-review delta,
+proposals/overflow and no-change reasons. Prior completed review artifacts are
+fetched through artifact tools; absent evidence makes a baseline. Off,
+unconfigured, shadow-only and insufficient-history runs can succeed as evidenced
+no-ops. At most three duplicate-checked proposed revision/evaluation tasks name
+exact settings/crews, before/after, evidence/verdicts, benefit/risks, AC, verified
+modification targets and `spawned_from` to the chore, with filed-task readback.
+
+This analysis cycle never rewrites configured pools/effort/order, enables
+modes/tiers/grading, promotes/demotes, concludes system trials or launches
+paid/live experiments. Existing operator precedence and off/shadow phase-1 policy
+remain authoritative. Revisions follow supported task/configuration/operator
+approval paths; this review does not implement the future promotion machinery.
+
 ## Problem
 
 - **Pool membership is set by feel.** "Haiku is a low crew", "hard needs opus" are
