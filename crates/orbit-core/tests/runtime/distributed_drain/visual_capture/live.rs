@@ -245,6 +245,118 @@ fn system_records(runtime: &OrbitRuntime, task: &str, artifacts: Vec<TaskArtifac
         .unwrap();
 }
 
+/// The experiment's control disables comparison review without disabling
+/// final capture enforcement; treatment still holds an unavailable reviewer.
+fn experiment_reviewer_outcome_controls_live_recapture() {
+    use orbit_core::application::experiment::{
+        ExperimentActor, ExperimentChange, ExperimentDefinitionInput,
+    };
+    for (arm, expected_outcome) in [
+        ("control", "reviewer_disabled"),
+        ("treatment", "not_established"),
+    ] {
+        let config = format!(
+            "{}\n[experiments]\nenabled = true\nconfig_keys = [\"visual_review.reviewer\"]\n",
+            CONFIG.replace("shadow", "live")
+        );
+        let (pair, _kit) = prepared_mock_pair(&config);
+        let runtime = &pair.wire.owner;
+        let task = &pair.tasks[0];
+        let actor = ExperimentActor {
+            actor: "visual-fixture".into(),
+            reason: None,
+        };
+        let experiment = runtime.create_experiment("visual-fixture", ExperimentDefinitionInput {
+            arms: Some(json!([
+                {"name":"control", "control":true, "overlay":{"config":{"values":{"visual_review.reviewer":false}}}},
+                {"name":"treatment", "overlay":{"config":{"values":{"visual_review.reviewer":true}}}}
+            ])),
+            primary_metric: Some("visual_landed_mismatches".into()),
+            mode: Some("live".into()),
+            ..Default::default()
+        }, actor.clone()).unwrap();
+        runtime
+            .change_experiment(&experiment.id, ExperimentChange::Start, actor)
+            .unwrap();
+        runtime
+            .force_experiment_assignment(&experiment.id, task, arm)
+            .unwrap();
+        let head = git2::Repository::open(&pair.owner_repo)
+            .unwrap()
+            .head()
+            .unwrap()
+            .target()
+            .unwrap()
+            .to_string();
+        let capture = json!({"schema_version":1,"outcome":"captured","mode":"live","task_id":task,
+            "host":"fixture","candidate_sha":head,"manifests":[],"mocks":[{
+                "artifact":"mocks/checkout.png","sha256":mock_sha256_hex(MOCK),"view":"checkout",
+                "state":"default","theme":"light","width":1440,
+                "capture":{"path":"visual/checkout/capture.png","side_by_side":"visual/checkout/side-by-side.png",
+                    "side_by_side_sha256":mock_sha256_hex(SIDE_BY_SIDE),"commit":head,"viewport":[1440,900],
+                    "device_scale_factor":1,"fixture":"default","fixture_sha256":"0".repeat(64),
+                    "captured_at":"2026-10-29T00:00:00Z","sha256":mock_sha256_hex(CAPTURE),
+                    "stability":"stable","encoding":"png","lossy":false}}]});
+        system_records(
+            runtime,
+            task,
+            vec![TaskArtifact::from_text(
+                "visual/capture.json",
+                capture.to_string(),
+            )],
+        );
+        let captures = json!({"captures":[{"task_id":task}]});
+        let prepared = runtime
+            .run_deterministic(
+                "visual_review_prepare",
+                &json!({}),
+                &json!({"workspace_path":pair.owner_repo,"capture":captures}),
+                ToolContext::default(),
+            )
+            .unwrap();
+        assert_eq!(prepared["records"][0]["outcome"], expected_outcome);
+        if arm == "treatment" {
+            assert_eq!(
+                prepared["records"][0]["not_established"][0]["reason"],
+                "no_vision_crew"
+            );
+        }
+        runtime
+            .run_deterministic(
+                "visual_settle",
+                &json!({}),
+                &json!({"workspace_path":pair.owner_repo,"capture":captures,"verified":prepared}),
+                ToolContext::default(),
+            )
+            .unwrap();
+        let result = runtime.run_deterministic(
+            "visual_recapture",
+            &json!({}),
+            &json!({"workspace_path":pair.owner_repo,"completed_task_ids":[task]}),
+            ToolContext::default(),
+        );
+        if arm == "control" {
+            assert!(
+                result.is_ok(),
+                "disabled reviewer with complete capture must pass: {result:?}"
+            );
+        } else {
+            let error = result
+                .expect_err("unavailable reviewer must hold")
+                .to_string();
+            assert!(
+                error.contains("the comparison review is not established"),
+                "{error}"
+            );
+        }
+    }
+}
+
+crate::scenario_table!(
+    experiment_visual_recapture_regression,
+    experiment_reviewer_outcome_controls_live_recapture
+);
+
 fn changed_live_candidate_without_final_evidence_is_held() {
     let (pair, _kit) = prepared_mock_pair(&CONFIG.replace("shadow", "live"));
     let runtime = &pair.wire.owner;
