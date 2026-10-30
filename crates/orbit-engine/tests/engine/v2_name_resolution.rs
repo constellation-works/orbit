@@ -24,9 +24,11 @@
 use std::path::PathBuf;
 
 use orbit_engine::activity_job::{
-    ResolveError, V2ActivityCatalog, load_job_asset, resolve_job_target_refs,
+    ResolveError, V2ActivityCatalog, V2ScriptCatalog, load_job_asset, resolve_job_target_refs,
 };
-use orbit_engine::{DispatchError, resolve_job_catalog_refs_for_execution, validate_job};
+use orbit_engine::{
+    DispatchError, resolve_job_catalog_refs_with_scripts_for_execution, validate_job,
+};
 use orbit_types::workflow::JobScheduleState;
 use orbit_types::workflow::activity_job::{
     ActivityV2, ActivityV2Spec, FanInSpec, FanOutBlock, JobKind, JobV2, JobV2Step, JobV2StepBody,
@@ -47,14 +49,39 @@ fn name_resolution_regressions() -> Result<(), Box<dyn std::error::Error>> {
 fn every_shipped_job_resolves_and_passes_execution_validation()
 -> Result<(), Box<dyn std::error::Error>> {
     let catalog = load_reference_catalog()?;
+    let workspace = tempfile::tempdir()?;
+    let scripts_dir = workspace.path().join(".orbit/resources/scripts");
+    std::fs::create_dir_all(&scripts_dir)?;
+    std::fs::write(workspace.path().join("stub.sh"), "#!/bin/sh\n")?;
     let mut validated = 0;
+    let mut sources = Vec::new();
     for entry in std::fs::read_dir(repo_root().join("crates/orbit-core/assets/jobs"))? {
         let path = entry?.path();
         if path.extension().and_then(|extension| extension.to_str()) != Some("yaml") {
             continue;
         }
-        let mut job = load_job_asset(&std::fs::read_to_string(&path)?)?.spec;
-        resolve_job_catalog_refs_for_execution(&mut job, &catalog)
+        let source = std::fs::read_to_string(&path)?;
+        // A shipped `script:` step names an operator-created workspace
+        // manifest; stub each one so validation sees a resolvable script.
+        for name in source
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("target: script:"))
+        {
+            std::fs::write(
+                scripts_dir.join(format!("{}.yaml", name.trim())),
+                format!(
+                    "schemaVersion: 1\nkind: Script\nmetadata:\n  name: {}\nspec:\n  description: stub\n  entry: stub.sh\n",
+                    name.trim()
+                ),
+            )?;
+        }
+        sources.push((path, source));
+    }
+    let mut scripts = V2ScriptCatalog::new(scripts_dir, workspace.path().to_path_buf());
+    scripts.load_dir()?;
+    for (path, source) in sources {
+        let mut job = load_job_asset(&source)?.spec;
+        resolve_job_catalog_refs_with_scripts_for_execution(&mut job, &catalog, &scripts)
             .and_then(|()| validate_job(&job))
             .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
         validated += 1;
