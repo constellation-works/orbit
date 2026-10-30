@@ -815,6 +815,7 @@ impl OrbitRuntime {
             && let Some((candidates, _)) = self.purpose_pool_candidates(purpose, false)?
         {
             let source = format!("{PURPOSE_SOURCE_PREFIX}{purpose}");
+            let candidates = self.creation_image_filtered(tags, candidates)?;
             let candidates = self.creation_weighted(candidates, complexity, tags, context_files);
             let candidates = permitted_candidates(candidates, &source, None)?;
             let selected = weighted_draw(&candidates, &source, random)?;
@@ -828,6 +829,7 @@ impl OrbitRuntime {
             && let Some((candidates, _)) = self.type_pool_candidates(&route, Some(&task_os))?
         {
             let source = route.crew_source();
+            let candidates = self.creation_image_filtered(tags, candidates)?;
             let candidates = self.creation_weighted(candidates, complexity, tags, context_files);
             let candidates = permitted_candidates(candidates, &source, None)?;
             let selected = weighted_draw(&candidates, &source, random)?;
@@ -842,6 +844,7 @@ impl OrbitRuntime {
                 self.creation_complexity_pool_candidates(Some(complexity), &pools, &task_os)?
         {
             let source = format!("pool:{complexity}");
+            let candidates = self.creation_image_filtered(tags, candidates)?;
             let candidates =
                 self.creation_weighted(candidates, Some(complexity), tags, context_files);
             let candidates = permitted_candidates(candidates, &source, None)?;
@@ -904,6 +907,28 @@ impl OrbitRuntime {
             any_of: narrowed,
             ..task_os
         }
+    }
+
+    /// A creation-seam pool draw's members for a `verify-mock-ui` task:
+    /// only the image-capable ones while the pool has one (§5.3), so the
+    /// crew the task is created with can use the self-check. The recorded
+    /// source stays the pool's; admission re-applies the filter and is
+    /// where an unfiltered fallback records `implementer_without_vision`
+    /// on the run. Other tasks draw unchanged.
+    fn creation_image_filtered(
+        &self,
+        tags: &[String],
+        candidates: Vec<CrewCandidate>,
+    ) -> Result<Vec<CrewCandidate>, OrbitError> {
+        if !orbit_types::task::has_verify_mock_ui_tag(tags) {
+            return Ok(candidates);
+        }
+        let (capable, _) = self.partition_image_reading(candidates.clone())?;
+        Ok(if capable.is_empty() {
+            candidates
+        } else {
+            capable
+        })
     }
 
     /// A creation-seam pool draw's members, weighed by usage pressure

@@ -1,0 +1,4 @@
+[
+  {"argv": ["visual"], "golden": "visual/root.txt"},
+  {"argv": ["visual", "capture"], "golden": "visual/capture.txt"}
+]

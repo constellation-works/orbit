@@ -88,6 +88,8 @@ impl AdmittedCrewSource {
             "provider_limit"
         } else if selection.contains("usage pressure") {
             "usage_pressure"
+        } else if selection.contains("image-capable implementer") {
+            "image_capable"
         } else {
             "pool"
         };

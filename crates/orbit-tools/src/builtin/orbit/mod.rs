@@ -14,6 +14,7 @@ mod orchestrator;
 pub mod pipeline;
 pub mod search;
 pub mod task;
+mod visual;
 mod workflow;
 pub mod workspace_claim;
 

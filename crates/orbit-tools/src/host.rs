@@ -15,6 +15,7 @@ use orbit_common::governance::lease::LeaseVerb;
 use orbit_common::governance::orchestrator::OrchestratorVerb;
 use orbit_common::governance::search::SearchVerb;
 use orbit_common::governance::task::TaskVerb;
+use orbit_common::governance::visual::VisualVerb;
 use orbit_common::governance::workflow::WorkflowVerb;
 use orbit_common::governance::workspace_claim::WorkspaceClaimVerb;
 use serde_json::Value;
@@ -141,6 +142,8 @@ pub enum OrbitBuiltinAction {
     WorkspaceClaim(WorkspaceClaimVerb),
     /// Principal-held path leases on the workspace owner.
     Lease(LeaseVerb),
+    /// Visual capture verbs: the implementer's mock self-check.
+    Visual(VisualVerb),
 }
 
 impl From<DecisionVerb> for OrbitBuiltinAction {
@@ -164,6 +167,12 @@ impl From<CodebaseVerb> for OrbitBuiltinAction {
 impl From<CrewVerb> for OrbitBuiltinAction {
     fn from(verb: CrewVerb) -> Self {
         Self::Crew(verb)
+    }
+}
+
+impl From<VisualVerb> for OrbitBuiltinAction {
+    fn from(verb: VisualVerb) -> Self {
+        Self::Visual(verb)
     }
 }
 

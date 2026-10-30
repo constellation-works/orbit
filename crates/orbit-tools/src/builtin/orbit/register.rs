@@ -9,6 +9,7 @@ use orbit_common::governance::friction::FRICTION;
 use orbit_common::governance::lease::LEASE;
 use orbit_common::governance::orchestrator::ORCHESTRATOR;
 use orbit_common::governance::task::TASK;
+use orbit_common::governance::visual::VISUAL;
 use orbit_common::governance::workflow::WORKFLOW;
 use orbit_common::governance::workspace_claim::WORKSPACE_CLAIM;
 use orbit_types::tool::McpToolScope;
@@ -73,4 +74,6 @@ pub fn register(registry: &mut ToolRegistry) {
     // Workflow ship, run reads and resume, and the auto-drain control come
     // from the shared operation registry.
     operation::register_noun(registry, &WORKFLOW);
+    // The implementer's mock self-check capture.
+    operation::register_noun(registry, &VISUAL);
 }

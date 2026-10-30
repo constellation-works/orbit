@@ -5,7 +5,8 @@ use std::path::PathBuf;
 
 use orbit_common::OrbitError;
 use orbit_core::bootstrap::browser_kit::{
-    KitInspection, KitLayout, PLAYWRIGHT_VERSION, WORKER_ENV_NAMES,
+    KitInspection, KitLayout, PIXEL_HELPER_PACKAGE, PIXEL_HELPER_VERSION, PLAYWRIGHT_VERSION,
+    WORKER_ENV_NAMES,
 };
 use serde::Serialize;
 
@@ -102,6 +103,21 @@ impl KitStatus {
                 "orbit browser-kit install (moves the kit to the pin and deletes the old browser revisions)",
             )),
             Some(_) => {}
+        }
+        match kit.pixel_helper_version.as_deref() {
+            Some(PIXEL_HELPER_VERSION) => {}
+            Some(version) => problems.push(install(
+                format!(
+                    "the pixel-compare helper {PIXEL_HELPER_PACKAGE} {version} is installed; this Orbit release pins {PIXEL_HELPER_VERSION}, so visual capture is unavailable"
+                ),
+                "orbit browser-kit install",
+            )),
+            None => problems.push(install(
+                format!(
+                    "the pixel-compare helper {PIXEL_HELPER_PACKAGE} is missing from kit/, so visual capture is unavailable"
+                ),
+                "orbit browser-kit install",
+            )),
         }
         if kit.module_present && !kit.browser_installed {
             problems.push(install(

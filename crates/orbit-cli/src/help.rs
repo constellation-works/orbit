@@ -218,6 +218,10 @@ const ROOT_ENVIRONMENT: &[GroupedRow] = &[
 const ROOT_KNOWLEDGE: &[GroupedRow] = &[
     ("task", "Create, update, and manage tasks"),
     (
+        "visual",
+        "Capture the working tree beside a task's mocks for comparison",
+    ),
+    (
         "decision",
         "List, show and answer human decision requests on held work",
     ),

@@ -9,6 +9,7 @@ use orbit_common::governance::operation::OperationVerb;
 use orbit_common::governance::orchestrator::OrchestratorVerb;
 use orbit_common::governance::search::SearchVerb;
 use orbit_common::governance::task::{TASK_CLI_OPTIONS_PARAM, TaskVerb};
+use orbit_common::governance::visual::VisualVerb;
 use orbit_common::governance::workflow::WorkflowVerb;
 use orbit_common::governance::workspace_claim::WorkspaceClaimVerb;
 use orbit_common::{ClaimRefusalKind, OrbitError};
@@ -53,6 +54,11 @@ pub(crate) fn execute(
         },
         OrbitBuiltinAction::Crew(verb) => match verb {
             CrewVerb::Ladder => false,
+        },
+        // Capture renders the checkout it runs in, so a claimed leaf
+        // captures locally rather than routing to the owner.
+        OrbitBuiltinAction::Visual(verb) => match verb {
+            VisualVerb::Capture => false,
         },
         OrbitBuiltinAction::Orchestrator(verb) => match verb {
             OrchestratorVerb::Scorecard | OrchestratorVerb::Show => false,
@@ -369,6 +375,9 @@ pub(crate) fn execute(
         },
         OrbitBuiltinAction::Crew(verb) => match verb {
             CrewVerb::Ladder => return Ok(None),
+        },
+        OrbitBuiltinAction::Visual(verb) => match verb {
+            VisualVerb::Capture => return Ok(None),
         },
         OrbitBuiltinAction::Orchestrator(verb) => match verb {
             OrchestratorVerb::Scorecard | OrchestratorVerb::Show => return Ok(None),

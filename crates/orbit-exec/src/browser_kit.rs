@@ -20,6 +20,12 @@ use serde::{Deserialize, Serialize};
 /// the same Orbit version runs the same browser build.
 pub const PLAYWRIGHT_VERSION: &str = "1.64.0";
 
+/// The npm package the visual capture driver decodes PNGs with, pinned in
+/// the kit's npm project so every host compares pixels with the same code.
+pub const PIXEL_HELPER_PACKAGE: &str = "pngjs";
+/// The exact [`PIXEL_HELPER_PACKAGE`] release this Orbit release installs.
+pub const PIXEL_HELPER_VERSION: &str = "7.0.0";
+
 /// The kit's location below the home directory of the user who runs workers.
 pub const KIT_HOME_RELATIVE: &str = ".local/chromium-deps";
 
@@ -108,6 +114,11 @@ impl KitLayout {
         self.npm_project().join("node_modules/playwright")
     }
 
+    fn pixel_helper_package(&self) -> PathBuf {
+        self.npm_project()
+            .join(format!("node_modules/{PIXEL_HELPER_PACKAGE}"))
+    }
+
     pub fn module(&self) -> PathBuf {
         self.playwright_package().join("index.mjs")
     }
@@ -164,6 +175,10 @@ pub struct KitVerification {
     pub chromium_revision: String,
     /// The version Chromium reported, for example `156.0.8078.4`.
     pub browser_version: String,
+    /// The pixel-helper (`pngjs`) version the smoke test decoded a PNG
+    /// with. Absent on records written before the helper was pinned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pixel_helper_version: Option<String>,
     /// RFC 3339 time of the passing run.
     pub verified_at: String,
 }
@@ -178,6 +193,10 @@ pub struct KitInspection {
     pub playwright_version: Option<String>,
     /// This Orbit release's pin.
     pub pinned_version: &'static str,
+    /// Version of the installed pixel-helper (`pngjs`) package.
+    pub pixel_helper_version: Option<String>,
+    /// This Orbit release's pixel-helper pin.
+    pub pinned_pixel_helper_version: &'static str,
     pub module_present: bool,
     /// The headless-shell revision the installed package launches.
     pub chromium_revision: Option<String>,
@@ -198,6 +217,8 @@ impl KitInspection {
     pub fn inspect(layout: &KitLayout) -> Self {
         let present = layout.root().is_dir();
         let playwright_version = read_json(&layout.playwright_package().join("package.json"))
+            .and_then(|package| package.get("version")?.as_str().map(str::to_string));
+        let pixel_helper_version = read_json(&layout.pixel_helper_package().join("package.json"))
             .and_then(|package| package.get("version")?.as_str().map(str::to_string));
         let revisions = layout
             .browsers_manifest()
@@ -225,6 +246,8 @@ impl KitInspection {
             present,
             playwright_version,
             pinned_version: PLAYWRIGHT_VERSION,
+            pixel_helper_version,
+            pinned_pixel_helper_version: PIXEL_HELPER_VERSION,
             module_present: layout.module().is_file(),
             chromium_revision: revisions.chromium,
             browser_installed,
@@ -241,6 +264,19 @@ impl KitInspection {
     /// The installed package is the version this Orbit release pins.
     pub fn matches_pin(&self) -> bool {
         self.playwright_version.as_deref() == Some(PLAYWRIGHT_VERSION)
+    }
+
+    /// The installed pixel helper is the version this release pins, and the
+    /// recorded smoke test ran against it. Visual capture requires this on
+    /// top of [`Self::is_verified`]: a kit verified before the helper was
+    /// pinned keeps serving ordinary browser checks until `install` adds it.
+    pub fn pixel_helper_verified(&self) -> bool {
+        self.pixel_helper_version.as_deref() == Some(PIXEL_HELPER_VERSION)
+            && self
+                .verification
+                .as_ref()
+                .and_then(|record| record.pixel_helper_version.as_deref())
+                == Some(PIXEL_HELPER_VERSION)
     }
 
     /// Module, browser and `env.sh` are in place, and the recorded smoke test

@@ -335,6 +335,38 @@ impl OrbitRuntime {
             None
         };
         let (mut crews, mut source) = self.auto_task_crew_candidates(task, &pools, explicit)?;
+        // [verify-mock-ui §5.3] The implementer of a mock-driven task is
+        // drawn from the pool's image-capable crews (native image read,
+        // not `vision = false`) so it can use the `orbit visual capture`
+        // self-check. A draw already collapsed to the assigned member
+        // re-expands to its complexity pool when that member cannot read
+        // images and the pool has one that can. With no capable member
+        // the draw falls back to the unfiltered pool and the run's
+        // selection records `implementer_without_vision` below. An
+        // explicit run crew and an experiment pool are the caller's and
+        // the experiment's own draws, so neither is filtered here.
+        let mut implementer_without_vision = false;
+        if explicit.is_none()
+            && experiment_pool.is_none()
+            && orbit_types::task::has_verify_mock_ui_tag(&task.tags)
+        {
+            if let [only] = crews.as_slice()
+                && !self.can_read_images(&only.crew)?
+                && let Some((pool, pool_source)) =
+                    self.complexity_pool_candidates(task.complexity, &pools)?
+            {
+                let (capable, _) = self.partition_image_reading(pool.clone())?;
+                if !capable.is_empty() {
+                    crews = pool;
+                    source = pool_source;
+                }
+            }
+            let (filtered, filtered_source, without_vision) =
+                self.image_capable_implementer_candidates(&task.tags, crews, source)?;
+            crews = filtered;
+            source = filtered_source;
+            implementer_without_vision = without_vision;
+        }
         // [ORB-17770] Weigh the narrowed pool by usage pressure and crew
         // performance; an explicit run crew is the operator's call and has
         // no draw to weigh. Performance never widens the pool: only the
@@ -430,6 +462,15 @@ impl OrbitRuntime {
         });
         if let Some(limit) = provider_limit {
             input[SELECTION_KEY]["provider_limit"] = json!(limit);
+        }
+        // A `verify-mock-ui` implementer that cannot read images — an
+        // unfiltered pool fallback above, or an explicit/experiment crew
+        // without a native image read — is recorded on the run (§5.3), so
+        // the operator can see the self-check went unused.
+        if orbit_types::task::has_verify_mock_ui_tag(&task.tags)
+            && (implementer_without_vision || !self.can_read_images(&selected.crew)?)
+        {
+            input[SELECTION_KEY][super::draw::IMPLEMENTER_WITHOUT_VISION] = json!(true);
         }
         if let Some(pool) = experiment_pool {
             input[SELECTION_KEY]["experiment_overlay_digest"] = json!(pool.digest);

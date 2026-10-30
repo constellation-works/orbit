@@ -33,6 +33,7 @@ pub mod sweep;
 pub mod task;
 pub mod tool;
 pub mod update;
+pub mod visual;
 pub mod web;
 pub mod workspace;
 
@@ -95,6 +96,7 @@ Environment:
 
 Knowledge:
   task         Create, update, and manage tasks
+  visual       Capture the working tree beside a task's mocks for comparison
   decision     List, show and answer human decision requests on held work
   friction     Report, list, and triage friction records
   search       Search tasks and frictions
@@ -164,6 +166,7 @@ pub enum Commands {
 
     // ── Knowledge ──
     Task(Box<task::TaskCommand>),
+    Visual(visual::VisualCommand),
     Decision(decision::DecisionCommand),
     Friction(friction::FrictionCommand),
     Search(search::SearchCommand),
