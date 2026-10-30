@@ -856,6 +856,7 @@ fn task_add_attributes_from_model_flag_and_managed_identity_env() {
         );
         let managed: Value = serde_json::from_slice(&output.stdout).expect("managed task JSON");
         assert_eq!(managed["created_by"], json!("codex"));
+        assert_eq!(managed["created_by_model"], json!("gpt-5.6-terra"));
     }
 
     let after = ambient.task_json(&["task", "list", "--json"]);
