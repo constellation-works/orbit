@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: Table Rendering"
-last_validated: 2026-10-27
+last_validated: 2026-10-30
 ---
 
 # Spec: Table Rendering
