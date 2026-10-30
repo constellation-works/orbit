@@ -111,9 +111,9 @@ orbit doctor
 - **Widening reseeds on the next sync.** Add a name to the list or set a key
   back to `all`, then preview and apply sync again. This seeds the shipped
   definition, not the preserved edited copy. Selecting a default is separate
-  from enabling it: shipped auto-tasks and nine of the ten routines start
-  disabled; `crew-performance-refresh` starts enabled and no-ops while
-  `workflow.crew_performance` is `off`. Preserve existing enablement choices.
+  from enabling it: shipped auto-tasks and every routine except
+  `crew-performance-refresh` start disabled; that one starts enabled and no-ops
+  while `workflow.crew_performance` is `off`. Preserve existing enablement choices.
 - **Auto-task deletion remains an opt-out.** An opt-out recorded by `orbit
   auto-task delete` survives exclusion and later widening, so sync still leaves
   that default absent. First include it in `seeding.auto_tasks`, then use

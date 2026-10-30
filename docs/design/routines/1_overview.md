@@ -40,12 +40,12 @@ initialization and persisted debt. [3_vision.md](./3_vision.md) holds deferred w
 > catalog from `orbit-registry` with registered runtimes; `orbit-automation` owns
 > the scheduler kernels, with Core supplying task facts, dispatch and status assembly.
 
-`orbit workspace init` seeds ten default routine templates (`ci_failure_sweep`,
+`orbit workspace init` seeds the default routine templates (`ci_failure_sweep`,
 `dependabot_alert_sweep`, `task_pilot`, `finding_verification`, `pilot_warning_triage`,
 `blocked_task_triage`, `worktree_gc`, `store_gc`, `crew_performance_refresh`,
-and `task_publication`) under
+`task_publication` and `ux-rules`) under
 `.orbit/routines/`. Their routine names use hyphens and the registered workspace name as a
-suffix (for example, `task-pilot-<workspace-name>`). Nine defaults are `enabled: false`;
+suffix (for example, `task-pilot-<workspace-name>`). All other defaults are `enabled: false`;
 `crew_performance_refresh`, added by [ORB-17816], is seeded enabled and runs hourly
 at :23. With `workflow.crew_performance = "off"` it skips the scan and writes no
 snapshot, while still recording a job run. [ORB-18378] added disabled weekly
