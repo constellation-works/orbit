@@ -1,7 +1,7 @@
 // Orbit dashboard task detail: the detail body, its tabs and the runs tab.
 
-import { captureWorkspaceVisit, el, elapsedDurationInfo, fetchJson, fmtDuration, isAggregateView, makeDisclosure, makeToggleRow, runHref, stateCell } from './common.js';
-import { absTimeNode, canMutateTask, fmtAbsTimeValue, pullRequestLink, refreshTasks, rerender, taskState, taskWorkspacePath, GITHUB_PR_REF_SYSTEM } from './task-shared.js';
+import { captureWorkspaceVisit, el, elapsedDurationInfo, fetchJson, fmtDuration, isAggregateView, makeDisclosure, makeToggleRow, stateCell } from './common.js';
+import { absTimeNode, canMutateTask, fmtAbsTimeValue, pullRequestLink, refreshTasks, rerender, taskRunHref, taskState, taskWorkspacePath, GITHUB_PR_REF_SYSTEM } from './task-shared.js';
 import { buildAttentionCallout, buildDeliveryPanel, buildDeliveryProgress, claimAttention, deliverySteps, lastKnownClaims } from './distributed.js';
 import { buildTaskMeta, buildStageStrip } from './task-lifecycle.js';
 import { buildActionsRow } from './task-actions.js';
@@ -498,7 +498,7 @@ function renderTaskRuns(node, task, context) {
 function buildTaskRun(run, task, context) {
   const runId = String(run.run_id || "");
   const link = el("a", { class: "mono task-run-id", text: runId });
-  link.href = runHref(runId, task.workspace_id ? { workspace: task.workspace_id } : {});
+  link.href = taskRunHref(task, runId);
   const when = run.started_at || run.scheduled_at || run.finished_at;
   const { durationMs } = elapsedDurationInfo(run);
   return el("li", { class: "task-run" }, [

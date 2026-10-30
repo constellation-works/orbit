@@ -2,7 +2,7 @@
 // The modules split out of tasks.js import this one, and it imports none of
 // them, so they share state and re-render the list without import cycles.
 
-import { clockStamp, el, getWorkspace, hostWriteRefusal, isAggregateView, isHttpUrl, withHost, withWorkspace } from './common.js';
+import { clockStamp, el, getWorkspace, hostWriteRefusal, isAggregateView, isHttpUrl, runHref, withHost, withWorkspace } from './common.js';
 
 export const $ = (id) => document.getElementById(id);
 
@@ -72,6 +72,9 @@ export const taskState = {
   // restores the thread the way it was left.
   expandedComments: new Set(),
   restoredCommentHash: null,
+  // The comment a task link names (`#tasks?open=ID&comment=N`, `N` counted from
+  // 1): `{ taskId, number }` while the route still names it, else null.
+  commentTarget: null,
   // Tasks whose description the operator expanded; a rebuild keeps it open.
   expandedDescriptions: new Set(),
   // Tasks whose acceptance criteria the operator expanded; a rebuild keeps them open.
@@ -179,6 +182,13 @@ export function taskWorkspacePath(task, path) {
   if (!task.workspace_id) return withWorkspace(path);
   const sep = path.includes("?") ? "&" : "?";
   return withHost(`${path}${sep}workspace=${encodeURIComponent(task.workspace_id)}`);
+}
+
+// The dashboard address of run `runId` in the task's own workspace, so an
+// aggregate view or a task pinned from another workspace opens the run where it
+// lives. A task with no known workspace falls back to the selected one.
+export function taskRunHref(task, runId) {
+  return runHref(runId, task && task.workspace_id ? { workspace: task.workspace_id } : {});
 }
 
 export function taskMutationPath(task, suffix = "") {

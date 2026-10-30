@@ -67,8 +67,13 @@ export function editorObserved(key) {
   return observed === undefined ? undefined : JSON.parse(JSON.stringify(observed));
 }
 
-function closeEditor(key) {
+// Close `editor` if it is still the one open under `key`. An instance retired
+// by a scope change is not: the same key may now hold a replacement draft, which
+// a late completion of the old one must leave alone.
+function closeEditor(key, editor) {
+  if (editors.get(key) !== editor) return false;
   editors.delete(key);
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -355,18 +360,17 @@ function buildEditor({ key, title, note, kinds, fields, value, preview, save, on
       render();
       try {
         await save(checked.value);
-        closeEditor(key);
-        onClose(true);
       } catch (failure) {
-        if (!editors.has(key)) return;
+        if (editors.get(key) !== editor) return;
         editor.pending = false;
         editor.error = failure.message || String(failure);
         render();
+        return;
       }
+      if (closeEditor(key, editor)) onClose(true);
     });
     cancelButton.addEventListener("click", () => {
-      closeEditor(key);
-      onClose(false);
+      if (closeEditor(key, editor)) onClose(false);
     });
     root.replaceChildren(...[
       el("div", { class: "schedule-editor-head" }, [el("strong", { text: title })]),
@@ -384,10 +388,7 @@ function buildEditor({ key, title, note, kinds, fields, value, preview, save, on
   };
   render();
   root.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && !editor.pending) {
-      closeEditor(key);
-      onClose(false);
-    }
+    if (event.key === "Escape" && !editor.pending && closeEditor(key, editor)) onClose(false);
   });
   return root;
 }

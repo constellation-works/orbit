@@ -171,6 +171,7 @@ async function answerDecision(task, detail, requestId, answer, note, btnNode, co
 
 export function buildOwedCriteria(owed, task, detail, context) {
   const wrap = el("div", { class: "owed-criteria" });
+  if (task && detail && context) wrap.dataset.operatorRecord = "true";
   for (const entry of owed) {
     const parts = [
       `${entry.criterion}. [${entry.state}] on ${entry.host}: ${entry.command} (target ${entry.target})`,
@@ -197,8 +198,8 @@ export function buildOwedCriteria(owed, task, detail, context) {
     wrap.appendChild(row);
   }
   if (task && detail && context) {
-    const refusal = taskShared.taskState.operatorRecordRefusals.get(taskShared.taskDispatchIdentity(task));
-    if (refusal) wrap.appendChild(taskShared.actionErrorNode(refusal));
+    const refusal = taskReadiness.operatorRecordRefusalNode(task);
+    if (refusal) wrap.appendChild(refusal);
   }
   return wrap;
 }

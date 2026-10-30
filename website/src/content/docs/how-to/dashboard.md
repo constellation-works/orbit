@@ -115,7 +115,10 @@ expected on the default port, `7878`.
   An unregistered machine stays plain text.
 - **Run links.** Every run link (Drain, Jobs, Routines, Tasks, Health, Analytics) uses that
   same form and carries the selected host, workspace and time window, so a link
-  opened in a new tab or copied shows the run in that scope.
+  opened in a new tab or copied shows the run in that scope. A run link in a
+  task's detail names the task's own workspace, so a run opened from **All
+  workspaces** or from a task shown from another workspace lands where the run
+  lives.
 - **Read-only.** Writes to another host go through the serving dashboard's
   [operator session](#authorization). Without one, a note reads `Read-only on
   <host>: <reason>` and write controls are disabled with the same reason.
@@ -226,7 +229,7 @@ Open a task to see its detail and every action its status allows:
 | **approve** | `proposed` or `review`. Refused while a non-terminal local run lists the task; the error names that run, and the task, its comments, and its history stay unchanged. Stop the run, then approve. |
 | **reject** | `proposed`, `review`, or `backlog`. |
 | **archive** | Any status except `archived`. |
-| **comment** | Any status. |
+| **comment** | Any status. A comment's **#** button copies a link that reopens the task and scrolls to that comment: `#tasks?open=<id>&comment=<n>` beside the list, `#tasks/<id>?comment=<n>` on the full page. |
 
 The row's crew dropdown and the detail's status dropdown are editable when a
 workspace is selected, or in **All workspaces** for a row that names its
@@ -430,7 +433,10 @@ admission hold** callout in its detail, with two actions:
 
 Each action asks you to confirm, then asks for evidence. **Approve anyway**
 asks for a reason instead. The evidence is recorded with the decision. Blank
-evidence sends nothing and shows `[pilot_admission_evidence_required]`. The
+evidence sends nothing and shows `[pilot_admission_evidence_required]`. A
+refused record shows its error beside the action, also while the task's detail
+is held open by an unsaved draft or pinned from another list, and the controls
+the attempt disabled become usable again. The
 callout does not appear while an open **Decision needed** request exists for
 the pilot-admission gate. Answer that request's options instead.
 

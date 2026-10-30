@@ -99,7 +99,7 @@ export function buildQuickAction(task, context) {
     // it on that host rather than this host's job store.
     if (task.job_run_navigable !== false) {
       const link = el("a", { class: "task-quick-link", text: "View run", title: `Open run ${task.job_run_id}` });
-      link.href = runHref(task.job_run_id);
+      link.href = taskShared.taskRunHref(task, task.job_run_id);
       link.addEventListener("click", (event) => event.stopPropagation());
       cell.appendChild(link);
       return cell;
@@ -171,7 +171,7 @@ export function buildQuickActionError(task, context) {
     const before = text.slice(0, idx);
     const after = text.slice(idx + runId.length);
     const link = el("a", { class: "task-quick-error-link", text: runId, title: `Open run ${runId}` });
-    link.href = runHref(runId);
+    link.href = taskShared.taskRunHref(task, runId);
     link.addEventListener("click", (e) => e.stopPropagation());
     message = el("span", { class: "task-quick-error-message" }, [
       before,
