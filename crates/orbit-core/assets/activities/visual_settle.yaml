@@ -13,7 +13,15 @@ spec:
     nothing. With `visual_review.require_established = true`, a capture
     that is not established ends the run held
     (`delivery_visual_not_established`) until an operator releases it or a
-    host with a verified browser kit captures it.
+    host with a verified browser kit captures it. It also settles the
+    comparison review: verifier verdicts are validated (image regions in
+    this delivery's capture, cited lines at the candidate, CONFIRMED
+    severities), a low-confidence verdict decides nothing without its one
+    escalation, and the findings, verdicts, verified severities, budgets
+    and dropped-evidence counts are recorded in the system-written
+    `visual/review.json` under purpose `visual_review`. Shadow only:
+    nothing is filed, nothing blocks and nothing is given to the code
+    reviewer.
   input_schema_json:
     type: object
     required: [workspace_path, capture]
@@ -26,6 +34,16 @@ spec:
       checks:
         type: [object, "null"]
         description: The visual_checks output for this run.
+      verified:
+        type: [object, "null"]
+        description: The initial visual_verify_prepare output for this run.
+      verify_results:
+        description: The visual_verify fan-out results.
+      escalation_prepared:
+        type: [object, "null"]
+        description: The escalation visual_verify_prepare output.
+      escalation_results:
+        description: The escalation visual_verify fan-out results.
   output_schema_json:
     type: object
     required: [applies, settled, summary]

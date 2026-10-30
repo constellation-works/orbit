@@ -1,12 +1,16 @@
-//! The delivery's visual review phase (visual-review design §4, §6, §7):
+//! The delivery's visual review phase (visual-review design §4, §6–§11):
 //! for a `verify-mock-ui` task whose `visual_review.mode` is not `off`,
 //! capture the final candidate once per mock in a detached checkout
-//! (`visual_capture`), record the deterministic checks (`visual_checks`)
-//! and settle the capture against the candidate and the frozen mocks
-//! (`visual_settle`). Everything is written by the system writer under the
-//! reserved `visual/` prefix. In this phase nothing blocks and nothing is
-//! filed; only `visual_review.require_established` holds a delivery whose
-//! capture is not established.
+//! (`visual_capture`), record the deterministic checks (`visual_checks`),
+//! run the mock comparison review and its in-line verification in shadow
+//! (`visual_review_prepare`, the `visual_review` and `visual_verify`
+//! agents, `visual_verify_prepare`), and settle the capture against the
+//! candidate and the frozen mocks (`visual_settle`, which also writes
+//! `visual/review.json`). Everything is written by the system writer under
+//! the reserved `visual/` prefix. In this phase nothing blocks, nothing is
+//! filed and nothing reaches the code reviewer; only
+//! `visual_review.require_established` holds a delivery whose capture is
+//! not established.
 //!
 //! A claimed leaf captures against the visual review contract its owner
 //! captured at admission, and the owner checks what the leaf returns before
@@ -16,11 +20,15 @@ mod capture;
 mod checks;
 mod contract;
 mod handoff;
+mod review;
 mod settle;
+mod verify;
 
 pub(crate) use capture::visual_capture_step;
 pub(crate) use checks::visual_checks_step;
+pub(crate) use review::visual_review_prepare_step;
 pub(crate) use settle::visual_settle_step;
+pub(crate) use verify::visual_verify_prepare_step;
 
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
@@ -144,9 +152,9 @@ impl OrbitRuntime {
         task: &orbit_types::task::Task,
     ) -> Result<Option<Value>, OrbitError> {
         use orbit_types::task::{
-            VISUAL_CAPTURE_ARTIFACT, VISUAL_CHECKS_ARTIFACT, VISUAL_SETTLE_ARTIFACT,
-            VisualCaptureRecord, VisualChecksRecord, VisualSettleRecord, has_verify_mock_ui_tag,
-            visual_review_summary,
+            VISUAL_CAPTURE_ARTIFACT, VISUAL_CHECKS_ARTIFACT, VISUAL_REVIEW_ARTIFACT,
+            VISUAL_SETTLE_ARTIFACT, VisualCaptureRecord, VisualChecksRecord, VisualReviewRecord,
+            VisualSettleRecord, has_verify_mock_ui_tag, visual_review_summary_with_review,
         };
         if !has_verify_mock_ui_tag(&task.tags) {
             return Ok(None);
@@ -169,8 +177,28 @@ impl OrbitRuntime {
             .flatten()
             .map(|(settle, _)| settle)
             .filter(|settle| settle.candidate_sha == record.candidate_sha);
+        let review = read_record::<VisualReviewRecord>(self, &task.id, VISUAL_REVIEW_ARTIFACT)
+            .ok()
+            .flatten()
+            .map(|(review, _)| review)
+            .filter(|review| review.candidate_sha == record.candidate_sha);
         Ok(Some(serde_json::json!({
-            "summary": visual_review_summary(&record, checks.as_ref(), settle.as_ref()),
+            "summary": visual_review_summary_with_review(
+                &record,
+                checks.as_ref(),
+                settle.as_ref(),
+                review.as_ref(),
+            ),
+            "review": review.as_ref().map(|review| serde_json::json!({
+                "outcome": review.outcome,
+                "purpose": review.purpose,
+                "reviewer_crew": review.reviewer_crew,
+                "verifier_crews": review.verifier_crews,
+                "findings": review.findings,
+                "invalid_evidence_dropped": review.invalid_evidence_dropped,
+                "not_shown": review.budget.not_shown,
+                "recorded_only": review.recorded_only,
+            })),
             "mode": record.mode.as_str(),
             "outcome": record.outcome,
             "candidate_sha": record.candidate_sha,

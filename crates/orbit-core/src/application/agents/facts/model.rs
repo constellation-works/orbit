@@ -207,6 +207,20 @@ pub(in crate::application::agents) enum RejectOutcome {
     },
 }
 
+/// One task's mock comparison review of record, for reviewer scoring
+/// under purpose `visual_review` (visual-review design §11.4): the
+/// reviewer's crew and each finding's verification verdict. A CONFIRMED
+/// finding scores at its verified severity; a REJECTED one counts as
+/// other rejected review findings do.
+#[derive(Debug, Clone)]
+pub(in crate::application::agents) struct VisualReviewFacts {
+    pub(in crate::application::agents) at: DateTime<Utc>,
+    pub(in crate::application::agents) reviewer_crew: Option<String>,
+    /// `(verdict, severity of record, title)` per finding: the verified
+    /// severity for a CONFIRMED finding, else the reviewer's.
+    pub(in crate::application::agents) findings: Vec<(FindingVerdict, String, String)>,
+}
+
 /// One settled review gate attempt, from its settlement comment.
 #[derive(Debug, Clone)]
 pub(in crate::application::agents) struct Review {
@@ -307,6 +321,9 @@ pub(in crate::application::agents) struct TaskFacts {
     pub(in crate::application::agents) landed_at: Option<DateTime<Utc>>,
     pub(in crate::application::agents) records: Vec<Record>,
     pub(in crate::application::agents) reviews: Vec<Review>,
+    /// The mock comparison review of record (`visual/review.json`), when
+    /// this `verify-mock-ui` task has one.
+    pub(in crate::application::agents) visual_review: Option<VisualReviewFacts>,
     /// Set when the task is a finding a review job filed.
     pub(in crate::application::agents) filed: Option<FiledFinding>,
     /// How each task-pilot assessment's warnings settled.

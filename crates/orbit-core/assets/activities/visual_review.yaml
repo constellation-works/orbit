@@ -1,0 +1,240 @@
+# The mock comparison review (visual-review design §8): one vision crew
+# compares each mock with Orbit's capture of the final candidate, in
+# shadow. `visual_review_prepare` assembled the input from capture.json;
+# the agent does not choose what to look at.
+#
+# The response envelope is required because the canary code and the
+# structured findings are this activity's only product: the engine stages
+# a fresh canary image first (`image_input`), and a result that does not
+# return its code fails as `image_not_seen` before any finding is read.
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: visual_review
+spec:
+  type: agent_loop
+  # Read-only reviewer profile: reads staged images and the candidate,
+  # writes nothing.
+  fsProfile: reviewer
+  require_completion_envelope: true
+  require_response_envelope: true
+  description: >
+    Mock comparison review of one `verify-mock-ui` delivery, in shadow.
+    For each shown mock, answers the eight comparison questions against
+    its capture under the precedence rule, one finding per difference,
+    each anchored to an image region in this delivery's capture. Findings
+    are verified in-line by `visual_verify` and recorded in
+    `visual/review.json`; in shadow nothing is filed, nothing blocks and
+    nothing is given to the code reviewer.
+  input_schema_json:
+    type: object
+    required: [task_id, workspace_path, crew, image_input]
+    properties:
+      task_id:
+        type: string
+      candidate_sha:
+        type: string
+      workspace_path:
+        type: string
+      crew:
+        type: string
+      image_input:
+        type: object
+        properties:
+          images:
+            type: array
+            items:
+              type: string
+      staged_images:
+        type: array
+        items:
+          type: object
+      shown:
+        type: array
+        items:
+          type: object
+      not_shown:
+        type: array
+        items:
+          type: object
+      max_findings:
+        type: number
+      task:
+        type: object
+      deviations:
+        type: array
+        items:
+          type: object
+      check_findings:
+        type: array
+        items:
+          type: object
+      design_rules:
+        type: array
+        items:
+          type: object
+      catalog:
+        type: object
+  # Agent-returned findings are advisory until visual_verify_prepare
+  # validates their evidence against this delivery's capture.
+  output_schema_json:
+    type: object
+    properties:
+      task_id:
+        type: string
+      canary:
+        type: [string, "null"]
+      findings:
+        type: array
+        items:
+          type: object
+          properties:
+            question:
+              type: [number, string]
+            mock:
+              type: string
+            title:
+              type: string
+            detail:
+              type: string
+            evidence:
+              type: array
+              items:
+                type: object
+                properties:
+                  image:
+                    type: string
+                  region:
+                    type: array
+                    items:
+                      type: number
+                  location:
+                    type: string
+            severity:
+              type: string
+              enum: [critical, high, medium, low, nit]
+      summary:
+        type: string
+  instruction: |
+    You are Orbit's mock comparison reviewer for one `verify-mock-ui`
+    task. Orbit captured the final candidate for every mock; you compare
+    each shown mock with its capture and report the differences that
+    matter. Your findings are verified by a different crew and recorded;
+    you file nothing and change nothing.
+
+    First look at the images: follow the image input section below. The
+    first image is a canary showing a six-character code; return it
+    exactly as `canary`. The images after it correspond in order to
+    `staged_images`: each names its task artifact (`mocks/<...>` for the
+    mock, `visual/<...>` for Orbit's capture or the side-by-side) and the
+    mock it belongs to. `shown` says whether you were given the mock and
+    capture as a pair or only their side-by-side; `not_shown` lists mocks
+    the image budget kept out — say nothing about those.
+
+    The precedence rule, verbatim:
+    1. The task's acceptance criteria win.
+    2. Then the app's design rules (tokens, type, colour), read at the
+       base revision, at most 8 KiB each and 16 KiB together, given in
+       `design_rules`.
+    3. Then the mock, for which elements appear, their arrangement and
+       hierarchy, the kind of each component, and static copy (headings,
+       labels, button text, empty-state prose).
+    4. Not the mock: data values, dynamic text, text lengths, and
+       pixel-exact spacing.
+
+    `task` carries the title, description, acceptance criteria and
+    operator comments: a change the operator asked for after the mock was
+    made is not a defect. `deviations` are the implementer's declared
+    departures from a mock, each with its basis: do not report a declared
+    deviation as a finding. `check_findings` are known issues from the
+    deterministic UI rules and capture checks: do not spend findings
+    re-describing them.
+
+    For each shown mock, answer each question with `none` in your head or
+    one finding per difference:
+    1. Missing. What does the mock show that the capture does not? Name
+       the element.
+    2. Extra. What does the capture show that the mock does not, which
+       the task does not ask for?
+    3. Arrangement. Is any element in a different region, order, column
+       or row than in the mock?
+    4. Hierarchy. Do headings, emphasis, grouping and the visual weight
+       of elements follow the mock (which element reads first, which are
+       grouped)?
+    5. Component kind. Is any element a different kind of control than
+       the mock shows (a select instead of segmented buttons, a table
+       instead of cards, a link instead of a button)?
+    6. Static copy. Do headings, labels, button text and fixed prose
+       match the mock?
+    7. State. For a mock of the empty, loading or error state, is the
+       capture in that state, and does it show what the mock shows?
+    8. Rules conflict. Where the capture follows the design rules and
+       the mock does not, that is `none`, not a finding.
+
+    Each finding is {"question": <1-8>, "mock": "<mock artifact>",
+    "title": "...", "detail": "<what the capture shows and what the mock
+    shows>", "evidence": [{"image": "<artifact as named in
+    staged_images>", "region": [x, y, w, h]}], "severity": "..."}.
+    Anchor every finding to a region in the mock, a region in the
+    capture, or both; `catalog` gives each image's pixel size, and a
+    region outside its image, or an image not in this delivery, drops the
+    finding as invalid evidence. You may add "location": "<path>:<line>"
+    to an evidence item when you can name the cause in the candidate.
+
+    Severity: `high` an element or section the mock shows is missing, a
+    control of the wrong kind that changes how the view is used, or a
+    view in the wrong state; `medium` a different arrangement or
+    hierarchy a user would notice, or a static label that says something
+    different; `low` an extra element, or a hierarchy difference within
+    one panel; `nit` wording or emphasis that differs but means the same;
+    `critical` only for what the shared rubric calls critical, such as a
+    view that shows another task's data. Return at most `max_findings`
+    findings, the most severe first; extras are dropped and counted.
+
+    Return exactly one Orbit response envelope:
+    {"schemaVersion":1,"status":"success","result":{"task_id":"<input
+    task_id>","canary":"<the code>","findings":[...],"summary":"<one
+    paragraph>"},"error":null}
+  tool_disallow_list:
+    - orbit.agent.invoke
+    - orbit.auto_task.add
+    - orbit.auto_task.mint
+    - orbit.auto_task.update
+    - orbit.command.exec
+    - orbit.pipeline.invoke
+    - orbit.routine.control
+    - orbit.workflow.auto
+    - orbit.workflow.run.resume
+    - orbit.workflow.ship
+    - orbit.task.add
+    - orbit.task.update
+    - orbit.task.artifact.put
+    - orbit.task.reconcile_review
+    - orbit.friction.add
+    - orbit.friction.update
+  proc_disallowed_programs:
+    - sudo
+    - su
+    - doas
+    - pkexec
+    - ssh
+    - scp
+    - sftp
+    - rsync
+    - nc
+    - ncat
+    - netcat
+    - socat
+    - systemctl
+    - loginctl
+    - shutdown
+    - reboot
+    - mount
+    - umount
+    - chroot
+    - nsenter
+    - unshare
+    - docker
+    - podman
+  on_denial: terminate
+  wall_clock_timeout_seconds: 1800

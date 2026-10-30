@@ -414,6 +414,12 @@ macro_rules! with_tail_keys {
         section: ConfigSection::Delivery, order: 106,
         resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
     },
+    workflow_purpose_crews_visual_review: Vec<String> => Vec<String> {
+        key: "workflow.purpose_crews.visual_review", value_type: "array<string>",
+        description: "Weighted crew pool for the mock comparison reviewer and its verifier; only crews whose executor declares image_input are drawn.",
+        section: ConfigSection::Delivery, order: 106,
+        resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
+    },
     workflow_required_validation_commands: Vec<String> => Vec<String> {
         key: "workflow.required_validation_commands", value_type: "array<string>",
         description: "Commands every delivered candidate must pass before it is accepted.",

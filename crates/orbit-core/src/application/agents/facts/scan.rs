@@ -90,6 +90,15 @@ pub(in crate::application::agents) fn scan(
             computed_at,
         );
         judge_rejects(&mut task_facts.reviews, &candidates);
+        // The comparison review of record, scored under purpose
+        // `visual_review` (§11.4). Read only for `verify-mock-ui` tasks.
+        if orbit_types::task::has_verify_mock_ui_tag(&task.tags)
+            && let Ok(Some(artifact)) =
+                runtime.get_task_artifact(&id, orbit_types::task::VISUAL_REVIEW_ARTIFACT)
+        {
+            task_facts.visual_review =
+                super::review::visual_review_facts(&artifact.content, task.updated_at);
+        }
         facts.push(task_facts);
     }
 

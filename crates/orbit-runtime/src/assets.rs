@@ -245,6 +245,22 @@ pub const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../orbit-core/assets/activities/visual_checks.yaml"),
     ),
     (
+        "visual_review_prepare",
+        include_str!("../../orbit-core/assets/activities/visual_review_prepare.yaml"),
+    ),
+    (
+        "visual_review",
+        include_str!("../../orbit-core/assets/activities/visual_review.yaml"),
+    ),
+    (
+        "visual_verify_prepare",
+        include_str!("../../orbit-core/assets/activities/visual_verify_prepare.yaml"),
+    ),
+    (
+        "visual_verify",
+        include_str!("../../orbit-core/assets/activities/visual_verify.yaml"),
+    ),
+    (
         "visual_settle",
         include_str!("../../orbit-core/assets/activities/visual_settle.yaml"),
     ),

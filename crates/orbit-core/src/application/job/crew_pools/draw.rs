@@ -156,6 +156,30 @@ impl crate::OrbitRuntime {
         )
     }
 
+    /// Whether `crew` can be given images at launch, as a visual
+    /// reviewer or verifier is (visual-review §9.4): its provider has a
+    /// CLI runtime, its executor declares `image_input` in either
+    /// mode, and the crew does not set `vision = false`. Unlike
+    /// [`Self::can_read_images`], an `attach_args` lane qualifies: the
+    /// images are attached when the invocation starts.
+    pub(crate) fn can_take_images(
+        &self,
+        crew: &Crew,
+    ) -> Result<Option<orbit_types::workflow::ExecutorImageInput>, OrbitError> {
+        if !crew.vision {
+            return Ok(None);
+        }
+        let provider = crew.assignment.provider.as_str();
+        if !Provider::parse(provider).is_ok_and(Provider::has_cli_runtime) {
+            return Ok(None);
+        }
+        let installed = self.get_executor_def(provider)?;
+        Ok(crate::application::executor::declared_image_input(
+            installed.as_ref(),
+            provider,
+        ))
+    }
+
     /// `candidates` split into the crews that can read images and the rest.
     pub(super) fn partition_image_reading(
         &self,

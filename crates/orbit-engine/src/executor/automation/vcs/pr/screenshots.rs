@@ -19,8 +19,9 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use orbit_types::task::{
     MAX_TASK_ARTIFACT_CONTENT_BYTES, Task, TaskArtifact, VISUAL_CAPTURE_ARTIFACT,
-    VISUAL_CHECKS_ARTIFACT, VISUAL_SETTLE_ARTIFACT, VisualCaptureRecord, VisualChecksRecord,
-    VisualSettleRecord, has_verify_mock_ui_tag, visual_review_summary,
+    VISUAL_CHECKS_ARTIFACT, VISUAL_REVIEW_ARTIFACT, VISUAL_SETTLE_ARTIFACT, VisualCaptureRecord,
+    VisualChecksRecord, VisualReviewRecord, VisualSettleRecord, has_verify_mock_ui_tag,
+    visual_review_summary_with_review,
 };
 use orbit_types::workflow::{EVIDENCE_REF_PREFIX, SCREENSHOT_ARTIFACT_PREFIX};
 use serde_json::{Value, json};
@@ -252,8 +253,16 @@ fn visual_evidence(task_id: &str, artifacts: &[TaskArtifact]) -> Option<VisualEv
             content: artifact.content.clone(),
         });
     }
+    let review = find(VISUAL_REVIEW_ARTIFACT)
+        .and_then(|artifact| VisualReviewRecord::parse(&artifact.content).ok())
+        .filter(|review| review.candidate_sha == record.candidate_sha);
     Some(VisualEvidence {
-        summary: visual_review_summary(&record, checks.as_ref(), settle.as_ref()),
+        summary: visual_review_summary_with_review(
+            &record,
+            checks.as_ref(),
+            settle.as_ref(),
+            review.as_ref(),
+        ),
         images,
     })
 }

@@ -49,7 +49,7 @@ const TERMS: &[Term] = &[
         key: "findings_held",
         label: "Findings that held",
         weight: 1.0,
-        definition: "Findings repaired by the reviewer whose fixes passed owner revalidation, open findings on a reject whose next implementation run changed a path the finding cites, and findings a review job filed that finding verification CONFIRMED or, with no verification verdict, whose task landed; each weighted by severity: critical 8, high 4, medium 2, low 1, nit 0.25. A CONFIRMED finding scores at the severity verification rated; an unverified landed finding at the highest severity rated on its own regression_from links, else low; a review gate finding at the reviewer's own. A filed finding whose task is still open is not judged yet.",
+        definition: "Findings repaired by the reviewer whose fixes passed owner revalidation, open findings on a reject whose next implementation run changed a path the finding cites, findings a review job filed that finding verification CONFIRMED or, with no verification verdict, whose task landed, and mock comparison findings (purpose visual_review) their in-line verifier CONFIRMED; each weighted by severity: critical 8, high 4, medium 2, low 1, nit 0.25. A CONFIRMED finding scores at the severity verification rated; an unverified landed finding at the highest severity rated on its own regression_from links, else low; a review gate finding at the reviewer's own. A filed finding whose task is still open is not judged yet.",
         group: "credit",
     },
     Term {
@@ -63,7 +63,7 @@ const TERMS: &[Term] = &[
         key: "rejected_findings",
         label: "Rejected findings",
         weight: -1.0,
-        definition: "Findings closed by an authorized decision (Disposed), and findings a review job filed as tasks that finding verification REJECTED. A filed finding whose task was rejected or archived without landing and without a verification verdict costs nothing: task records carry no typed reason that tells a wrong finding from a duplicate, won't-fix or superseded one, so every such drop is neutral.",
+        definition: "Findings closed by an authorized decision (Disposed), findings a review job filed as tasks that finding verification REJECTED, and mock comparison findings (purpose visual_review) their in-line verifier REJECTED. A filed finding whose task was rejected or archived without landing and without a verification verdict costs nothing: task records carry no typed reason that tells a wrong finding from a duplicate, won't-fix or superseded one, so every such drop is neutral.",
         group: "problem",
     },
     Term {
@@ -318,6 +318,51 @@ fn rows(facts: &AgentFacts, since: DateTime<Utc>, _min_support: usize) -> Vec<Ro
                     run_id: runner.run_id.clone(),
                 },
             );
+        }
+        row.outcome(match (held, rejected) {
+            (1.., _) => Outcome::Caught,
+            (0, 1..) => Outcome::FalseAlarm,
+            _ => Outcome::Unresolved,
+        });
+    }
+
+    // Mock comparison reviews count under purpose `visual_review`
+    // (§11.4): one unit per recorded review, judged by its in-line
+    // verification verdicts.
+    for task in &facts.tasks {
+        let Some(visual) = &task.visual_review else {
+            continue;
+        };
+        if visual.at < since {
+            continue;
+        }
+        let row = rows
+            .entry(row_key(visual.reviewer_crew.as_deref(), None))
+            .or_default();
+        row.unit(visual.at, None, lookback);
+        let (mut held, mut rejected) = (0, 0);
+        for (verdict, severity, title) in &visual.findings {
+            row.judged = true;
+            let occurrence = Occurrence {
+                at: visual.at,
+                detail: format!("visual review (purpose visual_review): {title}"),
+                run_id: None,
+            };
+            match verdict {
+                FindingVerdict::Confirmed => {
+                    held += 1;
+                    row.add("findings_held", task, severity_weight(severity), occurrence);
+                }
+                FindingVerdict::Rejected => {
+                    rejected += 1;
+                    row.add(
+                        "rejected_findings",
+                        task,
+                        severity_weight(severity),
+                        occurrence,
+                    );
+                }
+            }
         }
         row.outcome(match (held, rejected) {
             (1.., _) => Outcome::Caught,

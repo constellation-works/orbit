@@ -219,7 +219,12 @@ settings and the UI rules this design reuses.
    claimed-leaf capture, and the PR body section.
 5. **Comparison review and in-line verification in shadow.** Review, verification and
    `visual/review.json`. Findings are recorded and scored but not filed and not given to the
-   code reviewer.
+   code reviewer. Delivered ([ORB-19981]): `visual_review_prepare` assembles the prompt
+   from `capture.json` under the §10 budgets and draws the crews, `visual_review` answers
+   the §8 questions, `visual_verify_prepare` drops `invalid_evidence` and partitions
+   batches of five, `visual_verify` judges them with the region-extended verdict schema
+   (one escalation on low confidence, else `unverified`), and `visual_settle` writes
+   `visual/review.json`, which the reviewer scorecard reads under purpose `visual_review`.
 6. **Live and experiment.** `block_at` and `file_at` take effect in the treatment arm; the
    code reviewer receives must-address findings; `visual_recapture` after the review commit;
    the post-landing measurement comparison; the experiment (§12). If the ship gate passes,

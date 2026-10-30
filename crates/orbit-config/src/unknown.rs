@@ -56,6 +56,10 @@ pub fn unknown_config_keys_present(document: &toml::Value) -> Vec<UnknownConfigK
             "visual_review.default_width",
             "visual_review.mode",
             "visual_review.max_mocks",
+            "visual_review.reviewer",
+            "visual_review.max_images",
+            "visual_review.max_image_tokens",
+            "visual_review.max_findings",
             "visual_review.require_established",
             // Read by the operation layer; the settings registry has no row for it.
             REVIEW_HOST_EVIDENCE_KEY,

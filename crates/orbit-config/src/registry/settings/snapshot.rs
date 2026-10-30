@@ -170,6 +170,10 @@ impl ConfigSnapshot {
                 &mut self.workflow_purpose_crews_task_pilot,
                 "workflow.purpose_crews.task_pilot",
             ),
+            (
+                &mut self.workflow_purpose_crews_visual_review,
+                "workflow.purpose_crews.visual_review",
+            ),
         ] {
             admit_crew_pool(pool, crews, setting)?;
         }
@@ -292,6 +296,10 @@ impl ConfigSnapshot {
             (
                 CrewPurpose::Explorer,
                 self.workflow_purpose_crews_explorer.clone(),
+            ),
+            (
+                CrewPurpose::VisualReview,
+                self.workflow_purpose_crews_visual_review.clone(),
             ),
         ])
     }
