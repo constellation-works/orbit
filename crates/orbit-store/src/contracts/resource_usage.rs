@@ -263,6 +263,14 @@ pub trait ResourceUsageStoreBackend: Send + Sync {
     /// The finished sampled runs on the host, as a cache freshness probe.
     fn delivery_runs_freshness(&self) -> Result<DeliveryRunsFreshness, OrbitError>;
 
+    /// A counter that moves whenever [`Self::delivery_runs_freshness`] may
+    /// have changed, read without scanning: while it holds, the probe's
+    /// answer holds too. `None` when the store keeps no such counter, so a
+    /// caller always probes.
+    fn delivery_runs_stamp(&self) -> Result<Option<i64>, OrbitError> {
+        Ok(None)
+    }
+
     /// Host minutes at or after `since`, oldest first.
     fn host_resource_minutes(
         &self,
