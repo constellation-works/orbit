@@ -239,7 +239,7 @@ def schema_facts(schema, path, facts):
     properties = schema.get("properties")
     facts.setdefault("properties", {})[path] = set(properties) if isinstance(properties, dict) else set()
     if isinstance(properties, dict):
-        facts.setdefault("properties_keywords", set()).add(path)
+        facts.setdefault("properties_keywords", {})[path] = properties
         for name, child in properties.items():
             schema_facts(child, f"{path}.{name}", facts)
     for key in ("items", "additionalProperties"):
@@ -610,6 +610,28 @@ def detect_mcp_changes(git, parent, commit, changed):
     def inside_oneof(path):
         return re.search(r"\{oneOf\d+\}", path) is not None
 
+    def constrains_instances(schema):
+        if isinstance(schema, bool):
+            return not schema
+        if not isinstance(schema, dict):
+            return True
+        annotations = {"title", "description", "default", "examples", "deprecated",
+                       "readOnly", "writeOnly", "$comment", "$schema", "$id"}
+        for key, value in schema.items():
+            if key in annotations:
+                continue
+            if key == "properties" and isinstance(value, dict):
+                if any(constrains_instances(child) for child in value.values()):
+                    return True
+            elif key == "required" and value == []:
+                continue
+            elif key in ("items", "additionalProperties") and not constrains_instances(value):
+                continue
+            else:
+                # Treat other validation and unknown keywords conservatively.
+                return True
+        return False
+
     for name in sorted(old):
         if name not in new:
             report(f"tool `{name}` removed")
@@ -653,7 +675,7 @@ def detect_mcp_changes(git, parent, commit, changed):
                     and path not in before.get("closed_objects", set())):
                 report(f"`{name}` `{path}` additionalProperties closed")
         after_properties_keywords = translated_facts(
-            {path: True for path in after.get("properties_keywords", set())}, path_map, unmatched)
+            after.get("properties_keywords", {}), path_map, unmatched)
         # New constraints at existing locations are tightenings too, even
         # when no old keyword existed to drive the old/new comparison loops.
         # Keep newly declared optional properties additive, as before: only
@@ -671,9 +693,10 @@ def detect_mcp_changes(git, parent, commit, changed):
                 report(f"`{name}` `{path}` const constraint removed inside oneOf alternative")
         for path in sorted(after_properties_keywords):
             if (path in before.get("schema_nodes", set())
-                    and path not in before.get("properties_keywords", set())):
-                # Conservatively report a new property map at an existing
-                # schema: its children can constrain formerly arbitrary keys.
+                    and path not in before.get("properties_keywords", {})
+                    and any(constrains_instances(child)
+                            for child in after_properties_keywords[path].values())):
+                # A child can constrain a formerly arbitrary key.
                 report(f"`{name}` `{path}` properties constraint added")
         for path in sorted(before.get("closed_objects", set())):
             if path not in after_closed and path in after_nodes and inside_oneof(path):
