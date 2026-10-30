@@ -1168,6 +1168,19 @@ fn commit_verifier_refusal_names_already_landed_field_contract() {
             && message.contains("required, expected_failure, excluded, superseded"),
         "unknown validation role must be refused with the accepted roles, got: {message}"
     );
+
+    // A role name used as the outcome repeats F2026-10-709: the entry must be
+    // refused with the outcome vocabulary and the expected_failure/failed
+    // pairing, not just serde's unknown-variant diagnostic.
+    let message = already_landed_refusal(&host, temp.path(), &head, |report| {
+        report["validation"][0]["outcome"] = json!("expected_failure");
+    });
+    assert!(
+        message.contains("invalid already-landed.json")
+            && message.contains("passed, failed, denied, not_run")
+            && message.contains("with role expected_failure"),
+        "a role name used as the outcome must be refused with the accepted outcomes and the expected_failure/failed pairing, got: {message}"
+    );
 }
 
 fn commit_verifier_keeps_refusing_unaccepted_already_landed_evidence() {

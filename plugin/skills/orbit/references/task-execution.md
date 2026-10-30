@@ -131,7 +131,9 @@ flattens `command`, `outcome`, `role` and `log_artifact` as siblings; every
 required command's entry carries `outcome: "passed"` and `role: "required"`.
 The role vocabulary is `required`, `expected_failure`, `excluded`,
 `superseded` and `diagnostic`; other values such as `acceptance` or `gate` are
-refused.
+refused. The outcome vocabulary is `passed`, `failed`, `denied` and `not_run`;
+an `expected_failure` entry carries `outcome: "failed"`, never the role name as
+the outcome.
 The already-landed verifier requires exactly one passed `required` entry per
 `required_commands` command and refuses extra required commands. It also accepts
 additional `expected_failure` and `diagnostic` entries, without counting them
