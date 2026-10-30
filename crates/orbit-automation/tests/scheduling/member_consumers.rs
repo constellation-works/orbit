@@ -16,21 +16,24 @@ use orbit_types::workflow::automation::{
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
-const CONSUMER: &str = "host/ws/routine/pilot";
+pub(super) const CONSUMER: &str = "host/ws/routine/pilot";
 
-struct Host {
-    actions: RefCell<BTreeMap<String, String>>,
+pub(super) struct Host {
+    pub(super) actions: RefCell<BTreeMap<String, String>>,
     failed: RefCell<bool>,
     /// Counts branch probes and refuses each one, when set.
     head_probes: RefCell<Option<usize>>,
+    /// Why due members are withheld, such as a closed `when:` guard.
+    pub(super) withhold: RefCell<Option<String>>,
 }
 
 impl Host {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             actions: RefCell::new(BTreeMap::new()),
             failed: RefCell::new(false),
             head_probes: RefCell::new(None),
+            withhold: RefCell::new(None),
         }
     }
 }
@@ -70,7 +73,10 @@ impl MemberHost for Host {
     }
 
     fn admission(&self, _: &StateMember) -> Result<MemberAdmission, AutomationError> {
-        Ok(MemberAdmission::Admit)
+        Ok(match self.withhold.borrow().clone() {
+            Some(reason) => MemberAdmission::Withhold(reason),
+            None => MemberAdmission::Admit,
+        })
     }
 
     fn observable(&self, keys: &BTreeSet<String>) -> Result<BTreeSet<String>, AutomationError> {
@@ -136,7 +142,11 @@ fn evaluate_at(
     )
 }
 
-fn tick(store: &dyn AutomationStoreBackend, host: &Host, minute: i64) -> AutomationDiagnostic {
+pub(super) fn tick(
+    store: &dyn AutomationStoreBackend,
+    host: &Host,
+    minute: i64,
+) -> AutomationDiagnostic {
     evaluate_at(store, host, true, false, minute).unwrap()
 }
 

@@ -1,5 +1,7 @@
-//! `when:` guards on cron and interval triggers: a closed guard holds a due
-//! slot under `guard_miss: wait` and consumes it under `skip`.
+//! `when:` guards on every carrier: on cron and interval triggers a closed
+//! guard holds a due slot under `guard_miss: wait` and consumes it under
+//! `skip`; on `deliveries_landed` and `state` triggers it dispatches nothing
+//! and keeps the owed deliveries and due members until it opens.
 
 use super::{at, isolated};
 use chrono::{DateTime, Utc};
@@ -217,4 +219,81 @@ fn a_closed_routine_guard_holds_the_slot_under_wait_and_consumes_it_under_skip()
             "{miss}: the next slot fires while the guard is open"
         );
     }
+}
+
+/// The reason a closed guard gives the engines, as the runtime hosts pass it.
+fn closed_guard() -> String {
+    verdict(false)
+        .describe()
+        .expect("a closed guard describes why it holds")
+}
+
+#[test]
+fn a_closed_deliveries_landed_guard_keeps_the_owed_deliveries_until_it_opens() {
+    let (store, host, trigger) = super::delivery::setup();
+    host.page(0, 2);
+    *host.deferral.lock().unwrap() = Some(closed_guard());
+
+    // Due by count, then past max_wait: the guard still dispatches nothing.
+    for minutes in [0, 61] {
+        let held =
+            super::delivery::evaluate_at(store.as_ref(), &host, &trigger, true, minutes).unwrap();
+        assert!(held.reason.starts_with(GUARD_FALSE), "{held:?}");
+        assert!(host.actions.lock().unwrap().is_empty(), "{held:?}");
+        let state = store
+            .automation_state(super::delivery::CONSUMER)
+            .unwrap()
+            .unwrap();
+        assert_eq!(state.pending.len(), 2, "the deliveries stay owed");
+        assert_eq!(
+            state.covered,
+            super::delivery::revision(0),
+            "no coverage is spent"
+        );
+        // Later passes observe from the recorded head: nothing new has landed.
+        host.page(2, 2);
+    }
+
+    *host.deferral.lock().unwrap() = None;
+    super::delivery::evaluate_at(store.as_ref(), &host, &trigger, true, 62).unwrap();
+    assert_eq!(
+        host.actions.lock().unwrap().len(),
+        1,
+        "the owed batch is admitted"
+    );
+}
+
+#[test]
+fn a_closed_state_guard_withholds_due_members_until_it_opens() {
+    let store = orbit_store::compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
+    let host = super::member_consumers::Host::new();
+    *host.withhold.borrow_mut() = Some(closed_guard());
+    let tick = |minute| super::member_consumers::tick(store.as_ref(), &host, minute);
+
+    for minute in [0, 2, 11] {
+        tick(minute);
+        assert!(host.actions.borrow().is_empty(), "minute {minute}");
+    }
+    let state = store
+        .automation_state(super::member_consumers::CONSUMER)
+        .unwrap()
+        .unwrap();
+    let members = state.members.unwrap();
+    assert!(
+        members.pending.contains_key("task"),
+        "the member stays pending"
+    );
+    assert!(
+        members.withheld["task"].starts_with(GUARD_FALSE),
+        "{:?}",
+        members.withheld
+    );
+
+    *host.withhold.borrow_mut() = None;
+    tick(12);
+    assert_eq!(
+        host.actions.borrow().len(),
+        1,
+        "the held member is admitted"
+    );
 }
