@@ -22,6 +22,7 @@ import { pathToFileURL } from "node:url";
 
 const ANIMATION_OFF =
   "*,*::before,*::after{animation:none !important;transition:none !important;caret-color:transparent !important}";
+const activeFixtureStops = new Set();
 
 function fail(message) {
   throw new Error(message);
@@ -134,63 +135,86 @@ export async function startFixtureServer(app, fixture, repoRoot) {
     detached: true,
   });
   const timeoutMs = (app.setup_timeout_s ?? 120) * 1000;
-  const found = await new Promise((resolve, reject) => {
-    let buffer = "";
-    let stderr = "";
-    const timer = setTimeout(
-      () => reject(new Error(`setup for app ${app.name} timed out: ${stderr.slice(-800)}`)),
-      timeoutMs,
-    );
-    const scan = () => {
-      const placeholders = {};
-      for (const match of buffer.matchAll(/^ORBIT_VISUAL_([A-Z0-9_]+)=(.+)$/gm)) {
-        placeholders[match[1].toLowerCase()] = match[2].trim();
-      }
-      if (placeholders.url) {
-        clearTimeout(timer);
-        resolve({ baseUrl: placeholders.url, placeholders });
-        return true;
-      }
-      const plain = buffer.match(/https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\]):\d+/);
-      if (plain) {
-        clearTimeout(timer);
-        resolve({ baseUrl: plain[0], placeholders });
-        return true;
-      }
-      return false;
-    };
-    child.stdout.on("data", (chunk) => {
-      buffer += chunk.toString();
-      scan();
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString();
-    });
-    child.on("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-    child.on("exit", (code) => {
-      if (!scan()) {
-        clearTimeout(timer);
-        reject(new Error(`setup for app ${app.name} exited ${code}: ${stderr.slice(-800)}`));
-      }
-    });
-  });
-  return {
-    ...found,
-    stop() {
+  const closed = new Promise((resolve) => child.once("close", resolve));
+  let stopPromise;
+  const signalGroup = (signal) => {
+    if (!child.pid) return;
+    try {
+      process.kill(-child.pid, signal);
+    } catch {
       try {
-        process.kill(-child.pid, "SIGTERM");
+        child.kill(signal);
       } catch {
-        try {
-          child.kill("SIGTERM");
-        } catch {
-          // Already gone.
-        }
+        // Already gone.
       }
-    },
+    }
   };
+  const stop = () => {
+    if (!stopPromise) {
+      signalGroup("SIGTERM");
+      stopPromise = (async () => {
+        try {
+          await Promise.race([closed, new Promise((resolve) => setTimeout(resolve, 100))]);
+          signalGroup("SIGKILL");
+          await closed;
+        } finally {
+          activeFixtureStops.delete(stop);
+        }
+      })();
+    }
+    return stopPromise;
+  };
+  activeFixtureStops.add(stop);
+
+  try {
+    const found = await new Promise((resolve, reject) => {
+      let buffer = "";
+      let stderr = "";
+      const timer = setTimeout(
+        () => reject(new Error(`setup for app ${app.name} timed out: ${stderr.slice(-800)}`)),
+        timeoutMs,
+      );
+      const scan = () => {
+        const placeholders = {};
+        for (const match of buffer.matchAll(/^ORBIT_VISUAL_([A-Z0-9_]+)=(.+)$/gm)) {
+          placeholders[match[1].toLowerCase()] = match[2].trim();
+        }
+        if (placeholders.url) {
+          clearTimeout(timer);
+          resolve({ baseUrl: placeholders.url, placeholders });
+          return true;
+        }
+        const plain = buffer.match(/https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\]):\d+/);
+        if (plain) {
+          clearTimeout(timer);
+          resolve({ baseUrl: plain[0], placeholders });
+          return true;
+        }
+        return false;
+      };
+      child.stdout.on("data", (chunk) => {
+        buffer += chunk.toString();
+        scan();
+      });
+      child.stderr.on("data", (chunk) => {
+        stderr += chunk.toString();
+      });
+      child.on("error", (error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+      child.on("exit", (code) => {
+        if (!scan()) {
+          clearTimeout(timer);
+          reject(new Error(`setup for app ${app.name} exited ${code}: ${stderr.slice(-800)}`));
+        }
+      });
+    });
+    return { ...found, stop };
+  } catch (error) {
+    await stop();
+    throw error;
+  }
 }
 
 export function resolveRoute(route, placeholders) {
@@ -593,9 +617,17 @@ async function main() {
   const browser = await chromium.launch();
   const browserVersion = browser.version();
   const servers = new Map();
+  let shuttingDown = false;
+  const stopFixtureServers = () => {
+    shuttingDown = true;
+    for (const stop of activeFixtureStops) void stop();
+  };
+  process.on("SIGTERM", stopFixtureServers);
+  process.on("SIGINT", stopFixtureServers);
   const ruleResults = [];
   const entries = [];
   const serverFor = async (mock) => {
+    if (shuttingDown) throw new Error("capture driver is shutting down");
     const fixture =
       mock.state === "empty" ? `${mock.view_def.fixture}:empty` : mock.view_def.fixture;
     const key = `${mock.app_def.name}:${fixture}`;
@@ -655,7 +687,9 @@ async function main() {
       }
     }
   } finally {
-    for (const server of servers.values()) server.stop();
+    await Promise.all([...activeFixtureStops].map((stop) => stop()));
+    process.off("SIGTERM", stopFixtureServers);
+    process.off("SIGINT", stopFixtureServers);
     await browser.close().catch(() => {});
   }
   ruleResults.sort((a, b) => String(a.fingerprint).localeCompare(String(b.fingerprint)));
