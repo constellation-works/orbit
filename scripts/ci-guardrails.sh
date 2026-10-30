@@ -167,7 +167,9 @@ fi
 # build's lint environment, so it does not recompile. After the job uploads
 # the archive, --test-partitions runs the partition guard over the archive
 # itself, so the guard proves what the shards receive while they already run.
-# NEXTEST_SHARDS (ci.yml) is the shard count.
+# NEXTEST_PARTITIONS (ci.yml) is the count-partition count: the shard jobs
+# run all but one partition and the test-build job runs the remaining one.
+# A caller that sets only the older NEXTEST_SHARDS gets that many partitions.
 #
 # CI_TEST_SCOPE is the Change scope job's mode. For `affected:<crate>,...` (a
 # pull request; scripts/ci-change-scope.sh) both builds take only those crates
@@ -182,7 +184,7 @@ if [[ "$partitions" == true ]]; then
   fi
   # nextest extracts the archive for each listing; keep it in the checkout.
   TMPDIR="$guard_logs" run_phase workspace-test-partitions \
-    "$repo_root/scripts/check-nextest-partitions.py" --shards "${NEXTEST_SHARDS:?set NEXTEST_SHARDS}" \
+    "$repo_root/scripts/check-nextest-partitions.py" --shards "${NEXTEST_PARTITIONS:-${NEXTEST_SHARDS:?set NEXTEST_PARTITIONS or NEXTEST_SHARDS}}" \
     ${allow_empty[@]+"${allow_empty[@]}"} -- cargo nextest list --archive-file "$archive" --workspace-remap "$repo_root"
   exit 0
 fi

@@ -62,18 +62,34 @@ test-threads = 6
 retries = 0
 
 # Start measured long carriers before the ordinary queue so their final rows
-# do not leave the other slots idle at the end of a shard. Priority changes
-# scheduling only: count partitions, ignored applicability, isolation and the
-# inherited group caps are unchanged. Keep this CI-only; local default runs
-# retain their ordinary order. See the CI timing notes in test_strategy.md.
+# do not leave the other slots idle at the end of a shard. The list names
+# every test measured at 12 s or longer in the 2026-10-30 local profile
+# (docs/design-patterns/test_strategy.md, seventh CI pass); refresh it from
+# the shards' nextest-junit reports when a new long carrier appears.
+# Priority changes scheduling only: count partitions, ignored applicability,
+# isolation and the inherited group caps are unchanged. Keep this CI-only;
+# local default runs retain their ordinary order. See the CI timing notes
+# in test_strategy.md.
 [[profile.ci.overrides]]
 filter = '''
   (package(orbit-core) & binary(runtime) & (
     test(=task_delivery::source_repair::published_completion_scenarios) |
+    test(=task_delivery::source_repair::publication::same_pr_publication_scenarios) |
+    test(=task_delivery::source_repair::cancelled_source_repair_scenarios) |
+    test(=task_delivery::source_repair::handoff_requeue::handoff_requeue_scenarios) |
     test(=origin_fetch_hold::worktree_setup_origin_outage_holds_backlog_and_fails_in_progress))) |
   (package(orbit-engine) & binary(engine) & (
     test(=pr_landing::validation_repairs_and_logs) |
-    test(=pr_landing::ci_rerun::owner_retry_preserves_read_only_and_independent_candidate_routes))) |
+    test(=pr_landing::ci_rerun::owner_retry_preserves_read_only_and_independent_candidate_routes) |
+    test(=pr_landing::ci_rerun::bounded::bounded_nextest_retry_observes_results_and_never_resends_unknown_replies) |
+    test(=pr_landing::ci_rerun::bounded::bounded_retry_keeps_refusal_boundaries) |
+    test(=pr_landing::ci_rerun::dependency_adapter_refuses_incomplete_or_forged_evidence) |
+    test(=pr_landing::ci_rerun::diagnostic::planner_refusal_journal_deduplicates_bounds_transitions_and_clears_on_recovery) |
+    test(=pr_landing::absent_context::reserved_refresh_observes_lost_unapplied_and_pending_outcomes_without_another_write) |
+    test(=pr_landing::absent_context::unsupported_or_unproven_emission_never_updates_or_repairs) |
+    test(=pr_landing::auto_fix::auto_fix_checks_current_base_before_spending_a_repair) |
+    test(=pr_landing::auto_fix::base_check_holds_never_dispatch_candidate_recovery))) |
+  (package(orbit-cli) & binary(process) & test(=job_resume_detached::lifecycle::resume_lifecycle_contracts_0)) |
   (package(orbit-tools) & binary(tools) & test(=public_tool_surface::github_log_goldens::every_selected_window_hides_credential_fragments)) |
   (package(orbit-web) & binary(http_api) & test(=events::change_stream_notices_other_process_writes_and_resumes_after_reconnect))
 '''

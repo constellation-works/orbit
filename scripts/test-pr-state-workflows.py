@@ -500,6 +500,7 @@ class NextestShardWorkflowTests(unittest.TestCase):
 
     def test_shard_jobs_partition_once_each_and_the_check_job_awaits_all_of_them(self):
         shards = int(self.document["env"]["NEXTEST_SHARDS"])
+        partition_count = int(self.document["env"]["NEXTEST_PARTITIONS"])
         jobs = self.document["jobs"]
         shard_jobs = {job_id: job for job_id, job in jobs.items() if job_id.startswith("test-")
                       and job_id != "test-build"}
@@ -549,18 +550,35 @@ class NextestShardWorkflowTests(unittest.TestCase):
                 partitions[partition] = job["name"]
                 [wait] = self.run_step(job, "Await the nextest archive")
                 self.assertEqual(wait[1:], ["--job", "Test build", "--step", upload])
-        self.assertEqual(sorted(partitions), sorted(f"count:{k}/{shards}" for k in range(1, shards + 1)),
-                         "the shard jobs must select every count partition of NEXTEST_SHARDS")
-        self.assertEqual(sorted(partitions.values()), sorted(f"Test shard {k}/{shards}" for k in range(1, shards + 1)))
+        # The test build runs the one partition no shard job runs, from the
+        # archive it built, after the last upload the shards wait for.
+        self.assertLess(build_steps.index(upload),
+                        build_steps.index("Run nextest partition on the test build"))
+        [build_nextest] = self.run_step(jobs["test-build"], "Run nextest partition on the test build")
+        self.assertEqual(build_nextest[:4], ["--label", "nextest", "--", "cargo"])
+        self.assertIn("--no-fail-fast", build_nextest)
+        self.assertNotIn("--run-ignored", build_nextest)
+        self.assertEqual(build_nextest[build_nextest.index("--archive-file") + 1], pack[2],
+                         "the test build runs its partition from the archive it built")
+        build_partition = build_nextest[build_nextest.index("--partition") + 1]
+        self.assertNotIn(build_partition, partitions, "the test build repeats a shard's partition")
+        partitions[build_partition] = jobs["test-build"]["name"]
+        self.assertEqual(sorted(partitions),
+                         sorted(f"count:{k}/{partition_count}" for k in range(1, partition_count + 1)),
+                         "the shard jobs and the test build must select every count partition "
+                         "of NEXTEST_PARTITIONS")
+        self.assertEqual(sorted(name for name in partitions.values() if name != jobs["test-build"]["name"]),
+                         sorted(f"Test shard {k}/{shards}" for k in range(1, shards + 1)))
         [wait] = self.run_step(jobs["ci"], "Await the test build and nextest shards")
         self.assertEqual(wait[0], "scripts/ci-await-jobs.py")
         awaited = wait[2::2]
         self.assertEqual(wait[1::2], ["--job"] * len(awaited))
-        self.assertEqual(sorted(awaited), sorted([jobs["test-build"]["name"], *partitions.values()]),
+        self.assertEqual(sorted(awaited), sorted(set(partitions.values())),
                          "the Check job's elapsed time must cover the test build and every shard")
 
     def test_repack_and_shard_failures_remain_failed_workflow_steps(self):
         for job, step in (("test-build", "Pack nextest archive for transfer"),
+                          ("test-build", "Run nextest partition on the test build"),
                           ("test-1", "Restore native nextest archive"),
                           ("test-1", "Run nextest shard")):
             with self.subTest(step=step):
@@ -568,9 +586,11 @@ class NextestShardWorkflowTests(unittest.TestCase):
 
     def test_an_affected_crates_archive_passes_empty_partitions_and_gates_only_orbit_exec(self):
         jobs = self.document["jobs"]
-        for job_id in ("test-1", "test-2", "test-3"):
+        for job_id, step in (("test-1", "Run nextest shard"), ("test-2", "Run nextest shard"),
+                             ("test-3", "Run nextest shard"),
+                             ("test-build", "Run nextest partition on the test build")):
             with self.subTest(job=job_id):
-                [nextest] = self.run_step(jobs[job_id], "Run nextest shard")
+                [nextest] = self.run_step(jobs[job_id], step)
                 # The full archive's partition guard fails the test build on an
                 # empty shard, so only an affected-crates archive relies on this.
                 self.assertEqual(nextest[nextest.index("--no-tests") + 1], "pass")
