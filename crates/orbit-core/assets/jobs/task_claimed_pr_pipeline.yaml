@@ -391,15 +391,17 @@ spec:
     # outcome in `visual/review.json` under purpose `visual_review`.
     # Shadow only: nothing here is filed, blocks, or reaches the code
     # reviewer below, whose inputs do not name any visual step.
+    # Preparers always run and return empty collections when capture does not
+    # apply. Conditions may only read outputs whose producer always runs;
+    # empty fan-outs establish the collected aliases without invoking agents.
     - id: visual_review_prepare
-      when: "{{ steps.visual_capture.output.applies }} == true"
       target: activity:visual_review_prepare
       default_input:
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         capture: "{{ steps.visual_capture.output }}"
 
     - id: visual_review_empty
-      when: "{{ steps.visual_capture.output.applies }} == true && {{ steps.visual_review_prepare.output.review_count }} == 0"
+      when: "{{ steps.visual_review_prepare.output.review_count }} == 0"
       fan_out:
         items: "[]"
         max_workers: 1
@@ -412,7 +414,7 @@ spec:
         errors: visual_review_errors
 
     - id: visual_reviewers
-      when: "{{ steps.visual_capture.output.applies }} == true && {{ steps.visual_review_prepare.output.review_count }} != 0"
+      when: "{{ steps.visual_review_prepare.output.review_count }} != 0"
       fan_out:
         items: "{{ steps.visual_review_prepare.output.reviews }}"
         max_workers: 3
@@ -440,7 +442,6 @@ spec:
         errors: visual_review_errors
 
     - id: visual_verify_prepare
-      when: "{{ steps.visual_capture.output.applies }} == true"
       target: activity:visual_verify_prepare
       default_input:
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
@@ -448,7 +449,7 @@ spec:
         review_results: "{{ steps.visual_review_results.output }}"
 
     - id: visual_verify_empty
-      when: "{{ steps.visual_capture.output.applies }} == true && {{ steps.visual_verify_prepare.output.partition_count }} == 0"
+      when: "{{ steps.visual_verify_prepare.output.partition_count }} == 0"
       fan_out:
         items: "[]"
         max_workers: 1
@@ -461,7 +462,7 @@ spec:
         errors: visual_verify_errors
 
     - id: visual_verifiers
-      when: "{{ steps.visual_capture.output.applies }} == true && {{ steps.visual_verify_prepare.output.partition_count }} != 0"
+      when: "{{ steps.visual_verify_prepare.output.partition_count }} != 0"
       fan_out:
         items: "{{ steps.visual_verify_prepare.output.partitions }}"
         max_workers: 5
@@ -484,7 +485,6 @@ spec:
         errors: visual_verify_errors
 
     - id: visual_verify_escalations
-      when: "{{ steps.visual_capture.output.applies }} == true"
       target: activity:visual_verify_prepare
       default_input:
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
@@ -493,7 +493,7 @@ spec:
         round: escalation
 
     - id: visual_verify_escalation_empty
-      when: "{{ steps.visual_capture.output.applies }} == true && {{ steps.visual_verify_escalations.output.partition_count }} == 0"
+      when: "{{ steps.visual_verify_escalations.output.partition_count }} == 0"
       fan_out:
         items: "[]"
         max_workers: 1
@@ -506,7 +506,7 @@ spec:
         errors: visual_escalation_errors
 
     - id: visual_escalation_verifiers
-      when: "{{ steps.visual_capture.output.applies }} == true && {{ steps.visual_verify_escalations.output.partition_count }} != 0"
+      when: "{{ steps.visual_verify_escalations.output.partition_count }} != 0"
       fan_out:
         items: "{{ steps.visual_verify_escalations.output.partitions }}"
         max_workers: 5
