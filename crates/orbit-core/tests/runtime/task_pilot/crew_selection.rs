@@ -386,3 +386,5 @@ crate::scenario_table!(
     pilot_redraws_automatic_assignments_and_preserves_add_and_update_pins,
     complexity_update_redraws_automatic_assignments_and_clear_draws_current_tier
 );
+
+mod admitted_scope;

@@ -1,5 +1,6 @@
 use orbit_common::OrbitError;
 use orbit_config::ComplexityCrewPools;
+use orbit_store::contracts::JobRunQuery;
 use orbit_types::task::{Task, TaskComment, TaskComplexity, TaskHistoryEntry, TaskStatus};
 use serde_json::{Value, json};
 
@@ -84,7 +85,60 @@ pub(crate) fn strip_auto_crew_admission(job_name: &str, input: &mut Value) {
     }
 }
 
+/// The local task whose crew selection and run insertion must be serialized
+/// against scope edits. Coordinator submissions with no single task take no lock.
+pub(crate) fn crew_admission_task_id<'a>(job_name: &str, input: &'a Value) -> Option<&'a str> {
+    POLICY_PIPELINES
+        .contains(&job_name)
+        .then(|| auto_task_id(input))
+        .flatten()
+}
+
 impl OrbitRuntime {
+    /// Whether an implicit edit must preserve this task's execution identity.
+    /// Call under the task write lock. A stopped attempt still owns historical
+    /// attribution and candidate-resume provenance; only a fresh admission or
+    /// an explicit audited correction may replace it. Preparation jobs do not
+    /// admit an implementation and must not suppress pre-admission rerating.
+    pub(super) fn task_crew_has_admitted_delivery(&self, task: &Task) -> Result<bool, OrbitError> {
+        if !matches!(
+            task.status,
+            TaskStatus::Proposed | TaskStatus::Backlog | TaskStatus::Someday
+        ) || task.job_run_id.is_some()
+            || self.inspect_execution_claims()?.iter().any(|inspection| {
+                inspection.claim.task_id == task.id && inspection.claim.phase.protects_footprint()
+            })
+        {
+            return Ok(true);
+        }
+        Ok(self
+            .stores()
+            .jobs()
+            .list_job_runs_filtered(&JobRunQuery {
+                task_id: Some(task.id.clone()),
+                include_steps: false,
+                ..Default::default()
+            })?
+            .iter()
+            .any(|run| {
+                POLICY_PIPELINES.contains(&run.job_id.as_str())
+                    && (!run.state.is_terminal()
+                        || run
+                            .input
+                            .as_ref()
+                            .and_then(|input| input.get(SELECTION_KEY))
+                            .is_some_and(|selection| {
+                                selection.get("task_id").and_then(Value::as_str)
+                                    == Some(task.id.as_str())
+                                    && selection
+                                        .get("crew")
+                                        .and_then(Value::as_str)
+                                        .and_then(non_empty)
+                                        .is_some()
+                            }))
+            }))
+    }
+
     /// Transport inputs only; validation and source capture happen at the
     /// common pipeline admission boundary, including generic job submissions.
     pub(crate) fn set_auto_crew_overrides(input: &mut Value, overrides: &ComplexityCrewPools) {
@@ -387,6 +441,8 @@ impl OrbitRuntime {
             }
         }
         input["crew"] = json!(selected.crew.name);
+        #[cfg(feature = "test-support")]
+        super::selection_checkpoint::notify_crew_selection_checkpoint();
         Ok(AdmissionTaskWrites {
             task_id: task.id.clone(),
             crew: Some(PendingCrewWriteBack {

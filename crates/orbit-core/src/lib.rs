@@ -76,7 +76,9 @@ pub mod test_support {
     pub use crate::application::distributed::admission_checkpoint::{
         with_claim_settle_checkpoint, with_pull_admission_checkpoint,
     };
-    pub use crate::application::job::crew_pools::with_crew_backfill_checkpoint;
+    pub use crate::application::job::crew_pools::{
+        with_crew_backfill_checkpoint, with_crew_selection_checkpoint,
+    };
     pub use crate::application::job::pipeline::pipeline_worker_observer_completed;
     #[cfg(unix)]
     pub use crate::application::job::pipeline::with_pipeline_worker_log_open_hook;
