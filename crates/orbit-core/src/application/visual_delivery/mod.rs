@@ -22,6 +22,8 @@ mod contract;
 mod handoff;
 mod review;
 mod settle;
+#[cfg(test)]
+mod tests;
 mod verify;
 
 pub(crate) use capture::visual_capture_step;
