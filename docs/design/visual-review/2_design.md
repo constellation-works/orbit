@@ -404,7 +404,9 @@ whose `sha256` differs from the digest read at admission is refused as `mock_cha
   ([task artifacts §5a](../task-artifacts/2_design.md#5a-image-artifacts-presentation-and-retrieval)).
   Viewport captures of the dashboard are well under it (the ORB-19304 shots were 57–192 KB as
   PNG). The driver encodes PNG first; over the limit, lossless WebP; still over, WebP at
-  quality 90 with `lossy: true`. Pixel comparison always runs on the decoded captures in
+  quality 90 with `lossy: true`. If quality 90 still exceeds the limit, the driver records an
+  `image_over_budget` error for that mock and names no capture images in `capture.json`, so no
+  over-limit bytes are attached. Pixel comparison always runs on the decoded captures in
   scratch before encoding.
 - **Count.** At most `max_mocks` mocks, each with one capture and one side-by-side.
 - **Retention.** Captures are task artifacts and live as long as the task. `pr_open` puts

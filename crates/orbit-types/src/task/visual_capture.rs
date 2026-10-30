@@ -236,7 +236,7 @@ pub struct VisualCaptureImage {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VisualCaptureError {
-    /// `setup_failed` or `render_timeout`.
+    /// `setup_failed`, `render_timeout` or `image_over_budget`.
     pub code: String,
     pub message: String,
 }
