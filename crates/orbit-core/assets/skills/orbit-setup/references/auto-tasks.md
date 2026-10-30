@@ -366,7 +366,9 @@ it. Tasks minted from one carry
 `plugin:<ns>` beside `auto-task:<name>`, so their provenance survives the
 plugin being removed.
 
-## The twenty-three seeded definitions
+<a id="the-twenty-three-seeded-definitions"></a>
+
+## The twenty-four seeded definitions
 
 `orbit workspace init` seeds the defaults selected by `seeding.auto_tasks`
 (`"all"` by default) from this twenty-three-definition catalog, disabled,
@@ -642,6 +644,14 @@ For ongoing selection and reconciliation, follow [Seeding policy](configuration.
   against the previous run and files at most 3 `proposed` retuning tasks
   (cadence, merge, template fix or disable), each naming its definition
   and numbers. It never edits, toggles or mints definitions.
+
+- **`workflow-health-audit`** (`medium`) — weekly. Owner-only validation of
+  every loaded job and routine, from trigger and admission through durable
+  effects, including successful sweeps that produced no work. It uses run
+  evidence and safe existing isolated fixtures without firing production
+  workflows. Missing evidence stays explicit. Concrete repairs become
+  deduplicated proposed tasks; other actionable gaps become frictions, capped
+  at five new records with overflow in `workflow-health-audit.json`.
 
 - **`suppression-ratchet`** (`hard`) — weekly. Counts lint suppressions,
   TODO/FIXME/HACK/XXX, ignored tests and language escape hatches per category

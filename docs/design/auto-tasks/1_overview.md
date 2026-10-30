@@ -476,6 +476,15 @@ definition of the same name.
   never edits, toggles or mints definitions; changing configuration is
   the operator's decision.
 
+- `workflow-health-audit` — disabled-by-default weekly (`medium`) owner-only
+  validation of every effective job and routine, including triggers, admission,
+  no-ops, failure/recovery and durable effects. Recent run evidence and safe
+  existing isolated fixtures establish per-definition results; missing proof
+  never counts as validation. Up to five deduplicated concrete repairs become
+  proposed tasks; other actionable obstacles become frictions. Complete
+  coverage and overflow remain in `workflow-health-audit.json`. It does not
+  fire production workflows, invoke providers or alter live run state.
+
 - `suppression-ratchet` — disabled-by-default weekly (`hard`) static count of
   lint suppressions, TODO/FIXME/HACK/XXX, ignored tests and language escape
   hatches at one integration-branch SHA. Patterns follow detected languages;
