@@ -440,8 +440,36 @@ pub(super) fn dispatch_prepared_provider(
     }
 
     let model_redacted = agent.model_name().map(|m| redaction.apply_str(m));
+    let task_scope_blob_ref = task_ctx.as_ref().and_then(|task| {
+        let scope: serde_json::Map<String, serde_json::Value> = [
+            "id",
+            "title",
+            "description",
+            "acceptance_criteria",
+            "context_files",
+            "admission_tier",
+            "admission_type",
+            "final_validation_commands",
+        ]
+        .into_iter()
+        .filter_map(|key| task.get(key).map(|value| (key.into(), value.clone())))
+        .collect();
+        serde_json::to_vec(&scope)
+            .ok()
+            .filter(|bytes| bytes.len() <= 65_536)
+            .and_then(|bytes| audit.write_blob(&bytes))
+    });
     audit.emit_lossy(V2AuditEventKind::CliInvocationStarted {
         provider: provider.clone(),
+        reasoning_effort: spec.reasoning_effort.map(|effort| effort.to_string()),
+        configuration_fingerprint: serde_json::to_vec(spec).ok().map(|bytes| {
+            use sha2::{Digest, Sha256};
+            format!(
+                "sha256:{}",
+                orbit_types::identity::lower_hex(Sha256::digest(bytes))
+            )
+        }),
+        task_scope_blob_ref,
         argv_redacted: argv_redacted.clone(),
         stdin_blob_ref: stdin_blob_ref.clone(),
         model: model_redacted,

@@ -18,7 +18,9 @@ The [scope](../1_scope.md) remains parked and every existing consumer remains
 off by default. This is a new evaluation candidate, distinct from the private
 task-authoring quality collector. Its versioned offline questions, contracts and scoring are implemented by the
 [evaluation protocol](../2_evaluation.md#delivery-quality-offline-contract-decision-assistance-eval3).
-The runtime consumer and evidence builder remain unimplemented.
+A private runtime consumer and bounded owner evidence builder are implemented.
+They remain off without an explicit host assistance policy; no live grant,
+paid run, backfill, public display or crew-ladder adoption is authorized.
 
 ## Purpose and limits
 
@@ -228,6 +230,98 @@ Any live evaluation needs permission for the evidence and paid requests.
 None of these phases changes merge/review/admission authority or turns on
 the parked service. Source/rubric changes that invalidate calibration require
 new validation; preserve prior records and an effective off switch.
+
+## Private runtime capability
+
+The application consumer is `application::delivery_quality`; composition uses
+only host-global private shadow assistance settings; an advisory policy does
+not adopt this consumer. First enablement freezes an eligibility start time per
+policy epoch: only runs created since that boundary enter the owner scan. No
+historical backfill is implied. Owner sweeps reconcile one durable run
+page (at most 32 task units) and process at most one service work item per tick.
+The cursor cycles through immutable run IDs, including runs that were still live
+on an earlier pass. Batched task mappings page independently. Replicas and dry
+runs do no work. With no active grant, the source, consumer ledger and adapter
+are untouched. Delivery, review, routing, rankings and experiment draws do not
+call this consumer or depend on its answer.
+
+`freeze_delivery_quality` freezes metadata and a packet digest without queueing;
+`run_delivery_quality_with_source` performs bounded owner admission. The
+public `delivery_quality_profile` boundary exposes six independent typed
+choices and ordinal values with applicability, gaps, uncertainty, frozen unit
+and actual dispatch provenance. There is no aggregate. This first rubric has
+no calibrated confidence threshold, so even valid recorded ordinal replies
+remain **uncertain**; no production comparison decision is thereby admitted.
+The consumer retains bounded metadata receipts in host-global
+`state/delivery-quality/v1/<workspace-digest>/`. Raw packets and replies remain
+in the existing service store under its bounded retention policy; missing or
+expired service evidence is a gap, never a cached grade. Off and changed-policy
+reads fence publication. Changed rubric, source version, policy or adapter
+creates a separate assessment; a changed immutable packet under the same
+identity is refused rather than overwritten.
+
+The durable builder reads host delivery observations, dispatched task-scope
+blobs and CLI audit identities, immutable Git trees and exact host validation
+artifact references. Dispatch audit events now optionally capture resolved
+effort, a fingerprint of the resolved dispatch specification, and a bounded,
+redacted task-scope blob. Tier/type refer to that dispatch snapshot. Historical
+fields are unavailable; current task crew, experiment mode or provider settings
+never repair them. The configuration fingerprint identifies the dispatch
+specification, and is distinct from the experiment overlay digest.
+
+The builder preserves deletion/move paths, frozen scope, versioned guides,
+selected file/symbol context at base and candidate, and validation selections
+and outcomes. Missing objects, binary diffs, oversized guides/context, unresolved
+directory selectors, unavailable selections, unverified publication and
+unmapped integration contributions remain visible gaps. This version chooses
+whole-unit abstention for overflow; it neither truncates a unit into completeness
+nor aggregates partition grades. Reviewer/shared contributions cannot support
+individual attribution. Documentation-only and verified no-change units are
+inapplicable to the programming rubric and retain their ordinary outcome metrics.
+Source text, including apparent instructions in code or logs, is evidence only.
+Metadata unrelated to the rubric stays outside the model-facing packet.
+
+The `delivery_quality::ladder` read port uses the offline
+`delivery-quality-join/1` field set. Its host-grant-bearing receipt is separately
+versioned `delivery-quality-producer-sample/1`, so it cannot be mistaken for
+an offline evaluator `delivery-quality-sample/1` envelope. Both use the same
+outcome-independent `sha256-sort/1` selection keys.
+Stored assignments must match the run capture's experiment/arm/segment/digest
+and the actual provider/model/effort/configuration treatment. Hypothetical
+`live=false`, forced, explicit-crew, surface-conflict, unavailable and
+mismatched records retain separate exclusions. A later ladder consumer must
+supply separately recorded use-specific adoption and evaluated version identities;
+a generic grader policy is insufficient. The existing phase-1 `shadow` and
+`guardrail` delivery-quality refusals, and `propose`/`auto` mode refusals,
+remain unchanged.
+
+Trial frames freeze all enrolled identities before grading, then select every
+eligible candidate and a same-size seeded control sample within matching
+strata. `sha256-sort/1` uses the seed, cohort, epoch, eligibility watermark and
+task key; the immutable receipt retains probabilities, selected IDs and control
+shortfall. Retrying a cohort cannot redraw it. Growth requires a new cohort
+epoch; previous frames remain readable. `run_delivery_quality_sample` admits
+only selected, frame-bound assessments, and the read-only comparison snapshot
+revalidates the private shadow policy before and after reading, then exports
+enrolled/selected/unsampled counts plus applicable, valid-grade,
+weak-or-deficient and explicit gap counts per arm and dimension. Mixed grader,
+source or actual-treatment epochs are refused; duplicate tasks and shared
+change units never gain extra votes. There are no interval decisions or
+promotion/demotion actions.
+
+Run the isolated manual fixture with a fresh directory:
+
+```sh
+scripts/build-budget.py -- cargo run -p orbit-core --example delivery_quality_fixture -- .orbit/tmp/delivery-quality-fixture
+```
+
+It uses real local Git changes, isolated stored experiment assignments and
+recorded adapters, with no credentials, live requests or human labels. Its
+full-valid comparison data are explicitly synthetic mechanics, separate from
+the uncalibrated service replies. The 10-candidate/90-control frame selects
+10 controls: fully valid synthetic grades give 100% sample coverage per arm,
+with 80 unsampled controls retained separately. This establishes plumbing and
+accounting only, never grading accuracy or adoption.
 
 ## Task References
 

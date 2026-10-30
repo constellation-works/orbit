@@ -13,6 +13,11 @@ use std::collections::HashMap;
 use super::params::*;
 
 pub trait JobRunStoreBackend: Send + Sync {
+    /// Read-only keyset page, including live runs so a later terminal state is
+    /// recovered on the next scan cycle. No step or reconciliation writes.
+    fn observed_run_page(&self, _after: &str, _limit: usize) -> Result<Vec<JobRun>, OrbitError> {
+        Err(OrbitError::Store("run paging unavailable".into()))
+    }
     /// The workspace partition this store reads and writes runs under. Run
     /// ids are only unique within it.
     fn workspace_id(&self) -> &str;
