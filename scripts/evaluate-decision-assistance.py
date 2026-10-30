@@ -587,6 +587,8 @@ def check_split(ds, manifest, prior_holdout_ids):
         if cid not in cases: errs.append(f"manifest assigns unknown case {cid}")
         if split not in ("train", "dev", "holdout"): errs.append(f"case {cid}: split must be train/dev/holdout")
         seen_split[cid] = split
+    for cid in cases:
+        if cid not in assign: errs.append(f"case {cid} has no assignment; every case must be assigned to train, dev or holdout")
     fam, subj = {}, {}
     for cid, split in seen_split.items():
         c = cases.get(cid)

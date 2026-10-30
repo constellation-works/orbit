@@ -596,6 +596,40 @@ class EvalTests(unittest.TestCase):
                 self.assertFalse(json.loads(repeated.stdout)["ok"])
                 self.assertIn("reused", repeated.stdout)
 
+    def test_check_split_refuses_manifests_that_leave_cases_unassigned(self):
+        # Every dataset case must be assigned. Missing, empty and partial maps were
+        # accepted and opened the holdout, so refusal must come before any reservation.
+        holdouts = self.root / ".decision-assistance-eval" / "holdouts"
+        def opened(): return sorted(holdouts.glob("*.json")) if holdouts.exists() else []
+        for version in ("1", "2"):
+            format_version = f"decision-assistance-eval/{version}"
+            with self.subTest(format_version=format_version):
+                ds = self._load(self.ds)
+                ds["format_version"] = format_version
+                ds_path = self._dump(f"unassigned-v{version}-ds.json", ds)
+                hid = f"unassigned-v{version}"
+                complete = self._manifest(ds, holdout_id=hid, format_version=format_version)
+                omitted = ds["cases"][-1]["case_id"]
+                partial = {cid: split for cid, split in complete["assignments"].items() if cid != omitted}
+                refused = (
+                    ("no-assignments-key", {k: v for k, v in complete.items() if k != "assignments"}),
+                    ("empty-assignments", {**complete, "assignments": {}}),
+                    ("one-case-omitted", {**complete, "assignments": partial}),
+                )
+                for name, manifest in refused:
+                    with self.subTest(manifest=name):
+                        before = opened()
+                        r = self._run("check-split", "--dataset", str(ds_path),
+                                      "--manifest", str(self._dump(f"{name}-v{version}.json", manifest)))
+                        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                        body = json.loads(r.stdout)
+                        self.assertFalse(body["ok"])
+                        self.assertTrue(any(omitted in error for error in body["errors"]), body["errors"])
+                        self.assertEqual(opened(), before)
+                # Refusals reserved nothing, so the same holdout_id still opens with a complete map.
+                r = self._run("check-split", "--dataset", str(ds_path), "--manifest", str(self._dump(f"complete-v{version}.json", complete)))
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
     def test_default_targets_reject_registration_after_recorded_holdout(self):
         manifest = self._dump("manifest.json", self._manifest(self._load(self.ds)))
         opened = self._run("check-split", "--dataset", str(self.ds), "--manifest", str(manifest))
