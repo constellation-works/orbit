@@ -197,6 +197,120 @@ if (alive) {
     );
 }
 
+// ORB-20091: a fixture descendant that escapes the child's process group
+// (detached) and inherits its stdio pipes must not hang stop(): Node only
+// emits the child's "close" once those pipes close, so awaiting it (or
+// leaving the pipes open) blocks the setup-timeout rejection and keeps the
+// driver process alive. The probe deliberately does not call
+// process.exit(), so it only finishes if stop() releases the pipes.
+#[cfg(unix)]
+#[test]
+fn timed_out_fixture_setup_with_pipe_holding_detached_descendant_rejects_and_exits() {
+    let temp = tempfile::tempdir().unwrap();
+    let pid_file = temp.path().join("setup.pid");
+    let descendant_pid_file = temp.path().join("descendant.pid");
+    let probe = r#"
+import { pathToFileURL } from "node:url";
+const pidFile = process.argv[1];
+const descendantPidFile = process.argv[2];
+const driver = await import(pathToFileURL(process.argv[3]).href);
+const setup = `
+const { spawn } = require('node:child_process');
+const fs = require('node:fs');
+const descendant = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000);'], { detached: true, stdio: 'inherit' });
+fs.writeFileSync(process.argv[2], String(descendant.pid));
+fs.writeFileSync(process.argv[1], String(process.pid));
+setInterval(() => {}, 1000);
+`;
+const started = Date.now();
+let failure;
+try {
+  await driver.startFixtureServer(
+    { name: "leaky", setup: ["node", "-e", setup, pidFile, descendantPidFile], setup_timeout_s: 1 },
+    "fixture",
+    process.cwd(),
+  );
+} catch (error) {
+  failure = error;
+}
+if (!failure || !failure.message.includes("timed out")) {
+  throw new Error(`expected setup timeout, received ${failure?.message ?? "success"}`);
+}
+const elapsedMs = Date.now() - started;
+if (elapsedMs >= 10000) {
+  throw new Error(`setup timeout rejection took ${elapsedMs}ms; stop() must complete within a bound`);
+}
+"#;
+
+    let mut child = Command::new("node")
+        .arg("--input-type=module")
+        .arg("-e")
+        .arg(probe)
+        .arg(&pid_file)
+        .arg(&descendant_pid_file)
+        .arg(DRIVER)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|error| panic!("node must be on PATH to load the capture driver: {error}"));
+
+    let deadline = Duration::from_secs(20);
+    let started = Instant::now();
+    let status = loop {
+        if let Ok(Some(status)) = child.try_wait() {
+            break status;
+        }
+        if started.elapsed() >= deadline {
+            cleanup_child(&mut child);
+            kill_pid_file(&descendant_pid_file);
+            panic!(
+                "capture driver probe did not exit within {deadline:?}; a pipe-holding \
+                 detached descendant hung stop() or kept the driver alive (ORB-20091)"
+            );
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let descendant_alive = pid_file_alive(&descendant_pid_file);
+    let fixture_alive = pid_file_alive(&pid_file);
+    kill_pid_file(&descendant_pid_file);
+    let _ = child.wait();
+    assert!(
+        status.success(),
+        "pipe-holding descendant probe failed with {status:?} (ORB-20091)"
+    );
+    assert!(
+        descendant_alive,
+        "detached descendant must survive the fixture process-group kill, \
+         otherwise this test does not cover an escaped pipe holder (ORB-20091)"
+    );
+    assert!(
+        !fixture_alive,
+        "fixture setup process must be dead after the timeout rejection (ORB-20091)"
+    );
+}
+
+#[cfg(unix)]
+fn pid_file_alive(pid_file: &std::path::Path) -> bool {
+    let Ok(text) = std::fs::read_to_string(pid_file) else {
+        return false;
+    };
+    let Ok(pid) = text.trim().parse::<i32>() else {
+        return false;
+    };
+    (unsafe { libc::kill(pid, 0) }) == 0
+}
+
+#[cfg(unix)]
+fn kill_pid_file(pid_file: &std::path::Path) {
+    if let Ok(text) = std::fs::read_to_string(pid_file)
+        && let Ok(pid) = text.trim().parse::<i32>()
+    {
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+        }
+    }
+}
+
 // ORB-20090: the driver installed SIGTERM/SIGINT handlers that only flagged
 // shutdown and never exited, so a supervisor SIGTERM during a long capture
 // waited out the whole mock loop. The driver must exit promptly after

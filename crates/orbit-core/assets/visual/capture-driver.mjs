@@ -135,7 +135,14 @@ export async function startFixtureServer(app, fixture, repoRoot) {
     detached: true,
   });
   const timeoutMs = (app.setup_timeout_s ?? 120) * 1000;
-  const closed = new Promise((resolve) => child.once("close", resolve));
+  // Wait on "exit", not only "close": "close" also waits for the stdio
+  // pipes to close, which a descendant that escaped the process group and
+  // inherited those pipes can prevent forever. "close" is kept as a
+  // fallback because a failed spawn may emit it without "exit".
+  const exited = new Promise((resolve) => {
+    child.once("exit", resolve);
+    child.once("close", resolve);
+  });
   let stopPromise;
   const signalGroup = (signal) => {
     if (!child.pid) return;
@@ -154,12 +161,18 @@ export async function startFixtureServer(app, fixture, repoRoot) {
       signalGroup("SIGTERM");
       stopPromise = (async () => {
         try {
-          await Promise.race([closed, new Promise((resolve) => setTimeout(resolve, 100))]);
+          await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 100))]);
           signalGroup("SIGKILL");
+          // Release our ends of the pipes after the kill. An escaped
+          // descendant holding the far ends open would otherwise keep the
+          // pipe handles (and this process) alive indefinitely.
+          child.stdout?.destroy();
+          child.stderr?.destroy();
+          child.unref();
           // Bound the post-KILL wait so a signal handler awaiting stop()
           // cannot hang termination on a wedged fixture server.
           await Promise.race([
-            closed,
+            exited,
             new Promise((resolve) => setTimeout(resolve, 5000)),
           ]);
         } finally {
