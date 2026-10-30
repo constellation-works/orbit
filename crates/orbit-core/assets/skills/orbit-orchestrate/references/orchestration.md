@@ -729,11 +729,13 @@ configuration.
 
 ### Per-run review
 
-`orbit run ship --review before-pr|before-landing` and `orbit run auto --review
-...` (MCP `orbit_workflow_ship` and `orbit_workflow_auto` `start` with `review`)
-add a second-agent review before landing to one run. Use it when the user asks
-for review on specific work and the workspace applies none. It only adds review
-and never changes configuration:
+`orbit run ship --review before-landing` and `orbit run auto --review
+before-landing` (MCP `orbit_workflow_ship` and `orbit_workflow_auto` `start`
+with `review: "before-landing"`) add a second-agent review before landing to
+one run. Use it when the user asks for review on specific work and the
+workspace applies none. It only adds review and never changes configuration.
+`--review before-pr` is deprecated but still honoured as before-PR with a
+bounded warning; prefer `before-landing` for new requests:
 
 - If workspace policy already applies the same layer, the option is accepted
   unchanged. If policy applies the other layer, it is refused, naming the key

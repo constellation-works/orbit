@@ -1,7 +1,7 @@
 ---
 title: Review Gate — Overview
 owner: codex
-last_updated: 2026-10-29
+last_updated: 2026-10-30
 last_validated: 2026-10-28
 status: Accepted
 stage: shipped
@@ -9,7 +9,7 @@ next: "ORB-20099: staged before-PR deprecation (§1.1), then dependent ORB-20087
 feature: review-gate
 doc_role: overview
 type: design
-summary: Independent automatic review with captured timing and exact-tree coverage; proposed staged before-PR deprecation precedes selective before-landing risk/path rules and preserves existing runs and evidence.
+summary: Independent automatic review with captured timing and exact-tree coverage; shipped staged before-PR deprecation precedes proposed selective before-landing risk/path rules and preserves existing runs and evidence.
 tags: [review-gate, review-policy, automation, delivery]
 paths: ["crates/orbit-config/src/operation.rs", "crates/orbit-core/src/application/review/**", "crates/orbit-store/src/driver/sqlite/review/**", "crates/orbit-automation/src/review/**", "crates/orbit-engine/src/executor/automation/vcs/review_gate.rs"]
 related_features: [automation-triggers, activity-job, auditability]
@@ -33,11 +33,11 @@ certificates exclude exactly reproduced landings from redundant after-landing
 review while QA stays independent.
 Neither review timing nor a reviewer verdict grants merge permission.
 
-**Proposed prerequisite, not shipped:** [Design §1.1](./2_design.md#11-proposed-prerequisite-deprecate-before-pr-review)
+**Shipped prerequisite:** [Design §1.1](./2_design.md#11-staged-deprecation-of-before-pr-review-orb-20099-shipped)
 deprecates before-PR mode with warnings and explicit migration to
 before-landing, preserving legacy inputs, captured runs, budgets and review
-evidence. Implement it before selective review; removal of legacy handlers
-is separate later work.
+evidence. Selective review ([ORB-20087]) builds on it; removal of legacy
+handlers is separate later work.
 
 **Proposed extension, not shipped:** [Design §3.3](./2_design.md#33-proposed-selective-before-landing-review)
 adds optional risk-threshold and repository-relative path rules that select
@@ -115,7 +115,7 @@ a second time.
 | Concern | File | Task |
 | --- | --- | --- |
 | Shipped contract: gate, evidence rules, budgets, coverage, surfaces, rollback | [Design](./2_design.md) | [ORB-11333] |
-| Proposed before-PR deprecation, explicit migration and preservation contract | [Design §1.1](./2_design.md#11-proposed-prerequisite-deprecate-before-pr-review) | [ORB-20099] (proposed prerequisite) |
+| Shipped before-PR deprecation, explicit migration and preservation contract | [Design §1.1](./2_design.md#11-staged-deprecation-of-before-pr-review-orb-20099-shipped) | [ORB-20099] (shipped prerequisite) |
 | Verdicts, the two-commit shape, the findings comment, and revalidation | [Design §3.1](./2_design.md#31-verdicts-the-two-commit-shape-and-revalidation-orb-13989) | [ORB-13989] |
 | Before-landing review of the open PR, and its claimed-leaf placement | [Design §3.2](./2_design.md#32-before-landing-review-of-the-open-pr-orb-14849) | [ORB-14849] |
 | Proposed selective risk/path rules, configuration and rollout; symbols deferred | [Design §3.3](./2_design.md#33-proposed-selective-before-landing-review) | [ORB-20087] (proposed) |
@@ -133,6 +133,6 @@ a second time.
 - [ORB-13989] — the reviewer fixes its findings as a second commit and comments them; retires the rework loop and the repair-cycle budget.
 - [ORB-14849] — adds before-landing review of the open PR beside hosted CI.
 - [ORB-20087] — proposed configurable risk/path selection of before-landing review; symbol triggers deferred.
-- [ORB-20099] — proposed staged before-PR deprecation preserving runs and evidence; [ORB-20087] depends on it.
+- [ORB-20099] — shipped staged before-PR deprecation preserving runs and evidence; [ORB-20087] depends on it.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

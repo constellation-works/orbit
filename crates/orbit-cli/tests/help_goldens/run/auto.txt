@@ -24,11 +24,11 @@ Options:
           Repair failing checks and conflicts on the pull requests this drain opens
 
       --review <LAYER>
-          Add a review layer before landing when workspace policy has none
+          Add a review layer before landing when workspace policy has none. `before-landing` is recommended; `before-pr` is deprecated but still holds PR creation for a reviewer
 
           Possible values:
-          - before-pr:      Hold PR creation for a reviewer, as `review.timing = before_pr` does
-          - before-landing: Review the open PR before it lands, as `review.timing = before_landing` does
+          - before-pr:      Hold PR creation for a reviewer, as `review.timing = before_pr` does. Deprecated: prefer `before-landing`; still honoured as before-PR
+          - before-landing: Review the open PR before it lands, as `review.timing = before_landing` does. Recommended for new `--review` requests
 
       --allow-crew <CREW>
           Start only tasks on these crews (repeatable, comma-separated)

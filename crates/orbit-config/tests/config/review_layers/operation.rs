@@ -84,8 +84,10 @@ fn review_table_sets_timing_and_minutes_with_their_layer() {
     assert_eq!(review.review_budget().minutes, 45);
     assert_eq!(review.legacy_after_landing, None);
     assert!(
-        !logs.contains("deprecated"),
-        "no legacy key, no warning: {logs}"
+        logs.contains("review.timing")
+            && logs.contains("deprecated")
+            && logs.contains("before_pr"),
+        "canonical before_pr warns as deprecated but stays honoured: {logs}"
     );
 }
 

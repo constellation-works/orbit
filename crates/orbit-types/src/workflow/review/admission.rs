@@ -64,12 +64,17 @@ pub const DEFAULT_REVIEW_MINUTES: u32 = 30;
 /// exactly when `review.timing` was `before_pr` at submission,
 /// `before-landing` exactly when it was `before_landing` [ORB-14849], and
 /// `none` otherwise [ORB-13992].
+///
+/// `before-pr` is deprecated but preserved byte-for-byte for already-admitted
+/// runs, claims, resumes, and evidence; new admissions prefer `none` or
+/// `before-landing`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ReviewTiming {
     /// The run delivers without a before-PR review.
     None,
     /// Hold PR creation for a fresh reviewer that fixes what it finds.
+    /// Deprecated for new policy; preserved for captured admissions.
     BeforePr,
     /// Open the PR, then have a fresh reviewer review and fix it while
     /// hosted CI runs; the PR lands only at the head that review settled.
@@ -96,18 +101,28 @@ impl ReviewTiming {
 /// A review layer before landing that one run may add with `--review`
 /// [ORB-16572]. It strengthens workspace policy only: the layer the policy
 /// already applies is a no-op, and the other layer is refused.
+///
+/// `before-landing` is recommended for new run requests; `before-pr` is
+/// deprecated but still holds PR creation for a reviewer until a later
+/// separately scoped removal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
 #[serde(rename_all = "kebab-case")]
 pub enum ReviewLayer {
     /// Hold PR creation for a reviewer, as `review.timing = before_pr` does.
+    /// Deprecated: prefer `before-landing`; still honoured as before-PR.
     BeforePr,
     /// Review the open PR before it lands, as `review.timing = before_landing`
-    /// does.
+    /// does. Recommended for new `--review` requests.
     BeforeLanding,
 }
 
 impl ReviewLayer {
+    /// Whether this run-request layer is deprecated but still honoured.
+    pub fn is_deprecated(self) -> bool {
+        matches!(self, ReviewLayer::BeforePr)
+    }
+
     /// The option spelling.
     pub fn as_str(self) -> &'static str {
         self.timing().as_str()

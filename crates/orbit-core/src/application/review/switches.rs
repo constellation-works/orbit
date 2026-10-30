@@ -1,7 +1,8 @@
-//! One read view of every automatic-review switch [ORB-13992].
+//! One read view of every automatic-review switch [ORB-13992] [ORB-20099].
 //!
-//! Before-PR review is `review.timing = before_pr` and before-landing review
-//! is `review.timing = before_landing` [ORB-14849], both with `review.minutes`
+//! Before-PR review is the deprecated `review.timing = before_pr` and
+//! before-landing review is the recommended `review.timing = before_landing`
+//! [ORB-14849], both with `review.minutes`
 //! and the pre-landing reviewer pool (`workflow.purpose_crews.pre_landing_review`,
 //! else `workflow.purpose_crews.review`); an owner may also turn before-landing
 //! review on only for the claims of the machines `review.before_landing_hosts`
@@ -113,7 +114,9 @@ pub struct AfterLandingSwitch {
 }
 
 impl ReviewSwitches {
-    /// The before-PR line.
+    /// The before-PR line. Marks the deprecated timing so effective-value
+    /// displays stay truthful; deprecation alone never makes the view
+    /// unhealthy.
     pub fn before_pr_line(&self) -> String {
         let before_pr = &self.before_pr;
         let problems = if before_pr.problems.is_empty() {
@@ -121,9 +124,13 @@ impl ReviewSwitches {
         } else {
             format!("unhealthy: {}; ", before_pr.problems.join("; "))
         };
+        let state = if before_pr.enabled {
+            "on (deprecated)"
+        } else {
+            "off"
+        };
         format!(
-            "{problems}{} (review.timing, {}); {} min per candidate (review.minutes, {}); {}",
-            if before_pr.enabled { "on" } else { "off" },
+            "{problems}{state} (review.timing, {}); {} min per candidate (review.minutes, {}); {}",
             before_pr.source,
             before_pr.minutes,
             before_pr.minutes_source,

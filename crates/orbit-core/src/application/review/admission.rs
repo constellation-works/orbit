@@ -245,10 +245,12 @@ pub(crate) fn resolve(
 ) -> Result<ReviewAdmission, OrbitError> {
     let mut admission = snapshot(runtime)?;
     let Some(layer) = request else {
+        warn_before_pr_policy(&admission);
         return Ok(admission);
     };
     if admission.timing == layer.timing() {
         require_reviewer_crew(&admission, layer, Some(&admission.timing_source))?;
+        warn_before_pr_request(&admission, layer, true);
         return Ok(admission);
     }
     if let Some(applied) = ReviewLayer::from_timing(admission.timing) {
@@ -266,7 +268,52 @@ pub(crate) fn resolve(
     require_reviewer_crew(&admission, layer, None)?;
     admission.timing = layer.timing();
     admission.timing_source = REVIEW_RUN_OPTION_SOURCE.to_string();
+    warn_before_pr_request(&admission, layer, false);
     Ok(admission)
+}
+
+/// Bounded deprecation warning for a before-PR admission [ORB-20099].
+///
+/// Emitted once per fresh submission through `tracing` (stderr/log), never in
+/// stdout JSON or MCP envelopes. Effective behavior stays before-PR; the
+/// warning names the deciding key/request and its source so an operator can
+/// migrate with an explicit config write or a `--review before-landing`
+/// request.
+fn warn_before_pr_policy(admission: &ReviewAdmission) {
+    if admission.timing != ReviewTiming::BeforePr {
+        return;
+    }
+    tracing::warn!(
+        key = "review.timing",
+        value = "before_pr",
+        source = %admission.timing_source,
+        note = "review.timing = before_pr is deprecated but still holds PR creation for a reviewer; new setups use off or before_landing (`orbit config set review.timing before_landing`)",
+        "review timing is deprecated but still honoured as before-PR",
+    );
+}
+
+/// Bounded deprecation warning for an explicit old `--review before-pr`
+/// request [ORB-20099]. `policy_match` when the workspace already applies
+/// before-PR and the request only restates it.
+fn warn_before_pr_request(admission: &ReviewAdmission, layer: ReviewLayer, policy_match: bool) {
+    if !layer.is_deprecated() || admission.timing != ReviewTiming::BeforePr {
+        return;
+    }
+    if policy_match {
+        tracing::warn!(
+            request = "--review before-pr",
+            source = %admission.timing_source,
+            note = "--review before-pr is deprecated but still holds PR creation for a reviewer; new requests use --review before-landing",
+            "review request is deprecated but still honoured as before-PR",
+        );
+    } else {
+        tracing::warn!(
+            request = "--review before-pr",
+            source = %REVIEW_RUN_OPTION_SOURCE,
+            note = "--review before-pr is deprecated but still holds PR creation for a reviewer; new requests use --review before-landing",
+            "review request is deprecated but still honoured as before-PR",
+        );
+    }
 }
 
 /// Refuse a requested layer when neither a reviewer crew nor a reviewer pool

@@ -1,13 +1,13 @@
 ---
 title: Review Gate — Design
 owner: codex
-last_updated: 2026-10-29
+last_updated: 2026-10-30
 last_validated: 2026-10-26
 status: Accepted
 feature: review-gate
 doc_role: design
 type: design
-summary: Shipped review contract, proposed staged before-PR deprecation preserving captured runs and evidence, then selective before-landing risk/path rules with exact-head enforcement.
+summary: Shipped review contract (before_pr deprecated but honoured; off/before_landing recommended) and a proposed selective before-landing extension using configurable candidate-risk thresholds and path rules, with captured policy, exact-head enforcement, lineage budgets and delivery coverage.
 tags: [review-gate, review-policy, automation, delivery, operations]
 paths: ["crates/orbit-config/src/operation.rs", "crates/orbit-core/src/application/review/**", "crates/orbit-core/src/application/automation/after_landing.rs", "crates/orbit-store/src/driver/sqlite/review/**", "crates/orbit-automation/src/review/**", "crates/orbit-engine/src/executor/automation/vcs/review_gate.rs", "crates/orbit-store/src/repository/task/v2/artifacts.rs", "crates/orbit-store/src/repository/task/coordination/lifecycle/**"]
 related_features: [automation-triggers, activity-job, auditability]
@@ -16,23 +16,25 @@ related_artifacts: [ORB-11333, ORB-11528, ORB-11545, ORB-13890, ORB-13896, ORB-1
 
 # Review Gate — Design [ORB-11333]
 
-This file describes what shipped, except §1.1 and §3.3, which are proposed
-changes. The selective configuration is not available yet. A preference edit
-grants no authority and changes no schedule; a verdict grants no merge
-permission.
+This file describes what shipped, except §3.3, which is a proposed extension
+and is not an available configuration surface yet. A preference edit grants
+no authority and changes no schedule; a verdict grants no merge permission.
+§1.1 records the shipped staged deprecation of before-PR review [ORB-20099];
+§3.3 stays proposed (tracked by ORB-20087) and is not implemented by that
+deprecation.
 
 ## 1. Preferences: three timings [ORB-13992] [ORB-14849]
 
-Automatic review runs at up to three timings. Before-PR review and
-before-landing review are the two values of the `config.toml` key
-`review.timing` besides `off`; after-landing review is the
+Automatic review runs at up to three timings. Before-PR review (deprecated but
+honoured) and before-landing review are the two values of the `config.toml`
+key `review.timing` besides `off`; after-landing review is the
 `delivery-code-review` auto-task's own `enabled` flag. Config preferences
 resolve **built-in → global → workspace**, each with its winning layer
 recorded. Unknown keys and out-of-range values fail config load.
 
 | Key | Values (default) |
 | --- | --- |
-| `review.timing` | `off`, `before_pr` or `before_landing` (`off`) |
+| `review.timing` | `off` or `before_landing` (recommended), or deprecated `before_pr` (`off`) |
 | `review.before_landing_hosts` | machine ids (`[]` by default; entries are `hm_…`; owner policy for claimed leaves) |
 | `review.minutes` | 1..=1440 (30): wall-clock limit for one candidate's review |
 | `workflow.purpose_crews.review` | crew name or weighted pool |
@@ -106,20 +108,22 @@ review-admission contract remains version 1 and refuses unsupported contract
 versions. A snapshot captured before the retirement still carries
 `reviewer_starts` or `repair_cycles`; it reads and the values are ignored.
 
-### 1.1 Proposed prerequisite: deprecate before-PR review
+### 1.1 Staged deprecation of before-PR review [ORB-20099] (shipped)
 
-**Proposed, not implemented.** Daniel's 2026-10-29 direction is to deprecate
-the `before_pr` review mode first, before selective before-landing review
-([ORB-20087]). [ORB-20099] owns this prerequisite; [ORB-20087] depends on it.
-This is a warning-and-migration stage. The old boolean
-`review.before_pr` was already deprecated; the new decision also deprecates
-the mode selected by `review.timing = "before_pr"` or `--review before-pr`.
+**Shipped.** Daniel's 2026-10-29 direction is to deprecate the `before_pr`
+review mode first, before selective before-landing review ([ORB-20087]).
+[ORB-20099] delivers this prerequisite as a warning-and-migration stage, and
+[ORB-20087] consumes it. The old boolean `review.before_pr` was already
+deprecated; this stage also deprecates the mode selected by
+`review.timing = "before_pr"` or `--review before-pr`. Its effective behavior
+stays before-PR: `before_pr` is deprecated but fully honoured, with bounded
+warnings naming the deciding key or request and its source.
 
 For new use, recommend `review.timing = "before_landing"` or an explicit
 `--review before-landing`. The PR opens first and review overlaps hosted CI;
 the existing exact-reviewed-head merge rule and budgets still apply. Keep
 `off` as the default and after-landing review independent. Do not enable
-selective review in this prerequisite implementation.
+selective review in this stage; §3.3 stays proposed.
 
 #### Configuration, requests and diagnostics
 
@@ -528,9 +532,9 @@ before-landing review selectively using configurable regression-risk and path
 rules; [ORB-20087] tracks implementation. Symbol-history triggers are
 deferred. This extends this gate; it does not add another reviewer, merge
 permission or a second review framework.
-Implement the staged before-PR deprecation in §1.1 first. Legacy before-PR
-inputs and captured runs remain compatibility obligations, not a new
-selective timing option.
+The staged before-PR deprecation in §1.1 has shipped and is the prerequisite
+for this work. Legacy before-PR inputs and captured runs remain compatibility
+obligations, not a new selective timing option.
 It gates managed landing, not execution of GitHub Actions on an unreviewed
 PR; it does not replace protected environments or the separate credential
 isolation required before disabling Copilot workflow-run approval.
@@ -1749,7 +1753,7 @@ so for a `codeql` or `linux` `host_sandbox_test` hold on its next tick.
 
 ## Task References
 
-- [ORB-20099] — proposed staged before-PR deprecation (§1.1), preserving legacy input semantics, admitted runs and review evidence; prerequisite to [ORB-20087].
+- [ORB-20099] — shipped staged before-PR deprecation (§1.1), preserving legacy input semantics, admitted runs and review evidence; prerequisite to [ORB-20087].
 - [ORB-20087] — proposed configurable risk/path before-landing selection (§3.3), including observation, exact-head receipts and owner/follower compatibility; symbol triggers deferred.
 - [ORB-11333] — implements independent review policy, the before-PR gate, lineage budgets, and delivery coverage.
 - [ORB-11528] — adds validation-record roles to the certificate contract.

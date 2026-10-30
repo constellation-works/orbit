@@ -772,6 +772,11 @@ impl ConfigStore {
         // Every writer (CLI, doctor, migration, or unrelated edit) uses the
         // spelling older running clients admit. Keep canonical values and
         // comments untouched; only normalize aliases with the same meaning.
+        // [ORB-20099] Alias normalization preserves the resolved timing and
+        // its source: it never migrates `before_pr` to `before_landing` or
+        // `off`, and never materializes a masked global timing into another
+        // layer. Only an explicit `orbit config set review.timing
+        // before_landing` changes the timing.
         if let Some(value) = self
             .doc
             .get_mut("review")

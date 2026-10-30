@@ -59,10 +59,17 @@ const AUTO_CONCURRENCY_MODES: &[EnumValue] = &[
     EnumValue::plain("enforce"),
 ];
 
-/// The review layers a run's `review` option may add [ORB-16572].
+/// The review layers a run's `review` option may add [ORB-16572] [ORB-20099].
+/// `before-landing` is recommended; `before-pr` is deprecated but honoured.
 const REVIEW_LAYERS: &[EnumValue] = &[
-    EnumValue::plain("before-pr"),
-    EnumValue::plain("before-landing"),
+    EnumValue::helped(
+        "before-pr",
+        "Deprecated but honoured: hold PR creation for a reviewer; prefer before-landing.",
+    ),
+    EnumValue::helped(
+        "before-landing",
+        "Recommended: review the open PR before it lands.",
+    ),
 ];
 
 const RUN_ID_PARAM: ParamSpec = required(mcp_only("id", ParamType::String, "Job run ID."));
@@ -152,7 +159,7 @@ const AUTO: OperationSpec<WorkflowVerb> = OperationSpec {
         mcp_only(
             "review",
             ParamType::Enum(REVIEW_LAYERS),
-            "Start only: add this review layer before landing (before-pr or before-landing) to the window when workspace policy applies none; every task it admits inherits it. The layer policy already applies is accepted unchanged; the other layer, a workspace that sets neither workflow.purpose_crews.pre_landing_review nor workflow.purpose_crews.review and a workspace that delivers locally are refused. It can only add review. Omitted keeps workspace policy",
+            "Start only: add this review layer before landing (before-landing recommended; before-pr deprecated but honoured) to the window when workspace policy applies none; every task it admits inherits it. The layer policy already applies is accepted unchanged; the other layer, a workspace that sets neither workflow.purpose_crews.pre_landing_review nor workflow.purpose_crews.review and a workspace that delivers locally are refused. It can only add review. Omitted keeps workspace policy",
         ),
         mcp_only(
             "approve_proposed",
@@ -298,7 +305,7 @@ const SHIP: OperationSpec<WorkflowVerb> = OperationSpec {
         mcp_only(
             "review",
             ParamType::Enum(REVIEW_LAYERS),
-            "Optional review layer before landing (`before-pr` or `before-landing`) this run adds when workspace policy applies none. The layer policy already applies is accepted unchanged; the other layer, a workspace that sets neither workflow.purpose_crews.pre_landing_review nor workflow.purpose_crews.review and local-only delivery are refused before the run starts. It can only add review. Omitted keeps workspace policy.",
+            "Optional review layer before landing (`before-landing` recommended; `before-pr` deprecated but honoured) this run adds when workspace policy applies none. The layer policy already applies is accepted unchanged; the other layer, a workspace that sets neither workflow.purpose_crews.pre_landing_review nor workflow.purpose_crews.review and local-only delivery are refused before the run starts. It can only add review. Omitted keeps workspace policy.",
         ),
         CLAIM_TOKEN_PARAM,
         MODEL_PARAM,
