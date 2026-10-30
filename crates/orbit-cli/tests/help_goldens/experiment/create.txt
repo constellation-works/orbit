@@ -7,6 +7,12 @@ Arguments:
           A name unique in this workspace
 
 Options:
+      --template <TEMPLATE>
+          Start from a shipped definition
+
+          Possible values:
+          - visual-review: verify-mock-ui tasks, control without and treatment with the visual comparison reviewer, 1:1, live, 30 per arm, 60 days
+
       --hypothesis <HYPOTHESIS>
           What the treatment arms are expected to change, and why
 

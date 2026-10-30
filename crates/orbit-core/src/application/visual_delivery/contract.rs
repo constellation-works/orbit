@@ -106,6 +106,8 @@ impl OrbitRuntime {
             require_established: settings.require_established,
             manifests,
             mocks,
+            block_at: settings.block_at,
+            file_at: settings.file_at,
         }))
     }
 

@@ -1,9 +1,10 @@
-Capture the working tree beside a task's mocks for comparison
+Capture the working tree beside a task's mocks, or accept a disputed visual finding
 
 Usage: orbit visual [OPTIONS] <COMMAND>
 
 Commands:
-  capture  Capture the working tree beside each of a task's mocks
+  capture         Capture the working tree beside each of a task's mocks
+  accept-dispute  Accept a disputed blocking visual finding so the delivery can land
 
 Options:
   -h, --help

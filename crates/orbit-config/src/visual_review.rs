@@ -1,7 +1,8 @@
 //! `[visual_review]`: the view manifests mock names are validated
 //! against, the width a mock name without a width part means
-//! (visual-review design §2.2, §2.3), and the delivery capture's mode,
-//! mock budget and `require_established` hold (§4, §6.1).
+//! (visual-review design §2.2, §2.3), the delivery capture's mode,
+//! mock budget and `require_established` hold (§4, §6.1), and in `live`
+//! the severities that block and are filed (`block_at`, `file_at`, §11.3).
 
 use std::path::Path;
 
@@ -9,9 +10,13 @@ use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_home_dir;
 
 use orbit_types::task::{
-    DEFAULT_VISUAL_MAX_FINDINGS, DEFAULT_VISUAL_MAX_IMAGE_TOKENS, DEFAULT_VISUAL_MAX_IMAGES,
-    DEFAULT_VISUAL_MAX_MOCKS, VisualReviewMode,
+    DEFAULT_VISUAL_BLOCK_AT, DEFAULT_VISUAL_FILE_AT, DEFAULT_VISUAL_MAX_FINDINGS,
+    DEFAULT_VISUAL_MAX_IMAGE_TOKENS, DEFAULT_VISUAL_MAX_IMAGES, DEFAULT_VISUAL_MAX_MOCKS,
+    VisualReviewMode, VisualThreshold,
 };
+use orbit_types::workflow::SelectiveBeforeLandingMode;
+
+use crate::operation::{OperationPolicy, ReviewTimingSetting};
 
 use crate::tag_instructions::repository_path;
 
@@ -46,6 +51,13 @@ pub struct VisualReviewSettings {
     /// `visual_review.require_established` (default false): hold a
     /// delivery whose capture is not established.
     pub require_established: bool,
+    /// `visual_review.block_at` (default `high`): the lowest confirmed
+    /// severity that must be resolved before landing, or `never`.
+    pub block_at: VisualThreshold,
+    /// `visual_review.file_at` (default `low`): the lowest confirmed
+    /// severity filed as a follow-up when not fixed. Never above
+    /// `block_at`.
+    pub file_at: VisualThreshold,
 }
 
 impl Default for VisualReviewSettings {
@@ -60,6 +72,8 @@ impl Default for VisualReviewSettings {
             max_image_tokens: DEFAULT_VISUAL_MAX_IMAGE_TOKENS,
             max_findings: DEFAULT_VISUAL_MAX_FINDINGS,
             require_established: false,
+            block_at: DEFAULT_VISUAL_BLOCK_AT,
+            file_at: DEFAULT_VISUAL_FILE_AT,
         }
     }
 }
@@ -81,7 +95,7 @@ pub(crate) fn visual_review_from_document(
     let Some(table) = table.as_table() else {
         return Err(invalid(format!(
             "'{VISUAL_REVIEW_KEY}' must be a table with `mode`, `manifests`, `default_width`, \
-             `max_mocks` and `require_established`"
+             `max_mocks`, `require_established`, `block_at` and `file_at`"
         )));
     };
     let mut settings = VisualReviewSettings::default();
@@ -186,5 +200,68 @@ pub(crate) fn visual_review_from_document(
             ))
         })?;
     }
+    if let Some(block_at) = table.get("block_at") {
+        settings.block_at = block_at
+            .as_str()
+            .and_then(VisualThreshold::parse)
+            .filter(|threshold| *threshold != VisualThreshold::Nit)
+            .ok_or_else(|| {
+                invalid(format!(
+                    "'{VISUAL_REVIEW_KEY}.block_at' must be \"critical\", \"high\", \"medium\", \
+                     \"low\" or \"never\""
+                ))
+            })?;
+    }
+    if let Some(file_at) = table.get("file_at") {
+        settings.file_at = file_at
+            .as_str()
+            .and_then(VisualThreshold::parse)
+            .ok_or_else(|| {
+                invalid(format!(
+                    "'{VISUAL_REVIEW_KEY}.file_at' must be \"critical\", \"high\", \"medium\", \
+                     \"low\", \"nit\" or \"never\""
+                ))
+            })?;
+    }
+    if settings.file_at.rank() > settings.block_at.rank() {
+        return Err(invalid(format!(
+            "'{VISUAL_REVIEW_KEY}.file_at' (\"{}\") must not be above \
+             '{VISUAL_REVIEW_KEY}.block_at' (\"{}\"): a finding that blocks must also be filed \
+             when it lands unresolved",
+            settings.file_at.as_str(),
+            settings.block_at.as_str()
+        )));
+    }
     Ok(settings)
+}
+
+/// Whether `operation` runs a review before landing that can resolve a
+/// blocking visual finding: `review.timing` not off, or selective
+/// before-landing review enforced.
+#[must_use]
+pub fn visual_review_layer(operation: &OperationPolicy) -> bool {
+    operation.review_timing() != ReviewTimingSetting::Off
+        || operation.selective_before_landing.mode.value == SelectiveBeforeLandingMode::Enforce
+}
+
+/// Warn when `visual_review.mode = "live"` has no review layer (§1): with
+/// nothing to resolve a blocking finding before landing, blocking findings
+/// are filed as `high` follow-ups and nothing blocks.
+pub(crate) fn warn_live_without_review_layer(
+    settings: &VisualReviewSettings,
+    operation: &OperationPolicy,
+    config_path: &Path,
+) {
+    if settings.mode == VisualReviewMode::Live
+        && settings.block_at != VisualThreshold::Never
+        && !visual_review_layer(operation)
+    {
+        tracing::warn!(
+            config = %redact_home_dir(&config_path.display().to_string()),
+            key = "visual_review.mode",
+            "visual_review.mode = \"live\" without a review before landing (review.timing is off) \
+             blocks nothing: confirmed findings at or above visual_review.block_at are filed as \
+             high follow-ups instead"
+        );
+    }
 }

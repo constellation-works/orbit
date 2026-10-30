@@ -68,6 +68,11 @@ const MODES: &[EnumValue] = &[
     ),
 ];
 
+const TEMPLATES: &[EnumValue] = &[EnumValue::helped(
+    "visual-review",
+    "verify-mock-ui tasks, control without and treatment with the visual comparison reviewer, 1:1, live, 30 per arm, 60 days",
+)];
+
 const STATUSES: &[EnumValue] = &[
     EnumValue::plain("draft"),
     EnumValue::plain("running"),
@@ -96,7 +101,7 @@ const POPULATION_DESCRIPTION: &str = "Which tasks the experiment enrolls, as a J
 
 const GUARDRAILS_DESCRIPTION: &str = "Guardrail metrics as a JSON object from metric name to the threshold its difference from control may not pass, such as {\"delivery_done_rate\": \"-5pt\", \"escaped_regressions\": \"+0\"}.";
 
-const METRIC_DESCRIPTION: &str = "The metric the verdict is read on: implement_tokens, total_tokens, cost_usd, lead_time, implement_duration, turns_before_first_edit, result_bytes_before_first_edit, first_pass_acceptance, review_repairs, step_recoveries, final_recoveries, failed_checks, merge_conflicts, delivery_done_rate, escaped_regressions or lines_changed.";
+const METRIC_DESCRIPTION: &str = "The metric the verdict is read on: implement_tokens, total_tokens, cost_usd, lead_time, implement_duration, turns_before_first_edit, result_bytes_before_first_edit, first_pass_acceptance, review_repairs, step_recoveries, final_recoveries, failed_checks, merge_conflicts, delivery_done_rate, escaped_regressions, lines_changed, visual_landed_mismatches, visual_review_repairs or visual_verified_finding_rate.";
 
 /// The definition fields `create` and `update` share, after the name.
 const DEFINITION: &[ParamSpec] = &[
@@ -174,13 +179,22 @@ const REQUIRED_REASON: &[ParamSpec] = &[required(free_text(both(
     "Why, recorded on the event",
 )))];
 
-const CREATE_NAME: &[ParamSpec] = &[required(both(
-    "name",
-    ParamType::String,
-    "A name unique among this workspace's experiments.",
-    CliArgKind::Positional,
-    "A name unique in this workspace",
-))];
+const CREATE_NAME: &[ParamSpec] = &[
+    required(both(
+        "name",
+        ParamType::String,
+        "A name unique among this workspace's experiments.",
+        CliArgKind::Positional,
+        "A name unique in this workspace",
+    )),
+    both(
+        "template",
+        ParamType::Enum(TEMPLATES),
+        "Start from a definition Orbit ships; any definition field given as well replaces the template's. `visual-review` compares delivering `verify-mock-ui` tasks without (control) and with (treatment) the visual comparison reviewer: 1:1, live, 30 tasks per arm, 60 days, primary metric visual_landed_mismatches. The workspace must also list `visual_review.reviewer` in `experiments.config_keys` before it starts.",
+        CliArgKind::flag("template"),
+        "Start from a shipped definition",
+    ),
+];
 
 const CREATE: OperationSpec<ExperimentVerb> = OperationSpec {
     verb: ExperimentVerb::Create,
@@ -441,7 +455,7 @@ const ASSIGN: OperationSpec<ExperimentVerb> = OperationSpec {
 const READOUT_PARAMS: &[ParamSpec] = &[both(
     "metric",
     ParamType::String,
-    "Report only this metric; the verdict is still read on the primary metric and guardrails. One of implement_tokens, total_tokens, cost_usd, lead_time, implement_duration, turns_before_first_edit, result_bytes_before_first_edit, first_pass_acceptance, review_repairs, step_recoveries, final_recoveries, failed_checks, merge_conflicts, delivery_done_rate, escaped_regressions or lines_changed.",
+    "Report only this metric; the verdict is still read on the primary metric and guardrails. One of implement_tokens, total_tokens, cost_usd, lead_time, implement_duration, turns_before_first_edit, result_bytes_before_first_edit, first_pass_acceptance, review_repairs, step_recoveries, final_recoveries, failed_checks, merge_conflicts, delivery_done_rate, escaped_regressions, lines_changed, visual_landed_mismatches, visual_review_repairs or visual_verified_finding_rate.",
     CliArgKind::flag("metric"),
     "Report only this metric",
 )];

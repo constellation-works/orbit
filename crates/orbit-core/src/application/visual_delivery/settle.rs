@@ -3,19 +3,24 @@
 //! is `stale_capture`; a mock whose bytes differ from the digest frozen at
 //! admission is `mock_changed`. Both are recorded in `visual/settle.json`
 //! and in the one-line summary run show, task show and the PR body print.
-//! In this phase they block nothing. `visual_review.require_established`
-//! holds a delivery whose capture is not established.
+//! They block nothing themselves. `visual_review.require_established`
+//! holds a delivery whose capture is not established. In `live`, every
+//! confirmed finding gets its disposition under `visual_review.block_at`
+//! and `file_at` (§11.3): must-address findings go to the code reviewer,
+//! optional ones are offered and filed after landing when unfixed. The
+//! post-landing comparison (`pass = measure`) records under
+//! `visual/measure/` with purpose `visual_measure` and never holds.
 
 use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
 use orbit_types::task::{
-    VISUAL_CAPTURE_ARTIFACT, VISUAL_CHECKS_ARTIFACT, VISUAL_REVIEW_ARTIFACT, VISUAL_REVIEW_PURPOSE,
-    VISUAL_SETTLE_ARTIFACT, VisualCaptureOutcome, VisualCaptureRecord, VisualChecksRecord,
-    VisualDeviationRecord, VisualFindingVerdict, VisualReviewBudgetRecord, VisualReviewContract,
-    VisualReviewFinding, VisualReviewRecord, VisualSettleOutcome, VisualSettleRecord,
-    VisualSettleRefusal, VisualVerdictKind, mock_sha256_hex, visual_review_summary_with_review,
+    VisualCaptureOutcome, VisualCaptureRecord, VisualChecksRecord, VisualDeviationRecord,
+    VisualFindingVerdict, VisualPass, VisualReviewBudgetRecord, VisualReviewContract,
+    VisualReviewFinding, VisualReviewMode, VisualReviewRecord, VisualSettleOutcome,
+    VisualSettleRecord, VisualSettleRefusal, VisualThreshold, VisualVerdictKind, mock_sha256_hex,
+    visual_disposition, visual_review_summary_with_review,
 };
 use orbit_types::workflow::DeliveryRefusal;
 use serde_json::{Value, json};
@@ -24,7 +29,7 @@ use super::contract::MockDigestSource;
 use super::verify::{
     catalog_of, collect_result_objects, regions_overlap, visual_verdicts_by_finding,
 };
-use super::{attach_system_artifacts, json_artifact, read_record, required_string};
+use super::{attach_system_artifacts, json_artifact, read_record, required_string, step_pass};
 use crate::OrbitRuntime;
 
 pub(crate) fn visual_settle_step(
@@ -39,10 +44,11 @@ pub(crate) fn visual_settle_step(
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
+    let pass = step_pass(input);
     let mut settled = Vec::new();
     let mut held = Vec::new();
     for capture in &captures {
-        let (entry, hold) = settle_task(runtime, workspace, capture, input)
+        let (entry, hold) = settle_task(runtime, workspace, capture, input, pass)
             .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
         if let Some(hold) = hold {
             held.push(hold);
@@ -77,16 +83,16 @@ fn settle_task(
     workspace: &Path,
     capture: &Value,
     input: &Value,
+    pass: VisualPass,
 ) -> Result<(Value, Option<String>), OrbitError> {
     let task_id = capture
         .get("task_id")
         .and_then(Value::as_str)
         .ok_or_else(|| OrbitError::InvalidInput("capture entry names no task_id".into()))?;
-    let (record, _) =
-        read_record::<VisualCaptureRecord>(runtime, task_id, VISUAL_CAPTURE_ARTIFACT)?.ok_or_else(
-            || OrbitError::Execution(format!("{task_id} has no {VISUAL_CAPTURE_ARTIFACT}")),
-        )?;
-    let checks = read_record::<VisualChecksRecord>(runtime, task_id, VISUAL_CHECKS_ARTIFACT)?
+    let capture_artifact = pass.capture_artifact();
+    let (record, _) = read_record::<VisualCaptureRecord>(runtime, task_id, &capture_artifact)?
+        .ok_or_else(|| OrbitError::Execution(format!("{task_id} has no {capture_artifact}")))?;
+    let checks = read_record::<VisualChecksRecord>(runtime, task_id, &pass.checks_artifact())?
         .map(|(checks, _)| checks)
         .filter(|checks| checks.candidate_sha == record.candidate_sha);
     let head = crate::application::tag_instructions::commit_at(workspace, "HEAD")
@@ -163,7 +169,10 @@ fn settle_task(
     } else {
         runtime.visual_review_settings().require_established
     };
-    let held = require_established && outcome != VisualSettleOutcome::Established;
+    // The post-landing comparison never holds anything (§12.2).
+    let held = pass == VisualPass::Delivery
+        && require_established
+        && outcome != VisualSettleOutcome::Established;
     let settle = VisualSettleRecord {
         schema_version: 1,
         candidate_sha: head,
@@ -172,21 +181,38 @@ fn settle_task(
         not_established: record.not_established.clone(),
         held,
     };
+    let settle_artifact = pass.settle_artifact();
+    let review_artifact = pass.review_artifact();
     attach_system_artifacts(
         runtime,
         task_id,
-        vec![json_artifact(VISUAL_SETTLE_ARTIFACT, &settle)?],
+        vec![json_artifact(&settle_artifact, &settle)?],
     )?;
     // The comparison review of record (§11): findings with their
-    // verdicts and verified severities. Shadow only — recorded under
-    // purpose `visual_review`, never filed, never blocking and never
-    // given to the code reviewer.
-    let review = review_record(workspace, &record, task_id, input)?;
+    // verdicts and verified severities, recorded under the pass's purpose.
+    // In `live` a delivery's confirmed findings also get their
+    // disposition (§11.3); shadow and the post-landing comparison are
+    // recorded only.
+    let mut review = review_record(workspace, &record, task_id, input, pass)?;
+    if let Some(review) = review.as_mut()
+        && pass == VisualPass::Delivery
+        && record.mode == VisualReviewMode::Live
+    {
+        let (block_at, file_at) = contract.as_ref().map_or_else(
+            || {
+                let settings = runtime.visual_review_settings();
+                (settings.block_at, settings.file_at)
+            },
+            |contract| (contract.block_at, contract.file_at),
+        );
+        let review_layer = run_review_layer(runtime, input);
+        apply_dispositions(review, block_at, file_at, review_layer);
+    }
     if let Some(review) = &review {
         attach_system_artifacts(
             runtime,
             task_id,
-            vec![json_artifact(VISUAL_REVIEW_ARTIFACT, review)?],
+            vec![json_artifact(&review_artifact, review)?],
         )?;
     }
     let summary =
@@ -201,8 +227,12 @@ fn settle_task(
                 VisualSettleOutcome::Refused => "refused",
             },
             "held": held,
-            "settle_artifact": VISUAL_SETTLE_ARTIFACT,
-            "review_artifact": review.is_some().then_some(VISUAL_REVIEW_ARTIFACT),
+            "pass": pass.as_str(),
+            "settle_artifact": settle_artifact,
+            "review_artifact": review.is_some().then_some(review_artifact),
+            "must_address": review.as_ref().map_or(0, |review| {
+                review.findings.iter().filter(|finding| finding.must_address()).count()
+            }),
             "summary": summary,
         }),
         hold,
@@ -217,6 +247,7 @@ fn review_record(
     capture: &VisualCaptureRecord,
     task_id: &str,
     input: &Value,
+    pass: VisualPass,
 ) -> Result<Option<VisualReviewRecord>, OrbitError> {
     let Some(prepared) = input.get("verified") else {
         return Ok(None);
@@ -324,7 +355,7 @@ fn review_record(
     verifier_crews.dedup();
     Ok(Some(VisualReviewRecord {
         schema_version: 1,
-        purpose: VISUAL_REVIEW_PURPOSE.to_string(),
+        purpose: pass.purpose().to_string(),
         mode: capture.mode,
         task_id: task_id.to_string(),
         candidate_sha: capture.candidate_sha.clone(),
@@ -362,7 +393,59 @@ fn review_record(
         .unwrap_or(u32::MAX),
         deviations,
         recorded_only: true,
+        block_at: None,
+        file_at: None,
+        recapture: None,
     }))
+}
+
+/// Whether the run settles a review before landing that can resolve a
+/// blocking finding (§1): `review.timing` captured on, or selective
+/// before-landing review enforced. A run that captured no review
+/// admission has none.
+fn run_review_layer(runtime: &OrbitRuntime, input: &Value) -> bool {
+    let Some(run_id) = input
+        .get("job_run_id")
+        .and_then(Value::as_str)
+        .filter(|run| !run.trim().is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            runtime
+                .worker_invocation()
+                .map(|binding| binding.bound_run_id.clone())
+        })
+    else {
+        return false;
+    };
+    crate::application::review::run_review_admission(runtime, &run_id)
+        .ok()
+        .flatten()
+        .is_some_and(|admission| admission.gates_merge() || admission.selective_enforced())
+}
+
+/// Give each confirmed finding its live disposition (§11.3) and mark the
+/// record live. Rejected and unverified findings never block and are
+/// never filed, so they get none.
+pub(super) fn apply_dispositions(
+    review: &mut VisualReviewRecord,
+    block_at: VisualThreshold,
+    file_at: VisualThreshold,
+    review_layer: bool,
+) {
+    for finding in &mut review.findings {
+        finding.disposition =
+            (finding.verdict.verdict == VisualVerdictKind::Confirmed).then(|| {
+                visual_disposition(
+                    finding.severity_of_record(),
+                    block_at,
+                    file_at,
+                    review_layer,
+                )
+            });
+    }
+    review.recorded_only = false;
+    review.block_at = Some(block_at);
+    review.file_at = Some(file_at);
 }
 
 /// The crew each finding's partition named, by finding id.

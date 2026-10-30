@@ -202,10 +202,27 @@ pub(in crate::application::agents) fn visual_review_facts(
             Some((verdict, severity, finding.title.clone()))
         })
         .collect();
+    let mismatched: std::collections::BTreeSet<&str> = record
+        .findings
+        .iter()
+        .filter(|finding| finding.verdict.verdict == VisualVerdictKind::Confirmed)
+        .filter(|finding| {
+            orbit_types::task::visual_severity_rank(finding.severity_of_record())
+                .is_some_and(|rank| rank >= 2)
+        })
+        .map(|finding| finding.mock.as_str())
+        .collect();
+    let mocks_matched = record
+        .budget
+        .shown
+        .iter()
+        .filter(|shown| !mismatched.contains(shown.mock.as_str()))
+        .count();
     Some(super::model::VisualReviewFacts {
         at,
-        reviewer_crew: record.reviewer_crew,
+        reviewer_crew: record.reviewer_crew.clone(),
         findings,
+        mocks_matched,
     })
 }
 

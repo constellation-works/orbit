@@ -15,15 +15,14 @@ use orbit_common::fs::io::{atomic_write_bytes, create_private_dir_all};
 use orbit_engine::DispatchError;
 use orbit_types::identity::Crew;
 use orbit_types::task::{
-    MOCK_DEVIATIONS_ARTIFACT, MockDeviations, Task, TaskComplexity, VISUAL_CAPTURE_ARTIFACT,
-    VISUAL_CHECKS_ARTIFACT, VISUAL_NO_VISION_CREW, VisualBudgetMock, VisualCaptureOutcome,
-    VisualCaptureRecord, VisualChecksRecord, VisualReviewContract, VisualShownForm,
-    select_visual_budget, visual_image_dimensions,
+    MOCK_DEVIATIONS_ARTIFACT, MockDeviations, Task, TaskComplexity, VISUAL_NO_VISION_CREW,
+    VisualBudgetMock, VisualCaptureOutcome, VisualCaptureRecord, VisualChecksRecord, VisualPass,
+    VisualReviewContract, VisualShownForm, select_visual_budget, visual_image_dimensions,
 };
 use serde_json::{Value, json};
 
 use super::contract::MockDigestSource;
-use super::{read_record, required_string};
+use super::{read_record, required_string, step_pass};
 use crate::OrbitRuntime;
 use crate::application::contracts::CrewCandidate;
 use crate::application::tag_instructions::read_blob_at;
@@ -46,10 +45,11 @@ pub(crate) fn visual_review_prepare_step(
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
+    let pass = step_pass(input);
     let mut records = Vec::new();
     let mut reviews = Vec::new();
     for capture in &captures {
-        let prepared = prepare_task(runtime, &workspace, capture)
+        let prepared = prepare_task(runtime, &workspace, capture, pass)
             .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
         if let Some(dispatch) = prepared.dispatch {
             reviews.push(dispatch);
@@ -58,6 +58,7 @@ pub(crate) fn visual_review_prepare_step(
     }
     Ok(json!({
         "applies": !records.is_empty(),
+        "pass": pass.as_str(),
         "review_count": reviews.len(),
         "reviews": reviews,
         "records": records,
@@ -68,15 +69,15 @@ fn prepare_task(
     runtime: &OrbitRuntime,
     workspace: &Path,
     capture: &Value,
+    pass: VisualPass,
 ) -> Result<PreparedReview, OrbitError> {
     let task_id = capture
         .get("task_id")
         .and_then(Value::as_str)
         .ok_or_else(|| OrbitError::InvalidInput("capture entry names no task_id".into()))?;
-    let (record, _) =
-        read_record::<VisualCaptureRecord>(runtime, task_id, VISUAL_CAPTURE_ARTIFACT)?.ok_or_else(
-            || OrbitError::Execution(format!("{task_id} has no {VISUAL_CAPTURE_ARTIFACT}")),
-        )?;
+    let capture_artifact = pass.capture_artifact();
+    let (record, _) = read_record::<VisualCaptureRecord>(runtime, task_id, &capture_artifact)?
+        .ok_or_else(|| OrbitError::Execution(format!("{task_id} has no {capture_artifact}")))?;
     let contract = review_contract(runtime, task_id)?;
     let (max_mocks, reviewer_on, max_images, max_image_tokens, max_findings) = match &contract {
         Some(contract) => (
@@ -97,10 +98,18 @@ fn prepare_task(
             )
         }
     };
+    // The post-landing comparison measures both experiment arms the same
+    // way, so it always reviews (§12.2); a delivery honours the arm's
+    // `visual_review.reviewer` overlay (§12.1).
+    let reviewer_on = match pass {
+        VisualPass::Measure => true,
+        _ => runtime.experiment_visual_reviewer(task_id, reviewer_on)?,
+    };
     let task = runtime.get_task(task_id).ok();
     let deviations = declared_deviations(runtime, task_id);
     let mut base = json!({
         "task_id": task_id,
+        "pass": pass.as_str(),
         "candidate_sha": record.candidate_sha,
         "mode": record.mode.as_str(),
         "budget": {
@@ -222,7 +231,7 @@ fn prepare_task(
             .collect::<serde_json::Map<String, Value>>()
     );
     base["scratch_dir"] = json!(scratch.display().to_string());
-    let checks = read_record::<VisualChecksRecord>(runtime, task_id, VISUAL_CHECKS_ARTIFACT)?
+    let checks = read_record::<VisualChecksRecord>(runtime, task_id, &pass.checks_artifact())?
         .map(|(checks, _)| checks)
         .filter(|checks| checks.candidate_sha == record.candidate_sha);
     let dispatch = json!({

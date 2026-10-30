@@ -19,13 +19,22 @@ spec:
     severities), a low-confidence verdict decides nothing without its one
     escalation, and the findings, verdicts, verified severities, budgets
     and dropped-evidence counts are recorded in the system-written
-    `visual/review.json` under purpose `visual_review`. Shadow only:
-    nothing is filed, nothing blocks and nothing is given to the code
-    reviewer.
+    `visual/review.json` under purpose `visual_review`. In shadow nothing
+    is filed, nothing blocks and nothing is given to the code reviewer. In
+    `live` each confirmed finding gets a disposition from
+    `visual_review.block_at` and `visual_review.file_at`: must-address (the
+    code reviewer resolves it before landing), optional (filed after
+    landing when unfixed) or recorded; without a review before landing a
+    blocking finding is filed `high` instead. A `measure` capture (the
+    post-landing comparison) is settled under `visual/measure/` with
+    purpose `visual_measure` and never holds.
   input_schema_json:
     type: object
     required: [workspace_path, capture]
     properties:
+      job_run_id:
+        type: string
+        description: The run whose review admission decides the review layer.
       workspace_path:
         type: string
       capture:

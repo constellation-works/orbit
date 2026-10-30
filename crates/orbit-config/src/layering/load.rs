@@ -265,6 +265,11 @@ fn load_layered_resolved_with_staged(
         .clone()
         .unwrap_or_default();
     resolved.plugin_enablement = plugin_enablement;
+    crate::visual_review::warn_live_without_review_layer(
+        &resolved.visual_review,
+        &resolved.operation,
+        config_path,
+    );
     Ok(LoadedResolvedConfig {
         resolved,
         global,

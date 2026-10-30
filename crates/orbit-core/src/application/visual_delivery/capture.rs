@@ -14,17 +14,17 @@ use orbit_common::fs::io::create_private_dir_all;
 use orbit_common::process::run_bounded;
 use orbit_engine::DispatchError;
 use orbit_types::task::{
-    ResolvedMock, TaskArtifact, VISUAL_CAPTURE_ARTIFACT, VISUAL_CHECKS_ARTIFACT,
-    VISUAL_MAX_IMAGE_BYTES, ViewManifestSet, VisualCaptureError, VisualCaptureImage,
-    VisualCaptureOutcome, VisualCaptureRecord, VisualCapturedMock, VisualCheckFinding,
-    VisualChecksRecord, VisualKitPin, VisualNotEstablished, VisualReviewContract, mock_sha256_hex,
-    visual_review_summary,
+    ResolvedMock, TaskArtifact, VISUAL_MAX_IMAGE_BYTES, ViewManifestSet, VisualCaptureError,
+    VisualCaptureImage, VisualCaptureOutcome, VisualCaptureRecord, VisualCapturedMock,
+    VisualCheckFinding, VisualChecksRecord, VisualKitPin, VisualNotEstablished, VisualPass,
+    VisualReviewContract, mock_sha256_hex, visual_review_summary,
 };
 use serde_json::{Value, json};
 
 use super::contract::MockDigestSource;
 use super::{
-    attach_system_artifacts, json_artifact, required_string, step_task_ids, system_artifact,
+    attach_system_artifacts, json_artifact, required_string, step_pass, step_task_ids,
+    system_artifact,
 };
 use crate::OrbitRuntime;
 use crate::application::visual_capture::{
@@ -34,9 +34,10 @@ use crate::application::visual_capture::{
 use crate::bootstrap::browser_kit::{KitInspection, KitLayout};
 
 /// One task's capture, as the step reports it and later steps read it.
-struct TaskCapture {
+pub(super) struct TaskCapture {
+    pass: VisualPass,
     task_id: String,
-    record: VisualCaptureRecord,
+    pub(super) record: VisualCaptureRecord,
     capture_sha256: String,
     scratch: PathBuf,
     require_established: bool,
@@ -70,18 +71,21 @@ pub(crate) fn visual_capture_step(
                 .map(|binding| binding.bound_run_id.clone())
         })
         .unwrap_or_else(|| "run".to_string());
+    let pass = step_pass(input);
     let mut captures = Vec::new();
     for task_id in step_task_ids(input) {
-        let capture = capture_task(runtime, &task_id, &workspace, &run_id)
+        let capture = capture_task(runtime, &task_id, &workspace, &run_id, pass)
             .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
         if let Some(capture) = capture {
             captures.push(capture);
         }
     }
-    Ok(capture_output(&captures))
+    let mut output = capture_output(&captures);
+    output["pass"] = json!(pass.as_str());
+    Ok(output)
 }
 
-fn capture_output(captures: &[TaskCapture]) -> Value {
+pub(super) fn capture_output(captures: &[TaskCapture]) -> Value {
     let entries: Vec<Value> = captures
         .iter()
         .map(|capture| {
@@ -93,7 +97,8 @@ fn capture_output(captures: &[TaskCapture]) -> Value {
                 },
                 "mode": capture.record.mode.as_str(),
                 "candidate_sha": capture.record.candidate_sha,
-                "capture_artifact": VISUAL_CAPTURE_ARTIFACT,
+                "pass": capture.pass.as_str(),
+                "capture_artifact": capture.pass.capture_artifact(),
                 "capture_sha256": capture.capture_sha256,
                 "scratch_dir": capture.scratch.display().to_string(),
                 "require_established": capture.require_established,
@@ -110,17 +115,21 @@ fn capture_output(captures: &[TaskCapture]) -> Value {
         && let Some(object) = output.as_object_mut()
     {
         object.insert("task_id".into(), json!(single.task_id));
-        object.insert("capture_artifact".into(), json!(VISUAL_CAPTURE_ARTIFACT));
+        object.insert(
+            "capture_artifact".into(),
+            json!(single.pass.capture_artifact()),
+        );
         object.insert("capture_sha256".into(), json!(single.capture_sha256));
     }
     output
 }
 
-fn capture_task(
+pub(super) fn capture_task(
     runtime: &OrbitRuntime,
     task_id: &str,
     workspace: &Path,
     run_id: &str,
+    pass: VisualPass,
 ) -> Result<Option<TaskCapture>, OrbitError> {
     let mut unreadable = None;
     let contract = if runtime.worker_invocation().is_some() {
@@ -146,6 +155,8 @@ fn capture_task(
                     require_established: settings.require_established,
                     manifests: Vec::new(),
                     mocks: Vec::new(),
+                    block_at: settings.block_at,
+                    file_at: settings.file_at,
                 })
             }
         }
@@ -155,12 +166,15 @@ fn capture_task(
     };
     let candidate_sha = crate::application::tag_instructions::commit_at(workspace, "HEAD")
         .map_err(|reason| OrbitError::Execution(format!("candidate head: {reason}")))?;
-    let scratch = runtime
+    let mut scratch = runtime
         .paths()
         .repo_root
         .join(".orbit/tmp/visual-delivery")
         .join(sanitize(run_id))
         .join(sanitize(task_id));
+    if pass != VisualPass::Delivery {
+        scratch = scratch.join(pass.as_str());
+    }
     let host = runtime
         .automation_machine_identity()
         .unwrap_or("local")
@@ -206,6 +220,7 @@ fn capture_task(
                 &scratch,
                 &layout,
                 &inspection,
+                pass,
             ) {
                 Ok(captured) => {
                     record.kit = Some(captured.kit);
@@ -241,7 +256,7 @@ fn capture_task(
             }
         }
     }
-    let capture_artifact = json_artifact(VISUAL_CAPTURE_ARTIFACT, &record)?;
+    let capture_artifact = json_artifact(&pass.capture_artifact(), &record)?;
     let capture_sha256 = mock_sha256_hex(&capture_artifact.content);
     // Preserve diagnostics from error-only driver entries until visual_checks
     // merges them with the capture findings and rule results.
@@ -254,12 +269,13 @@ fn capture_task(
         rule_results: BTreeMap::new(),
         rules_unavailable: None,
     };
-    let checks_artifact = json_artifact(VISUAL_CHECKS_ARTIFACT, &checks)?;
+    let checks_artifact = json_artifact(&pass.checks_artifact(), &checks)?;
     // Images first: the record names only images already attached.
     attach_system_artifacts(runtime, task_id, images)?;
     attach_system_artifacts(runtime, task_id, vec![capture_artifact])?;
     attach_system_artifacts(runtime, task_id, vec![checks_artifact])?;
     Ok(Some(TaskCapture {
+        pass,
         task_id: task_id.to_string(),
         record,
         capture_sha256,
@@ -301,6 +317,7 @@ fn capture_mocks(
     scratch: &Path,
     layout: &KitLayout,
     inspection: &KitInspection,
+    pass: VisualPass,
 ) -> Result<CapturedMocks, OrbitError> {
     let mut manifests = ViewManifestSet::default();
     for manifest in &contract.manifests {
@@ -400,7 +417,7 @@ fn capture_mocks(
             ),
             None => {
                 let (image, attached) =
-                    capture_image(&entry, &out_dir, candidate_sha, &tree, &manifests)?;
+                    capture_image(&entry, &out_dir, candidate_sha, &tree, &manifests, pass)?;
                 images.extend(attached);
                 (Some(image), None)
             }
@@ -426,13 +443,14 @@ fn capture_mocks(
 }
 
 /// One rendered mock's record and the two images it attaches under
-/// `visual/<mock-name>/` (§4.5).
+/// `visual/<mock-name>/` (§4.5), or the pass's own prefix.
 fn capture_image(
     entry: &VisualCaptureMock,
     out_dir: &Path,
     candidate_sha: &str,
     tree: &str,
     manifests: &ViewManifestSet,
+    pass: VisualPass,
 ) -> Result<(VisualCaptureImage, Vec<TaskArtifact>), OrbitError> {
     let missing = |field: &str| {
         OrbitError::Execution(format!(
@@ -451,7 +469,7 @@ fn capture_image(
             .file_name()
             .and_then(|leaf| leaf.to_str())
             .unwrap_or(file);
-        format!("visual/{name}/{leaf}")
+        pass.image_artifact(&name, leaf)
     };
     let capture_bytes = read_output(out_dir, capture_file)?;
     let side_bytes = read_output(out_dir, side_file)?;

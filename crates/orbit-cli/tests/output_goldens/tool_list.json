@@ -1186,6 +1186,12 @@
         "required": true
       },
       {
+        "name": "template",
+        "description": "Start from a definition Orbit ships; any definition field given as well replaces the template's. `visual-review` compares delivering `verify-mock-ui` tasks without (control) and with (treatment) the visual comparison reviewer: 1:1, live, 30 tasks per arm, 60 days, primary metric visual_landed_mismatches. The workspace must also list `visual_review.reviewer` in `experiments.config_keys` before it starts.",
+        "param_type": "string",
+        "required": false
+      },
+      {
         "name": "hypothesis",
         "description": "What the experiment expects the treatment arms to change, and why.",
         "param_type": "string",
@@ -1205,7 +1211,7 @@
       },
       {
         "name": "primary_metric",
-        "description": "The metric the verdict is read on: implement_tokens, total_tokens, cost_usd, lead_time, implement_duration, turns_before_first_edit, result_bytes_before_first_edit, first_pass_acceptance, review_repairs, step_recoveries, final_recoveries, failed_checks, merge_conflicts, delivery_done_rate, escaped_regressions or lines_changed.",
+        "description": "The metric the verdict is read on: implement_tokens, total_tokens, cost_usd, lead_time, implement_duration, turns_before_first_edit, result_bytes_before_first_edit, first_pass_acceptance, review_repairs, step_recoveries, final_recoveries, failed_checks, merge_conflicts, delivery_done_rate, escaped_regressions, lines_changed, visual_landed_mismatches, visual_review_repairs or visual_verified_finding_rate.",
         "param_type": "string",
         "required": false
       },
@@ -1313,7 +1319,7 @@
       },
       {
         "name": "metric",
-        "description": "Report only this metric; the verdict is still read on the primary metric and guardrails. One of implement_tokens, total_tokens, cost_usd, lead_time, implement_duration, turns_before_first_edit, result_bytes_before_first_edit, first_pass_acceptance, review_repairs, step_recoveries, final_recoveries, failed_checks, merge_conflicts, delivery_done_rate, escaped_regressions or lines_changed.",
+        "description": "Report only this metric; the verdict is still read on the primary metric and guardrails. One of implement_tokens, total_tokens, cost_usd, lead_time, implement_duration, turns_before_first_edit, result_bytes_before_first_edit, first_pass_acceptance, review_repairs, step_recoveries, final_recoveries, failed_checks, merge_conflicts, delivery_done_rate, escaped_regressions, lines_changed, visual_landed_mismatches, visual_review_repairs or visual_verified_finding_rate.",
         "param_type": "string",
         "required": false
       },
@@ -1483,7 +1489,7 @@
       },
       {
         "name": "primary_metric",
-        "description": "The metric the verdict is read on: implement_tokens, total_tokens, cost_usd, lead_time, implement_duration, turns_before_first_edit, result_bytes_before_first_edit, first_pass_acceptance, review_repairs, step_recoveries, final_recoveries, failed_checks, merge_conflicts, delivery_done_rate, escaped_regressions or lines_changed.",
+        "description": "The metric the verdict is read on: implement_tokens, total_tokens, cost_usd, lead_time, implement_duration, turns_before_first_edit, result_bytes_before_first_edit, first_pass_acceptance, review_repairs, step_recoveries, final_recoveries, failed_checks, merge_conflicts, delivery_done_rate, escaped_regressions, lines_changed, visual_landed_mismatches, visual_review_repairs or visual_verified_finding_rate.",
         "param_type": "string",
         "required": false
       },

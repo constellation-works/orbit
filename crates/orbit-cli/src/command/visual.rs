@@ -2,7 +2,8 @@
 //!
 //! `capture` calls the `orbit.visual.capture` tool, so `--json` is that
 //! tool's payload. What is left here is the text rendering: one line per
-//! mock with the files written for it, then the rules summary.
+//! mock with the files written for it, then the rules summary, and one line
+//! for an accepted dispute.
 
 use clap::Args;
 use orbit_common::governance::visual::VisualVerb;
@@ -26,6 +27,11 @@ impl Execute for VisualCommand {
         let value = runtime.run_tool(spec.tool_name, Value::Object(input))?;
         let blocks = match spec.verb {
             VisualVerb::Capture => capture_blocks(&value),
+            VisualVerb::AcceptDispute => vec![Block::text(format!(
+                "Accepted the dispute of visual finding {} on {}",
+                text(&value["finding_id"]),
+                text(&value["task_id"]),
+            ))],
         };
         Ok(Payload::blocks(value, blocks).into())
     }

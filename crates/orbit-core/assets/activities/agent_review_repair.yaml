@@ -144,6 +144,17 @@ spec:
          `proposal` (`tool`, `input`, `rationale`) as part of the change against
          the criteria. You cannot repair a proposal: one that is wrong, unjustified
          or outside the task's intent is an open finding naming its `artifact`.
+       - `visual_findings`: confirmed mismatches between the candidate's
+         rendered views and the task's mocks (fetch the cited `images` with
+         `orbit.task.artifact.get`). For each, add one entry to the report's
+         `visual_resolutions`: `{finding_id, resolution, reason}` with
+         `resolution` `fixed` (your repair commit changes the view; it is
+         recaptured and its checks rerun before landing), `disputed` (the
+         mock or finding is wrong; `reason` says why, and an operator decides)
+         or `unfixed`. A `must_address: true` finding left `unfixed` or
+         `disputed` holds the candidate from landing; an optional one left
+         unfixed is filed as a follow-up after landing. Never claim `fixed`
+         without changing the view.
     4. Review spec compliance: every acceptance criterion against
        `git diff <base.commit>..HEAD`, the affected callers, and the implementer's
        execution summary in the manifest. A green summary or CI result is not
@@ -359,6 +370,12 @@ spec:
                  "properties":{
                    "kind":{"enum":["open","repaired","disposed"]},
                    "reason":{"type":"string","description":"required for disposed"}}}}}},
+           "visual_resolutions":{"type":"array","items":{"type":"object",
+             "required":["finding_id","resolution"],
+             "properties":{
+               "finding_id":{"type":"string","description":"a manifest visual_findings id"},
+               "resolution":{"enum":["fixed","disputed","unfixed"]},
+               "reason":{"type":"string","description":"required for disputed"}}}},
            "validation":{"type":"array","items":{"type":"object",
              "required":["command","outcome"],
              "properties":{

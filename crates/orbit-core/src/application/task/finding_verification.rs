@@ -47,11 +47,12 @@ pub(crate) const UNVERIFIED_REVIEW_FINDING: &str = "unverified_review_finding";
 pub const FINDING_VERIFICATION_SCHEMA_VERSION: u32 = 1;
 
 /// Tags a review job files its findings with.
-pub const REVIEW_FINDING_TAGS: [&str; 4] = [
+pub const REVIEW_FINDING_TAGS: [&str; 5] = [
     "code-review",
     "delivery-code-review",
     "security-review",
     "qa-sweep",
+    orbit_types::task::VISUAL_REVIEW_TAG,
 ];
 
 /// Statuses in which a finding is verified and held: those before promotion
@@ -149,6 +150,9 @@ pub enum VerdictSource {
     TaskPilot,
     /// An implementer's `finding-invalid.json` report at its claim base.
     Implementer,
+    /// A delivery's in-line visual verification, carried to the follow-up
+    /// filed for a confirmed visual finding after landing.
+    VisualReview,
 }
 
 impl VerdictSource {
@@ -161,6 +165,7 @@ impl VerdictSource {
             Self::Verification => "verification",
             Self::TaskPilot => "task-pilot",
             Self::Implementer => "implementer",
+            Self::VisualReview => "visual-review",
         }
     }
 }

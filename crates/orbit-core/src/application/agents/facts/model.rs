@@ -219,6 +219,9 @@ pub(in crate::application::agents) struct VisualReviewFacts {
     /// `(verdict, severity of record, title)` per finding: the verified
     /// severity for a CONFIRMED finding, else the reviewer's.
     pub(in crate::application::agents) findings: Vec<(FindingVerdict, String, String)>,
+    /// Mocks shown to the reviewer with no CONFIRMED finding at `medium`
+    /// or above on this first candidate: the implementer's credit.
+    pub(in crate::application::agents) mocks_matched: usize,
 }
 
 /// One settled review gate attempt, from its settlement comment.

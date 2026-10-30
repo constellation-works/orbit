@@ -20,6 +20,8 @@ mod capture;
 mod checks;
 mod contract;
 mod handoff;
+mod landed;
+mod resolve;
 mod review;
 mod settle;
 #[cfg(test)]
@@ -28,6 +30,8 @@ mod verify;
 
 pub(crate) use capture::visual_capture_step;
 pub(crate) use checks::visual_checks_step;
+pub(crate) use landed::visual_landed_step;
+pub(crate) use resolve::visual_recapture_step;
 pub(crate) use review::visual_review_prepare_step;
 pub(crate) use settle::visual_settle_step;
 pub(crate) use verify::visual_verify_prepare_step;
@@ -39,6 +43,19 @@ use serde_json::Value;
 
 use crate::OrbitRuntime;
 use crate::application::task::TaskUpdateParams;
+
+/// The pass a step runs for: its input's `pass`, else the `pass` its
+/// capture output or capture entry names, else the delivery's.
+fn step_pass(input: &Value) -> orbit_types::task::VisualPass {
+    [
+        input.get("pass"),
+        input.get("capture").and_then(|capture| capture.get("pass")),
+    ]
+    .into_iter()
+    .flatten()
+    .find_map(|pass| pass.as_str().and_then(orbit_types::task::VisualPass::parse))
+    .unwrap_or_default()
+}
 
 /// The task ids a delivery step acts for.
 fn step_task_ids(input: &Value) -> Vec<String> {

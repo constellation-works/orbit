@@ -415,7 +415,7 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
             },
         },
         OrbitBuiltinAction::Visual(verb) => match verb {
-            VisualVerb::Capture => ActionPolicy {
+            VisualVerb::Capture | VisualVerb::AcceptDispute => ActionPolicy {
                 declared: verb.spec().params,
                 ..NO_REDACTION
             },
@@ -498,6 +498,7 @@ fn is_covered_mutating_action(action: OrbitBuiltinAction) -> bool {
         },
         OrbitBuiltinAction::Visual(verb) => match verb {
             VisualVerb::Capture => false,
+            VisualVerb::AcceptDispute => true,
         },
         OrbitBuiltinAction::Orchestrator(verb) => match verb {
             OrchestratorVerb::Scorecard | OrchestratorVerb::Show => false,

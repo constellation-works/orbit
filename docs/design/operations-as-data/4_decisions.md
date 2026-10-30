@@ -269,6 +269,13 @@ called: an agent session or plugin callback naming either is refused rather
 than defaulting to a grantable mutation. `GOVERNED_TOOL_PLACEMENT` records
 both as unadvertised.
 
+Current surface addition (2026-10-30): `orbit.visual.accept_dispute` is governed
+`operator` and unadvertised (`mcp_scope: None`); the operator surface is `orbit visual
+accept-dispute`. Accepting a disputed blocking visual finding overrides the reviewer's and
+verifier's confirmation and lets a held candidate land, so an agent session is refused at
+the row, and the tool entry also refuses a managed run and a claimed worker.
+`GOVERNED_TOOL_PLACEMENT` records it unadvertised.
+
 ### Rejected alternatives
 
 - **Give the exposure declaration a second axis — "which surface advertises" versus "which capability may perform" — and derive chokepoint enforcement from the second** (ORB-10478 option 1). Rejected: there is no longer a second advertisement axis to split. `McpExposure` is gone and `mcp_scope` is a plain placement decision, so this would mean *introducing* a policy framework to unify two declarations that already have one enforcement point between them — speculative v2 machinery for a drift that a ten-line table catches.

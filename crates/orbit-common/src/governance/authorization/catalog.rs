@@ -534,6 +534,12 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         allowed: &[McpCapability::Operator],
         rationale: "requeuing a blocked task overrides a recorded escalation and preserves its published candidate",
     },
+    GovernedOperation {
+        id: "orbit.visual.accept_dispute",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "accepting a disputed visual finding overrides two crews' confirmation and lets the candidate land, so only an operator decides it",
+    },
     // Field-level, not a tool: `orbit.task.add` and `orbit.task.update`
     // additionally require it when their input carries `granted_tools`.
     GovernedOperation {

@@ -31,6 +31,12 @@ spec:
       # A `no-diff-expected` skip delivers no candidate to capture.
       skipped_no_diff_expected:
         type: [boolean, "null"]
+      pass:
+        type: string
+        enum: [delivery, recapture, measure]
+        description: >
+          `delivery` (default) writes under `visual/`; `measure`, the
+          post-landing comparison of the landed head, under `visual/measure/`.
   output_schema_json:
     type: object
     required: [applies, captures]

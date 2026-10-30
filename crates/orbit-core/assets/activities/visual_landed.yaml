@@ -1,0 +1,53 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: visual_landed
+spec:
+  type: deterministic
+  description: >
+    After a `verify-mock-ui` delivery lands (its task is `done`) in
+    `visual_review.mode = "live"`, file each confirmed visual finding it
+    left unresolved as a proposed follow-up: an optional fix (below
+    `visual_review.block_at`, at or above `visual_review.file_at`) the code
+    reviewer did not make, a blocking finding whose dispute the operator
+    accepted, or a blocking finding with no review before landing to
+    resolve it (filed `high`). Each follow-up is a bug tagged
+    `visual-review`, `spawned_from` the delivered task, with the mock,
+    capture and side-by-side attached and the in-line verification recorded
+    as its `finding_verified` history entry; the finding records it in
+    `visual/review.json`. It also names the landed tasks a visual review
+    experiment enrolled (`measure_task_ids`), whose landed head the
+    post-landing comparison reviews in both arms. Every other delivery
+    reports `applies: false`.
+  input_schema_json:
+    type: object
+    properties:
+      job_run_id:
+        type: string
+      completed_task_ids:
+        type: array
+        items:
+          type: string
+      task_id:
+        type: string
+        description: The one claimed task an owner landing lands.
+      base:
+        type: string
+  output_schema_json:
+    type: object
+    required: [applies, filed, measure, measure_task_ids]
+    properties:
+      applies:
+        type: boolean
+      filed:
+        type: array
+        items:
+          type: object
+      measure:
+        type: boolean
+      measure_task_ids:
+        type: array
+        items:
+          type: string
+  action: visual_landed
+  config: {}

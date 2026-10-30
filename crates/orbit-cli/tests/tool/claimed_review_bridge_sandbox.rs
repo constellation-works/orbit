@@ -1589,6 +1589,7 @@ fn wait_for(path: &Path, limit: Duration) {
 
 fn manifest(task: &str, attempt_id: &str, candidate: &SourceRevision) -> ReviewManifest {
     ReviewManifest {
+        visual_findings: Vec::new(),
         satisfied_external_evidence: BTreeMap::new(),
         evidence_carried: None,
         mutation_proposals: Vec::new(),

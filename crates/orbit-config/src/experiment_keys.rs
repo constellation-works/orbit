@@ -8,16 +8,20 @@ use serde_json::Value;
 pub enum ExperimentConfigKey {
     /// Maximum read-only explorer calls a managed run may submit (1–100).
     ExploreMaxCallsPerRun,
+    /// Whether a `verify-mock-ui` delivery runs the comparison reviewer and
+    /// its verifier (a boolean); the visual review experiment's arms.
+    VisualReviewReviewer,
 }
 
 impl ExperimentConfigKey {
     /// The complete code allowlist; workspace permission is also required.
-    pub const ALL: &[Self] = &[Self::ExploreMaxCallsPerRun];
+    pub const ALL: &[Self] = &[Self::ExploreMaxCallsPerRun, Self::VisualReviewReviewer];
 
     /// The dotted configuration key.
     pub const fn config_key(self) -> &'static str {
         match self {
             Self::ExploreMaxCallsPerRun => "workflow.explore.max_calls_per_run",
+            Self::VisualReviewReviewer => "visual_review.reviewer",
         }
     }
 
@@ -36,16 +40,20 @@ impl ExperimentConfigKey {
 
     /// Admit the key's JSON type and bounds without changing workspace config.
     pub fn validate_experiment_value(self, value: &Value) -> Result<(), OrbitError> {
-        let valid = match self {
-            Self::ExploreMaxCallsPerRun => value
-                .as_u64()
-                .is_some_and(|value| (1..=100).contains(&value)),
+        let (valid, expected) = match self {
+            Self::ExploreMaxCallsPerRun => (
+                value
+                    .as_u64()
+                    .is_some_and(|value| (1..=100).contains(&value)),
+                "an integer from 1 to 100",
+            ),
+            Self::VisualReviewReviewer => (value.is_boolean(), "a boolean"),
         };
         if valid {
             Ok(())
         } else {
             Err(OrbitError::InvalidInput(format!(
-                "experiment config `{}` must be an integer from 1 to 100",
+                "experiment config `{}` must be {expected}",
                 self.config_key()
             )))
         }

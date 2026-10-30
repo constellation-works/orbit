@@ -14,8 +14,10 @@ mod promotion;
 mod readout;
 mod run_policy;
 mod skills;
+mod templates;
 mod view;
 
 pub use lifecycle::{ExperimentActor, ExperimentChange, ExperimentDefinitionInput};
 pub use readout::ExperimentReadout;
+pub(crate) use templates::experiment_definition_from_template;
 pub use view::{ExperimentArmView, ExperimentEventView, ExperimentView};

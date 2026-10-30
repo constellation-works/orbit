@@ -184,7 +184,9 @@ pub use seeding::{
 };
 pub use store::{ConfigScope, ConfigStore, WorkspaceInitMode};
 pub use tag_instructions::{TAG_INSTRUCTIONS_KEY, TagInstructionSetting, TagInstructionSettings};
-pub use visual_review::{DEFAULT_VISUAL_REVIEW_WIDTH, VISUAL_REVIEW_KEY, VisualReviewSettings};
+pub use visual_review::{
+    DEFAULT_VISUAL_REVIEW_WIDTH, VISUAL_REVIEW_KEY, VisualReviewSettings, visual_review_layer,
+};
 
 const MACHINE_SETTINGS_FILE: &str = "config.toml";
 
