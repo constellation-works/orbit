@@ -513,6 +513,17 @@ mod script_linked_worktree {
         };
         let argv = compile_linux_script_argv(&spec, &[], &["/usr/bin/true".to_string()])
             .expect("compile profile");
+        let pointer_at = ro_bind_at(&argv, &fixture.worktree.join(".git"))
+            .expect("the worktree Git pointer is bound read-only");
+        let cwd = fixture.worktree.display().to_string();
+        let cwd_at = argv
+            .windows(3)
+            .position(|bind| bind[0] == "--bind" && bind[1] == cwd && bind[2] == cwd)
+            .expect("the worktree is bound writable");
+        assert!(
+            pointer_at > cwd_at,
+            "the pointer bind must cover the writable worktree"
+        );
         let common_at = ro_bind_at(&argv, &fixture.common)
             .expect("the common Git directory is bound read-only");
         let gitdir_at =
@@ -546,13 +557,21 @@ mod script_linked_worktree {
         let head = git(&fixture.worktree, &["rev-parse", "HEAD"]);
         let config = fixture.common.join("config");
         let config_before = fs::read(&config).expect("common config");
+        let pointer_before = fs::read(fixture.worktree.join(".git")).expect("Git pointer");
         let script = format!(
             "set -eu\n\
              git rev-parse HEAD\n\
              git log -1 --format=%H\n\
+             git status --porcelain\n\
              git archive --format=tar -o /orbit-script/out/archive.tar HEAD\n\
              echo generated > generated.txt\n\
-             if (echo tampered >> '{}') 2>/dev/null; then exit 3; fi\n",
+             if (echo tampered >> '{}') 2>/dev/null; then exit 3; fi\n\
+             if (: > .git) 2>/dev/null; then exit 4; fi\n\
+             if rm .git 2>/dev/null; then exit 5; fi\n\
+             if mv .git moved-git 2>/dev/null; then exit 6; fi\n\
+             echo replacement > replacement\n\
+             if mv -f replacement .git 2>/dev/null; then exit 7; fi\n\
+             if ln -sf replacement .git 2>/dev/null; then exit 8; fi\n",
             config.display()
         );
         let argv = vec!["/bin/sh".to_string(), "-c".to_string(), script];
@@ -590,6 +609,10 @@ mod script_linked_worktree {
             format!("{head}\n{head}\n")
         );
         assert!(fixture.scratch.join("out/archive.tar").is_file());
+        assert_eq!(
+            fs::read(fixture.worktree.join(".git")).expect("Git pointer"),
+            pointer_before
+        );
         assert_eq!(
             fs::read_to_string(fixture.worktree.join("generated.txt")).expect("source write"),
             "generated\n"
