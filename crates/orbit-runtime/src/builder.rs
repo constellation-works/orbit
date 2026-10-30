@@ -374,6 +374,7 @@ pub(crate) fn build_context_from_roots(
             runtime_config.snapshot.mid_run_steering(),
             runtime_config.tag_instructions.clone(),
             runtime_config.review_skip_tags.clone(),
+            runtime_config.visual_review.clone(),
             crate::task::locks::UnlockedContextPaths::new(
                 &runtime_config.snapshot.workflow_unlocked_context_paths,
             )?,

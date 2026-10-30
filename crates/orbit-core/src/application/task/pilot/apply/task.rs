@@ -437,6 +437,7 @@ fn assess(
         &ImplementationLane::resolve(context.runtime),
         &current.required_tools,
     );
+    warn_mocks_without_tag(context, &current, &mut assessment);
     Ok(Assessed {
         assessment,
         after: scope.after,
@@ -446,6 +447,42 @@ fn assess(
         post_deploy,
         user_facing_ui,
     })
+}
+
+/// `mocks_without_tag`: the task carries `mocks/` artifacts but no
+/// `verify-mock-ui` tag, so nothing will validate or compare them. The
+/// pilot warns and the operator decides; it never adds the tag
+/// (visual-review §2.1). Advisory: it holds no promotion.
+fn warn_mocks_without_tag(context: &ApplyContext<'_>, current: &Task, assessment: &mut Value) {
+    if orbit_types::task::has_verify_mock_ui_tag(&current.tags) {
+        return;
+    }
+    let Ok(artifacts) = context.runtime.get_task_artifacts(&current.id) else {
+        return;
+    };
+    let mocks: Vec<&str> = artifacts
+        .iter()
+        .map(|artifact| artifact.path.as_str())
+        .filter(|path| orbit_types::task::is_mock_artifact(path))
+        .collect();
+    if mocks.is_empty() {
+        return;
+    }
+    let Some(warnings) = assessment
+        .get_mut("utility_warnings")
+        .and_then(Value::as_array_mut)
+    else {
+        return;
+    };
+    warnings.push(json!({
+        "text": format!(
+            "mocks_without_tag: task has mocks/ artifacts ({}) but no `verify-mock-ui` tag; \
+             they will not be validated or compared. Add the tag to make them the visual \
+             specification, or leave them as plain attachments.",
+            mocks.join(", ")
+        ),
+        "holds_promotion": false,
+    }));
 }
 
 /// A `finding_invalid` result judges a review-filed bug at the pinned

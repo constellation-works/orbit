@@ -27,6 +27,16 @@ pub const DEFAULT_TAG_INSTRUCTIONS: &[(&str, TagInstructionRole, &str)] = &[
         TagInstructionRole::Review,
         include_str!("../../orbit-core/assets/tag_instructions/ui/review.md"),
     ),
+    (
+        "verify-mock-ui",
+        TagInstructionRole::Implement,
+        include_str!("../../orbit-core/assets/tag_instructions/verify-mock-ui/implement.md"),
+    ),
+    (
+        "verify-mock-ui",
+        TagInstructionRole::Review,
+        include_str!("../../orbit-core/assets/tag_instructions/verify-mock-ui/review.md"),
+    ),
 ];
 
 /// Shippable default activity assets, seeded under

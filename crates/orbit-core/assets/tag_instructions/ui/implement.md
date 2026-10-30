@@ -15,3 +15,7 @@ draft or refuse the PR for that reason:
 
 When the host has no browser kit or the view cannot render, say so in the
 handoff instead of claiming visual verification.
+
+For a task that also carries `verify-mock-ui`, the mocks under `mocks/`
+are the visual specification and the `verify-mock-ui` instructions govern
+the mocked views.

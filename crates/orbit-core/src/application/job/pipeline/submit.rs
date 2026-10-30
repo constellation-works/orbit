@@ -303,6 +303,18 @@ impl OrbitRuntime {
                     orbit_types::task::browser_kit_wait()
                 )));
             }
+            // A `verify-mock-ui` task's mocks are validated again at
+            // delivery admission, and their digests frozen for this
+            // delivery (visual-review §2.3, §2.4).
+            match self.mock_admission_check(&task) {
+                Ok(Some(resolved)) => self.record_admitted_mock_digests(&task, &resolved)?,
+                Ok(None) => {}
+                Err(detail) => {
+                    return Err(OrbitError::PolicyDenied(format!(
+                        "explicit ship task '{task_id}' is not admitted: {detail}"
+                    )));
+                }
+            }
             if let Some(allowlist) = allowlist.as_ref() {
                 // [ORB-12606] Report against the crew admission will draw, not
                 // the default chain: a crew-less task whose complexity pool

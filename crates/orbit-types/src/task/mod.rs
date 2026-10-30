@@ -10,6 +10,7 @@ mod fields_updated;
 mod granted_tools;
 mod host_labels;
 mod light_delivery;
+mod mock_review;
 mod model;
 mod mutation_proposal;
 mod os_requirement;
@@ -79,6 +80,14 @@ pub use artifacts::{
     is_explore_brief_artifact, is_valid_orb_task_id, is_valid_task_id_prefix, parse_task_number,
     serialize_task_artifacts, task_id_prefix, validate_orb_task_id,
     validate_relative_artifact_path, validate_task_relations_for_source,
+};
+pub use mock_review::{
+    MOCK_DEVIATIONS_ARTIFACT, MOCK_DIGESTS_ARTIFACT, MOCK_EXTENSIONS, MOCK_STATES,
+    MOCKS_ARTIFACT_PREFIX, ManifestApp, ManifestView, MockDeviation, MockDeviationBasis,
+    MockDeviations, MockDigest, MockDigestRecord, MockRefusal, MockRefusalCode, ResolvedMock,
+    VERIFY_MOCK_UI_TAG, ViewManifestSet, changed_mock_artifacts, has_verify_mock_ui_tag,
+    is_mock_artifact, mock_refusals_detail, mock_sha256_hex, parse_mock_name, record_mock_digests,
+    validate_task_mocks,
 };
 pub use model::{
     AdmissionAffinityReach, ArtifactPresentation, CANDIDATE_DISCARDED_EVENT,

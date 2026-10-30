@@ -99,6 +99,7 @@ mod seeding;
 mod store;
 mod tag_instructions;
 mod unknown;
+mod visual_review;
 
 pub use unknown::{UnknownConfigKey, unknown_config_keys_at, unknown_config_keys_present};
 
@@ -171,6 +172,7 @@ pub use seeding::{
 };
 pub use store::{ConfigScope, ConfigStore, WorkspaceInitMode};
 pub use tag_instructions::{TAG_INSTRUCTIONS_KEY, TagInstructionSetting, TagInstructionSettings};
+pub use visual_review::{DEFAULT_VISUAL_REVIEW_WIDTH, VISUAL_REVIEW_KEY, VisualReviewSettings};
 
 const MACHINE_SETTINGS_FILE: &str = "config.toml";
 
