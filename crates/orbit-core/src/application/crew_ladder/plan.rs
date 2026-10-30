@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
 use orbit_config::{CrewLadderMode, CrewLadderSettings, CrewPoolEntry, canonical_crew_pool};
+use orbit_runtime::CrewLadderControls;
 use orbit_types::task::{TaskComplexity, TaskType};
 use serde_json::{Value, json};
 
@@ -250,13 +251,16 @@ pub(super) struct LadderPlan {
 }
 
 impl OrbitRuntime {
-    /// Plan every tier against the workspace's experiments `views`.
+    /// Plan every tier against the workspace's experiments `views`, reading
+    /// the ladder, crews, pools and experiment gates from one `controls`
+    /// version so the plan never mixes config versions.
     pub(super) fn crew_ladder_plan(
         &self,
         views: &[ExperimentView],
+        controls: &CrewLadderControls,
     ) -> Result<LadderPlan, OrbitError> {
-        let settings = self.crew_ladder_settings().clone();
-        let crews = self.context.settings().crews();
+        let settings = controls.settings.clone();
+        let crews = &controls.crews;
         let trials = views
             .iter()
             .filter_map(LadderTrial::from_view)
@@ -265,10 +269,8 @@ impl OrbitRuntime {
         let mut tiers = Vec::with_capacity(TIERS.len());
         for tier in TIERS {
             let pool_key = format!("workflow.{tier}_complexity_crews");
-            let names = self
-                .context
-                .settings()
-                .complexity_crews()
+            let names = controls
+                .complexity_crews
                 .pool(tier)
                 .unwrap_or_default()
                 .to_vec();
@@ -331,8 +333,8 @@ impl OrbitRuntime {
 
         // Trials count toward `experiments.max_running`. The sync concludes
         // retired trials before it starts new ones, so their slots are free.
-        let experiments_enabled = self.current_experiments_enabled();
-        let max_running = self.experiment_settings().max_running;
+        let experiments_enabled = controls.experiments_enabled;
+        let max_running = controls.max_running;
         let running = views.iter().filter(|view| view.status == "running").count();
         let retiring = tiers
             .iter()

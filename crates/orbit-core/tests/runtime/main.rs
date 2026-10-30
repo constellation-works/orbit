@@ -54,6 +54,7 @@ mod child_wait_audit;
 mod claude_worker_credential;
 mod config_settings;
 mod crew_accounts;
+mod crew_ladder_trials;
 mod decision_channel;
 mod decision_requested;
 mod default_catalog;

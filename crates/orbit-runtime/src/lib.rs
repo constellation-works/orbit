@@ -87,6 +87,7 @@ mod tests;
 
 pub use application_port::ApplicationPort;
 pub use config_path::{CONFIG_TOML_FILE, existing_config_file_path};
+pub use orbit_runtime::CrewLadderControls;
 pub use orbit_runtime::RuntimeConfigLoader;
 pub use orbit_runtime::{HostLifetime, OrbitRuntimeRoots, RuntimeKernel};
 pub use workspace::binding::{WorkspaceRuntimeBinding, workspace_runtime_binding};
