@@ -9,7 +9,8 @@
 //!   `status` and `updated_at` are null once the task is no longer listed.
 //! - `run` `{id, task_id, state}`: a run changed state.
 //! - `locks` `{}`: the workspace's held locks may have changed.
-//! - `drain` `{phase}`: on connect, and whenever the drain phase changes.
+//! - `drain` `{phase}`: on connect, and whenever the drain phase or follower
+//!   executor capability/freshness evidence changes.
 //! - `host.resources` `{resources}`: the serving host's `/host/resources`
 //!   body, every few seconds.
 //! - `resync` `{reason}`: changes may have been missed; refetch everything.
@@ -264,6 +265,7 @@ struct WorkspaceWatch {
     run_read_at: DateTime<Utc>,
     reservations: Option<Vec<String>>,
     drain_phase: Option<&'static str>,
+    executor_readiness: Option<Vec<String>>,
     drain_read_at: Option<Instant>,
     scanned_at: DateTime<Utc>,
 }
@@ -277,6 +279,7 @@ impl Default for WorkspaceWatch {
             run_read_at: now,
             reservations: None,
             drain_phase: None,
+            executor_readiness: None,
             drain_read_at: None,
             scanned_at: now,
         }
@@ -373,9 +376,22 @@ impl WorkspaceWatch {
                 .drain_read_at
                 .is_none_or(|at| at.elapsed() >= DRAIN_RECHECK_INTERVAL);
         if drain_due {
+            let executor_change = match runtime.executor_readiness_change_keys() {
+                Ok(keys) => {
+                    let changed = self.executor_readiness.as_ref() != Some(&keys);
+                    self.executor_readiness = Some(keys);
+                    changed
+                }
+                Err(error) => {
+                    tracing::debug!(%error, "change stream could not read executor readiness");
+                    // Invalidate the view once on failure and again when the
+                    // evidence recovers, even if no local run changed.
+                    self.executor_readiness.take().is_some()
+                }
+            };
             match runtime.workspace_drain_phase() {
                 Ok(phase) => {
-                    if self.drain_phase != Some(phase) {
+                    if self.drain_phase != Some(phase) || executor_change {
                         notices.push(json!({"kind": "drain", "phase": phase}));
                     }
                     self.drain_phase = Some(phase);

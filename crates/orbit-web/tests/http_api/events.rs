@@ -164,6 +164,38 @@ fn change_stream_notices_other_process_writes_and_resumes_after_reconnect() {
                 await_notice(&mut stream, "idle", idle);
             }
 
+            // A remote pull's capability row is not a local run. Its arrival
+            // and expiry must invalidate readiness even while phase stays idle.
+            for age in [0, 601] {
+                fixture
+                    .runtime
+                    .stores()
+                    .tasks()
+                    .record_executor_census(&orbit_store::contracts::ExecutorCensusEntry {
+                        machine_id: "hm_remote_mac".into(),
+                        capability: orbit_store::contracts::ExecutorCapability {
+                            os: Some(orbit_types::task::HostOs::Macos),
+                            ..Default::default()
+                        },
+                        run_id: "remote-mac-drain".into(),
+                        seen_at: chrono::Utc::now() - chrono::Duration::seconds(age),
+                    })
+                    .unwrap();
+                if age != 0 {
+                    let connection =
+                        rusqlite::Connection::open(fixture.runtime.global_root().join("orbit.db"))
+                            .unwrap();
+                    connection.execute("UPDATE executor_census SET seen_at = ?1 WHERE workspace_id = ?2 AND machine_id = 'hm_remote_mac'",
+                        rusqlite::params![(chrono::Utc::now() - chrono::Duration::seconds(age)).to_rfc3339(), fixture.runtime.workspace_id().unwrap()]).unwrap();
+                }
+                let (_, changed, _) =
+                    await_notice(&mut stream, "remote executor", |n| kind(n) == "drain");
+                assert_eq!(
+                    changed["phase"], "idle",
+                    "executor change invalidates readiness independently of local phase"
+                );
+            }
+
             // Disconnected, nothing reaches the client. Resuming from the last
             // id it saw replays what it missed.
             let (last_id, _, _) = await_notice(&mut stream, "any", |_| true);
