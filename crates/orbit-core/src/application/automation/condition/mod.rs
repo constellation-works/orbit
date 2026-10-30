@@ -8,6 +8,8 @@ pub(crate) mod facts;
 mod host;
 mod status;
 
+use std::collections::BTreeSet;
+
 use chrono::{DateTime, Utc};
 use orbit_automation::automation_error_to_orbit;
 use orbit_automation::condition::{
@@ -258,7 +260,8 @@ pub(crate) fn enable_preview(
     let mut full = state.clone();
     full.lap_after = None;
     let mut matches = Vec::new();
-    let mut unknown = 0;
+    // Tracked subjects are observed in every lap, so count each key once.
+    let mut unknown = BTreeSet::new();
     let mut unavailable = Vec::new();
     loop {
         let (observation, missing) = host.observe_view(&full, now)?;
@@ -266,7 +269,9 @@ pub(crate) fn enable_preview(
         for subject in &observation.subjects {
             match subject.when {
                 Truth::True if !matches.contains(&subject.key) => matches.push(subject.key.clone()),
-                Truth::Unknown(_) => unknown += 1,
+                Truth::Unknown(_) => {
+                    unknown.insert(subject.key.clone());
+                }
                 _ => {}
             }
         }
@@ -275,6 +280,7 @@ pub(crate) fn enable_preview(
             _ => break,
         }
     }
+    unavailable.sort();
     unavailable.dedup();
     let fire_existing = definition.condition.on_enable == ConditionOnEnable::FireExisting;
     let refused = matches.len() > definition.condition.max_matches as usize;
@@ -289,7 +295,7 @@ pub(crate) fn enable_preview(
         },
         max_matches: definition.condition.max_matches,
         matched: matches.len(),
-        unknown,
+        unknown: unknown.len(),
         refused,
         refusal: refused.then(|| {
             format!(

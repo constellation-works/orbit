@@ -5,6 +5,8 @@
 //! two steps is finished by the next pass under the same key, so an edge
 //! admits its action exactly once.
 
+use std::collections::BTreeMap;
+
 use chrono::{DateTime, Utc};
 use orbit_store::contracts::AutomationStoreBackend;
 use orbit_types::workflow::automation::{
@@ -145,7 +147,7 @@ pub fn evaluate_condition(
     }
 
     let (state, mut actions) = match stored {
-        Some(state) if !request.dry_run => settle(store, host, state, request.now)?,
+        Some(state) if !request.dry_run => settle(store, host, state, request.now, request.epoch)?,
         Some(state) => (state, Vec::new()),
         None => {
             let fresh = ConditionState::new(request.consumer, request.epoch);
@@ -164,7 +166,14 @@ pub fn evaluate_condition(
         return Ok(diagnostic);
     }
 
-    let observation = host.observe(&state, request.now)?;
+    // An enable or a definition change baselines or refuses on the whole set,
+    // so it reads every lap. A steady pass reads one lap per tick.
+    let whole_set = !state.enabled || state.epoch != request.epoch;
+    let observation = if whole_set {
+        observe_all(host, &state, request.now)?
+    } else {
+        host.observe(&state, request.now)?
+    };
     let outcome = advance_pass(
         &state,
         &observation,
@@ -194,7 +203,7 @@ pub fn evaluate_condition(
     let (state, admitted) = if outcome.fired.is_empty() {
         (committed, Vec::new())
     } else {
-        settle(store, host, committed, request.now)?
+        settle(store, host, committed, request.now, request.epoch)?
     };
     actions.extend(admitted);
     Ok(ConditionDiagnostic {
@@ -205,13 +214,48 @@ pub fn evaluate_condition(
     })
 }
 
+/// Every lap of the subjects, for a pass that decides on the whole set. A
+/// lap's tracked subjects come back in each later lap, so each key is kept
+/// once.
+fn observe_all(
+    host: &dyn ConditionHost,
+    state: &ConditionState,
+    now: DateTime<Utc>,
+) -> Result<ConditionObservation, AutomationError> {
+    let mut lap = state.clone();
+    lap.lap_after = None;
+    let mut subjects = BTreeMap::new();
+    loop {
+        let page = host.observe(&lap, now)?;
+        for subject in page.subjects {
+            subjects.entry(subject.key.clone()).or_insert(subject);
+        }
+        // A cursor that does not move would read the same page forever.
+        match page.lap_after {
+            Some(after) if !page.lap_complete && lap.lap_after.as_ref() != Some(&after) => {
+                lap.lap_after = Some(after)
+            }
+            _ => break,
+        }
+    }
+    Ok(ConditionObservation {
+        subjects: subjects.into_values().collect(),
+        complete: true,
+        lap_complete: true,
+        lap_after: None,
+    })
+}
+
 /// Admit every recorded intent under its key and commit what happened. An
 /// action the key already resolves to is acknowledged, never admitted again.
+/// An edge recorded under an older definition is refused, not admitted under
+/// the edited target or template it never saw.
 fn settle(
     store: &dyn AutomationStoreBackend,
     host: &dyn ConditionHost,
     state: ConditionState,
     now: DateTime<Utc>,
+    epoch: &str,
 ) -> Result<(ConditionState, Vec<ConditionAction>), AutomationError> {
     if !state
         .fires
@@ -229,6 +273,18 @@ fn settle(
     {
         let resolved = match host.lookup(fire)? {
             Some(id) => Ok(id),
+            None if fire.epoch != epoch => {
+                fire.state = ConditionFireState::Refused;
+                fire.detail = Some("definition changed before admission".into());
+                actions.push(ConditionAction {
+                    fire_id: fire.fire_id.clone(),
+                    subject: fire.subject.clone(),
+                    state: fire.state.as_str(),
+                    action_id: None,
+                    detail: fire.detail.clone(),
+                });
+                continue;
+            }
             None => match host.admission_deferral(fire)? {
                 Some(reason) => {
                     fire.detail = Some(format!("waiting: {reason}"));

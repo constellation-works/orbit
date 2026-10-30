@@ -691,3 +691,144 @@ fn a_recorded_fire_cannot_be_rewritten_by_a_later_commit() {
     assert!(!matches!(store.condition_commit(&state, &stale), Ok(true)));
     assert_eq!(store.condition_state(CONSUMER).unwrap().unwrap(), state);
 }
+
+/// Subjects split into laps the way the task prefilter pages them: each lap
+/// ends at its last subject, and the next lap continues after it.
+#[derive(Default)]
+struct Paged {
+    laps: Vec<Vec<SubjectObservation>>,
+    admitted: Cell<usize>,
+}
+
+impl ConditionHost for Paged {
+    fn observe(
+        &self,
+        state: &ConditionState,
+        _now: DateTime<Utc>,
+    ) -> Result<ConditionObservation, AutomationError> {
+        let index = match state.lap_after.as_deref() {
+            None => 0,
+            Some(after) => self
+                .laps
+                .iter()
+                .position(|lap| lap.last().is_some_and(|last| last.key == after))
+                .map_or(0, |index| index + 1),
+        };
+        let lap = self.laps.get(index).cloned().unwrap_or_default();
+        let last = index + 1 >= self.laps.len();
+        Ok(ConditionObservation {
+            lap_after: if last {
+                None
+            } else {
+                lap.last().map(|subject| subject.key.clone())
+            },
+            subjects: lap,
+            complete: true,
+            lap_complete: last,
+        })
+    }
+
+    fn lookup(&self, _fire: &ConditionFire) -> Result<Option<String>, AutomationError> {
+        Ok(None)
+    }
+
+    fn admit(&self, _fire: &ConditionFire) -> Result<String, AutomationError> {
+        self.admitted.set(self.admitted.get() + 1);
+        Ok(format!("task-{}", self.admitted.get()))
+    }
+}
+
+#[test]
+fn a_paged_enable_baselines_true_subjects_on_every_page_not_only_the_first() {
+    let store = memory_store();
+    let host = Paged {
+        laps: vec![
+            vec![subject("ORB-1", Truth::False, "1")],
+            vec![subject("ORB-2", Truth::True, "1")],
+        ],
+        ..Paged::default()
+    };
+    let trigger = trigger(serde_json::json!({}));
+    assert_eq!(
+        Pass::live(&trigger)
+            .run(&*store, &host, at(0))
+            .unwrap()
+            .reason,
+        "baselined",
+        "the enable reads every page before it baselines"
+    );
+    Pass::live(&trigger).run(&*store, &host, at(1)).unwrap();
+    assert_eq!(
+        host.admitted.get(),
+        0,
+        "a true subject on page two never fires"
+    );
+}
+
+#[test]
+fn a_paged_enable_counts_matches_on_every_page_against_max_matches() {
+    let store = memory_store();
+    let host = Paged {
+        laps: vec![
+            vec![subject("ORB-1", Truth::False, "1")],
+            vec![
+                subject("ORB-2", Truth::True, "1"),
+                subject("ORB-3", Truth::True, "1"),
+                subject("ORB-4", Truth::True, "1"),
+            ],
+        ],
+        ..Paged::default()
+    };
+    let trigger = trigger(serde_json::json!({"max_matches": 2}));
+    let diagnostic = Pass::live(&trigger).run(&*store, &host, at(0)).unwrap();
+    assert_eq!(
+        diagnostic.reason, "too_many_matches",
+        "three matches on page two refuse an enable with max_matches 2"
+    );
+    assert_eq!(host.admitted.get(), 0);
+}
+
+#[test]
+fn a_pending_intent_from_the_old_definition_is_refused_not_admitted_under_the_edit() {
+    let store = memory_store();
+    let board = Board::default();
+    let trigger = trigger(serde_json::json!({}));
+    board.set(vec![subject("ORB-1", Truth::True, "1")]);
+    pass(&*store, &board, &trigger, at(0));
+    board.set(vec![subject("ORB-1", Truth::False, "2")]);
+    pass(&*store, &board, &trigger, at(1));
+    board.set(vec![subject("ORB-1", Truth::True, "3")]);
+    *board.deferral.borrow_mut() = Some("open_instance task-9".into());
+    pass(&*store, &board, &trigger, at(2));
+    assert_eq!(
+        board.admissions(),
+        0,
+        "the intent waits on its open instance"
+    );
+
+    // The definition is edited (a new epoch) before the waiting intent admits.
+    *board.deferral.borrow_mut() = None;
+    let edited = condition_epoch(&trigger, &("mint", "edited")).unwrap();
+    evaluate_condition(
+        &*store,
+        &board,
+        ConditionEvaluation {
+            consumer: CONSUMER,
+            epoch: &edited,
+            trigger: &trigger,
+            enabled: true,
+            refusal: None,
+            dry_run: false,
+            now: at(3),
+            cadence_seconds: CADENCE_SECONDS,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        board.admissions(),
+        0,
+        "an edge recorded under the old definition is never admitted under the edited one"
+    );
+    let state = store.condition_state(CONSUMER).unwrap().unwrap();
+    assert_eq!(state.fires[0].state, ConditionFireState::Refused);
+}

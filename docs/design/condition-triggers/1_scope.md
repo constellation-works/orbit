@@ -15,7 +15,7 @@ tags: [condition-triggers, automation-triggers, routines, auto-tasks, scheduling
 
 # Scope: Condition triggers
 
-Status: proposed. This doc is the design deliverable of [ORB-19288]. Phase 1 (the CEL
+Status: draft. This doc is the design deliverable of [ORB-19288]. Phase 1 (the CEL
 schema, load-time checking and `orbit automation explain`) shipped in [ORB-19990]. Phase 2
 (firing for task and workspace scopes, `when:` guards, chains and `clear-stall`) shipped in
 [ORB-20156]; host and file scopes and high-authority actions are still refused. Revised 2026-10-29 with Daniel's answers to four open questions (transitions,
