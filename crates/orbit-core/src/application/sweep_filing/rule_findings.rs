@@ -87,7 +87,10 @@ struct FilerSettings {
 }
 
 fn filer_settings(runtime: &OrbitRuntime, input: &Value) -> Result<FilerSettings, OrbitError> {
-    let max_new_tasks = if input.get("max_new_tasks").is_some() {
+    let max_new_tasks = if input
+        .get("max_new_tasks")
+        .is_some_and(|value| !value.is_null())
+    {
         bounded_u64(input, "max_new_tasks", DEFAULT_MAX_NEW_TASKS, MAX_NEW_TASKS)? as usize
     } else {
         config_value(runtime, "ux_rules.max_new_tasks")
@@ -97,9 +100,11 @@ fn filer_settings(runtime: &OrbitRuntime, input: &Value) -> Result<FilerSettings
     };
     let file_at = match input.get("file_at") {
         Some(Value::String(value)) if !value.trim().is_empty() => value.trim().to_ascii_lowercase(),
-        Some(Value::Null) | None => config_value(runtime, "ux_rules.file_at")
-            .and_then(|value| value.as_str().map(str::to_string))
-            .unwrap_or_else(|| "low".to_string()),
+        Some(Value::String(_)) | Some(Value::Null) | None => {
+            config_value(runtime, "ux_rules.file_at")
+                .and_then(|value| value.as_str().map(str::to_string))
+                .unwrap_or_else(|| "low".to_string())
+        }
         _ => {
             return Err(OrbitError::InvalidInput(
                 "input.file_at must be one of critical, high, medium, low, or nit".to_string(),
