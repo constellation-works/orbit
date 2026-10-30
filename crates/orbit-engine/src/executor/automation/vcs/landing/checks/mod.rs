@@ -87,7 +87,7 @@ mod suspect;
 pub(in crate::executor::automation::vcs) use base_tip::base_tip_check_evidence;
 pub(in crate::executor::automation::vcs) use base_update::verify_published_base_update;
 pub(in crate::executor::automation::vcs) use head::{
-    HeadCheckEvidence, head_check_evidence, unmoved_red_base,
+    DeferredLogRead, HeadCheckEvidence, head_check_evidence, unmoved_red_base,
 };
 pub(in crate::executor::automation::vcs) use recovery::{
     CheckRecovery, CheckRecoveryStep, failed_checks, recover_failed_checks,

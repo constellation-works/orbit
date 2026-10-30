@@ -15,10 +15,10 @@ use super::super::super::super::input::input_string_field;
 use super::super::super::push::push_batch_changes;
 use super::super::answers::{ReviewedMergeOutcome, read_pr_status, read_pr_status_before};
 use super::super::auto_fix::{
-    AutoFix, BlockedStopReason, BlockedVerdict, LocalRepair, adopt_published_repairs,
-    base_tip_checks, blocked_verdict, hold_auto_fix_stop, publish_local_repair, record_base_path,
-    record_landed_repair, record_published_repair, red_base_wait, repair_failed_checks,
-    reserve_base_refresh, stopped,
+    AutoFix, BlockedStopReason, BlockedVerdict, CheckRepair, LocalRepair, adopt_published_repairs,
+    base_tip_checks, blocked_verdict, defer_throttled_read, hold_auto_fix_stop, owed_read_wait,
+    publish_local_repair, record_base_path, record_landed_repair, record_published_repair,
+    red_base_wait, repair_failed_checks, reserve_base_refresh, stopped,
 };
 use super::super::delivery::{
     BlockedCheckWait, DeliveryEvidence, DeliveryPin, PrMergeState, UnreportedChecks,
@@ -409,6 +409,16 @@ fn drive_pr_to_merged_observed<H: RuntimeHost + ?Sized>(
                     None => error,
                 });
             }
+            // [ORB-20178] A throttled log read this run lineage recorded
+            // for this head is not read again before its not-before.
+            if diagnose
+                && let Some(head) = status.head_sha.as_deref()
+                && let Some(wait_ms) =
+                    owed_read_wait(host, auto_fix, pr_number, head, observation_budget)?
+            {
+                sleep(Duration::from_millis(wait_ms));
+                continue;
+            }
             if diagnose {
                 let retry = super::super::auto_fix::recover_ci_rerun(
                     host,
@@ -423,6 +433,23 @@ fn drive_pr_to_merged_observed<H: RuntimeHost + ?Sized>(
                 infrastructure_wait |= match retry {
                     Ok(waiting) => waiting,
                     Err(error) => {
+                        // [ORB-20178] The first throttled answer ends this
+                        // poll's reads of that log until its not-before.
+                        if let Some(deferred) = diagnostic
+                            .as_ref()
+                            .and_then(|observed| observed.throttled_log_read(&error))
+                        {
+                            let wait_ms = defer_throttled_read(
+                                host,
+                                auto_fix,
+                                pr_number,
+                                &deferred,
+                                observation_budget,
+                                mutated,
+                            )?;
+                            sleep(Duration::from_millis(wait_ms));
+                            continue;
+                        }
                         // The existing evidence/hold route retains its typed
                         // refusal and any recorded base inheritance. A failed
                         // planner read grants no CI mutation permission.
@@ -647,14 +674,32 @@ fn drive_pr_to_merged_observed<H: RuntimeHost + ?Sized>(
                             )?;
                             base_red_reason = Some(reason);
                         } else {
-                            return Err(repair_failed_checks(
+                            match repair_failed_checks(
                                 host,
                                 auto_fix,
                                 workspace_path,
                                 pr_number,
                                 &status,
                                 &failed,
-                            ));
+                                observation_budget,
+                            ) {
+                                CheckRepair::Ended(error) => return Err(error),
+                                // Wait out the provider's throttle within the
+                                // original deadline, then observe the pull
+                                // request again before reading any evidence.
+                                CheckRepair::ReadDeferred(deferred) => {
+                                    let wait_ms = defer_throttled_read(
+                                        host,
+                                        auto_fix,
+                                        pr_number,
+                                        &deferred,
+                                        observation_budget,
+                                        mutated,
+                                    )?;
+                                    sleep(Duration::from_millis(wait_ms));
+                                    continue;
+                                }
+                            }
                         }
                     }
                 }

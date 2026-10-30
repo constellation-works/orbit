@@ -711,6 +711,7 @@ fn infrastructure_deadline_refusal_keeps_type_and_unreadable_forge_holds() {
                                 operation: "PR required checks".into(),
                                 class: orbit_common::PrivateVcsFailureClass::TransientObservation,
                                 message: "private automation VCS PR required checks failed: error connecting to api.github.com".into(),
+                                read_throttle: None,
                             },
                         )));
                     }

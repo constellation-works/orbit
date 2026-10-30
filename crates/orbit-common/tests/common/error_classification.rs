@@ -132,6 +132,7 @@ fn private_vcs_failure_preserves_the_execution_display_and_wire_contract() {
         operation: "pr.status".into(),
         class: orbit_common::PrivateVcsFailureClass::CompletionObservationUnavailable,
         message: message.into(),
+        read_throttle: None,
     }));
     let legacy = OrbitError::Execution(message.into());
     assert_eq!(

@@ -109,6 +109,7 @@ pub(in crate::executor::automation::vcs) fn base_tip_check_evidence<H: RuntimeHo
             job["run_id"].as_u64()?,
             job["job_id"].as_u64()?,
             job,
+            None,
         )
         .ok()?;
         let base_log = job_log(
@@ -117,6 +118,7 @@ pub(in crate::executor::automation::vcs) fn base_tip_check_evidence<H: RuntimeHo
             base_job["run_id"].as_u64()?,
             base_job["job_id"].as_u64()?,
             &base_job,
+            None,
         )
         .ok()?;
         if transient_evidence(&log).is_some() || transient_evidence(&base_log).is_some() {

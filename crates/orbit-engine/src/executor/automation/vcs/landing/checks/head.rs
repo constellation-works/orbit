@@ -2,6 +2,7 @@
 
 use std::path::Path;
 
+use orbit_common::ProviderReadThrottle;
 use serde_json::Value;
 
 use crate::context::RuntimeHost;
@@ -37,6 +38,22 @@ pub(in crate::executor::automation::vcs) enum HeadCheckEvidence {
     Inconclusive(String),
     /// The cited failure needs the base's own result before any repair.
     WaitForBase(String),
+    /// The provider throttled the failed job's log read. Nothing was read,
+    /// so this is no evidence; the caller's policy decides whether the same
+    /// pinned read may repeat.
+    ReadDeferred(DeferredLogRead),
+}
+
+/// One throttled failed-job log read, bound to the exact job it was for.
+pub(in crate::executor::automation::vcs) struct DeferredLogRead {
+    /// What an unreadable log reports, with the provider's own diagnostic.
+    pub(in crate::executor::automation::vcs) reason: String,
+    pub(in crate::executor::automation::vcs) head: String,
+    pub(in crate::executor::automation::vcs) repository: Option<String>,
+    pub(in crate::executor::automation::vcs) run_id: u64,
+    pub(in crate::executor::automation::vcs) job_id: u64,
+    pub(in crate::executor::automation::vcs) run_attempt: Option<u64>,
+    pub(in crate::executor::automation::vcs) throttle: ProviderReadThrottle,
 }
 
 /// Read the failed jobs behind `failed` on `head`, the exact commit the
@@ -49,7 +66,9 @@ pub(in crate::executor::automation::vcs) enum HeadCheckEvidence {
 /// the runner or the network failing is not the candidate's. Each stops without a repair.
 /// An untouched-file failure also needs task history proving that this head
 /// repeated the same check and signature after the earlier failed attempt;
-/// a passing base job alone only authorizes that PR rerun.
+/// a passing base job alone only authorizes that PR rerun. A log read the
+/// provider throttled is [`HeadCheckEvidence::ReadDeferred`]; `deadline_ms`,
+/// when set, bounds the log read by the completion's absolute deadline.
 #[allow(clippy::too_many_arguments)]
 pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost + ?Sized>(
     host: &H,
@@ -61,6 +80,7 @@ pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost +
     failed: &[(Option<String>, String)],
     required: &RequiredChecks,
     allow_candidate_sibling: bool,
+    deadline_ms: Option<u64>,
 ) -> HeadCheckEvidence {
     let jobs = match commit_jobs(host, workspace, head) {
         Ok(jobs) => jobs,
@@ -102,13 +122,25 @@ pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost +
                 "the failed job behind check '{label}' reported no identity"
             ));
         };
-        let log = match job_log(host, workspace, run_id, job_id, job) {
+        let log = match job_log(host, workspace, run_id, job_id, job, deadline_ms) {
             Ok(log) => log,
             Err(error) => {
-                return HeadCheckEvidence::Inconclusive(format!(
-                    "the log of '{}' could not be read: {error}",
-                    job_label(job)
-                ));
+                let reason = format!("the log of '{}' could not be read: {error}", job_label(job));
+                let throttle = error
+                    .private_vcs_failure()
+                    .and_then(|failure| failure.read_throttle.clone());
+                return match throttle {
+                    Some(throttle) => HeadCheckEvidence::ReadDeferred(DeferredLogRead {
+                        reason,
+                        head: head.to_string(),
+                        repository: job["repository"].as_str().map(ToOwned::to_owned),
+                        run_id,
+                        job_id,
+                        run_attempt: job["run_attempt"].as_u64(),
+                        throttle,
+                    }),
+                    None => HeadCheckEvidence::Inconclusive(reason),
+                };
             }
         };
         if let Some(evidence) = transient_evidence(&log) {
@@ -316,7 +348,7 @@ pub(in crate::executor::automation::vcs) fn unmoved_red_base<H: RuntimeHost + ?S
             return Err("a failed job reported no identity".to_string());
         };
         let label = job_label(job);
-        let log = job_log(host, workspace, run_id, job_id, job)
+        let log = job_log(host, workspace, run_id, job_id, job, None)
             .map_err(|error| format!("the log of '{label}' could not be read: {error}"))?;
         let (class, why, _, signature) = classify_logged_job(
             host,
@@ -486,7 +518,7 @@ fn inherited<H: RuntimeHost + ?Sized>(
         else {
             return Err(format!("a failed job on base {base} reported no identity"));
         };
-        let log = job_log(host, workspace, run_id, job_id, candidate).map_err(|error| {
+        let log = job_log(host, workspace, run_id, job_id, candidate, None).map_err(|error| {
             format!("the log of the failed job on base {base} could not be read: {error}")
         })?;
         let found = error_signature(&log, failed_step(candidate));
@@ -546,7 +578,7 @@ fn inherited<H: RuntimeHost + ?Sized>(
             else {
                 continue;
             };
-            let Ok(tip_log) = job_log(host, workspace, run_id, job_id, candidate) else {
+            let Ok(tip_log) = job_log(host, workspace, run_id, job_id, candidate, None) else {
                 continue;
             };
             let found = error_signature(&tip_log, failed_step(candidate));

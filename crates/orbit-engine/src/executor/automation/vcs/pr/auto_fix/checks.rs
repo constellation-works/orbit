@@ -12,7 +12,7 @@ use super::super::super::git::{
     base_sync_mode_from_input, git_output, resolve_worktree_start_point,
 };
 use super::super::super::landing::checks::{
-    HeadCheckEvidence, head_check_evidence, unmoved_red_base,
+    DeferredLogRead, HeadCheckEvidence, head_check_evidence, unmoved_red_base,
 };
 use super::super::answers::{CheckState, PullRequestStatus, RequiredChecks, read_required_checks};
 use super::{admission, ledger, verdict};
@@ -184,8 +184,17 @@ fn recorded_base_red<H: RuntimeHost + ?Sized>(
     })
 }
 
-/// Read the failed checks on the pinned head and admit their repair. Returns
-/// the hand-off failure once admitted, or the stop.
+/// What reading the failed checks on the pinned head decided.
+pub(in crate::executor::automation::vcs::pr) enum CheckRepair {
+    /// The hand-off failure once admitted, or the stop.
+    Ended(OrbitError),
+    /// The provider throttled a failed job's log read. Nothing was admitted
+    /// and no budget was spent.
+    ReadDeferred(DeferredLogRead),
+}
+
+/// Read the failed checks on the pinned head and admit their repair.
+/// `deadline_ms` bounds the log reads by the completion's absolute deadline.
 pub(in crate::executor::automation::vcs::pr) fn repair_failed_checks<H: RuntimeHost + ?Sized>(
     host: &H,
     auto_fix: &admission::AutoFix,
@@ -193,14 +202,18 @@ pub(in crate::executor::automation::vcs::pr) fn repair_failed_checks<H: RuntimeH
     pr_number: &str,
     status: &PullRequestStatus,
     failed: &[(Option<String>, String)],
-) -> OrbitError {
+    deadline_ms: Option<u64>,
+) -> CheckRepair {
     let Some(head_sha) = status.head_sha.as_deref() else {
-        return verdict::stopped(pr_number, "the pull request reported no head commit");
+        return CheckRepair::Ended(verdict::stopped(
+            pr_number,
+            "the pull request reported no head commit",
+        ));
     };
     let (failed, required) =
         match required_failures(host, workspace_path, pr_number, head_sha, failed) {
             Ok(found) => found,
-            Err(reason) => return verdict::stopped(pr_number, &reason),
+            Err(reason) => return CheckRepair::Ended(verdict::stopped(pr_number, &reason)),
         };
     let (evidence, annotations) = match head_check_evidence(
         host,
@@ -212,44 +225,50 @@ pub(in crate::executor::automation::vcs::pr) fn repair_failed_checks<H: RuntimeH
         &failed,
         &required,
         true,
+        deadline_ms,
     ) {
         HeadCheckEvidence::Repair {
             evidence,
             annotations,
         } => (evidence, annotations),
-        HeadCheckEvidence::Stop(reason) => return verdict::stopped(pr_number, &reason),
+        HeadCheckEvidence::Stop(reason) => {
+            return CheckRepair::Ended(verdict::stopped(pr_number, &reason));
+        }
         HeadCheckEvidence::Inconclusive(reason) => {
-            return verdict::hold_auto_fix_stop(
+            return CheckRepair::Ended(verdict::hold_auto_fix_stop(
                 verdict::stopped(pr_number, &reason),
                 DeliveryRefusal::CheckEvidenceInconclusive,
-            );
+            ));
         }
         HeadCheckEvidence::WaitForBase(reason) => {
-            return verdict::hold_auto_fix_stop(
+            return CheckRepair::Ended(verdict::hold_auto_fix_stop(
                 verdict::stopped(pr_number, &reason),
                 DeliveryRefusal::BaseChecksPending,
-            );
+            ));
         }
+        HeadCheckEvidence::ReadDeferred(deferred) => return CheckRepair::ReadDeferred(deferred),
     };
     if !annotations.is_empty()
         && let Err(error) =
             ledger::record_check_annotations(host, auto_fix, pr_number, head_sha, annotations)
     {
-        return verdict::stopped(
+        return CheckRepair::Ended(verdict::stopped(
             pr_number,
             &format!("the check annotations a repair would rely on were not retained: {error}"),
-        );
+        ));
     }
-    match admission::admit(
-        host,
-        auto_fix,
-        pr_number,
-        head_sha,
-        PrAutoFixBlocker::FailedChecks,
-    ) {
-        Ok(attempt) => verdict::check_repair_handoff(pr_number, head_sha, &attempt, &evidence),
-        Err(stop) => stop,
-    }
+    CheckRepair::Ended(
+        match admission::admit(
+            host,
+            auto_fix,
+            pr_number,
+            head_sha,
+            PrAutoFixBlocker::FailedChecks,
+        ) {
+            Ok(attempt) => verdict::check_repair_handoff(pr_number, head_sha, &attempt, &evidence),
+            Err(stop) => stop,
+        },
+    )
 }
 
 /// Compare required failures with the current base tip before repair admission.

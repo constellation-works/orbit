@@ -228,7 +228,7 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
             ));
         };
         let label = job_label(job);
-        let log = match job_log(host, workspace, run_id, job_id, job) {
+        let log = match job_log(host, workspace, run_id, job_id, job, None) {
             Ok(log) => log,
             Err(error) => {
                 return Ok(unclassified(format!(

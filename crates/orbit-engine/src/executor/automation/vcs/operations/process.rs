@@ -73,6 +73,7 @@ pub(in crate::executor::automation::vcs) fn carry_class(
                 operation: failure.operation.clone(),
                 class: failure.class,
                 message,
+                read_throttle: failure.read_throttle.clone(),
             }))
         }
         (_, OrbitError::Execution(message)) => match cause {
@@ -223,6 +224,7 @@ pub(super) fn succeeded(
             operation: operation.to_string(),
             class: classify(&message),
             message,
+            read_throttle: None,
         })));
     }
     Ok(result)
