@@ -161,6 +161,13 @@ pub struct TaskHandoff {
     /// accepts the handoff.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub regression_from: Vec<String>,
+    /// The capture of record (`visual/capture.json`) a `verify-mock-ui`
+    /// claim returns, already attached on the owner by the system writer.
+    /// The owner checks it, and every image it names, against the claim's
+    /// visual review contract (`visual_capture_mismatch`). Absent when the
+    /// claim captured no visual review contract.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visual: Option<HandoffArtifactRef>,
 }
 
 /// Captured command output in an owner-accessible task artifact, never an agent reply.

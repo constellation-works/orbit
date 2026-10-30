@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_types::task::{canonical_artifact_path, is_explore_brief_artifact};
+use orbit_types::task::{canonical_artifact_path, is_explore_brief_artifact, is_visual_artifact};
 use orbit_types::workflow::handoff::{AlreadyLandedEvidence, NoDiffEvidence};
 use orbit_types::workflow::is_reserved_review_artifact;
 use serde::Deserialize;
@@ -51,6 +51,11 @@ fn prepare(
         if is_explore_brief_artifact(&path) {
             return Err(refused(format!(
                 "{field} path '{path}' is reserved for the task-pilot's explore brief, which only an applied pilot assessment writes"
+            )));
+        }
+        if is_visual_artifact(&path) {
+            return Err(refused(format!(
+                "{field} path '{path}' is under the reserved visual/ prefix, which only Orbit's capture of record writes"
             )));
         }
         if !paths.insert(path.clone()) {

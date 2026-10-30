@@ -1,0 +1,42 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: visual_settle
+spec:
+  type: deterministic
+  description: >
+    Settle the capture of record against the delivery's head and the mocks
+    frozen at admission. A capture of another commit is `stale_capture`; a
+    mock whose bytes differ from its frozen digest is `mock_changed`. Both
+    are recorded in the system-written `visual/settle.json` and in the
+    summary run show, task show and the PR body print; in shadow they block
+    nothing. With `visual_review.require_established = true`, a capture
+    that is not established ends the run held
+    (`delivery_visual_not_established`) until an operator releases it or a
+    host with a verified browser kit captures it.
+  input_schema_json:
+    type: object
+    required: [workspace_path, capture]
+    properties:
+      workspace_path:
+        type: string
+      capture:
+        type: [object, "null"]
+        description: The visual_capture output for this run.
+      checks:
+        type: [object, "null"]
+        description: The visual_checks output for this run.
+  output_schema_json:
+    type: object
+    required: [applies, settled, summary]
+    properties:
+      applies:
+        type: boolean
+      settled:
+        type: array
+        items:
+          type: object
+      summary:
+        type: string
+  action: visual_settle
+  config: {}

@@ -116,7 +116,9 @@ pub fn task_record_json(
 /// `final_recovery` is the last automated final-recovery decision, with
 /// `run_id`, `decision`, `outcome` and `at`. `owed_criteria` lists each
 /// criterion the delivery owes after deploy, with its host, command, target
-/// and state. Each key is present only when it applies. `orbit task show`, `orbit.task.show`, `GET /api/tasks/:id` and a
+/// and state. `visual_review` is a `verify-mock-ui` task's last capture of
+/// record: its summary line, outcome, `not_established` reasons and check
+/// findings. Each key is present only when it applies. `orbit task show`, `orbit.task.show`, `GET /api/tasks/:id` and a
 /// routed remote show all serve this record and add only their own extras.
 pub fn task_show_json(
     runtime: &OrbitRuntime,
@@ -151,6 +153,9 @@ pub fn task_show_json(
     }
     if let Some(owed) = super::owed_criteria_json(&row.history) {
         object.insert("owed_criteria".to_string(), owed);
+    }
+    if let Some(visual) = runtime.task_visual_review_json(&row.task)? {
+        object.insert("visual_review".to_string(), visual);
     }
     if row
         .history

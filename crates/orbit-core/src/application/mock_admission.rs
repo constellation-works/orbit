@@ -31,7 +31,7 @@ use crate::application::task::TaskUpdateParams;
 impl OrbitRuntime {
     /// The workspace's current base commit: base branch as last fetched,
     /// else the local branch, else `HEAD` (as experiment overlays read it).
-    fn mock_base_revision(&self) -> Result<String, String> {
+    pub(crate) fn mock_base_revision(&self) -> Result<String, String> {
         let root = &self.paths().repo_root;
         let branch = self.workspace_base_branch();
         let branch = branch.strip_prefix("origin/").unwrap_or(branch);

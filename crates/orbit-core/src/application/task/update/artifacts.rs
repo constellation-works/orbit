@@ -1,9 +1,9 @@
 use orbit_common::OrbitError;
 use orbit_types::task::{
     EXPLORE_BRIEF_ARTIFACT, MOCK_DEVIATIONS_ARTIFACT, MUTATION_PROPOSAL_ARTIFACT_DIR,
-    MUTATION_RECEIPT_ARTIFACT_DIR, MockDeviations, Task, TaskArtifact, canonical_artifact_path,
-    is_explore_brief_artifact, is_mock_artifact, is_mutation_proposal_artifact,
-    is_mutation_receipt_artifact,
+    MUTATION_RECEIPT_ARTIFACT_DIR, MockDeviations, Task, TaskArtifact, VISUAL_ARTIFACT_PREFIX,
+    canonical_artifact_path, is_explore_brief_artifact, is_mock_artifact,
+    is_mutation_proposal_artifact, is_mutation_receipt_artifact, is_visual_artifact,
 };
 use orbit_types::workflow::{REVIEW_REPORT_ARTIFACT, ReviewReport, is_reserved_review_artifact};
 
@@ -76,6 +76,12 @@ fn admit_agent_artifact_as(
     if is_mock_artifact(&artifact.path) && !allow_mocks {
         return Err(OrbitError::InvalidInput(format!(
             "mocks_reserved: {} is under `mocks/`, which only an operator (or Orbit's system writer) may write; an implement- or review-purpose run cannot replace its own visual specification — ask in a task comment if a mock is wrong",
+            artifact.path
+        )));
+    }
+    if is_visual_artifact(&artifact.path) {
+        return Err(OrbitError::InvalidInput(format!(
+            "visual_reserved: {} is under `{VISUAL_ARTIFACT_PREFIX}`, which only Orbit's system writer writes: the delivery's capture of record, its checks and the frozen mock digests are evidence, not agent or operator claims; rename ordinary supporting evidence to a nonreserved name (for example `screenshots/…`)",
             artifact.path
         )));
     }

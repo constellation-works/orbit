@@ -77,6 +77,7 @@ fn accept_publishes_the_implementation_head_without_revalidation() {
             "pr_prepare",
             "git_rebase",
             "candidate_validate",
+            "visual_capture",
             "review_gate_admit",
             "agent_review_repair",
             "review_gate_settle",
@@ -91,7 +92,8 @@ fn accept_publishes_the_implementation_head_without_revalidation() {
             "review_gate_admit",
             "review_gate_settle",
         ],
-        "one review, no revalidation, then delivery; the before-landing gate and both \
+        "one review, no revalidation, then delivery; the visual capture of a task without \
+         the phase reports it does not apply, and the before-landing gate and both \
          completion re-review rounds only admit and settle as not applicable"
     );
     let pr_open = &host.inputs("pr_open")[0];
@@ -352,6 +354,9 @@ const ACTIVITIES: &[&str] = &[
     "claim_validate",
     "claim_handoff",
     "claim_candidate_carry",
+    "visual_capture",
+    "visual_checks",
+    "visual_settle",
 ];
 
 pub(super) fn position(actions: &[String], action: &str) -> usize {
@@ -732,6 +737,7 @@ impl orbit_engine::test_support::NullRuntimeHost for ScriptedHost {
             }),
             "claim_handoff" => json!({ "decision": "handed_off" }),
             "claim_candidate_carry" => json!({ "phase": "candidate_carry", "carry": "none" }),
+            "visual_capture" => json!({ "applies": false, "captures": [] }),
             other => {
                 return Err(DispatchError::DeterministicActionFailed {
                     action: other.to_string(),

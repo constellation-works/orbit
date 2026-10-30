@@ -553,6 +553,7 @@ impl Fixture {
             footprint_widening: vec![],
             owed_criteria: vec![],
             regression_from: vec![],
+            visual: None,
         };
         let observation = HandoffObservation {
             footprint_widening: vec![],
@@ -1053,6 +1054,7 @@ fn a_recovered_claim_with_an_unrecorded_rescued_pr_can_settle() {
         footprint_widening: vec![],
         owed_criteria: vec![],
         regression_from: vec![],
+        visual: None,
     };
     let observation = HandoffObservation {
         candidate: handoff.candidate.clone(),

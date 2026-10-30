@@ -49,6 +49,7 @@ fn handoff(
             footprint_widening: vec![],
             owed_criteria: vec![],
             regression_from: vec![],
+            visual: None,
         },
         required_commands: vec![],
         accepted_at: Utc::now(),

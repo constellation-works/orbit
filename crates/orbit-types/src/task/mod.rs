@@ -23,6 +23,7 @@ mod severity;
 mod show_fields;
 mod tags_changed;
 mod ui_requirement;
+mod visual_capture;
 mod work_class;
 pub use error::TaskError;
 
@@ -143,6 +144,16 @@ pub use show_fields::{
 pub use tags_changed::{TAGS_CHANGED_EVENT, TagsChanged, TagsChangedError, tags_at};
 pub use ui_requirement::{
     BROWSER_KIT_INSTALL_COMMAND, UI_TAG, browser_kit_wait, requires_browser_kit,
+};
+pub use visual_capture::{
+    DEFAULT_VISUAL_MAX_MOCKS, VISUAL_ARTIFACT_PREFIX, VISUAL_CAPTURE_ARTIFACT,
+    VISUAL_CAPTURE_MISMATCH, VISUAL_CHECKS_ARTIFACT, VISUAL_MAX_IMAGE_BYTES,
+    VISUAL_SETTLE_ARTIFACT, VisualCaptureError, VisualCaptureExpectation, VisualCaptureImage,
+    VisualCaptureOutcome, VisualCaptureRecord, VisualCapturedMock, VisualCheckFinding,
+    VisualChecksRecord, VisualKitPin, VisualManifestCapture, VisualManifestRef, VisualMockDigest,
+    VisualMockDigestRecord, VisualNotEstablished, VisualReviewContract, VisualReviewMode,
+    VisualSettleOutcome, VisualSettleRecord, VisualSettleRefusal, is_visual_artifact,
+    visual_capture_mismatches, visual_review_summary,
 };
 pub use work_class::{
     CHANGE_WORK_CLASS, NO_DIFF_WORK_CLASS, auto_task_template, is_no_diff_expected, work_class,

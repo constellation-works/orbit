@@ -13,7 +13,7 @@ use super::refusal;
 
 impl OrbitRuntime {
     /// The receipt this owner recorded when it admitted `claim_id`'s claim.
-    pub(super) fn claim_receipt(&self, claim_id: &str) -> Result<AdmissionReceipt, OrbitError> {
+    pub(crate) fn claim_receipt(&self, claim_id: &str) -> Result<AdmissionReceipt, OrbitError> {
         let claim = self.current_claim(claim_id)?;
         let AdmissionLookup::Found { receipt, .. } = self.admission_boundary()?.lookup_admission(
             &AdmissionIdentity::trusted_local(claim.executed_on.clone()),

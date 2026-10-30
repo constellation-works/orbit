@@ -1,0 +1,34 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: visual_checks
+spec:
+  type: deterministic
+  description: >
+    The deterministic checks over the capture of record: the workspace's UI
+    rules, which ran on each capture's live page, plus the capture checks
+    `render_timeout`, `setup_failed`, `off_loopback_request`,
+    `color_scheme_leak` and `unstable_view`. Findings are recorded in the
+    system-written `visual/checks.json`; in shadow nothing blocks and
+    nothing is filed.
+  input_schema_json:
+    type: object
+    required: [capture]
+    properties:
+      capture:
+        type: [object, "null"]
+        description: The visual_capture output for this run.
+  output_schema_json:
+    type: object
+    required: [applies, blocking, checks]
+    properties:
+      applies:
+        type: boolean
+      blocking:
+        type: boolean
+      checks:
+        type: array
+        items:
+          type: object
+  action: visual_checks
+  config: {}

@@ -52,6 +52,7 @@ pub mod task_quality;
 pub(crate) mod test_support;
 pub mod vision_probe;
 pub mod visual_capture;
+pub(crate) mod visual_delivery;
 pub(crate) mod workflow;
 mod workspace;
 pub(crate) mod workspace_auto;

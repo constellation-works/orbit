@@ -16,7 +16,7 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
-import { copyFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -234,9 +234,9 @@ export function resolveRoute(route, placeholders) {
 
 // Open one fresh §4.2 context at the mock's view/state/theme/width.
 // Returns {context, page, diagnostics, takeScreenshot}.
-async function openCapturePage(browser, mock, server, frozenInstant, state) {
+async function openCapturePage(browser, mock, server, frozenInstant, state, colorScheme) {
   const context = await browser.newContext(
-    browserContextOptions({ width: mock.width, theme: mock.theme }),
+    browserContextOptions({ width: mock.width, theme: colorScheme ?? mock.theme }),
   );
   const page = await context.newPage();
   const diagnostics = {
@@ -533,6 +533,56 @@ async function writeSideBySide(browser, mock, dir) {
   }
 }
 
+// The colour preference opposite `theme`, for the color_scheme_leak check
+// (§7); null for a theme that is neither light nor dark.
+function oppositeScheme(theme) {
+  if (theme === "dark") return "light";
+  if (theme === "light") return "dark";
+  return null;
+}
+
+// Keep an image under the artifact limit (§4.5): PNG first, then WebP from
+// a browser canvas at full quality, then at 0.9. Chromium's canvas encoder
+// is lossy at every quality, so a WebP is recorded `lossy: true`. Returns
+// the file name used, its encoding and whether it is lossy.
+async function fitImageLimit(browser, dir, base, maxBytes) {
+  const pngName = `${base}.png`;
+  const pngPath = path.join(dir, pngName);
+  if (!maxBytes || (await stat(pngPath)).size <= maxBytes) {
+    return { file: pngName, encoding: "png", lossy: false };
+  }
+  const context = await browser.newContext({ deviceScaleFactor: 1 });
+  const page = await context.newPage();
+  try {
+    const dataUrl = `data:image/png;base64,${(await readFile(pngPath)).toString("base64")}`;
+    for (const quality of [1, 0.9]) {
+      const encoded = await page.evaluate(
+        async ({ dataUrl, quality }) => {
+          const img = new Image();
+          img.src = dataUrl;
+          await img.decode();
+          const canvas = document.createElement("canvas");
+          canvas.width = img.naturalWidth;
+          canvas.height = img.naturalHeight;
+          canvas.getContext("2d").drawImage(img, 0, 0);
+          return canvas.toDataURL("image/webp", quality);
+        },
+        { dataUrl, quality },
+      );
+      const bytes = Buffer.from(encoded.slice(encoded.indexOf(",") + 1), "base64");
+      if (bytes.length <= maxBytes || quality === 0.9) {
+        const webpName = `${base}.webp`;
+        await writeFile(path.join(dir, webpName), bytes);
+        await unlink(pngPath).catch(() => {});
+        return { file: webpName, encoding: "webp", lossy: true };
+      }
+    }
+  } finally {
+    await context.close().catch(() => {});
+  }
+  return { file: pngName, encoding: "png", lossy: false };
+}
+
 function sha256Hex(buffer) {
   return createHash("sha256").update(buffer).digest("hex");
 }
@@ -596,15 +646,38 @@ async function captureMock({ browser, PNG, request, mock, server, ruleModules, r
       }
     }
   }
+  // color_scheme_leak (§7): a colour-scheme-invariant app must render the
+  // same under the opposite preference. Only the delivery's double capture
+  // checks it; the self-check captures once.
+  const opposite = oppositeScheme(mock.theme);
+  if (wanted === 2 && mock.app_def.color_scheme_invariant && opposite) {
+    const opened = await openCapturePage(browser, mock, server, request.frozen_instant, state, opposite);
+    try {
+      const other = await opened.takeScreenshot();
+      const compared = comparePngPixels(PNG, shots[0], other);
+      entry.color_scheme_leak = !compared.equal;
+      if (!compared.equal && compared.region) entry.color_scheme_region = compared.region;
+    } finally {
+      await opened.context.close().catch(() => {});
+    }
+  }
+  entry.captured_at = new Date().toISOString();
   await writeFile(path.join(dir, "capture.png"), shots[0]);
   await writeMockPng(browser, mock, path.join(dir, "mock.png"));
   await writeSideBySide(browser, mock, dir);
-  entry.capture = `${mock.name}/capture.png`;
+  const captureFile = await fitImageLimit(browser, dir, "capture", request.max_image_bytes);
+  const sideFile = await fitImageLimit(browser, dir, "side-by-side", request.max_image_bytes);
+  entry.capture = `${mock.name}/${captureFile.file}`;
+  entry.capture_encoding = captureFile.encoding;
+  entry.capture_lossy = captureFile.lossy;
   entry.mock = `${mock.name}/mock.png`;
-  entry.side_by_side = `${mock.name}/side-by-side.png`;
+  entry.side_by_side = `${mock.name}/${sideFile.file}`;
+  entry.side_by_side_encoding = sideFile.encoding;
+  entry.side_by_side_lossy = sideFile.lossy;
   entry.stability = stability;
   if (diffRegion) entry.diff_region = diffRegion;
-  entry.sha256 = sha256Hex(shots[0]);
+  entry.sha256 = sha256Hex(await readFile(path.join(dir, captureFile.file)));
+  entry.side_by_side_sha256 = sha256Hex(await readFile(path.join(dir, sideFile.file)));
   entry.mock_sha256 = sha256Hex(await readFile(mock.mock_file));
   if (firstDiagnostics && firstDiagnostics.offLoopback.length > 0) {
     entry.off_loopback_requests = firstDiagnostics.offLoopback.slice(0, 10);

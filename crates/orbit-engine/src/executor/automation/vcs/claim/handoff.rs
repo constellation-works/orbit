@@ -177,6 +177,7 @@ pub(in crate::executor::automation) fn claim_handoff<H: RuntimeHost + ?Sized>(
         .1,
         owed_criteria,
         regression_from,
+        visual: handoff_visual(input)?,
     };
     host.record_claim_handoff(&handoff)?;
 
@@ -192,6 +193,34 @@ pub(in crate::executor::automation) fn claim_handoff<H: RuntimeHost + ?Sized>(
             HandoffDelivery::AlreadyLanded { .. } => "already_landed",
             HandoffDelivery::NoDiff { .. } => "no_diff",
         },
+    }))
+}
+
+/// The capture of record the `visual_capture` step attached on the owner,
+/// or `None` when the claim's visual review did not apply (or the step was
+/// skipped for a no-diff candidate).
+fn handoff_visual(input: &Value) -> Result<Option<HandoffArtifactRef>, OrbitError> {
+    let Some(visual) = input.get("visual").filter(|visual| !visual.is_null()) else {
+        return Ok(None);
+    };
+    if visual.get("applies").and_then(Value::as_bool) != Some(true) {
+        return Ok(None);
+    }
+    let field = |name: &str| {
+        visual
+            .get(name)
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_string)
+            .ok_or_else(|| {
+                OrbitError::InvalidInput(format!(
+                    "the visual capture output names no `{name}` for the capture of record"
+                ))
+            })
+    };
+    Ok(Some(HandoffArtifactRef {
+        path: field("capture_artifact")?,
+        sha256: field("capture_sha256")?,
     }))
 }
 

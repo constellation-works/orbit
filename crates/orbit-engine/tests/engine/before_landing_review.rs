@@ -707,6 +707,9 @@ const LEAF_ACTIVITIES: &[&str] = &[
     "final_recovery",
     RECOVERY,
     "pr_conflict_recovery",
+    "visual_capture",
+    "visual_checks",
+    "visual_settle",
 ];
 
 fn shipped_leaf() -> orbit_types::workflow::JobV2 {
@@ -881,6 +884,7 @@ impl orbit_engine::test_support::NullRuntimeHost for LeafHost {
             }),
             "test_stub_pr_open" => json!({ "pr_number": "41" }),
             "test_stub_claim_handoff" => json!({ "handed_off": true, "merged": false }),
+            "test_stub_visual_capture" => json!({ "applies": false, "captures": [] }),
             other => panic!("unexpected action `{other}`"),
         };
         Ok(output)

@@ -353,6 +353,42 @@ spec:
         # ORB-15287: replays a gate the implementer's sandbox deferred.
         implementation: "{{ steps.implement_one.output }}"
 
+    # Visual review (capture of record and checks): for a `verify-mock-ui`
+    # task whose `visual_review.mode` is not `off`, capture the final
+    # candidate in a detached checkout once per mock at the digests frozen
+    # at admission, attach the side-by-side images and the system-written
+    # `visual/capture.json`, record the deterministic checks, and settle the
+    # capture against the head and the frozen mocks (`stale_capture`,
+    # `mock_changed`). Every other delivery reports `applies: false` and
+    # writes nothing. In shadow nothing blocks; only
+    # `visual_review.require_established` holds a capture that is not
+    # established. The leaf captures against the contract its owner
+    # captured at admission, and the handoff returns the capture for the
+    # owner to check (`visual_capture_mismatch`).
+    # It always runs, so the later steps' conditions may read its output;
+    # a `no-diff-expected` skip has no candidate and reports `applies: false`.
+    - id: visual_capture
+      target: activity:visual_capture
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        skipped_no_diff_expected: "{{ steps.commit.output.skipped_no_diff_expected }}"
+
+    - id: visual_checks
+      when: "{{ steps.visual_capture.output.applies }} == true"
+      target: activity:visual_checks
+      default_input:
+        capture: "{{ steps.visual_capture.output }}"
+
+    - id: visual_settle
+      when: "{{ steps.visual_capture.output.applies }} == true"
+      target: activity:visual_settle
+      default_input:
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        capture: "{{ steps.visual_capture.output }}"
+        checks: "{{ steps.visual_checks.output }}"
+
     - id: push
       stage: { id: publish, label: Publish }
       when: "{{ steps.commit.output.skipped_no_diff_expected }} != true"
@@ -537,6 +573,9 @@ spec:
         # A claim binds exactly one task, so the loop ran once and this is
         # that task's implementer output; its summary becomes the owner's.
         implementation: "{{ steps.implement_one.output }}"
+        # The capture of record, already attached on the owner, or
+        # `applies: false` when the claim captured no visual review contract.
+        visual: "{{ steps.visual_capture.output }}"
 
     # No branch publication, PR or reviewer is needed for a verified clean base.
     # [ORB-14791] A `no-diff-expected` review reaches here with no report: the

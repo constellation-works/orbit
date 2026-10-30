@@ -233,6 +233,7 @@ impl OrbitRuntime {
                         .mock_digest_artifact_for_pull_admission(task, &request.request_id)?
                         .into_iter()
                         .collect(),
+                    visual_review: self.captured_visual_review(task)?,
                 })
             },
         )

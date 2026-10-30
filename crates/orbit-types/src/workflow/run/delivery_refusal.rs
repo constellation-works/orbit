@@ -41,6 +41,10 @@ pub enum DeliveryRefusal {
     /// after transport recovers. A task already in progress follows ordinary
     /// run failure handling, or claim settlement for a claimed leaf, instead.
     OriginUnavailable,
+    /// A `verify-mock-ui` delivery's capture is not established and
+    /// `visual_review.require_established` holds it until an operator
+    /// releases it or a host with a verified browser kit captures it.
+    VisualNotEstablished,
 }
 
 impl DeliveryRefusal {
@@ -61,6 +65,7 @@ impl DeliveryRefusal {
             Self::CheckEvidenceInconclusive => "delivery_check_evidence_inconclusive",
             Self::ForgeObservationUnavailable => "delivery_forge_observation_unavailable",
             Self::OriginUnavailable => "delivery_origin_unavailable",
+            Self::VisualNotEstablished => "delivery_visual_not_established",
         }
     }
 
@@ -81,6 +86,7 @@ impl DeliveryRefusal {
             "delivery_check_evidence_inconclusive" => Some(Self::CheckEvidenceInconclusive),
             "delivery_forge_observation_unavailable" => Some(Self::ForgeObservationUnavailable),
             "delivery_origin_unavailable" => Some(Self::OriginUnavailable),
+            "delivery_visual_not_established" => Some(Self::VisualNotEstablished),
             _ => None,
         }
     }

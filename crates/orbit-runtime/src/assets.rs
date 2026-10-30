@@ -237,6 +237,18 @@ pub const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../orbit-core/assets/activities/review_gate_settle.yaml"),
     ),
     (
+        "visual_capture",
+        include_str!("../../orbit-core/assets/activities/visual_capture.yaml"),
+    ),
+    (
+        "visual_checks",
+        include_str!("../../orbit-core/assets/activities/visual_checks.yaml"),
+    ),
+    (
+        "visual_settle",
+        include_str!("../../orbit-core/assets/activities/visual_settle.yaml"),
+    ),
+    (
         "review_reconciliation_prepare",
         include_str!("../../orbit-core/assets/activities/review_reconciliation_prepare.yaml"),
     ),

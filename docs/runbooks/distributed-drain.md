@@ -214,6 +214,19 @@ requirement are the same as for before-PR review, with the reason codes
 unchanged.
 After-landing review (the `delivery-code-review` auto-task) never affects
 admission: the owner reviews landed deliveries whatever host implemented them.
+
+Visual review: when the owner's `visual_review.mode` is not `off`, a claimed
+`verify-mock-ui` task's claim receipt carries its visual review contract (the
+mode and budget, the view manifests at the mock base with their digests, and
+each mock's digest). The leaf captures against that contract with its own
+browser kit, writes the images and `visual/capture.json` to the owner through
+the host-owned channel, and its handoff names the capture. The owner refuses a
+handoff that returns no capture, or one whose image digests, commits, manifest
+or mock digests or kit pin differ from the contract and the handed-off head,
+with `visual_capture_mismatch`; the leaf records the refused settlement. A
+leaf without a verified kit returns a `not_established` capture naming its
+reason, which is accepted and shown as not established. The receipt field is new, so owner and
+followers need matching builds.
 A follower's landed PR reaches the owner's review batch under the claimed
 task's id, which the owner reads from the handoff it accepted.
 
