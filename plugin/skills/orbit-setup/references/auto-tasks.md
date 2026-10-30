@@ -639,11 +639,6 @@ For ongoing selection and reconciliation, follow [Seeding policy](configuration.
   operator experiment evidence by task tier and exact model, effort and
   configuration digest, including mature quality, repair/regression and total
   delivery cost/time. Shadow would-be assignments never prove candidate quality.
-  Runs an available committed/configured workspace analysis helper before
-  revisions (Orbit's contributor helper is `scripts/crew-risk/report.py`),
-  attaches fresh snapshot/manifest/results/supported PNG/SVG/PDF/report artifacts,
-  and records missing helper/dependencies/evidence without installing anything.
-  Seven-day observational plots do not replace fourteen-day ladder guardrails.
   Every run attaches `crew-ladder-review.json`, fetching previous completed
   review artifacts for deltas or recording a baseline. Files at most three
   duplicate-checked proposed revisions/evaluations with precise targets and

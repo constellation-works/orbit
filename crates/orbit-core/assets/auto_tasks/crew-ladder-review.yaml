@@ -1,6 +1,6 @@
 schemaVersion: 1
 name: crew-ladder-review
-description: Monthly evidence review of crew tier membership and model effort variants; runs an available workspace reporting helper, persists comparisons and proposes at most three supported revisions or evaluations without changing live configuration
+description: Monthly evidence review of crew tier membership and model effort variants; persists comparisons and proposes at most three supported revisions or evaluations without changing live configuration
 enabled: false
 schedule:
   cron: 0 9 1 * *
@@ -15,7 +15,7 @@ template:
     ## Authority and complete reads
 
     Inspect the actual registered owning workspace/checkout before reading
-    configuration or invoking a helper. Read actual ladder configuration,
+    configuration. Read actual ladder configuration,
     ordered crews (provider, exact model version, effort and configuration
     digest), tier pools and `orbit crew ladder --json` / orbit.crew.ladder.
     Read tool schemas before calls. Enumerate orbit.experiment.list without
@@ -30,46 +30,11 @@ template:
     auto-task:crew-ladder-review); enumerate completely, sort by completion
     evidence rather than list position, and exclude this task. Inspect their
     artifact metadata with orbit.task.show and fetch the newest available
-    crew-ladder-review.json and helper manifest through
+    crew-ladder-review.json through
     orbit.task.artifact.get. Missing/unreadable prior evidence makes this a
     baseline; record why. Analyze newly settled evidence since that review,
     with at least 30 days of context and full relevant trials. A monthly
     window must never truncate follow-up to manufacture maturity or a verdict.
-
-    ## Re-run the committed analysis before recommending revisions
-
-    Discover a committed or explicitly configured workspace helper and read
-    its instructions. In the Orbit repository the first consumer is
-    scripts/crew-risk/report.py; other workspaces need not have that path.
-    Verify the helper belongs to the selected checkout. Follow its documented
-    dependency/setup contract using already available dependencies only.
-    Never auto-install dependencies, use private caches, assume a host/home
-    path, internal workspace key, crew-to-model alias mapping or source tree
-    outside this workspace. Run the helper in the foreground with explicit
-    workspace, as-of, protocol and a fresh output directory under .orbit/tmp/.
-    The Orbit helper command is:
-    `<configured-python> scripts/crew-risk/report.py --workspace <owner-selector>
-    --output <absolute-scratch-directory> --as-of <UTC-cutoff>
-    --protocol observational-v2`.
-    It reads public tools and read-only stores, never canonical writes.
-    Fetch the prior helper manifest and pass --previous-manifest when available.
-    Attach its fresh snapshot (gzip if needed), cohort/provenance manifest,
-    results.json, within-tier-results.json, curve-fits.json, generated
-    PNG/SVG/PDF figures and report.md with orbit.task.artifact.put. Respect
-    the artifact size limit: compress or split oversized JSON and record every
-    part and hash; never silently omit an output. Read the numeric results
-    and inspect plots before using them. A missing helper, dependency, source
-    or mature cohort is a specific evidenced gap/no-op, not invented plots.
-
-    The exploratory figure endpoint is seven-day recorded regression links;
-    it is not ladder's fourteen-day mature quality guardrail or a proposed
-    thirty-day risk calibration. Preserve source protocol/seed/cutoff and
-    input/output hashes, source coverage, attribution and observational/proxy
-    limitations. Discover exact execution-time model versions, effort and
-    configuration digest; unknown identity stays unknown. Never substitute
-    today's crew definition. Pooling must be explicit and versioned, retain
-    member counts, and never mix task tiers. Flash is not implicitly part of
-    a Luna/Haiku/Spark pool. Suppress unsupported curves but keep counts/gaps.
 
     ## Measure and compare
 
@@ -91,8 +56,8 @@ template:
     versions, efforts or digests or use mixed-tier raw rates as capability
     evidence. Explain common-support, task-mix, sample and maturity limits.
     Prefer lower total delivery cost/time only subject to configured quality,
-    non-inferiority and regression guardrails. Observational helper output
-    screens questions; it cannot replace randomized mature trial evidence.
+    non-inferiority and regression guardrails. Observational summaries can
+    identify questions; they cannot replace mature randomized trial evidence.
 
     ## Prepare bounded supported revisions
 
@@ -127,8 +92,8 @@ template:
     cutoff/window/timezone (cron uses host-local first day at 09:00), owning
     workspace, configuration snapshot/digests, experiment IDs/modes/readouts,
     full maturity/coverage/exclusions, per-tier/model/effort comparisons and
-    unknowns, helper status/output paths/hashes, prior-review reference and
-    delta (including newly settled counts and snapshot hashes), proposals,
+    unknowns, evidence references, prior-review reference and
+    delta (including newly settled counts), proposals,
     duplicate mappings, overflow and no-op reasons. Fetch previous artifacts
     through tools, never infer a baseline from a final message. Attach it with
     orbit.task.artifact.put (id=this chore, source_path=the scratch file,
@@ -138,7 +103,6 @@ template:
   acceptance_criteria:
   - Actual ladder configuration and all relevant standing/operator experiment readouts were inspected completely, or exact enumeration gaps and unknowns were recorded with full available denominators
   - Per-tier exact model, effort and configuration-digest evidence separates assignment, actual execution, settlement and horizon maturity, with quality, failures, repairs, regressions, total cost/time and uncertainty; shadow evidence never becomes measured candidate quality
-  - An available committed/configured workspace helper was run read-only and its fresh snapshot, manifest, numeric results, supported PNG/SVG/PDF plots and report were attached before revisions; missing helper/dependencies/evidence is an explicit gap without invented plots or auto-installation
   - crew-ladder-review.json is attached and compared with the prior completed review artifacts fetched through tools, or an evidenced baseline/no-op reason is recorded
   - At most 3 duplicate-checked proposed tasks were filed and read back, each with exact supported targets, before/after, trial/config digests, evidence/verdict, benefit/risks, AC and spawned_from to this chore; overflow and no-change reasons remain in the artifact
   - No routing, configuration, effort, rung order, mode, grading adoption or experiment lifecycle was changed, no live/paid trial launched and no proposal approved or dispatched

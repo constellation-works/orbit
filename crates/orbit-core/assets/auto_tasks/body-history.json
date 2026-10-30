@@ -12,6 +12,34 @@
         "## Rules and command surfaces",
         "## What to check"
       ],
+      "digest": "0fffd30387a6323d4be0a746382cbe823dd0591365247a0c79ef7290bfa16afc",
+      "revision": "ff7de70fa52d78f9c40e834bdb111622efe8ff77",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "low",
+        "schedule": {
+          "every_minutes": 4320
+        },
+        "tags": [
+          "agent-guidance-audit",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## Discover guidance files",
+        "## Duplicates",
+        "## Filing",
+        "## Generated mirrors",
+        "## Handoff",
+        "## Pin one commit",
+        "## Rolling batch",
+        "## Rules and command surfaces",
+        "## What to check"
+      ],
       "digest": "c3153e102d547e9db0735493e988be6ffe5d6fe1d9fa62e4672117f9aa5619da",
       "revision": "a65afab3d1bcea7d789e72dcf770a25e69c5cda1",
       "settings": {
@@ -58,6 +86,37 @@
     }
   ],
   "architecture-audit": [
+    {
+      "comments": [
+        "## Discover the repository's shape",
+        "## Duplicate and conflict safety",
+        "## Filing",
+        "## Handoff",
+        "## Layering: documented, or inferred",
+        "## Lenses and bars",
+        "## Pass A — structure metrics, whole repository, every run",
+        "## Pass B — one area, read in full",
+        "## Pin and cursor",
+        "## Rules and command surfaces",
+        "## What this sweep owns"
+      ],
+      "digest": "1d2abbac54471ff1c89494859225f96d70b32fe58d060499eb78a92ea5998192",
+      "revision": "ff7de70fa52d78f9c40e834bdb111622efe8ff77",
+      "settings": {
+        "complexity": "hard",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "low",
+        "schedule": {
+          "every_minutes": 20160
+        },
+        "tags": [
+          "architecture-audit",
+          "no-diff-expected",
+          "tech-debt"
+        ]
+      }
+    },
     {
       "comments": [
         "## Discover the repository's shape",
@@ -180,6 +239,30 @@
       ],
       "digest": "c296a2bab039721c83a4a3b61db5e33091d979f7c09822bb121f02c0d30930c6",
       "revision": "37f8572a95ebc191d96a688d430a9da6c6956943",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "0 9 1 * *"
+        },
+        "tags": [
+          "auto-task-yield-review",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## Linkage gap",
+        "## Measure each enabled definition (last 30 days)",
+        "## Propose retuning (at most 3 tasks)",
+        "## Record and diff",
+        "## Rules and command surfaces"
+      ],
+      "digest": "d8ce5de7c330cb1987d44c4e0d23c4ed7ea0ea7926375b3c1f66c0fce2b71fe0",
+      "revision": "ff7de70fa52d78f9c40e834bdb111622efe8ff77",
       "settings": {
         "complexity": "medium",
         "dedupe": "skip_if_open",
@@ -347,6 +430,31 @@
         "## Report",
         "## Rules and command surfaces"
       ],
+      "digest": "85a8400452f133b3330c3772ada3f983a8fbed1bc5f537a8b0ea1e4cacbc9aa1",
+      "revision": "ff7de70fa52d78f9c40e834bdb111622efe8ff77",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "45 1 * * *"
+        },
+        "tags": [
+          "ci-budget-watch",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## Decide",
+        "## Discover the documented budget",
+        "## Discover the measured job",
+        "## Measure and compare",
+        "## Report",
+        "## Rules and command surfaces"
+      ],
       "digest": "ba81d4d769c74323e76f7621e9797546adb37e5d3d71a2ed549e1b49e0161d2b",
       "revision": "4af345784467692b882c37dce7479f15e006b621",
       "settings": {
@@ -380,6 +488,36 @@
       ],
       "digest": "090a2b9a5e17388644a6d2debaf0879f5535e8dbaf080b62bbfdf80e41625140",
       "revision": "ef65d1a5682e7352fb809bad89080dd505b0d2d2",
+      "settings": {
+        "complexity": "hard",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "low",
+        "schedule": {
+          "every_minutes": 4320
+        },
+        "tags": [
+          "code-health-sweep",
+          "no-diff-expected",
+          "tech-debt"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## Discover the repository's shape",
+        "## Duplicate and conflict safety",
+        "## Filing",
+        "## Handoff",
+        "## Pass A — dead code, whole repository, every run",
+        "## Pass B — one area, read in full",
+        "## Pass C — compatibility retirement, whole repository, every run",
+        "## Pin and cursor",
+        "## Rules and command surfaces",
+        "## What other work owns"
+      ],
+      "digest": "0df858d8e273e7d775e1095db23b6b4fc974f480fef6cf1013fead97ec0d1fa5",
+      "revision": "ff7de70fa52d78f9c40e834bdb111622efe8ff77",
       "settings": {
         "complexity": "hard",
         "dedupe": "skip_if_open",
@@ -1241,7 +1379,32 @@
       }
     }
   ],
-  "crew-ladder-review": [],
+  "crew-ladder-review": [
+    {
+      "comments": [
+        "## Authority and complete reads",
+        "## Measure and compare",
+        "## Persist",
+        "## Prepare bounded supported revisions",
+        "## Re-run the committed analysis before recommending revisions"
+      ],
+      "digest": "a39a2e80ac66446bb14f8b37fe6cf87ed7fac63010b6c1c40146f83f15436251",
+      "revision": "85b19a1547c0d349dd89d58dd1dd2aefc547b4f0",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "0 9 1 * *"
+        },
+        "tags": [
+          "crew-ladder-review",
+          "no-diff-expected"
+        ]
+      }
+    }
+  ],
   "delivery-code-review": [
     {
       "comments": [],
@@ -1788,6 +1951,32 @@
         "## Rules and command surfaces",
         "## Security exclusion"
       ],
+      "digest": "5b3842c2b68811aab32c1501d098cbd64b760e3ca9847edfecd27fa9ac9106e4",
+      "revision": "ff7de70fa52d78f9c40e834bdb111622efe8ff77",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "0 9 1 * *"
+        },
+        "tags": [
+          "dependency-freshness",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## Detect ecosystems and inventory",
+        "## Handoff",
+        "## No network",
+        "## Prioritize and file",
+        "## Read the changelog before filing",
+        "## Rules and command surfaces",
+        "## Security exclusion"
+      ],
       "digest": "db1e6e89e42fed92821964c272344cb94e77a954896fc6a3313ed8a353eef704",
       "revision": "8cfbbaa89a3f93bb4cf8af57ac8ec943004464e1",
       "settings": {
@@ -1814,6 +2003,28 @@
       ],
       "digest": "314d11470f14090cd892120b76a683e71862c370a13fcbdafab8a351c916d46d",
       "revision": "b866351c469f409184ad0b1bcf82952d05e8452a",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "every_minutes": 720
+        },
+        "tags": [
+          "design-sync",
+          "docs"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## Ledger and summary",
+        "## Reconcile each selected feature",
+        "## Select features"
+      ],
+      "digest": "61de16a28d704e1e02684b923e3d1a9562edc1b71b263da4beb77319f91877c2",
+      "revision": "ff7de70fa52d78f9c40e834bdb111622efe8ff77",
       "settings": {
         "complexity": "medium",
         "dedupe": "skip_if_open",
@@ -2246,6 +2457,30 @@
           "no-diff-expected"
         ]
       }
+    },
+    {
+      "comments": [
+        "## Discover hosted CI and pin the window",
+        "## File at most 4 fix tasks",
+        "## Find the 2 flake signals",
+        "## Record the run",
+        "## Rules and command surfaces"
+      ],
+      "digest": "6f9c4b2fe25db506b6b990aa2465854231a0cf840e4e4e77be294bc8d7ac43b2",
+      "revision": "ff7de70fa52d78f9c40e834bdb111622efe8ff77",
+      "settings": {
+        "complexity": "hard",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "15 8 * * 1"
+        },
+        "tags": [
+          "flaky-test-hunt",
+          "no-diff-expected"
+        ]
+      }
     }
   ],
   "friction-curation": [
@@ -2522,6 +2757,27 @@
       ],
       "digest": "87c0fd41d32e5c9aa768fd0227f1bfd3826ed95f362420a2bec31f7c31ab5d3d",
       "revision": "31a349018685766ddcf36a9a2332b3891127415e",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "15 7 * * *"
+        },
+        "tags": [
+          "friction-curation",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## Pass",
+        "## Rules and command surfaces"
+      ],
+      "digest": "fa8f83ea7dc6c77cca17f987fc675ed40999757511397cc8a60e10ea882d5b79",
+      "revision": "ff7de70fa52d78f9c40e834bdb111622efe8ff77",
       "settings": {
         "complexity": "medium",
         "dedupe": "skip_if_open",
@@ -2981,6 +3237,32 @@
       ],
       "digest": "408b91569f36d49ec7019082541140d1f67bac8d14a1526803d2560459e58256",
       "revision": "37d10744d68d076be18ace14b3387d9f961da570",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "0 3 15 * *"
+        },
+        "tags": [
+          "qa-full-sweep",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## File one surface-QA task per area",
+        "## File the roll-up",
+        "## Finish",
+        "## Inventory the user-facing surface",
+        "## Partition into bounded areas",
+        "## Pin the commit",
+        "## Rules and command surfaces"
+      ],
+      "digest": "416e0cdb1715fc7374229dfa40cdc4dc23359e7194c24b77b14865af6e89dab2",
+      "revision": "96c314ad1730604771687d2c626cd21b4714f4f6",
       "settings": {
         "complexity": "medium",
         "dedupe": "skip_if_open",
@@ -4391,6 +4673,35 @@
         "## Rules and command surfaces",
         "## Thresholds (state them in every run summary)"
       ],
+      "digest": "369e200e7ecfd0522498f00c6c9d654d5538a7e703f4c5b33a01e5f8d3b291b4",
+      "revision": "ff7de70fa52d78f9c40e834bdb111622efe8ff77",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "low",
+        "schedule": {
+          "every_minutes": 10080
+        },
+        "tags": [
+          "structure-sweep",
+          "no-diff-expected",
+          "tech-debt"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## Candidate shapes",
+        "## Discovery",
+        "## Duplicate safety",
+        "## Filing",
+        "## Grouping and filing cap",
+        "## Handoff",
+        "## Pin",
+        "## Rules and command surfaces",
+        "## Thresholds (state them in every run summary)"
+      ],
       "digest": "b9c01e9d7f3150d7382c9410b85dd4e23db104d5769902d88a087c98b02d16a2",
       "revision": "e5d99399c59ef61c5e89b9e029fc0d6d30fabc00",
       "settings": {
@@ -4457,5 +4768,30 @@
       }
     }
   ],
-  "workflow-health-audit": []
+  "workflow-health-audit": [
+    {
+      "comments": [
+        "## Authority and evidence",
+        "## Handoff",
+        "## Inventory every definition",
+        "## Route findings",
+        "## Verify behavior, including green runs"
+      ],
+      "digest": "ccdacd6ca8d9041d7f752b16f025f6de4ca69b4a3ac30292c773d071dd541681",
+      "revision": "9979e44a3a831ce808e023082c65af24011cdb3e",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "every_minutes": 10080
+        },
+        "tags": [
+          "workflow-health-audit",
+          "no-diff-expected"
+        ]
+      }
+    }
+  ]
 }

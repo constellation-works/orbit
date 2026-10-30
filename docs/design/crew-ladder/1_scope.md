@@ -65,18 +65,9 @@ comparisons require actual same-model, same-tier experiment support. Shadow
 would-be assignments never measure candidate quality. Grading applies only when
 independently enabled and adopted, and missing grades never become passes.
 
-Before proposing revisions it reruns a committed/configured workspace helper when
-available. Orbit's first consumer is [scripts/crew-risk/report.py](../../../scripts/crew-risk/README.md),
-which exports read-only facts and produces same-tier observational size-response
-analysis with explicit provenance. Other workspaces need not contain this helper.
-Missing helper, dependencies or mature support is recorded without installing
-anything or fabricating plots. The helper's seven-day exploratory link endpoint
-is distinct from the ladder's fourteen-day quality guardrail and any future
-thirty-day calibration. It cannot establish model/effort causality.
-
 Every run attaches `crew-ladder-review.json` with configuration/trial digests,
 cutoff/window/timezone, coverage/maturity, per-tier/model/effort comparisons,
-helper snapshot/manifest/results/PNG/SVG/PDF/report artifacts, prior-review delta,
+evidence references, prior-review delta,
 proposals/overflow and no-change reasons. Prior completed review artifacts are
 fetched through artifact tools; absent evidence makes a baseline. Off,
 unconfigured, shadow-only and insufficient-history runs can succeed as evidenced

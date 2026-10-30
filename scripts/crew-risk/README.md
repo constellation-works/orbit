@@ -1,5 +1,9 @@
 # Crew risk observational report
 
+These scripts are for manual contributor analysis from an Orbit source checkout.
+They are separate from the generic `crew-ladder-review` auto-task, which uses
+workspace ladder and experiment readouts without invoking these scripts.
+
 `report.py` is the supported entrypoint. It exports facts read-only from an
 explicit registered **owning** workspace, or consumes a frozen JSON/gzip snapshot,
 then runs the original temporal backtest, same-tier comparison and size-response
@@ -52,8 +56,8 @@ IDs. Output directories must be new so stale figures cannot masquerade as fresh.
 Missing dependencies exit 2 with a persisted manifest/report and an actionable
 gap. No numerical results or plots are fabricated. Other source/input failures
 also exit 2; a completed analysis with sparse/unknown/shadow-only evidence records
-`complete_with_gaps` and can be a successful monthly no-op. The caller attaches
-all outputs as task artifacts, compressing/splitting files over the artifact
+`complete_with_gaps`. When recording a manual analysis on a task, attach
+its outputs as task artifacts, compressing/splitting files over the artifact
 limit and preserving part hashes. They contain private task evidence and must
 not be committed. The plotting font cache is confined to the output directory.
 
@@ -76,7 +80,7 @@ or crew configuration digest. Live exports preserve those as **unknown**, never
 infer them from today's crew configuration. `observational-v2` refuses to combine
 such identities into curves/comparisons; its manifest retains observed counts.
 An enriched snapshot with captured execution-time identity can supply them.
-Monthly experiment readouts remain the authority for assigned/executed/settled,
+Ladder experiment readouts remain the authority for assigned/executed/settled,
 14-day quality, grading adoption, total delivery cost/time and trial verdicts;
 this helper's completed-task proxy endpoint cannot supply those absent facts.
 
@@ -136,4 +140,4 @@ it deliberately retains unknown effort/digest and cannot support effort claims.
 Temporal and within-tier results should preserve the original counts and numeric
 results; plot layout/group discovery/suppression and serialized output hashes
 intentionally change. Policy commit dates are not verified deployment times.
-Historical-v1 is a reproducibility route, not the monthly revision protocol.
+Historical-v1 is a reproducibility route, not evidence for a ladder revision.

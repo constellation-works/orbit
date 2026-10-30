@@ -460,15 +460,12 @@ definition of the same name.
 - `crew-ladder-review` — disabled-by-default monthly (`0 9 1 * *`, host-local)
   medium no-diff chore, seeded through both shipped registries like the other
   24 defaults. Reviews per-tier exact model/effort/digest mature ladder and
-  operator trial evidence. Runs an available workspace reporting helper and
-  attaches snapshot, manifest, numeric comparisons, supported figures and report;
-  helper/dependency/evidence gaps remain explicit. Every run attaches
+  operator trial evidence. Every run attaches
   `crew-ladder-review.json` and fetches the prior review for deltas. At most three
   duplicate-checked proposed configuration revisions or bounded evaluation tasks
   carry exact targets, evidence and `spawned_from`. It never changes live routing,
-  effort, ordering, mode, grading or experiment lifecycle. Shadow projections and
-  seven-day observational curves cannot substitute for mature actual trial
-  quality. See [monthly ladder review](../crew-ladder/1_scope.md#monthly-evidence-review).
+  effort, ordering, mode, grading or experiment lifecycle. Shadow projections
+  cannot substitute for mature actual trial quality. See [monthly ladder review](../crew-ladder/1_scope.md#monthly-evidence-review).
 
 - `auto-task-yield-review` — disabled-by-default monthly review of whether
   this workspace's enabled auto-task definitions pay for themselves. For
