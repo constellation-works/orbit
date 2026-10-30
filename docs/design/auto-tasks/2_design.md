@@ -483,7 +483,7 @@ dispositions. It complements `run-failure-patterns`: even a successful sweep
 with no output must explain eligible findings and their dispositions.
 
 Like other bundled defaults it is disabled until the operator enables it with
-`orbit auto-task enable workflow-health-audit on`; `skip_if_open` prevents
+`orbit auto-task toggle workflow-health-audit on`; `skip_if_open` prevents
 overlapping weekly audit tasks. Enabling or running the audit grants no
 production retry, dispatch, configuration, merge or release authority.
 
