@@ -11,8 +11,8 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
 use orbit_types::task::{
-    VISUAL_CAPTURE_ARTIFACT, VISUAL_CHECKS_ARTIFACT, VisualCaptureOutcome, VisualCaptureRecord,
-    VisualCheckFinding, VisualChecksRecord, visual_review_summary,
+    VISUAL_CAPTURE_ARTIFACT, VISUAL_CHECKS_ARTIFACT, VisualCaptureRecord, VisualCheckFinding,
+    VisualChecksRecord, visual_review_summary,
 };
 use serde_json::{Value, json};
 
@@ -57,16 +57,25 @@ fn check_task(runtime: &OrbitRuntime, capture: &Value) -> Result<Value, OrbitErr
         .get("scratch_dir")
         .and_then(Value::as_str)
         .map(Path::new);
-    let (rule_findings, rule_results, rules_unavailable) =
-        if record.outcome == VisualCaptureOutcome::Captured {
-            rule_findings(runtime, scratch)
-        } else {
-            (
-                Vec::new(),
-                BTreeMap::new(),
-                Some("the capture is not established".to_string()),
-            )
-        };
+    // The driver runs each mock's UI rules on its first render. An over-budget
+    // mock has rendered, so its results stay readable from `rules.json` even when
+    // no mock captured (§7). Setup failures never rendered and have none to read.
+    let rules_ran = record.mocks.iter().any(|mock| {
+        mock.capture.is_some()
+            || mock
+                .error
+                .as_ref()
+                .is_some_and(|error| error.code == "image_over_budget")
+    });
+    let (rule_findings, rule_results, rules_unavailable) = if rules_ran {
+        rule_findings(runtime, scratch)
+    } else {
+        (
+            Vec::new(),
+            BTreeMap::new(),
+            Some("the capture is not established".to_string()),
+        )
+    };
     let mut findings = capture_findings(&record);
     let image_budget_mocks: BTreeSet<&str> = record
         .mocks
