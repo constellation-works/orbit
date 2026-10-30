@@ -846,8 +846,10 @@ readout says so.
 - An unresolved blocking finding holds the run with `delivery_visual_review_unresolved`
   before `complete_pr` and each bounded re-review completion. These gates apply only
   when this run captured visual evidence. Live delivery requires complete evidence for
-  every frozen mock at the final head, including candidates whose initial review found
-  nothing. Changed heads are recaptured; missing, partial or stale evidence holds.
+  every budgeted mock (`visual_review.max_mocks`, by artifact name) at the final head,
+  including candidates whose initial review found nothing. Mocks over budget are listed
+  `over_budget` and are not required. Changed heads are recaptured; missing, partial or
+  stale evidence holds.
   A fixed finding remains unresolved when recapture is missing, incomplete or not established.
   `orbit visual accept-dispute` is the operator's acceptance; a
   managed run or a claimed worker is refused it.

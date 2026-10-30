@@ -487,13 +487,46 @@ crate::scenario_table!(
     measurement_capture_uses_the_durable_landed_revision
 );
 
+/// A verified browser kit under `home`: its pixel helper at the pinned
+/// version, recorded in the kit's verification.
+#[cfg(unix)]
+fn install_browser_kit(home: &Path) {
+    crate::host_ui_routing::write_kit(home, true);
+    let layout = orbit_core::bootstrap::browser_kit::KitLayout::for_home(home);
+    let helper = layout
+        .npm_project()
+        .join("node_modules")
+        .join(orbit_exec::browser_kit::PIXEL_HELPER_PACKAGE);
+    std::fs::create_dir_all(&helper).unwrap();
+    std::fs::write(
+        helper.join("package.json"),
+        json!({"version":orbit_exec::browser_kit::PIXEL_HELPER_VERSION}).to_string(),
+    )
+    .unwrap();
+    let mut verification: Value =
+        serde_json::from_slice(&std::fs::read(layout.verification_file()).unwrap()).unwrap();
+    verification["pixel_helper_version"] = json!(orbit_exec::browser_kit::PIXEL_HELPER_VERSION);
+    std::fs::write(layout.verification_file(), verification.to_string()).unwrap();
+}
+
+/// The external browser process: a `node` on the scenario PATH that prints
+/// `driver` as the capture driver's report. `driver` must hold no shell quotes.
+#[cfg(unix)]
+fn write_fake_driver(home: &Path, driver: &Value) {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = home.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let node = bin.join("node");
+    std::fs::write(&node, format!("#!/bin/sh\nprintf '%s\\n' '{}'\n", driver)).unwrap();
+    std::fs::set_permissions(&node, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
 /// The real pre-landing action must hold unavailable and partial recaptures,
 /// then accept a complete capture of its final HEAD. The fixture substitutes
 /// only the external browser process; Git, artifacts, checks and resolution
 /// all run through their production boundaries.
 #[cfg(unix)]
 fn fixed_vision_finding_requires_complete_final_capture() {
-    use std::os::unix::fs::PermissionsExt;
     let (pair, _kit) = prepared_mock_pair(&CONFIG.replace("shadow", "live"));
     let runtime = &pair.wire.owner;
     let task = &pair.tasks[0];
@@ -561,25 +594,7 @@ fn fixed_vision_finding_requires_complete_final_capture() {
         "missing kit must hold a fixed vision finding"
     );
     let home = PathBuf::from(std::env::var_os("HOME").unwrap());
-    crate::host_ui_routing::write_kit(&home, true);
-    let layout = orbit_core::bootstrap::browser_kit::KitLayout::for_home(&home);
-    let helper = layout
-        .npm_project()
-        .join("node_modules")
-        .join(orbit_exec::browser_kit::PIXEL_HELPER_PACKAGE);
-    std::fs::create_dir_all(&helper).unwrap();
-    std::fs::write(
-        helper.join("package.json"),
-        json!({"version":orbit_exec::browser_kit::PIXEL_HELPER_VERSION}).to_string(),
-    )
-    .unwrap();
-    let mut verification: Value =
-        serde_json::from_slice(&std::fs::read(layout.verification_file()).unwrap()).unwrap();
-    verification["pixel_helper_version"] = json!(orbit_exec::browser_kit::PIXEL_HELPER_VERSION);
-    std::fs::write(layout.verification_file(), verification.to_string()).unwrap();
-    let bin = home.join("bin");
-    std::fs::create_dir_all(&bin).unwrap();
-    let node = bin.join("node");
+    install_browser_kit(&home);
     let out = pair
         .owner_repo
         .join(".orbit/tmp/visual-delivery/fixture")
@@ -605,9 +620,7 @@ fn fixed_vision_finding_requires_complete_final_capture() {
         }
         let driver = json!({"outcome":"captured","kit":{},"frozen_instant":"2026-01-01T12:00:00.000Z",
             "captures_per_mock":2,"mocks":entries,"rules":"rules.json","rules_summary":{}});
-        // All report fields above are fixed fixture data with no shell quotes.
-        std::fs::write(&node, format!("#!/bin/sh\nprintf '%s\\n' '{}'\n", driver)).unwrap();
-        std::fs::set_permissions(&node, std::fs::Permissions::from_mode(0o755)).unwrap();
+        write_fake_driver(&home, &driver);
         let result = recapture();
         if partial {
             assert!(
@@ -680,4 +693,124 @@ fn fixed_vision_finding_requires_complete_final_capture() {
 crate::scenario_table!(
     fixed_visual_resolution_regression,
     fixed_vision_finding_requires_complete_final_capture
+);
+
+/// A live delivery with more frozen mocks than `visual_review.max_mocks` holds
+/// only on evidence it lacks. The over-budget mock is listed over budget and
+/// never captured, so it cannot hold a candidate whose budgeted mock rendered
+/// at the final head; a hold for missing evidence names that cause.
+#[cfg(unix)]
+fn live_over_budget_mock_does_not_hold_the_budgeted_capture() {
+    let config = format!("{}max_mocks = 1\n", CONFIG.replace("shadow", "live"));
+    let (pair, _kit) = prepared_mock_pair(&config);
+    let runtime = &pair.wire.owner;
+    let task = &pair.tasks[0];
+    // Sorted by artifact name, `mocks/checkout.dark.png` is the budgeted mock
+    // and `mocks/checkout.png` is over budget.
+    system_records(
+        runtime,
+        task,
+        vec![TaskArtifact {
+            path: "mocks/checkout.dark.png".into(),
+            content: MOCK.to_vec(),
+            media_type: "image/png".into(),
+            created_by: None,
+        }],
+    );
+    std::fs::write(
+        pair.owner_repo.join("views.toml"),
+        MANIFEST.replace("[app.web]", "[app.web]\nsetup = [\"true\"]"),
+    )
+    .unwrap();
+    git(&pair.owner_repo, &["add", "views.toml"]);
+    git(&pair.owner_repo, &["commit", "-q", "-m", "capture fixture"]);
+    let head = git2::Repository::open(&pair.owner_repo)
+        .unwrap()
+        .head()
+        .unwrap()
+        .target()
+        .unwrap()
+        .to_string();
+    let home = PathBuf::from(std::env::var_os("HOME").unwrap());
+    install_browser_kit(&home);
+    let out = pair
+        .owner_repo
+        .join(".orbit/tmp/visual-delivery/fixture")
+        .join(task)
+        .join("out");
+    std::fs::create_dir_all(&out).unwrap();
+    std::fs::write(out.join("capture.png"), CAPTURE).unwrap();
+    std::fs::write(out.join("side-by-side.png"), SIDE_BY_SIDE).unwrap();
+    let driver = |failed: bool| {
+        let mut entry = json!({"artifact":"mocks/checkout.dark.png","name":"checkout","view":"checkout",
+            "state":"default","theme":"dark","width":1440,"viewport":[1440,900],"fixture":"default",
+            "capture":"capture.png","side_by_side":"side-by-side.png","stability":"stable"});
+        if failed {
+            entry["error"] = json!({"code":"render_timeout","message":"render timed out"});
+        }
+        json!({"outcome":"captured","kit":{},"frozen_instant":"2026-01-01T12:00:00.000Z",
+            "captures_per_mock":2,"mocks":[entry],"rules":"rules.json","rules_summary":{}})
+    };
+    let capture = || {
+        runtime.run_deterministic(
+            "visual_capture",
+            &json!({}),
+            &json!({"workspace_path":pair.owner_repo,"completed_task_ids":[task],"job_run_id":"fixture"}),
+            ToolContext::default(),
+        )
+    };
+    let recapture = || {
+        runtime.run_deterministic(
+            "visual_recapture",
+            &json!({}),
+            &json!({"workspace_path":pair.owner_repo,"completed_task_ids":[task]}),
+            ToolContext::default(),
+        )
+    };
+    let review = json!({"schema_version":1,"purpose":"visual_review","mode":"live","task_id":task,
+        "candidate_sha":head,"outcome":"reviewed","recorded_only":false,
+        "budget":{"max_mocks":1,"max_images":2,"max_image_tokens":1000,"max_findings":1,
+            "images_shown":2,"estimated_image_tokens":1000},
+        "invalid_evidence_dropped":0,"over_max_findings_dropped":0,"findings":[]});
+    system_records(
+        runtime,
+        task,
+        vec![TaskArtifact::from_text(
+            "visual/review.json",
+            review.to_string(),
+        )],
+    );
+    write_fake_driver(&home, &driver(false));
+    capture().expect("capture the budgeted mock");
+    let stored = runtime
+        .get_task_artifact(task, "visual/capture.json")
+        .unwrap()
+        .unwrap();
+    let stored: Value = serde_json::from_slice(&stored.content).unwrap();
+    assert_eq!(
+        stored["outcome"], "captured",
+        "the budgeted mock must render: {stored}"
+    );
+    assert_eq!(
+        stored["over_budget"],
+        json!(["mocks/checkout.png"]),
+        "the over-budget mock is recorded, not captured: {stored}"
+    );
+    recapture().expect("a budgeted mock captured at the final head must not hold the delivery");
+    write_fake_driver(&home, &driver(true));
+    capture().expect("capture the failed render");
+    let error = recapture()
+        .expect_err("a budgeted mock without a capture holds the delivery")
+        .to_string();
+    assert!(error.contains("visual evidence"), "{error}");
+    assert!(
+        !error.contains("confirmed visual findings"),
+        "an evidence hold must name its cause, not unresolved findings: {error}"
+    );
+}
+
+#[cfg(unix)]
+crate::scenario_table!(
+    live_over_budget_mock_regression,
+    live_over_budget_mock_does_not_hold_the_budgeted_capture
 );
