@@ -127,7 +127,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Path Leases](./design/path-leases/1_overview.md) | Preemption and signed webhooks remain later work | claude |
 | [Web Terminal](./design/web-terminal/1_scope.md) | Phase 2: ORB-18489 PTY sessions and local terminal routes; phase 1 landed | claude |
 
-### Designing (7)
+### Designing (8)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
@@ -136,6 +136,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Conflict Budget](./design/conflict-budget/1_scope.md) | Settle the open questions (sum vs max, where weights live), then file phase 1 | claude |
 | [Script Steps](./design/script-steps/1_scope.md) | Phases 1 and 2 landed (manifests, grants, and Linux execution under `linux-bwrap-script-v1` with `script.execution` audit and `orbit script history`); next is phase 3, files and macOS | claude |
 | [Symbol Risk Index](./design/symbol-risk-index/1_scope.md) | Daniel reviews this scope and 2_design.md; implementation tasks are filed after acceptance | claude |
+| [Task Risk](./design/task-risk/1_scope.md) | Review estimands and evidence prerequisites before authorizing implementation. | codex |
 | [Ux Rules](./design/ux-rules/1_scope.md) | Phases 1-3 built (ORB-19974..19976); enabling the routine needs an operator-granted ux_rules_runner script, and a live UI surface waits for script steps' network phase | claude |
 | [Visual Review](./design/visual-review/1_scope.md) | UX rules ORB-19974/19975 first (view manifest, browser settings); then phases 1-6 as ORB-19977..19982 | claude |
 
@@ -241,6 +242,7 @@ a conservative title/status fallback.
 | [Task Artifacts](./design/task-artifacts/1_overview.md) | Tasks are Orbit's durable intent records: they explain what an agent or human is trying to change, how the work should be validated, what context is relevant, who acted on the work, and how the work connects to other Orbit artifacts. | Draft | codex |
 | [Task Migration](./design/task-migration/1_overview.md) | Move orbit tasks between hosts with export/import (tar.zst); task_prefix identifies each task's canonical owner, while an admitted follower may execute a fenced claim without taking authority. | Draft | claude |
 | [Task Publication](./design/task-publication/1_overview.md) | Explicitly publish authority-owned task snapshots to a dedicated Git repository for labelled inspection and deliberate recovery. | Accepted | codex |
+| [Task Risk](./design/task-risk/1_scope.md) | Advisory task-risk estimates separating model-relative complexity, repair burden and escaped regressions. | Draft | codex |
 | [Terminal Interface](./design/terminal-interface/1_overview.md) | House style for orbit-cli terminal output — machine-readable first, borderless single-line tables, semantic color resolved at the sink. | Accepted | claude |
 | [Usage Pressure](./design/usage-pressure/1_scope.md) | Scope: weight crew pool draws by how much of each provider account's usage window would expire unused, so Orbit spends the capacity that is about to reset before the capacity that is not | Draft | claude |
 | [User Interface](./design/user-interface/1_overview.md) | Orbit UI covers the dashboard and HTTP API owned by `orbit-web`; `orbit-cli` is the thin `orbit web serve` / `connect` command adapter. | Draft | gemini |
