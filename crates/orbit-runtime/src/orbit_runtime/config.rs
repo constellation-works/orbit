@@ -245,6 +245,11 @@ impl RuntimeKernel {
         self.context.settings().tag_instructions()
     }
 
+    /// `[visual_review]` as admitted.
+    pub fn visual_review_settings(&self) -> &orbit_config::VisualReviewSettings {
+        self.context.settings().visual_review()
+    }
+
     /// `[workflow.review_skip_tags]` as admitted.
     pub fn review_skip_settings(&self) -> &orbit_config::ReviewSkipSettings {
         self.context.settings().review_skip_tags()

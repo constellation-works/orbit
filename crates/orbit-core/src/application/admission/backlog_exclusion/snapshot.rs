@@ -14,8 +14,8 @@ use super::super::surface_reservation::{
 use super::super::unknown_footprint::footprint_waits;
 use super::exclusions::{
     browser_kit_exclusion, clears_complexity_gate, host_labels_exclusion, host_os_exclusion,
-    inherited_only_epic_root_exclusion, pilot_finding_exclusion, pilot_preparation_exclusion,
-    scheduled_exclusion,
+    inherited_only_epic_root_exclusion, mock_validation_exclusion, pilot_finding_exclusion,
+    pilot_preparation_exclusion, scheduled_exclusion,
 };
 use super::listing::active_pilot_preparations;
 use super::ordering::task_root_id;
@@ -267,6 +267,15 @@ pub(super) fn backlog_snapshot_in_mode(
     let kit_verified = runtime.browser_kit_verified();
     backlog.retain(|task| {
         let Some(exclusion) = browser_kit_exclusion(task, kit_verified) else {
+            return true;
+        };
+        excluded.push(exclusion);
+        false
+    });
+    // A `verify-mock-ui` task whose mocks fail validation against the
+    // manifest at the base waits for the mocks to be fixed, naming each.
+    backlog.retain(|task| {
+        let Some(exclusion) = mock_validation_exclusion(runtime, task) else {
             return true;
         };
         excluded.push(exclusion);

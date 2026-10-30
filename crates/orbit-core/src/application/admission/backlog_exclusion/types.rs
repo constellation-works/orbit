@@ -68,6 +68,11 @@ pub(crate) enum BacklogTaskExclusionReason {
     /// [`Self::HostOsMismatch`], so a task this host's OS cannot run names
     /// that wait first.
     BrowserKitMissing,
+    /// A `verify-mock-ui` task whose mocks fail validation against the
+    /// view manifest at the base revision (visual-review §2.3). `detail`
+    /// names every failing artifact and its refusal code; only renaming,
+    /// re-exporting or re-declaring clears it.
+    MockValidationFailed,
     GroupMemberConflict,
     /// An `epic`-tagged root that declared no `context_files` of its own while
     /// its descendants did. Admission no longer inherits their surface, so the

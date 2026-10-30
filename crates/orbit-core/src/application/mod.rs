@@ -35,6 +35,7 @@ pub(crate) mod host_labels;
 pub mod job;
 pub mod landing;
 pub(crate) mod managed_assets;
+pub(crate) mod mock_admission;
 pub mod plugin;
 pub(crate) mod pull_drain;
 pub mod review;

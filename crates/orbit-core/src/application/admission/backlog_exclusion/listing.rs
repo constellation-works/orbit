@@ -9,8 +9,8 @@ use super::super::pass_error::PassError;
 use super::super::unknown_footprint::{FootprintGuard, FootprintWave, whole_tree_holder};
 use super::exclusions::{
     browser_kit_exclusion, clears_complexity_gate, footprint_exclusion, host_labels_exclusion,
-    host_os_exclusion, inherited_only_epic_root_exclusion, pilot_finding_exclusion,
-    pilot_preparation_exclusion, scheduled_exclusion,
+    host_os_exclusion, inherited_only_epic_root_exclusion, mock_validation_exclusion,
+    pilot_finding_exclusion, pilot_preparation_exclusion, scheduled_exclusion,
 };
 use super::snapshot::backlog_snapshot_in_mode;
 use super::{
@@ -221,6 +221,10 @@ pub(crate) fn list_backlog_tasks(
                 continue;
             }
             if let Some(exclusion) = browser_kit_exclusion(&task, kit_verified) {
+                excluded.push(exclusion);
+                continue;
+            }
+            if let Some(exclusion) = mock_validation_exclusion(runtime, &task) {
                 excluded.push(exclusion);
                 continue;
             }

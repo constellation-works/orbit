@@ -101,6 +101,23 @@ pub(super) fn browser_kit_exclusion(
     })
 }
 
+/// The exclusion for a `verify-mock-ui` task whose mocks fail validation
+/// against the manifest at the base revision. Shared by automatic
+/// selection and the readiness snapshot, like [`browser_kit_exclusion`].
+pub(super) fn mock_validation_exclusion(
+    runtime: &OrbitRuntime,
+    task: &Task,
+) -> Option<BacklogTaskExclusion> {
+    let detail = runtime.mock_admission_check(task).err()?;
+    Some(BacklogTaskExclusion {
+        id: task.id.clone(),
+        reason: BacklogTaskExclusionReason::MockValidationFailed,
+        conflicts: Vec::new(),
+        crew: None,
+        detail: Some(detail),
+    })
+}
+
 /// The exclusion for a `backlog` task whose `not_before` is still ahead.
 /// Shared by automatic selection and the explicit ship override, like
 /// [`host_os_exclusion`]. A hold that cannot be read is not one: the
