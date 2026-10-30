@@ -264,14 +264,25 @@ pub trait InvocationStoreBackend: Send + Sync {
         account: Option<&str>,
         since: DateTime<Utc>,
     ) -> Result<Vec<ProviderLedgerEntry>, OrbitError>;
+    /// Activity aggregates for one workspace partition, all time. Rows
+    /// recorded under another workspace, and legacy rows without an
+    /// attributed workspace, never match. The provider ledger
+    /// ([`Self::list_provider_ledger_entries`]) stays host-wide by contract.
     fn list_activity_invocation_metrics(
         &self,
+        workspace_id: &str,
     ) -> Result<Vec<ActivityInvocationMetrics>, OrbitError>;
     fn get_task_invocation_metrics(
         &self,
         task_id: &str,
     ) -> Result<TaskInvocationMetrics, OrbitError>;
-    fn list_tool_invocation_metrics(&self) -> Result<Vec<ToolInvocationMetrics>, OrbitError>;
+    /// Tool aggregates for one workspace partition, all time. Rows recorded
+    /// under another workspace, and legacy rows without an attributed
+    /// workspace, never match.
+    fn list_tool_invocation_metrics(
+        &self,
+        workspace_id: &str,
+    ) -> Result<Vec<ToolInvocationMetrics>, OrbitError>;
 }
 
 pub trait V2AuditStoreBackend: Send + Sync {
