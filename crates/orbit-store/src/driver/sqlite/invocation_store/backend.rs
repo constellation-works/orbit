@@ -44,8 +44,9 @@ impl crate::contracts::InvocationStoreBackend for crate::driver::sqlite::connect
 
     fn list_activity_invocation_metrics(
         &self,
+        workspace_id: &str,
     ) -> Result<Vec<crate::contracts::ActivityInvocationMetrics>, orbit_common::OrbitError> {
-        Self::list_activity_invocation_metrics(self)
+        Self::list_activity_invocation_metrics(self, workspace_id)
     }
 
     fn get_task_invocation_metrics(
@@ -57,7 +58,8 @@ impl crate::contracts::InvocationStoreBackend for crate::driver::sqlite::connect
 
     fn list_tool_invocation_metrics(
         &self,
+        workspace_id: &str,
     ) -> Result<Vec<crate::contracts::ToolInvocationMetrics>, orbit_common::OrbitError> {
-        Self::list_tool_invocation_metrics(self)
+        Self::list_tool_invocation_metrics(self, workspace_id)
     }
 }

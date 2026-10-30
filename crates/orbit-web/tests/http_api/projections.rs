@@ -1905,3 +1905,322 @@ fn task_payloads_expose_durable_holding_pilot_warnings() {
         },
     );
 }
+
+fn add_scope_workspace(fixture: &Fixture, id: &str, name: &str) -> orbit_core::OrbitRuntime {
+    let path = orbit_registry::workspace_registry::registry_path_for(&fixture.global);
+    let mut registry = orbit_registry::workspace_registry::load_registry_from(&path).unwrap();
+    let mut workspace = registry.workspaces[0].clone();
+    workspace.id = id.into();
+    workspace.name = name.into();
+    let repo = fixture.path(name);
+    let work = repo.join(".orbit");
+    fs::create_dir_all(&work).unwrap();
+    fs::write(
+        work.join("config.yaml"),
+        format!("schema_version: 1\nworkspace_id: {id}\n"),
+    )
+    .unwrap();
+    let checkout = orbit_types::workspace::WorkspaceCheckout::owner(id.into(), repo, work);
+    registry.workspaces.push(workspace.clone());
+    registry.checkouts.push(checkout.clone());
+    orbit_registry::workspace_registry::save_registry_to(&registry, &path).unwrap();
+    orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_registered_checkout(
+        &fixture.global,
+        &workspace,
+        &checkout,
+    )
+    .unwrap()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn seed_scope_aggregate(
+    runtime: &orbit_core::OrbitRuntime,
+    run: &str,
+    activity: &str,
+    agent: &str,
+    model: &str,
+    tool: &str,
+    input: u64,
+    output: u64,
+    result_bytes: u64,
+) {
+    runtime
+        .insert_invocation_trace_record(&InvocationInsertParams {
+            job_run_id: run.into(),
+            activity_id: activity.into(),
+            agent: agent.into(),
+            provider: None,
+            account: None,
+            model: Some(model.into()),
+            task_ids: Vec::new(),
+            trace: InvocationTrace {
+                usage: TokenUsage {
+                    input,
+                    output,
+                    ..TokenUsage::default()
+                },
+                tool_calls: vec![ToolCallTrace {
+                    seq: 1,
+                    tool_name: tool.into(),
+                    result_bytes,
+                    result_payload: None,
+                }],
+                duration_ms: 1_000,
+                ..InvocationTrace::default()
+            },
+        })
+        .unwrap();
+}
+
+fn null_scope_workspace(fixture: &Fixture, run: &str) {
+    fixture
+        .runtime
+        .sqlite_store()
+        .unwrap()
+        .with_transaction(|tx| {
+            tx.connection()
+                .execute(
+                    "UPDATE invocations SET workspace_id = NULL WHERE job_run_id = ?1",
+                    [run],
+                )
+                .map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+            Ok(())
+        })
+        .unwrap();
+}
+
+/// [ORB-20152] Workspace-selected activity/tool aggregates must count only
+/// the selected runtime partition. Two workspaces seed deliberately
+/// different populations plus unscoped legacy rows; each selection must see
+/// only its own partition with preserved grouping, totals and ordering.
+#[test]
+fn activity_and_tool_aggregates_scope_to_selected_workspace_partition() {
+    isolated(
+        "projections::activity_and_tool_aggregates_scope_to_selected_workspace_partition",
+        || {
+            let fixture = Fixture::new();
+            let other = add_scope_workspace(&fixture, "ws_http_scope_other", "scope_other");
+            seed_scope_aggregate(
+                &fixture.runtime,
+                "scope-a-1",
+                "scope-alpha",
+                "agent-a",
+                "model-a",
+                "scope-tool-a",
+                10,
+                20,
+                12,
+            );
+            seed_scope_aggregate(
+                &fixture.runtime,
+                "scope-a-2",
+                "scope-alpha",
+                "agent-a",
+                "model-a",
+                "scope-tool-a",
+                10,
+                20,
+                12,
+            );
+            seed_scope_aggregate(
+                &fixture.runtime,
+                "scope-a-low",
+                "scope-alpha-low",
+                "agent-a",
+                "model-a",
+                "scope-tool-a",
+                1,
+                1,
+                12,
+            );
+            seed_scope_aggregate(
+                &other,
+                "scope-b-1",
+                "scope-beta",
+                "agent-b",
+                "model-b",
+                "scope-tool-b",
+                100,
+                200,
+                34,
+            );
+            seed_scope_aggregate(
+                &fixture.runtime,
+                "scope-null-a",
+                "scope-alpha",
+                "agent-a",
+                "model-a",
+                "scope-tool-a",
+                1_000,
+                1_000,
+                999,
+            );
+            null_scope_workspace(&fixture, "scope-null-a");
+            seed_scope_aggregate(
+                &fixture.runtime,
+                "scope-null-b",
+                "scope-beta",
+                "agent-b",
+                "model-b",
+                "scope-tool-b",
+                1_000,
+                1_000,
+                999,
+            );
+            null_scope_workspace(&fixture, "scope-null-b");
+            seed_scope_aggregate(
+                &fixture.runtime,
+                "scope-null-legacy",
+                "scope-legacy",
+                "legacy-agent",
+                "legacy-model",
+                "legacy-tool",
+                1_000,
+                1_000,
+                999,
+            );
+            null_scope_workspace(&fixture, "scope-null-legacy");
+            let server = fixture.server(false);
+            let activity_a = json_ok(server.get("/api/metrics/activity?workspace=ws_http_fixture"));
+            let rows_a = activity_a.as_array().unwrap();
+            assert_eq!(
+                rows_a.len(),
+                2,
+                "selected workspace sees only its groups: {rows_a:?}"
+            );
+            assert!(
+                rows_a.iter().all(|row| row["activity_id"] != "scope-beta"),
+                "other workspace leaked into activity: {rows_a:?}"
+            );
+            assert!(
+                rows_a
+                    .iter()
+                    .all(|row| row["activity_id"] != "scope-legacy"),
+                "unscoped legacy leaked into activity: {rows_a:?}"
+            );
+            assert_eq!(rows_a[0]["activity_id"], "scope-alpha");
+            assert_eq!(rows_a[1]["activity_id"], "scope-alpha-low");
+            let alpha = &rows_a[0];
+            assert_eq!(alpha["agent"], "agent-a");
+            assert_eq!(alpha["model"], "model-a");
+            assert_eq!(alpha["invocation_count"], 2);
+            assert_eq!(alpha["total_input_tokens"], 20);
+            assert_eq!(alpha["total_output_tokens"], 40);
+            assert_eq!(alpha["total_tokens"], 60);
+            assert!(
+                (alpha["avg_tokens"].as_f64().unwrap() - 30.0).abs() < 1e-9,
+                "avg preserves selected population: {alpha}"
+            );
+            assert_eq!(alpha["p50_tokens"], 30);
+            assert_eq!(alpha["p95_tokens"], 30);
+            assert_eq!(alpha["total_tool_calls"], 2);
+            let low = &rows_a[1];
+            assert_eq!(low["invocation_count"], 1);
+            assert_eq!(low["total_input_tokens"], 1);
+            assert_eq!(low["total_output_tokens"], 1);
+            assert_eq!(low["total_tokens"], 2);
+            assert_eq!(low["total_tool_calls"], 1);
+            let activity_b =
+                json_ok(server.get("/api/metrics/activity?workspace=ws_http_scope_other"));
+            let rows_b = activity_b.as_array().unwrap();
+            assert_eq!(
+                rows_b.len(),
+                1,
+                "other workspace sees only its group: {rows_b:?}"
+            );
+            let beta = &rows_b[0];
+            assert_eq!(beta["activity_id"], "scope-beta");
+            assert_eq!(beta["agent"], "agent-b");
+            assert_eq!(beta["model"], "model-b");
+            assert_eq!(beta["invocation_count"], 1);
+            assert_eq!(beta["total_input_tokens"], 100);
+            assert_eq!(beta["total_output_tokens"], 200);
+            assert_eq!(beta["total_tokens"], 300);
+            assert!(
+                (beta["avg_tokens"].as_f64().unwrap() - 300.0).abs() < 1e-9,
+                "avg preserves selected population: {beta}"
+            );
+            assert_eq!(beta["p50_tokens"], 300);
+            assert_eq!(beta["p95_tokens"], 300);
+            assert_eq!(beta["total_tool_calls"], 1);
+            let tools_a = json_ok(server.get("/api/metrics/tools?workspace=ws_http_fixture"));
+            let tool_rows_a = tools_a.as_array().unwrap();
+            assert_eq!(
+                tool_rows_a.len(),
+                2,
+                "selected workspace sees only its tool groups: {tool_rows_a:?}"
+            );
+            assert!(
+                tool_rows_a
+                    .iter()
+                    .all(|row| row["activity_id"] != "scope-beta"),
+                "other workspace leaked into tools: {tool_rows_a:?}"
+            );
+            assert!(
+                tool_rows_a
+                    .iter()
+                    .all(|row| row["activity_id"] != "scope-legacy"),
+                "unscoped legacy leaked into tools: {tool_rows_a:?}"
+            );
+            assert_eq!(tool_rows_a[0]["activity_id"], "scope-alpha");
+            assert_eq!(tool_rows_a[0]["tool_name"], "scope-tool-a");
+            assert_eq!(tool_rows_a[0]["call_count"], 2);
+            assert_eq!(tool_rows_a[0]["total_result_bytes"], 24);
+            assert!(
+                (tool_rows_a[0]["avg_result_bytes"].as_f64().unwrap() - 12.0).abs() < 1e-9,
+                "avg preserves selected population: {}",
+                tool_rows_a[0]
+            );
+            assert_eq!(tool_rows_a[1]["activity_id"], "scope-alpha-low");
+            assert_eq!(tool_rows_a[1]["call_count"], 1);
+            assert_eq!(tool_rows_a[1]["total_result_bytes"], 12);
+            let tools_b = json_ok(server.get("/api/metrics/tools?workspace=ws_http_scope_other"));
+            let tool_rows_b = tools_b.as_array().unwrap();
+            assert_eq!(
+                tool_rows_b.len(),
+                1,
+                "other workspace sees only its tool group: {tool_rows_b:?}"
+            );
+            assert_eq!(tool_rows_b[0]["activity_id"], "scope-beta");
+            assert_eq!(tool_rows_b[0]["tool_name"], "scope-tool-b");
+            assert_eq!(tool_rows_b[0]["call_count"], 1);
+            assert_eq!(tool_rows_b[0]["total_result_bytes"], 34);
+            assert!(
+                (tool_rows_b[0]["avg_result_bytes"].as_f64().unwrap() - 34.0).abs() < 1e-9,
+                "avg preserves selected population: {}",
+                tool_rows_b[0]
+            );
+            let detail_a =
+                json_ok(server.get("/api/metrics/invocations?limit=20&workspace=ws_http_fixture"));
+            let runs_a: std::collections::BTreeSet<String> = detail_a
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| row["job_run_id"].as_str().unwrap().to_string())
+                .collect();
+            assert_eq!(
+                runs_a,
+                std::collections::BTreeSet::from([
+                    "scope-a-1".to_string(),
+                    "scope-a-2".to_string(),
+                    "scope-a-low".to_string(),
+                ]),
+                "detailed listing stays workspace-isolated: {runs_a:?}"
+            );
+            let detail_b = json_ok(
+                server.get("/api/metrics/invocations?limit=20&workspace=ws_http_scope_other"),
+            );
+            let runs_b: std::collections::BTreeSet<String> = detail_b
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| row["job_run_id"].as_str().unwrap().to_string())
+                .collect();
+            assert_eq!(
+                runs_b,
+                std::collections::BTreeSet::from(["scope-b-1".to_string()]),
+                "detailed listing stays workspace-isolated: {runs_b:?}"
+            );
+        },
+    );
+}

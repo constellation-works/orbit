@@ -234,10 +234,14 @@ impl BucketAccumulator {
 }
 
 impl RuntimeKernel {
+    /// Activity aggregates for this runtime's workspace partition, all time.
+    /// The partition is the job-run store's persisted identity, the same one
+    /// invocation writes use, not the logical workspace binding.
     pub fn activity_invocation_metrics(
         &self,
     ) -> Result<Vec<ActivityInvocationMetrics>, OrbitError> {
-        open_invocation_store(self)?.list_activity_invocation_metrics()
+        open_invocation_store(self)?
+            .list_activity_invocation_metrics(self.stores().jobs().workspace_id())
     }
 
     pub fn task_invocation_metrics(
@@ -247,8 +251,12 @@ impl RuntimeKernel {
         open_invocation_store(self)?.get_task_invocation_metrics(task_id)
     }
 
+    /// Tool aggregates for this runtime's workspace partition, all time.
+    /// The partition is the job-run store's persisted identity, the same one
+    /// invocation writes use, not the logical workspace binding.
     pub fn tool_invocation_metrics(&self) -> Result<Vec<ToolInvocationMetrics>, OrbitError> {
-        open_invocation_store(self)?.list_tool_invocation_metrics()
+        open_invocation_store(self)?
+            .list_tool_invocation_metrics(self.stores().jobs().workspace_id())
     }
 
     /// Recorded model of the latest invocation of an activity in each run.
