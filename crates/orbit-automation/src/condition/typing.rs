@@ -326,7 +326,7 @@ impl Checker<'_> {
                     return self.fail(expr, "- takes one operand");
                 };
                 match self.check(operand)? {
-                    ty @ (CelType::Int | CelType::Double | CelType::Duration) => Ok(ty),
+                    ty @ (CelType::Int | CelType::Double) => Ok(ty),
                     other => self.fail(operand, format!("cannot negate {}", other.name())),
                 }
             }
