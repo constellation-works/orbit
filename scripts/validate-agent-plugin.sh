@@ -186,8 +186,22 @@ def validate_skill_frontmatter(skill_dir: Path) -> None:
 def relative_plugin_cwd(raw: Any) -> bool:
     if not isinstance(raw, str) or not raw:
         return False
-    if raw.startswith("${PLUGIN_ROOT}") or raw.startswith("${PLUGIN_DATA}"):
-        return True
+    for prefix in ("${PLUGIN_ROOT}", "${PLUGIN_DATA}"):
+        if raw == prefix:
+            return True
+        if raw.startswith(prefix):
+            suffix = raw[len(prefix):]
+            if not suffix.startswith("/"):
+                return False
+            rest = suffix[1:]
+            if not rest or rest.startswith("/") or "\\" in suffix or "//" in rest:
+                return False
+            if len(rest) >= 2 and rest[0].isalpha() and rest[1] == ":":
+                return False
+            path = PurePosixPath(rest)
+            if path.is_absolute() or ".." in path.parts:
+                return False
+            return True
     path = PurePosixPath(raw.replace("\\", "/"))
     return not path.is_absolute() and ".." not in path.parts and raw.startswith("./")
 
