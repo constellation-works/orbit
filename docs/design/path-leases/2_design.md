@@ -1,8 +1,8 @@
 ---
 title: Path Leases — Design
 owner: claude
-last_updated: 2026-10-29
-last_validated: 2026-10-26
+last_updated: 2026-10-30
+last_validated: 2026-10-30
 status: Draft
 feature: path-leases
 doc_role: design
@@ -124,6 +124,8 @@ candidates more, but it never makes one wait by itself.
 after path policy:
 
 1. Paths matching `unlocked_context_paths` are dropped from the hard surface, as for tasks.
+   When every selector matches, the original surface is kept; [ORB-18405] implemented this
+   fallback and [ORB-18524] documented it for lease users.
 2. Paths matching `exclusive_context_paths`, once the conflict budget lands, are hard whatever
    mode was asked for.
 3. A principal whose policy forbids hard leases (`lease.hard = "never"`, §8) is granted the
@@ -252,9 +254,9 @@ Request uses `<selector>... --principal <name> [--mode advisory|hard | --hard]
 Renew takes `<lease-id> [--ttl 30m]`; check takes `<path>... [--lease-id <id>]`.
 Every verb accepts `--json`; a hard request that is refused or queued, and an expansion refused
 to break a deadlock, exit 3. TTL is 1–14400 seconds,
-default 1800. Branch bindings are recorded only. The table below also includes
-later-phase surfaces; `notices` is added in phase 3 and `expand`, queueing and `--no-wait`
-in phase 4.
+default 1800. Branch bindings drive the release-on-landing checks described in §4
+([ORB-18554]). The table also includes `notices`, delivered in phase 3, and `expand`,
+queueing and `--no-wait`, delivered in phase 4.
 
 | Verb | MCP tool | CLI | REST |
 |---|---|---|---|
@@ -689,15 +691,17 @@ unchanged.
 
 ## 9. Phasing
 
-1. **Lease rows and SSH surfaces.** Advisory and hard leases, TTL and renew, explicit release,
+1. **Lease rows and SSH surfaces (done: [ORB-18404], [ORB-18405], [ORB-18406]).** Advisory and hard leases, TTL and renew, explicit release,
    `check`, MCP tools and CLI, drain admission honoring hard leases, leases in
    `orbit task locks list` and the denial log.
-2. **Lease listener.** The `orbit-auth` crate and lease tokens, the listener user, the intake
+2. **Lease listener (done: [ORB-18410], [ORB-18411], [ORB-18430], [ORB-18412], [ORB-18413], [ORB-18421], [ORB-18414]).** The `orbit-auth` crate and lease tokens, the listener user, the intake
    socket, the lease-only router, TLS or proxy binding, audit and limits, with its STD-05 review.
-   From here several people can coordinate on one owner.
-3. **Notices.** The notice stream, `overlap` and `overlap_landed`, poll by cursor, SSE on both
+   The review filed three repairs, all done: [ORB-18774] enforced renewal ceilings,
+   [ORB-18775] redacted owner audit payloads and errors, and [ORB-18776] bounded token
+   lease accumulation and answer construction. Deployment still requires §7.1's host boundary.
+3. **Notices (done: [ORB-18551], [ORB-18552]).** The notice stream, `overlap` and `overlap_landed`, poll by cursor, SSE on both
    Orbit Web and the lease listener, and the Claude Code hook recipe in the skill docs.
-4. **Queue and lifetime.** Waiting instead of refusal, aging, expansion, release on landing for
+4. **Queue and lifetime (done: [ORB-18553], [ORB-18554], [ORB-18555]).** Waiting instead of refusal, aging, expansion, release on landing for
    bound branches and pull requests, and the dashboard Leases view.
 5. **Later.** Preemption, webhooks with signed payloads, and conflict-budget pricing that weighs
    advisory holders by their measured landing rate.
@@ -754,15 +758,24 @@ feature multi-person.
 
 ## Task References
 
-- ORB-18404 — lease rows in the reservation store; advisory leases lock-free (§2, §3).
-- ORB-18405 — lease runtime operations, principal class and the phase-1 `lease.*` keys (§3, §7, §8).
-- ORB-18406 — `orbit.lease` tools and the `orbit lease` CLI.
-- ORB-18410 — the `orbit-auth` crate and lease tokens for the listener user (§7.1, §7.3, §7.4).
-- ORB-18411 — lease REST routes over a backend trait (§6, §7.3).
-- ORB-18430 — the intake socket (§7.2).
-- ORB-18412 — the lease listener as its own OS user (§7.1–§7.3).
-- ORB-18413 — native TLS on the listener.
-- ORB-18421 — listener rate limits and request bounds (§7.3).
-- ORB-18414 — STD-05 security review of phase 2.
+- [ORB-18404] — stored lease rows alongside reservations, with advisory leases lock-free (§2, §3).
+- [ORB-18405] — added lease operations, principal class and phase-1 `lease.*` keys (§3, §7, §8).
+- [ORB-18406] — exposed `orbit.lease` tools and the `orbit lease` CLI.
+- [ORB-18410] — added `orbit-auth` and listener-user lease tokens (§7.1, §7.3, §7.4).
+- [ORB-18411] — served lease REST routes over a backend trait (§6, §7.3).
+- [ORB-18430] — added the intake socket (§7.2).
+- [ORB-18412] — ran the lease listener as its own OS user (§7.1–§7.3).
+- [ORB-18413] — added native TLS on the listener.
+- [ORB-18421] — bounded listener rates and requests (§7.3).
+- [ORB-18414] — reviewed phase-2 security and filed repairs.
+- [ORB-18524] — documented the hard-lease fallback when every selector is unlocked.
+- [ORB-18774] — enforced token and workspace ceilings on renewal.
+- [ORB-18775] — redacted secrets in owner lease audit payloads and intake errors.
+- [ORB-18776] — bounded token lease accumulation, selectors and answer construction.
+- [ORB-18551] — delivered durable notices, Orbit Web polling and SSE, and the hook recipe.
+- [ORB-18552] — delivered notice polling and SSE on the listener.
+- [ORB-18553] — delivered the hard-lease queue, aging and expansion.
+- [ORB-18554] — delivered release on landing and expiry notices.
+- [ORB-18555] — delivered the dashboard Leases view.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

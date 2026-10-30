@@ -1,8 +1,8 @@
 ---
 title: Path Leases — Vision
 owner: claude
-last_updated: 2026-10-25
-last_validated: 2026-10-25
+last_updated: 2026-10-30
+last_validated: 2026-10-30
 status: Draft
 feature: path-leases
 doc_role: vision
@@ -98,6 +98,7 @@ compose: a lease reduces how often a queued change fails to rebase.
 
 ## Task References
 
-None yet; the design is unfiled.
+None for these open directions; the implemented phases are tracked in
+[2_design.md §9](./2_design.md#9-phasing).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

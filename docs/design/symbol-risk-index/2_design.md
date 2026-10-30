@@ -1,8 +1,8 @@
 ---
 title: Symbol Risk Index — Design
 owner: claude
-last_updated: 2026-10-28
-last_validated: 2026-10-28
+last_updated: 2026-10-30
+last_validated: 2026-10-30
 status: Draft
 feature: symbol-risk-index
 doc_role: design
@@ -20,7 +20,9 @@ This doc specifies the mechanisms that [1_scope.md](./1_scope.md) proposes: the 
 record and the source of each field, the boundary between Orbit core and the language-aware
 indexer, the core storage shape, the rebuild routine, staleness and rename handling, how site
 history is computed, how the two readers use the index, and the backtest protocol behind each
-ship gate. Nothing here is built. The task asked for a scope and a design document, so this
+ship gate. The symbol index and its consumers are unbuilt; [ORB-19370] repaired the scope's
+test guidance and [ORB-19371] added the publication fence below. [ORB-19358] wrote this
+design and its scope, so this
 folder keeps a scope entry with a separate design file instead of choosing one track
 ([CONVENTIONS.md §1](../CONVENTIONS.md#1-folder-layout-per-feature-recommended)). The scope
 holds the problem, evidence, outputs and gates; this file holds the contracts.
@@ -94,10 +96,13 @@ too.
 **Why a plugin tool.** The indexer runs as a plugin tool, named by
 `workflow.symbol_index.indexer_tool`. A plugin backend runs under the plugin sandbox with
 manifest-declared filesystem and network permissions, after operator consent
-([plugin standard](../plugins/1_scope.md#43-sandboxing)). A bare configured command has no such
-path today: the shell activity was removed fail-closed ([ORB-00374]), and
-[script steps](../script-steps/1_scope.md) ([ORB-19294]) is still a design. Once script steps
-ship, a granted script may implement the same contract, and nothing in core changes.
+([plugin standard](../plugins/1_scope.md#43-sandboxing)). The original shell activity was
+removed fail-closed ([ORB-00374]).
+[Script steps](../script-steps/1_scope.md), designed by [ORB-19294], now have manifests and
+grants ([ORB-19983]) and granted Linux execution under `linux-bwrap-script-v1`
+([ORB-19985]); declared file inputs and macOS execution remain later phases. A granted script
+still needs the declared file handoff before it can replace the plugin tool under the
+indexer's proposed file contract.
 
 **Invocation.** The routine's job calls the tool through the existing deterministic
 `plugin.tool_call` action, the one orbit-graph's own sync jobs use. Input:
@@ -169,7 +174,7 @@ It needs a `symbol_index` operation, LCOV mapping and an output-path grant.
 
 ## 3. Core storage
 
-Four owner-store tables, added by one store migration:
+Five proposed owner-store tables, added by one store migration:
 
 | Table | Key | Rows |
 |---|---|---|
@@ -371,8 +376,8 @@ A rename that also edits the body therefore breaks history unless the indexer pa
 or merge never carries history. A deleted symbol drops out of the view, and its events age out
 of the window.
 
-**Resolving recorded sites.** `regression.sites` are recorded at filing time and never
-rewritten on the task. At read time core resolves each `symbol:` site forward through lineage,
+**Resolving recorded sites.** `regression.sites` are recorded at filing time ([ORB-19276]
+made that recording unconditional) and never rewritten on the task. At read time core resolves each `symbol:` site forward through lineage,
 at most 16 hops and with a cycle guard, to a current selector. Agents often spell kinds
 inconsistently, for example `fn` against `function`. A site with no exact match therefore
 resolves by `path#name` when exactly one current symbol in that file has the name; the
@@ -407,8 +412,8 @@ therefore uses only links filed before a fold starts (§8).
 
 ### 7.1 Admission: the `declared_lines` basis
 
-This basis is wired only after G1 passes. It extends [ORB-19361]'s estimator with a third
-basis beside `declared_files` and `diff_lines`:
+This basis is wired only after G1 passes. It extends [ORB-19361]'s size estimator, stabilized
+by [ORB-19376], with a third basis beside `declared_files` and `diff_lines`:
 
 1. Resolve each canonical selector of the task's footprint against the current `fresh`
    generation:
@@ -529,11 +534,16 @@ same protocol and margin; the rerun has to clear it again from scratch.
 ## Task References
 
 - [ORB-19358] — wrote this design and its scope
-- [ORB-19361] — replaces the per-file maximum with a size-based riskiness fit (declared files, diff lines)
+- [ORB-19361] — replaced the per-file maximum with a size-based riskiness fit (declared files, diff lines)
+- [ORB-19376] — stabilized finite size fits and advanced the estimator to version 3
+- [ORB-19370] — reconciled the scope's test guidance with the workspace guide
+- [ORB-19371] — specified the build sequence and compare-and-publish fence
 - [ORB-19276] — made Orbit always record `regression.sites`
 - [ORB-19442] — attributed the Regressions ranking (the G3a baseline) to `regression.sites` and admitted `dir:` sites
 - [ORB-18383] — recorded lines added and deleted per landed delivery, with a bounded backfill
 - [ORB-00374] — removed the shell activity surface fail-closed
 - [ORB-19294] — designed script steps, a granted execution path for workspace scripts
+- [ORB-19983] — added script manifests, parsing and digest-bound grants
+- [ORB-19985] — executed granted script steps on Linux under the script sandbox profile
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

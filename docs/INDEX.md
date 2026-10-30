@@ -113,7 +113,7 @@ Where each feature in `docs/design/` stands, from the `stage` and `next` fields 
 entry doc. Stages run idea, designing, building, shipped, with parked for work on hold.
 Live task progress is in Orbit; this board records what the feature lead last set.
 
-### Building (9)
+### Building (8)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
@@ -124,7 +124,6 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Explore Brief](./design/explore-brief/1_scope.md) | Finish the remaining trial prerequisites before starting the three-arm trial | claude |
 | [Human Decision Channel](./design/human-decision-channel/1_scope.md) | Mail transport in the orbit-decision-mail plugin (a stub today); polish ORB-18446 | claude |
 | [Operations as Data](./design/operations-as-data/1_overview.md) | Restore ORB-15934 after 2026-11-12 to refuse unknown fields | claude |
-| [Path Leases](./design/path-leases/1_overview.md) | Preemption and signed webhooks remain later work | claude |
 | [Web Terminal](./design/web-terminal/1_scope.md) | Phase 2: ORB-18489 PTY sessions and local terminal routes; phase 1 landed | claude |
 
 ### Designing (8)
@@ -140,7 +139,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Ux Rules](./design/ux-rules/1_scope.md) | Phases 1-3 built (ORB-19974..19976); enabling the routine needs an operator-granted ux_rules_runner script, and a live UI surface waits for script steps' network phase | claude |
 | [Visual Review](./design/visual-review/1_scope.md) | UX rules ORB-19974/19975 first (view manifest, browser settings); then phases 1-6 as ORB-19977..19982 | claude |
 
-### Shipped (34)
+### Shipped (35)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
@@ -164,6 +163,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Mid-Run Operator Steering](./design/mid-run-steering/1_overview.md) | — | codex |
 | [Orbit Core](./design/orbit-core/1_overview.md) | — | codex |
 | [Task Search](./design/orbit-search/1_overview.md) | — | codex |
+| [Path Leases](./design/path-leases/1_overview.md) | — | claude |
 | [Plugins](./design/plugins/1_scope.md) | — | claude |
 | [Policy & Sandboxing](./design/policy-sandbox/1_overview.md) | — | claude |
 | [Process Supervision](./design/process-supervision/1_overview.md) | — | claude |
@@ -244,7 +244,7 @@ a conservative title/status fallback.
 | [Task Publication](./design/task-publication/1_overview.md) | Explicitly publish authority-owned task snapshots to a dedicated Git repository for labelled inspection and deliberate recovery. | Accepted | codex |
 | [Task Risk](./design/task-risk/1_scope.md) | Advisory task-risk estimates separating model-relative complexity, repair burden and escaped regressions. | Draft | codex |
 | [Terminal Interface](./design/terminal-interface/1_overview.md) | House style for orbit-cli terminal output — machine-readable first, borderless single-line tables, semantic color resolved at the sink. | Accepted | claude |
-| [Usage Pressure](./design/usage-pressure/1_scope.md) | Scope: weight crew pool draws by how much of each provider account's usage window would expire unused, so Orbit spends the capacity that is about to reset before the capacity that is not | Draft | claude |
+| [Usage Pressure](./design/usage-pressure/1_scope.md) | Scope: weight crew pool draws by how much of each provider account's usage window would expire unused, so Orbit spends the capacity that is about to reset before the capacity that is not | Implemented | claude |
 | [User Interface](./design/user-interface/1_overview.md) | Orbit UI covers the dashboard and HTTP API owned by `orbit-web`; `orbit-cli` is the thin `orbit web serve` / `connect` command adapter. | Draft | gemini |
 | [Ux Rules](./design/ux-rules/1_scope.md) | Scope: break the ux-review-ui and ux-review-cli prompts into named, executable rules (Playwright measurements for the dashboard and website, PTY captures for the CLI and MCP surface), run them on a routine, and file one task per failing rule and target, so the LLM reviews keep only the judgement work | Draft | claude |
 | [Visual Review](./design/visual-review/1_scope.md) | Scope: for tasks tagged verify-mock-ui, the implementer compares its build against the attached mocks while it works, then Orbit captures the mocked views on the final candidate, runs deterministic checks, and has a vision crew compare each capture with its mock, with findings verified by a different crew | Draft | claude |
