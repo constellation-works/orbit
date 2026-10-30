@@ -92,6 +92,24 @@ impl OrbitRuntime {
         }
     }
 
+    /// Refuse a promotion to backlog whose `verify-mock-ui` mocks fail
+    /// admission. `artifacts: None` judges the task's stored artifacts;
+    /// `Some` judges the artifacts the promoting write would leave stored.
+    pub(crate) fn ensure_backlog_mock_admission(
+        &self,
+        task: &Task,
+        artifacts: Option<Vec<TaskArtifact>>,
+    ) -> Result<(), OrbitError> {
+        self.mock_admission_check_with(task, artifacts)
+            .map(|_| ())
+            .map_err(|detail| {
+                OrbitError::InvalidInput(format!(
+                    "task '{}' cannot move to backlog: {detail}",
+                    task.id
+                ))
+            })
+    }
+
     /// Freeze the admitted mocks' digests as the system artifact
     /// [`MOCK_DIGESTS_ARTIFACT`], so a mock replaced mid-delivery is
     /// detectable against this record (`mock_changed`, design §4.4).

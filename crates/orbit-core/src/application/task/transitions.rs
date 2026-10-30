@@ -186,6 +186,9 @@ impl OrbitRuntime {
 
             if task.status == TaskStatus::Proposed {
                 self.ensure_finding_verified(&task)?;
+                // Every proposal approval (tool, operator and drain) lands here,
+                // so the mock check runs over the stored artifacts and tags.
+                self.ensure_backlog_mock_admission(&task, None)?;
             }
 
             result = Some(match task.status {
