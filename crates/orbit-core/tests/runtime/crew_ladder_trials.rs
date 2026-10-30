@@ -89,6 +89,8 @@ fn stale_mode_off_runtime_keeps_the_current_ladder_trial() -> Result<(), OrbitEr
 
     // The long-lived owner runtime opened while the ladder was off.
     let stale = OrbitRuntime::from_roots(&global, &workspace)?;
+    // This second runtime has never refreshed since opening with mode off.
+    let never_refreshed = OrbitRuntime::from_roots(&global, &workspace)?;
     admit_hard_task(&stale, &job, "admitted while the ladder is off");
     assert!(ladder_trials(&stale).is_empty());
 
@@ -119,6 +121,17 @@ fn stale_mode_off_runtime_keeps_the_current_ladder_trial() -> Result<(), OrbitEr
     let trial = trials[0].clone();
     assert_eq!(trial.status, "running");
     let events = current.experiment_view(&trial.id)?.events.len();
+
+    // A failed first reload must not reconcile the shared store using the
+    // old runtime's unrelated, open-time off fallback.
+    std::fs::write(&config_path, "[workflow.crew_ladder\nmode = ").unwrap();
+    admit_hard_task(&never_refreshed, &job, "first reload is invalid");
+    let after_failed_first_reload = ladder_trials(&current);
+    assert_eq!(after_failed_first_reload.len(), 1);
+    assert_eq!(after_failed_first_reload[0].id, trial.id);
+    assert_eq!(after_failed_first_reload[0].status, "running");
+    assert_eq!(current.experiment_view(&trial.id)?.events.len(), events);
+    std::fs::write(&config_path, config("shadow", "0.1")).unwrap();
 
     // Alternate real admissions across the stale and the current runtime.
     for round in 0..3 {

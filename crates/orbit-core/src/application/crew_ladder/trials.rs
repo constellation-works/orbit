@@ -34,7 +34,12 @@ impl OrbitRuntime {
         // One config version for the mode check and the plan: a runtime opened
         // before an operator's change must not retire a trial the current
         // config still wants.
-        let controls = self.current_crew_ladder_controls();
+        let Some(controls) = self.readable_crew_ladder_controls() else {
+            tracing::warn!(
+                "crew ladder configuration unavailable; leaving standing trials unchanged"
+            );
+            return Ok(());
+        };
         let views = self.experiment_views(None)?;
         let any_open = views
             .iter()

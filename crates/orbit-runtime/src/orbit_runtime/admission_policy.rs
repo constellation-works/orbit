@@ -60,6 +60,7 @@ impl AdmissionPolicy {
 pub(super) struct CachedPolicy {
     stamps: [Option<(SystemTime, u64)>; 2],
     policy: Arc<AdmissionPolicy>,
+    reload_valid: bool,
 }
 
 /// Modification stamp of a layer's `config.toml`. The layer root is validated
@@ -86,6 +87,10 @@ impl RuntimeKernel {
     }
 
     fn refresh_workflow_policy(&self) -> Arc<AdmissionPolicy> {
+        self.refresh_workflow_policy_with_status().0
+    }
+
+    fn refresh_workflow_policy_with_status(&self) -> (Arc<AdmissionPolicy>, bool) {
         let initial = || {
             Arc::new(AdmissionPolicy {
                 auto_concurrency: self.context.settings().auto_concurrency().clone(),
@@ -113,25 +118,26 @@ impl RuntimeKernel {
             Ok(stamps) => stamps,
             Err(error) => {
                 tracing::warn!(%error, "could not inspect admission configuration; keeping previous policy");
-                return previous;
+                return (previous, false);
             }
         };
-        if cache.as_ref().is_some_and(|cached| cached.stamps == stamps) {
-            return previous;
+        if let Some(cached) = cache.as_ref().filter(|cached| cached.stamps == stamps) {
+            return (previous, cached.reload_valid);
         }
-        let policy = match (self.config_loader)() {
-            Ok(config) => Arc::new(AdmissionPolicy::from_resolved(config)),
+        let (policy, reload_valid) = match (self.config_loader)() {
+            Ok(config) => (Arc::new(AdmissionPolicy::from_resolved(config)), true),
             Err(error) => {
                 tracing::warn!(%error, "could not reload admission configuration; keeping previous policy");
-                previous
+                (previous, false)
             }
         };
         // Remember failed versions too: warn once, retry when either file changes.
         *cache = Some(CachedPolicy {
             stamps,
             policy: policy.clone(),
+            reload_valid,
         });
-        policy
+        (policy, reload_valid)
     }
 
     pub(super) fn current_mid_run_steering(&self) -> MidRunSteeringSettings {
@@ -157,6 +163,12 @@ impl RuntimeKernel {
     /// keeps the last-known-good controls.
     pub fn current_crew_ladder_controls(&self) -> Arc<CrewLadderControls> {
         self.current_admission_policy().crew_ladder.clone()
+    }
+
+    /// Freshly validated owner controls, or none when the current layers cannot load.
+    pub fn readable_crew_ladder_controls(&self) -> Option<Arc<CrewLadderControls>> {
+        let (policy, valid) = self.refresh_workflow_policy_with_status();
+        valid.then(|| policy.crew_ladder.clone())
     }
 
     /// Pin both policies for this pass so all decisions use one config version.
