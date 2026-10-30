@@ -11,7 +11,8 @@
 // Usage: node capture-driver.mjs --request <file>
 // Prints one JSON report as the last stdout line. Exit 1 is a fatal
 // driver error; a mock that fails to render is reported per mock
-// (`error.code` render_timeout / setup_failed) and the run continues.
+// (`error.code` render_timeout / setup_failed / image_over_budget) and the
+// run continues.
 
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -566,7 +567,8 @@ function oppositeScheme(theme) {
 // Keep an image under the artifact limit (§4.5): PNG first, then WebP from
 // a browser canvas at full quality, then at 0.9. Chromium's canvas encoder
 // is lossy at every quality, so a WebP is recorded `lossy: true`. Returns
-// the file name used, its encoding and whether it is lossy.
+// the file name used, its encoding and whether it is lossy; throws
+// `image_over_budget` when no encoding fits.
 async function fitImageLimit(browser, dir, base, maxBytes) {
   const pngName = `${base}.png`;
   const pngPath = path.join(dir, pngName);
@@ -592,7 +594,7 @@ async function fitImageLimit(browser, dir, base, maxBytes) {
         { dataUrl, quality },
       );
       const bytes = Buffer.from(encoded.slice(encoded.indexOf(",") + 1), "base64");
-      if (bytes.length <= maxBytes || quality === 0.9) {
+      if (bytes.length <= maxBytes) {
         const webpName = `${base}.webp`;
         await writeFile(path.join(dir, webpName), bytes);
         await unlink(pngPath).catch(() => {});
@@ -602,14 +604,18 @@ async function fitImageLimit(browser, dir, base, maxBytes) {
   } finally {
     await context.close().catch(() => {});
   }
-  return { file: pngName, encoding: "png", lossy: false };
+  const error = new Error(
+    `${base} image remains over the ${maxBytes}-byte artifact limit after WebP encoding`,
+  );
+  error.code = "image_over_budget";
+  throw error;
 }
 
 function sha256Hex(buffer) {
   return createHash("sha256").update(buffer).digest("hex");
 }
 
-async function captureMock({ browser, PNG, request, mock, server, ruleModules, ruleResults }) {
+export async function captureMock({ browser, PNG, request, mock, server, ruleModules, ruleResults }) {
   const dir = path.join(request.out_dir, mock.name);
   await mkdir(dir, { recursive: true });
   const entry = {
@@ -687,8 +693,16 @@ async function captureMock({ browser, PNG, request, mock, server, ruleModules, r
   await writeFile(path.join(dir, "capture.png"), shots[0]);
   await writeMockPng(browser, mock, path.join(dir, "mock.png"));
   await writeSideBySide(browser, mock, dir);
-  const captureFile = await fitImageLimit(browser, dir, "capture", request.max_image_bytes);
-  const sideFile = await fitImageLimit(browser, dir, "side-by-side", request.max_image_bytes);
+  let captureFile;
+  let sideFile;
+  try {
+    captureFile = await fitImageLimit(browser, dir, "capture", request.max_image_bytes);
+    sideFile = await fitImageLimit(browser, dir, "side-by-side", request.max_image_bytes);
+  } catch (error) {
+    if (error?.code !== "image_over_budget") throw error;
+    entry.error = { code: error.code, message: error.message };
+    return entry;
+  }
   entry.capture = `${mock.name}/${captureFile.file}`;
   entry.capture_encoding = captureFile.encoding;
   entry.capture_lossy = captureFile.lossy;

@@ -37,6 +37,78 @@ for (const { rules, mock } of cases) {
 process.stdout.write(JSON.stringify(out));
 "#;
 
+const IMAGE_LIMIT_PROBE: &str = r#"
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+const outDir = process.argv[1];
+const driver = await import(pathToFileURL(process.argv[2]).href);
+const mockFile = path.join(outDir, "mock.png");
+await writeFile(mockFile, Buffer.alloc(128, 2));
+const makeBrowser = (captureBytes, sideBySideBytes) => ({
+  newContext: async () => {
+    const page = {
+      on() {},
+      route: async () => {},
+      clock: { install: async () => {}, pauseAt: async () => {}, runFor: async () => {} },
+      addInitScript: async () => {},
+      goto: async () => {},
+      addStyleTag: async () => {},
+      locator() { return { first() { return this; }, waitFor: async () => {} }; },
+      waitForLoadState: async () => {},
+      evaluate: async (_fn, args) => {
+        if (args?.quality !== undefined) {
+          return `data:image/webp;base64,${Buffer.alloc(2048, 7).toString("base64")}`;
+        }
+        if (args?.mockUrl) return { width: 100, height: 100 };
+        return undefined;
+      },
+      screenshot: async (options = {}) => {
+        const bytes = Buffer.alloc(options.path ? sideBySideBytes : captureBytes, 1);
+        if (options.path) await writeFile(options.path, bytes);
+        return bytes;
+      },
+      setContent: async () => {},
+      setViewportSize: async () => {},
+    };
+    return { newPage: async () => page, close: async () => {} };
+  },
+});
+const cases = [
+  { name: "capture", captureBytes: 2048, sideBySideBytes: 512 },
+  { name: "side-by-side", captureBytes: 512, sideBySideBytes: 2048 },
+];
+const rows = [];
+for (const testCase of cases) {
+  const name = testCase.name;
+  const request = {
+    out_dir: path.join(outDir, name),
+    captures_per_mock: 1,
+    frozen_instant: "2026-01-01T12:00:00.000Z",
+    max_image_bytes: 1024,
+  };
+  const mock = {
+    artifact: `mocks/${name}.png`, name, view: "example", state: "default",
+    theme: "dark", width: 1440, mock_ext: "png", mock_file: mockFile,
+    view_def: { fixture: "fixture", route: "/", ready: "body", responsive: true },
+    app_def: { name: "example" },
+  };
+  const entry = await driver.captureMock({
+    browser: makeBrowser(testCase.captureBytes, testCase.sideBySideBytes),
+    PNG: {}, request, mock, server: { baseUrl: "http://127.0.0.1:1234", placeholders: {} },
+    ruleModules: [], ruleResults: [],
+  });
+  const captureJson = JSON.parse(JSON.stringify({ mocks: [entry] }));
+  const reported = captureJson.mocks[0];
+  rows.push({
+    error: reported.error,
+    claims_capture: Object.hasOwn(reported, "capture"),
+    claims_side_by_side: Object.hasOwn(reported, "side_by_side"),
+  });
+}
+process.stdout.write(JSON.stringify(rows));
+"#;
+
 fn mock(width: u64, responsive: bool) -> Value {
     json!({
         "artifact": format!("tasks-list-dark-{width}.png"),
@@ -139,6 +211,46 @@ fn rules_run_only_at_declared_widths() {
     for ((label, _, _, expected), actual) in cases.iter().zip(&recorded) {
         assert_eq!(actual, expected, "{label}");
     }
+}
+
+#[test]
+fn images_over_the_limit_are_reported_without_capture_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    let output = Command::new("node")
+        .arg("--input-type=module")
+        .arg("-e")
+        .arg(IMAGE_LIMIT_PROBE)
+        .arg(temp.path())
+        .arg(DRIVER)
+        .output()
+        .unwrap_or_else(|error| panic!("node must be on PATH to load the capture driver: {error}"));
+    assert!(
+        output.status.success(),
+        "image limit probe failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let rows: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        rows,
+        json!([
+            {
+                "error": {
+                    "code": "image_over_budget",
+                    "message": "capture image remains over the 1024-byte artifact limit after WebP encoding"
+                },
+                "claims_capture": false,
+                "claims_side_by_side": false
+            },
+            {
+                "error": {
+                    "code": "image_over_budget",
+                    "message": "side-by-side image remains over the 1024-byte artifact limit after WebP encoding"
+                },
+                "claims_capture": false,
+                "claims_side_by_side": false
+            }
+        ])
+    );
 }
 
 #[test]

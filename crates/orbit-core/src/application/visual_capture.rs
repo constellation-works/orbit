@@ -93,7 +93,7 @@ pub struct VisualCaptureMock {
 /// Why one mock produced no capture.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VisualCaptureMockError {
-    /// `setup_failed` or `render_timeout`.
+    /// `setup_failed`, `render_timeout` or `image_over_budget`.
     pub code: String,
     pub message: String,
 }
