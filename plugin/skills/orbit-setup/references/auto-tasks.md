@@ -368,7 +368,7 @@ plugin being removed.
 
 <a id="the-twenty-three-seeded-definitions"></a>
 
-## The seeded definitions
+## The 25 seeded definitions
 
 `orbit workspace init` seeds the defaults selected by `seeding.auto_tasks`
 (`"all"` by default) from this catalog, disabled,
@@ -634,6 +634,19 @@ For ongoing selection and reconciliation, follow [Seeding policy](configuration.
   `no-diff-expected` and never builds or runs tests. A test-reduction
   task keeps that file's coverage — every scenario survives or is named
   with a reason — and reports the test count before and after.
+- **`crew-ladder-review`** (`medium`) — monthly, first day at 09:00 host-local
+  (`0 9 1 * *`), disabled until explicit opt-in. Reviews actual ladder and
+  operator experiment evidence by task tier and exact model, effort and
+  configuration digest, including mature quality, repair/regression and total
+  delivery cost/time. Shadow would-be assignments never prove candidate quality.
+  Every run attaches `crew-ladder-review.json`, fetching previous completed
+  review artifacts for deltas or recording a baseline. Files at most three
+  duplicate-checked proposed revisions/evaluations with precise targets and
+  evidence; it never rewrites pools/effort/order, changes modes or grading,
+  starts paid/live trials or concludes system-owned experiments. Off,
+  unconfigured, shadow-only and insufficient-history runs can succeed as
+  evidenced no-ops. Ordinary seeding selection, settings preservation, body
+  forks and opt-outs apply; no preset enables this review or the ladder.
 - **`auto-task-yield-review`** (`medium`) — monthly. Reports whether each
   enabled auto-task definition in this workspace pays for itself over the
   last 30 days: minted chores by final status and no-op successes, cost

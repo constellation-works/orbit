@@ -3,7 +3,7 @@ summary: "Activity / Job — Design"
 type: design
 title: "Activity / Job — Design"
 owner: codex
-last_updated: 2026-10-28
+last_updated: 2026-10-30
 last_validated: 2026-10-19
 status: Draft
 feature: activity-job
@@ -13,7 +13,7 @@ tags: ["activity-job"]
 
 # Activity / Job — Design
 
-This document describes the shipped Activity / Job substrate across `orbit-types`, `orbit-engine`, `orbit-core`, and `orbit-cli`: asset shape, normalization, dispatch boundaries, DAG execution, audit, and retained legacy edges. See [1_overview.md](./1_overview.md) for purpose and [3_vision.md](./3_vision.md) for open questions.
+This document describes the shipped Activity / Job substrate across `orbit-types`, `orbit-engine`, `orbit-core`, and `orbit-cli`: asset shape, normalization, dispatch boundaries, DAG execution, audit, and retained legacy edges. Section 8.14 is a proposed extension, not shipped behavior. See [1_overview.md](./1_overview.md) for purpose and [3_vision.md](./3_vision.md) for open questions.
 
 ---
 
@@ -102,6 +102,10 @@ The body is one of:
 - `loop`
 
 `TargetStep` is the executor-facing form. It inlines an `ActivityV2Spec` plus optional `fsProfile`, `default_input`, `timeout_seconds`, and optional `session`. `TargetRef` is the authoring-facing form: `target: activity:<name>`. It is resolved away before execution.
+
+Proposed `target: auto-task:<name>` adds a task-binding/waiting step rather than
+another workflow carrier; see §8.14. It must not be treated as an unresolved
+activity or silently skipped by a binary that lacks that extension.
 
 Step-local input layering landed earlier, but the shipped job-level `default_input` behavior changed in [T20260423-0445]:
 
@@ -1351,6 +1355,10 @@ Direct agent responses are advisory audit/diagnostic data. Workflows gate on dur
 
 `when` is evaluated once, before retry. A skipped step is a successful no-op and does not retry.
 
+The proposed CEL `wait_until` and `expire_when` fields in §8.14 are distinct from
+this guard. They must not change existing `when` grammar, skip behavior or the
+output-reference rules below.
+
 After [T20260509-11], the shipped condition grammar remains equality-only (`==` / `!=`, combined with `&&` / `||`); skip-on-empty guards express emptiness as `!= 0` or `!= []` rather than numeric comparisons, preserving the `orbit run ship` auto-mode empty-backlog no-op behavior.
 
 **A step output read by any `when:` / `break_when:` condition must belong to a step that always runs** (ORB-11325). Two facts combine to make this a hard requirement rather than a style preference: `condition::evaluate_bool_expr` (`crates/orbit-engine/src/condition.rs`) renders the *whole* expression through the template engine before it parses it, so there is no short-circuit — both sides of `&&` / `||` render even when the left side alone would decide the result — and a step skipped by `when:` records no output at all, so any reference to it resolves to `template.rs`'s `no data recorded for step '{step_id}'` error. Together, a condition that reads `steps.<id>.output` for a step that itself carries a `when:` fails at runtime on exactly the branch where the referenced step would have been skipped — the branch an author is least likely to exercise first, since the happy path usually runs it.
@@ -1666,6 +1674,30 @@ repair-commit receipt and generic-resume/source-repair rules remain separate.
 
 
 ---
+
+### 8.14 Proposed auto-task targets and durable conditional waiting
+
+The [auto-task step specification](./specs/auto-task-step.md) proposes
+`target: auto-task:<name>` inside the existing job grammar. The step binds a
+compatible open task, reuses qualifying accepted evidence or performs one keyed
+mint, then waits for its durable completion contract. Mint success is not step
+success. Conditions trigger a routine's existing `job:<name>` target; there is
+no separate auto-sequence directory, loader, command family or lifecycle.
+
+Sequential lists and parallel joins retain their existing ordering/failure
+semantics. New CEL `wait_until` waits on false or unknown; `expire_when` makes
+expiry explicit, including an outer finite job bound. Existing `when` still
+skips. A job/step timeout retains children and evidence instead of cancelling
+workers or treating missing prerequisites as satisfied.
+
+Durable parked waits and pending/partial-branch checkpoints are required new
+runtime work. A wait releases execution resources, the existing owner clock
+resumes observation, and incomplete parallel replay restores the same child
+bindings and successful siblings. New effects fail closed if their checkpoint
+cannot be persisted. Existing run/control/audit surfaces show wait clauses,
+expiry, task/run identity and accepted results. The specification includes
+disabled release-readiness examples, exact-source freshness, readiness adapters
+and old-client refusal. None of this is implementation or enablement authority.
 
 ## 9. Filesystem Policy and `fsProfile`
 

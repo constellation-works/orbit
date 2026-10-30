@@ -3,11 +3,11 @@ summary: "Activity / Job — Overview"
 type: design
 title: "Activity / Job — Overview"
 owner: codex
-last_updated: 2026-10-06
+last_updated: 2026-10-30
 last_validated: 2026-10-28
 status: Draft
 stage: shipped
-next: "—"
+next: "Review proposed auto-task targets and durable CEL waiting; no implementation authorized"
 feature: activity-job
 doc_role: overview
 tags: ["activity-job"]
@@ -16,6 +16,12 @@ tags: ["activity-job"]
 # Activity / Job — Overview
 
 Activity / Job is Orbit's execution substrate. Activities describe runnable units; jobs compose them sequentially, in parallel, across collections, or through bounded loops. Orbit's product story is moving toward goals, graphs, sessions, and locks, but this layer remains the runtime underneath. [2_design.md](./2_design.md) is the current contract; [3_vision.md](./3_vision.md) captures open questions.
+
+**Proposed extension.** [Auto-task steps and durable waiting](./specs/auto-task-step.md)
+would let an existing job bind or mint named auto-tasks and wait for accepted
+completion using CEL. A condition-triggered routine starts the job. This is not
+part of the shipped scope: no separate auto-sequence definition or lifecycle is
+introduced, and existing job ordering and `when` skip semantics stay unchanged.
 
 > **Release scope.** Orbit executes agent activities through the CLI agent path only. The `backend: http | cli | auto` selector and the engine-driven HTTP agent loop were removed in [ORB-10801]; see [specs/backend-resolution.md](./specs/backend-resolution.md) for the migration.
 

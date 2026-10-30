@@ -92,6 +92,10 @@ pub(crate) const DEFAULT_AUTO_TASK_FILES: &[(&str, &str)] = &[
         include_str!("../../../assets/auto_tasks/code-health-sweep.yaml"),
     ),
     (
+        "crew-ladder-review",
+        include_str!("../../../assets/auto_tasks/crew-ladder-review.yaml"),
+    ),
+    (
         "delivery-code-review",
         include_str!("../../../assets/auto_tasks/delivery-code-review.yaml"),
     ),
