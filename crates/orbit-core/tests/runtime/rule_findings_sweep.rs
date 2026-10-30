@@ -195,6 +195,192 @@ fn default_ux_rules_pipeline_file_step_binds_optional_inputs() {
     assert!(outcome.success, "{outcome:?}");
 }
 
+fn ux_rules_pipeline_binds_config_defaults_and_explicit_overrides_win() {
+    let (_root, runtime) = fixture(
+        "[ux_rules]\nsurfaces = [\"cli\"]\nrunner = \"custom/run.mjs\"\nui_base_url = \"http://127.0.0.1:9999\"\n",
+    );
+    let job_path = _root.path().join("repo/ux_rules_pipeline.yaml");
+    std::fs::write(
+        &job_path,
+        include_str!("../../assets/jobs/ux_rules_pipeline.yaml"),
+    )
+    .unwrap();
+    // A manifest (but no grant) for the script step, and the filer activity,
+    // so the job loads and the step refuses at dispatch.
+    let scripts_dir = _root.path().join("repo/.orbit/resources/scripts");
+    std::fs::create_dir_all(&scripts_dir).unwrap();
+    std::fs::create_dir_all(_root.path().join("repo/tools")).unwrap();
+    std::fs::write(
+        _root.path().join("repo/tools/run.sh"),
+        "#!/bin/sh\necho '{}'\n",
+    )
+    .unwrap();
+    std::fs::write(
+        scripts_dir.join("ux_rules_runner.yaml"),
+        "schemaVersion: 1\nkind: Script\nmetadata:\n  name: ux_rules_runner\nspec:\n  description: Fixture runner.\n  entry: tools/run.sh\n",
+    )
+    .unwrap();
+    let activity_dir = _root.path().join("home/.orbit/resources/activities");
+    std::fs::create_dir_all(&activity_dir).unwrap();
+    std::fs::write(
+        activity_dir.join("file_rule_findings.yaml"),
+        include_str!("../../assets/activities/file_rule_findings.yaml"),
+    )
+    .unwrap();
+
+    // No caller input: effective config supplies surfaces/runner/ui_base_url
+    // to the persisted run, which both the script step and (through
+    // `input.runner`) the filer consume. The script step itself refuses
+    // without a grant, so the run does not succeed or file anything.
+    let persisted_input = |runtime: &OrbitRuntime| {
+        runtime
+            .list_job_runs(orbit_core::application::job::JobRunListParams::default())
+            .unwrap()
+            .into_iter()
+            .filter(|run| run.job_id.as_str() == "ux_rules_pipeline")
+            .max_by_key(|run| run.scheduled_at)
+            .expect("ux run persisted")
+            .input
+            .expect("run input persisted")
+    };
+    let refused = runtime.run_job_v2_from_yaml(&job_path, json!({}));
+    assert!(
+        format!("{refused:?}").contains("not granted"),
+        "{refused:?}"
+    );
+    let input = persisted_input(&runtime);
+    assert_eq!(input["surfaces"], json!(["cli"]), "{input}");
+    assert_eq!(input["runner"], "custom/run.mjs", "{input}");
+    assert_eq!(input["ui_base_url"], "http://127.0.0.1:9999", "{input}");
+    assert!(
+        runtime
+            .list_tasks_by_tags(&["ux-rules".to_string()])
+            .unwrap()
+            .is_empty()
+    );
+
+    // Explicit overrides win, including an empty surfaces list.
+    let _ = runtime.run_job_v2_from_yaml(
+        &job_path,
+        json!({"surfaces": [], "runner": "explicit.mjs", "ui_base_url": "http://127.0.0.1:1"}),
+    );
+    let input = persisted_input(&runtime);
+    assert_eq!(input["surfaces"], json!([]), "{input}");
+    assert_eq!(input["runner"], "explicit.mjs", "{input}");
+    assert_eq!(input["ui_base_url"], "http://127.0.0.1:1", "{input}");
+}
+
+fn ux_rules_pipeline_preserves_custom_manifest_defaults_when_config_unset() {
+    let (_root, runtime) = fixture("");
+    let mut pipeline: serde_yaml::Value =
+        serde_yaml::from_str(include_str!("../../assets/jobs/ux_rules_pipeline.yaml")).unwrap();
+    pipeline["spec"]["default_input"]["surfaces"] =
+        serde_yaml::to_value(vec!["cli".to_string()]).unwrap();
+    pipeline["spec"]["default_input"]["runner"] = serde_yaml::to_value("custom/run.mjs").unwrap();
+    pipeline["spec"]["default_input"]["ui_base_url"] =
+        serde_yaml::to_value("http://127.0.0.1:9999").unwrap();
+    let job_path = _root.path().join("repo/ux_rules_pipeline_custom.yaml");
+    std::fs::write(&job_path, serde_yaml::to_string(&pipeline).unwrap()).unwrap();
+    // Same loadable-but-ungranted shape as the configured-defaults scenario,
+    // so the only difference under test is the unset-config precedence.
+    let scripts_dir = _root.path().join("repo/.orbit/resources/scripts");
+    std::fs::create_dir_all(&scripts_dir).unwrap();
+    std::fs::create_dir_all(_root.path().join("repo/tools")).unwrap();
+    std::fs::write(
+        _root.path().join("repo/tools/run.sh"),
+        "#!/bin/sh\necho '{}'\n",
+    )
+    .unwrap();
+    std::fs::write(
+        scripts_dir.join("ux_rules_runner.yaml"),
+        "schemaVersion: 1\nkind: Script\nmetadata:\n  name: ux_rules_runner\nspec:\n  description: Fixture runner.\n  entry: tools/run.sh\n",
+    )
+    .unwrap();
+    let activity_dir = _root.path().join("home/.orbit/resources/activities");
+    std::fs::create_dir_all(&activity_dir).unwrap();
+    std::fs::write(
+        activity_dir.join("file_rule_findings.yaml"),
+        include_str!("../../assets/activities/file_rule_findings.yaml"),
+    )
+    .unwrap();
+
+    let persisted_input = |runtime: &OrbitRuntime| {
+        runtime
+            .list_job_runs(orbit_core::application::job::JobRunListParams::default())
+            .unwrap()
+            .into_iter()
+            .filter(|run| run.job_id.as_str() == "ux_rules_pipeline")
+            .max_by_key(|run| run.scheduled_at)
+            .expect("ux run persisted")
+            .input
+            .expect("run input persisted")
+    };
+    // Empty-object caller input: unset config must not inject built-ins, so
+    // the custom manifest defaults survive engine merging.
+    let refused = runtime.run_job_v2_from_yaml(&job_path, json!({}));
+    assert!(
+        format!("{refused:?}").contains("not granted"),
+        "{refused:?}"
+    );
+    let input = persisted_input(&runtime);
+    assert!(
+        input.get("surfaces").is_none_or(Value::is_null),
+        "unset config must leave surfaces to the manifest default, got {input}"
+    );
+    assert!(
+        input.get("runner").is_none_or(Value::is_null),
+        "unset config must leave runner to the manifest default, got {input}"
+    );
+    assert!(
+        input.get("ui_base_url").is_none_or(Value::is_null),
+        "unset config must leave ui_base_url to the manifest default, got {input}"
+    );
+
+    // Null caller input normalizes the same way.
+    let refused = runtime.run_job_v2_from_yaml(&job_path, Value::Null);
+    assert!(
+        format!("{refused:?}").contains("not granted"),
+        "{refused:?}"
+    );
+    let input = persisted_input(&runtime);
+    assert!(
+        input.get("surfaces").is_none_or(Value::is_null),
+        "unset config must leave surfaces to the manifest default, got {input}"
+    );
+    assert!(
+        input.get("runner").is_none_or(Value::is_null),
+        "unset config must leave runner to the manifest default, got {input}"
+    );
+    assert!(
+        input.get("ui_base_url").is_none_or(Value::is_null),
+        "unset config must leave ui_base_url to the manifest default, got {input}"
+    );
+
+    // Per-key nulls are unsupplied too: remove them from the run input so
+    // engine merging can use the custom manifest defaults.
+    let refused = runtime.run_job_v2_from_yaml(
+        &job_path,
+        json!({"surfaces": null, "runner": null, "ui_base_url": null}),
+    );
+    assert!(
+        format!("{refused:?}").contains("not granted"),
+        "{refused:?}"
+    );
+    let input = persisted_input(&runtime);
+    assert!(
+        input.get("surfaces").is_none(),
+        "unset config must remove null surfaces so the manifest default applies, got {input}"
+    );
+    assert!(
+        input.get("runner").is_none(),
+        "unset config must remove null runner so the manifest default applies, got {input}"
+    );
+    assert!(
+        input.get("ui_base_url").is_none(),
+        "unset config must remove null ui_base_url so the manifest default applies, got {input}"
+    );
+}
+
 fn errors_file_one_task_per_rule() {
     let (_root, runtime) = fixture("");
     let mut first_error = result("error", "medium", "cli.example|a", json!({"threw": "x"}));
@@ -279,5 +465,7 @@ crate::scenario_table!(
     cap_takes_highest_severity_first_and_floor_records_only,
     blank_file_at_uses_configured_floor,
     default_ux_rules_pipeline_file_step_binds_optional_inputs,
+    ux_rules_pipeline_binds_config_defaults_and_explicit_overrides_win,
+    ux_rules_pipeline_preserves_custom_manifest_defaults_when_config_unset,
     errors_file_one_task_per_rule
 );

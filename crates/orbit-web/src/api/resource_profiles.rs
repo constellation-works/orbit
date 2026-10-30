@@ -7,10 +7,13 @@
 //! effective per-key bound and `max_last` the maximum explicit selection.
 
 use axum::extract::Query;
-use axum::http::StatusCode;
+use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Json, Response};
-use serde::Deserialize;
-use serde_json::{Value, json};
+use chrono::{DateTime, Utc};
+use orbit_core::runtime::host_resource::forecast::HostCapacity;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use serde_json::value::RawValue;
 
 use super::blocking;
 use crate::state::Ws;
@@ -56,36 +59,49 @@ pub(super) async fn resource_profiles(
             Some(window) => runtime.resource_profiles_over(window)?,
             None => runtime.resource_profiles()?,
         };
-        let profiles = set
-            .profiles
-            .iter()
-            .filter(|profile| profile.key.workspace_id == workspace_id)
-            .map(|profile| serde_json::to_value(profile.as_ref()))
-            .collect::<Result<Vec<Value>, _>>()
-            .map_err(|error| {
-                orbit_core::OrbitError::Execution(format!("encode resource profiles: {error}"))
-            })?;
+        // Encoded once per cached set and workspace, not on every read.
+        let profiles = set.workspace_profiles_json(&workspace_id)?;
         let settings = runtime.auto_concurrency_settings();
-        Ok(json!({
-            "workspace_id": workspace_id,
-            "built_at": set.built_at,
-            "host": runtime.host_capacity(),
-            "admit_cpu_percent": settings.admit_cpu_percent,
-            "admit_memory_percent": settings.admit_memory_percent,
-            "profile_window": settings.profile_window,
-            // Preserve the requested selection, including the legacy `all`
-            // alias, and disclose its effective bound independently.
-            "last": selected,
-            "delivery_limit": window.unwrap_or(settings.profile_window as usize),
-            "max_last": MAX_LAST,
-            "min_profile_deliveries": settings.min_profile_deliveries,
-            "horizon_cap_minutes": settings.horizon_cap_minutes,
-            "profiles": profiles,
-        }))
+        serde_json::to_vec(&ResourceProfilesBody {
+            workspace_id: &workspace_id,
+            built_at: set.built_at,
+            host: runtime.host_capacity(),
+            admit_cpu_percent: settings.admit_cpu_percent,
+            admit_memory_percent: settings.admit_memory_percent,
+            profile_window: settings.profile_window,
+            last: selected,
+            delivery_limit: window.unwrap_or(settings.profile_window as usize),
+            max_last: MAX_LAST,
+            min_profile_deliveries: settings.min_profile_deliveries,
+            horizon_cap_minutes: settings.horizon_cap_minutes,
+            profiles: &profiles,
+        })
+        .map_err(|error| {
+            orbit_core::OrbitError::Execution(format!("encode resource profiles: {error}"))
+        })
     })
     .await
     {
-        Ok(body) => Json(body).into_response(),
+        Ok(body) => ([(header::CONTENT_TYPE, "application/json")], body).into_response(),
         Err(response) => *response,
     }
+}
+
+/// The answer, in the order its keys are written.
+#[derive(Serialize)]
+struct ResourceProfilesBody<'a> {
+    workspace_id: &'a str,
+    built_at: DateTime<Utc>,
+    host: Option<HostCapacity>,
+    admit_cpu_percent: u8,
+    admit_memory_percent: u8,
+    profile_window: u32,
+    /// The requested selection, including the legacy `all` alias; its
+    /// effective bound is `delivery_limit`.
+    last: Option<String>,
+    delivery_limit: usize,
+    max_last: usize,
+    min_profile_deliveries: u32,
+    horizon_cap_minutes: u32,
+    profiles: &'a RawValue,
 }

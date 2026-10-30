@@ -594,6 +594,10 @@ impl Commands {
             Commands::AutoTask(command) => {
                 registry_operation(&command.command, runtime_dispatch!(AutoTask))
             }
+            // Condition explain is registry-driven like crew.
+            Commands::Automation(command) => {
+                registry_operation(&command.command, runtime_dispatch!(Automation))
+            }
             Commands::Job(command) => {
                 use super::super::job::JobSubcommand;
                 let (subcommand, target_id, job_run_id) = match &command.command {

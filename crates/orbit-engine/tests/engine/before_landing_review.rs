@@ -709,6 +709,10 @@ const LEAF_ACTIVITIES: &[&str] = &[
     "pr_conflict_recovery",
     "visual_capture",
     "visual_checks",
+    "visual_review_prepare",
+    "visual_review",
+    "visual_verify_prepare",
+    "visual_verify",
     "visual_settle",
 ];
 
@@ -885,6 +889,12 @@ impl orbit_engine::test_support::NullRuntimeHost for LeafHost {
             "test_stub_pr_open" => json!({ "pr_number": "41" }),
             "test_stub_claim_handoff" => json!({ "handed_off": true, "merged": false }),
             "test_stub_visual_capture" => json!({ "applies": false, "captures": [] }),
+            "test_stub_visual_review_prepare" => {
+                json!({ "applies": false, "review_count": 0, "reviews": [], "records": [] })
+            }
+            "test_stub_visual_verify_prepare" => {
+                json!({ "applies": false, "partition_count": 0, "partitions": [], "records": [] })
+            }
             other => panic!("unexpected action `{other}`"),
         };
         Ok(output)

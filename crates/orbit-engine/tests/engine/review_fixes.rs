@@ -78,6 +78,9 @@ fn accept_publishes_the_implementation_head_without_revalidation() {
             "git_rebase",
             "candidate_validate",
             "visual_capture",
+            "visual_review_prepare",
+            "visual_verify_prepare",
+            "visual_verify_prepare",
             "review_gate_admit",
             "agent_review_repair",
             "review_gate_settle",
@@ -356,6 +359,10 @@ const ACTIVITIES: &[&str] = &[
     "claim_candidate_carry",
     "visual_capture",
     "visual_checks",
+    "visual_review_prepare",
+    "visual_review",
+    "visual_verify_prepare",
+    "visual_verify",
     "visual_settle",
 ];
 
@@ -738,6 +745,12 @@ impl orbit_engine::test_support::NullRuntimeHost for ScriptedHost {
             "claim_handoff" => json!({ "decision": "handed_off" }),
             "claim_candidate_carry" => json!({ "phase": "candidate_carry", "carry": "none" }),
             "visual_capture" => json!({ "applies": false, "captures": [] }),
+            "visual_review_prepare" => {
+                json!({ "applies": false, "review_count": 0, "reviews": [], "records": [] })
+            }
+            "visual_verify_prepare" => {
+                json!({ "applies": false, "partition_count": 0, "partitions": [], "records": [] })
+            }
             other => {
                 return Err(DispatchError::DeterministicActionFailed {
                     action: other.to_string(),

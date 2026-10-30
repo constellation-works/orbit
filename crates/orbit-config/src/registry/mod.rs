@@ -169,9 +169,9 @@ pub struct ConfigKeyDescriptor {
     pub section: ConfigSection,
     /// Visibility in the ordinary configuration overview.
     pub tier: ConfigKeyTier,
-    /// Relevance ordinal within the section; lower renders first. Registry
-    /// declaration order stays alphabetical (a store test enforces it), so
-    /// this is what puts the settings an operator reaches for at the top.
+    /// Relevance ordinal within the section; lower renders first. This is
+    /// what puts the settings an operator reaches for at the top, regardless
+    /// of registry declaration order.
     pub order: u16,
 }
 

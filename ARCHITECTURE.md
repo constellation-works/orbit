@@ -1,7 +1,7 @@
 ---
 type: context
 summary: "Layered crate graph, dependency rules, per-crate roles, store internals and scoping"
-last_validated: 2026-10-29
+last_validated: 2026-10-30
 ---
 
 # Architecture
@@ -48,6 +48,12 @@ read or a lost minute-zero insert leaves no such row, and the run still counts
 once it finishes. The probe joins `job_runs` only for sampled runs, so its cost
 follows retained minute rows, not job history. The migration (v69) is
 read-compatible: older binaries can read the database but stay read-only.
+Because that scan grows with retained minutes, `delivery_runs_stamp` (v75,
+additive) is a one-row counter that triggers bump on every write that can move
+the probe: a run's first or last minute row, and an insert, delete, re-key or
+`finished_at` change of a sampled run's `job_runs` row. A cache pass probes
+only when the counter moved since its cached answer. The triggers fire on
+older binaries' writes too.
 
 ## Crates
 
@@ -91,6 +97,11 @@ cache shares inspection facts across routines without retaining stale refs
 across polls. Web's host-wide routine memo uses the existing runtime-memo
 single-flight mechanism with a separate host namespace and file/database input
 stamps.
+
+Automation parses and evaluates condition-trigger predicates with the `cel`
+crate (cel-rust, no regex or encoder features). That crate ships no type
+checker, so `orbit-automation::condition` checks the parsed AST against the
+declared task and workspace schema itself. There is no new internal crate edge.
 
 Core exposes Exec's shared Bubblewrap capability probe to CLI onboarding and
 diagnostics. The CLI's dev-only edges to Engine, Exec and Tools support the real

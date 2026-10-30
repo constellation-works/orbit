@@ -1,6 +1,7 @@
 pub mod agents;
 pub mod authorization;
 pub mod auto_task;
+pub mod automation;
 pub mod codebase;
 pub mod crew;
 pub mod decision;
