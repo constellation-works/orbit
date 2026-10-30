@@ -7,12 +7,15 @@ Formats are versioned (`decision-assistance-eval/1` frozen legacy,
 synthetic labels are never human ground truth (label.provenance
 distinguishes them). V1 second-label holdouts without a recorded first
 value are legacy/unverified and never eligible; v2 records the first
-value so rewriting `expected` cannot hide disagreement.
+value so rewriting `expected` cannot hide disagreement. Additive delivery-quality
+v3 contracts and CLI dispatch live in the sibling delivery_quality_* modules.
 """
 import argparse, hashlib, json, math, os, sys
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
+
+import delivery_quality_eval as delivery
 
 FORMAT_V1 = "decision-assistance-eval/1"
 FORMAT_V2 = "decision-assistance-eval/2"
@@ -708,7 +711,14 @@ def load(p): return json.loads(Path(p).read_text())
 def emit(obj, code=0): print(json.dumps(obj, indent=2, sort_keys=True)); return code
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="Offline decision-assistance evaluation (no external calls).")
+    argv = sys.argv[1:] if argv is None else argv
+    delivery_result = delivery.delivery_cli(argv)
+    if delivery_result is not None:
+        return delivery_result
+    ap = argparse.ArgumentParser(
+        description="Offline decision-assistance evaluation (no external calls).",
+        epilog="Delivery-quality commands: delivery-schema, freeze-sample, export-labels, "
+               "import-labels, ladder-export, register-targets, study-seed. Each accepts --help.")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("schema"); s = sub.add_parser("seed"); s.add_argument("--answers", action="store_true")
     s.add_argument("--format-version", default=FORMAT_V1, choices=list(SUPPORTED_FORMATS))
@@ -718,7 +728,8 @@ def main(argv=None):
     p = sub.add_parser("check-targets"); p.add_argument("--targets", required=True); p.add_argument("--holdout-opened-at")
     a = ap.parse_args(argv)
     if a.cmd == "schema":
-        return emit({"format_version": FORMAT_V1, "supported_format_versions": list(SUPPORTED_FORMATS),
+        return emit({"format_version": FORMAT_V1, "supported_format_versions": [*SUPPORTED_FORMATS, delivery.FORMAT],
+                     "delivery_quality": delivery.delivery_schema(),
                      "question_sets": QUESTION_SETS, "dispositions": DISPOSITIONS,
                      "label_provenances": PROVENANCES,
                      "human_label_import_fields": {"v1_legacy": list(HUMAN_LABEL_IMPORT_FIELDS_V1),

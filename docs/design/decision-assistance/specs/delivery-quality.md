@@ -13,11 +13,12 @@ tags: [decision-assistance, agent-scorecards]
 
 # Proposal: delivery-quality grader
 
-Status: **design only; no consumer, grading run or activation is authorized**.
+Status: **proposed for adoption; no live consumer, grading run or activation is authorized**.
 The [scope](../1_scope.md) remains parked and every existing consumer remains
 off by default. This is a new evaluation candidate, distinct from the private
-task-authoring quality collector. Its questions, scoring and evidence builder
-are not implemented by the existing evaluator.
+task-authoring quality collector. Its versioned offline questions, contracts and scoring are implemented by the
+[evaluation protocol](../2_evaluation.md#delivery-quality-offline-contract-decision-assistance-eval3).
+The runtime consumer and evidence builder remain unimplemented.
 
 ## Purpose and limits
 
@@ -219,9 +220,10 @@ delivery-grader accuracy estimate or permission to restart parked consumers.
    improve a crew's apparent quality. Review human usefulness and harmful
    disagreement before enabling a separate advisory surface.
 
-The [evaluation protocol](../2_evaluation.md) needs additive question,
-ordinal-scoring and coverage support before this candidate can be run; its
-existing classifier metrics and frozen formats are not silently repurposed.
+The [evaluation protocol](../2_evaluation.md) supplies additive offline question,
+ordinal-scoring, blinded-label, frozen-sampling and coverage tooling. Its synthetic
+fixtures exercise mechanics only; existing classifier metrics and frozen formats
+are not repurposed and no human accuracy or live adoption is established.
 Any live evaluation needs permission for the evidence and paid requests.
 None of these phases changes merge/review/admission authority or turns on
 the parked service. Source/rubric changes that invalidate calibration require
