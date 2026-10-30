@@ -756,14 +756,21 @@ Orbit wraps each spawned agent CLI in an OS sandbox scoped by the activity's
 resolved filesystem profile. `orbit init` writes the right backend for your
 host into the shipped executors:
 
-- **macOS**: `sandbox-exec`, with the profile compiled to SBPL.
+- **macOS**: `sandbox-exec`, with the profile compiled to SBPL. Dispatch fails
+  closed if the trusted `sandbox-exec` executable is missing, unless the
+  executor sets `allow_fallback: true` (a read-only explorer takes the same
+  provider read-only mode as on Linux). If the executable exists but cannot
+  apply the profile (exit 71, `sandbox_apply: Operation not permitted`), the run
+  fails and no fallback applies.
 - **Linux**: Bubblewrap, from a trusted `/usr/bin/bwrap` or, when that is
   missing or too old, Orbit's root-owned bundled build. It confines writes to
   the resolved profile and hides well-known credential locations such as
   `~/.ssh` and `~/.aws`. Other host reads and network access stay open, so it
   is not a read-rule or network boundary. Dispatch **fails closed** if `bwrap`
   is missing or its namespace-and-mount probe fails, unless the executor sets
-  `allow_fallback: true`.
+  `allow_fallback: true`. The one exception is a read-only explorer: it does
+  not need `allow_fallback`, and instead runs under its provider's own
+  read-only mode (Codex), while a provider without one is refused.
 - **Other platforms**: release binaries ship for macOS and Linux only (x64 and
   arm64). A source build on any other OS seeds its executors with no OS
   sandbox. Process supervision, tool policy, and Orbit's in-process guards for

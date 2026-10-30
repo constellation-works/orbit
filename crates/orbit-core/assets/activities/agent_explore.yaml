@@ -4,10 +4,12 @@
 # The explorer answers one question about the delegating run's own worktree
 # and reports what it read. It runs inside Orbit's executor sandbox under the
 # read-only `reviewer` profile, so a write anywhere in the worktree is denied
-# when that sandbox wraps the provider. Where the wrapper is absent, cannot
-# start on this host or is explicitly off, only a provider with an enforced
-# read-only mode (Codex) starts, in that mode; every other provider is refused
-# before spawn.
+# when that sandbox wraps the provider. Where the wrapper is explicitly off,
+# the Linux Bubblewrap probe fails or the trusted macOS `sandbox-exec`
+# executable is missing, only a provider with an enforced read-only mode
+# (Codex) starts, in that mode; every other provider is refused before spawn.
+# A macOS `sandbox-exec` that exists but cannot apply the profile (exit 71) is
+# not that case: the wrapper is kept and the run fails.
 # It carries no trusted-host admission.
 #
 # It has no task-write, lifecycle, dispatch, commit or PR grant, and cannot

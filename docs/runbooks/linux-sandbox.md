@@ -268,6 +268,11 @@ cause, then run `orbit init --host-prerequisites-only` and recheck doctor. Do no
 `kernel.apparmor_restrict_unprivileged_userns` globally or enable
 `allow_fallback`; both weaken or bypass the fail-closed boundary.
 
+The read-only explorer (`agent_explore`) is the one activity that does not stop on a failed
+probe: it runs unwrapped under its provider's own read-only mode (Codex), and any provider
+without one is refused before spawn. That does not need `allow_fallback` and does not
+change any other activity.
+
 Other distributions need the same two conditions: a Bubblewrap with both `--bind-fd` and
 `--ro-bind-fd` (the host's `/usr/bin/bwrap` or the bundled one) and permission for an
 unprivileged user to create user namespaces and mounts. Non-Linux hosts are unaffected: macOS uses
