@@ -143,8 +143,9 @@ dispatch error without a run shows its outcome without a link. Consecutive
 failures include failed runs, timeouts and dispatch errors, and show their
 count and starting slot. A success, skipped slot or in-flight fire resets the
 streak. Cron retries count once per scheduled slot, using the latest attempt.
-State- and delivery-triggered routines include their automation-admitted runs,
-merged with retained cron fires when the trigger has changed.
+State-, delivery- and condition-triggered routines include their
+automation-admitted runs, merged with retained cron fires when the trigger has
+changed.
 
 Three or more consecutive failures produce a warning above the routine rows
 and a badge in the Health rail for the selected workspace and host. The badge
@@ -832,8 +833,8 @@ debuggable with the existing run tooling — there is no separate "scheduled run
 Every run records how it was submitted in its `trigger`, which run JSON projects and the
 `run.started` audit names as `<kind>:<name>`. `kind` is `cli`, `mcp` (a call over an MCP
 session), `dashboard` (`orbit web serve`), `child` (dispatched by a parent run), or
-`routine`. A cron fire carries `routine` and `slot`; a run a state-triggered or
-delivery-triggered routine admits carries `routine` and the automation `consumer` that
+`routine`. A cron fire carries `routine` and `slot`; a run a state-, delivery- or
+condition-triggered routine admits carries `routine` and the automation `consumer` that
 admitted it, with no slot ([ORB-12255], [ORB-13016]).
 
 Naming note: `orbit clock tick` is the general scheduler pass and `orbit sweep` is its
