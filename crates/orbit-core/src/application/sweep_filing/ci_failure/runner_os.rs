@@ -12,47 +12,69 @@
 use std::path::Path;
 
 use orbit_types::task::HostOs;
-use serde_json::{Value, json};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use super::fields::value_string;
 
 /// Where a run's runner OS came from.
-const SOURCE_JOB_LABELS: &str = "job_labels";
-const SOURCE_WORKFLOW_RUNS_ON: &str = "workflow_runs_on";
-const SOURCE_UNKNOWN: &str = "unknown";
+///
+/// Serialized snake_case (`job_labels`, `workflow_runs_on`, `unknown`) to keep
+/// the existing evidence wire byte-identical.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum RunnerOsSource {
+    JobLabels,
+    WorkflowRunsOn,
+    Unknown,
+}
 
-/// The runner OS of one failure row, as recorded evidence:
-/// `{"os", "source", "labels"}`. `os` is null when neither source names one OS.
-pub(super) fn failure_runner_os(failure: &Value, repo_root: &Path) -> Value {
+/// The runner OS of one failure row, as recorded evidence.
+///
+/// Field order is the wire order (`os`, `source`, `labels`); `os` serializes
+/// as `linux`/`macos`/`windows` or null when neither source names one OS.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) struct RunnerOsEvidence {
+    pub(super) os: Option<HostOs>,
+    pub(super) source: RunnerOsSource,
+    pub(super) labels: Vec<String>,
+}
+
+/// The runner OS of one failure row, parsed once at the failure-row boundary.
+pub(super) fn failure_runner_os(failure: &Value, repo_root: &Path) -> RunnerOsEvidence {
     let job = &failure["failed_jobs"][0];
     let labels = string_list(&job["runner_labels"]);
     if !labels.is_empty() {
-        return json!({
-            "os": os_from_labels(&labels),
-            "source": SOURCE_JOB_LABELS,
-            "labels": labels,
-        });
+        return RunnerOsEvidence {
+            os: os_from_labels(&labels),
+            source: RunnerOsSource::JobLabels,
+            labels,
+        };
     }
     let workflow = value_string(failure, "workflow");
     let job_name = value_string(job, "name");
     if let Some(labels) = workflow_runs_on(repo_root, &workflow, &job_name) {
-        return json!({
-            "os": os_from_labels(&labels),
-            "source": SOURCE_WORKFLOW_RUNS_ON,
-            "labels": labels,
-        });
+        return RunnerOsEvidence {
+            os: os_from_labels(&labels),
+            source: RunnerOsSource::WorkflowRunsOn,
+            labels,
+        };
     }
-    json!({"os": null, "source": SOURCE_UNKNOWN, "labels": []})
+    RunnerOsEvidence {
+        os: None,
+        source: RunnerOsSource::Unknown,
+        labels: Vec::new(),
+    }
 }
 
 /// The `os:` tags for a repair whose runs ran on `runners`: the union of their
 /// OSes when every run's is Linux or macOS, and none otherwise. One run on
 /// Windows or an unknown runner leaves the repair untagged, admissible
 /// anywhere, rather than routed away from the platform that failed.
-pub(super) fn os_tags(runners: &[Value]) -> Vec<String> {
+pub(super) fn os_tags(runners: &[RunnerOsEvidence]) -> Vec<String> {
     let mut oses = std::collections::BTreeSet::new();
     for runner in runners {
-        match runner["os"].as_str().and_then(HostOs::parse) {
+        match runner.os {
             Some(os @ (HostOs::Linux | HostOs::Macos)) => {
                 oses.insert(os);
             }
@@ -65,10 +87,10 @@ pub(super) fn os_tags(runners: &[Value]) -> Vec<String> {
 /// The one OS a runner's labels name: `macos-*` is macOS, `ubuntu-*` or
 /// `linux` is Linux, `windows-*` is Windows. Labels naming none, or naming two,
 /// say nothing.
-fn os_from_labels(labels: &[String]) -> Option<&'static str> {
+fn os_from_labels(labels: &[String]) -> Option<HostOs> {
     let mut found = labels.iter().filter_map(|label| label_os(label));
     let first = found.next()?;
-    found.all(|other| other == first).then_some(first.as_str())
+    found.all(|other| other == first).then_some(first)
 }
 
 fn label_os(label: &str) -> Option<HostOs> {
