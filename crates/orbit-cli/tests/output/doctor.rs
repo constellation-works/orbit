@@ -963,6 +963,59 @@ fn doctor_retired_repair_keeps_host_evidence_rules_in_each_layer() {
         assert_eq!(effective_host_evidence(&f), before, "repeat repair");
     }
 }
+
+/// Live visual-review settings survive repair while an unknown sibling is removed.
+#[test]
+fn doctor_retired_repair_keeps_visual_review_settings() {
+    if in_child("doctor::doctor_retired_repair_keeps_visual_review_settings") {
+        return;
+    }
+    let f = WorkCheckout::new();
+    let workspace_body = "[visual_review]\nmanifests = [\"views.toml\"]\ndefault_width = 375\nmock_neighbor = true\n";
+    let (gd, gc, wc) = write_configs(&f, "", workspace_body);
+
+    let diagnosis = rows(&doctor(&f, &[]));
+    let retired = retired_rows(&diagnosis);
+    expect_mentions(&retired, "visual_review.mock_neighbor", &wc);
+    expect_no_mentions(&retired, "visual_review.manifests", &wc);
+    expect_no_mentions(&retired, "visual_review.default_width", &wc);
+    expect_file(&gc, "");
+    expect_file(&wc, workspace_body);
+
+    let fixed = fix_rows(&f);
+    assert_fix_ok(&fixed);
+    let repair = row(&fixed, "fix-retired-config-keys");
+    msg_has(repair, "visual_review.mock_neighbor");
+    let updated = read_toml(&wc);
+    assert_eq!(
+        updated["visual_review"]["manifests"]
+            .as_array()
+            .map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(
+        updated["visual_review"]["manifests"][0].as_str(),
+        Some("views.toml")
+    );
+    assert_eq!(
+        updated["visual_review"]["default_width"].as_integer(),
+        Some(375)
+    );
+    assert!(updated["visual_review"].get("mock_neighbor").is_none());
+    let config = ResolvedConfig::load(&ConfigRoots::new(
+        f.home.join(".orbit"),
+        f.work.join(".orbit"),
+    ))
+    .expect("repaired config loads");
+    assert_eq!(config.visual_review.manifests, ["views.toml"]);
+    assert_eq!(config.visual_review.default_width, 375);
+    assert_backup(&f.work.join(".orbit"), workspace_body);
+    assert!(backup_names(&gd).is_empty(), "global config was unchanged");
+
+    let settled = assert_repair_settled(&f, &[&wc, &gc], &[&f.work.join(".orbit"), &gd]);
+    assert_fix_ok(&settled);
+}
+
 /// The repair preserves translated review values in their original layer and keeps the first backup.
 #[test]
 #[allow(clippy::print_stderr)] // Name each scenario and its elapsed time in isolated child failure output.
