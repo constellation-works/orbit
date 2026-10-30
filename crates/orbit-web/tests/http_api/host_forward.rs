@@ -1185,6 +1185,55 @@ fn forwarded_audit_cursor_walks_the_remote_window_page_by_page() {
     );
 }
 
+/// The serving host's own name is answered locally: outer `/on/<host>/<rest>`
+/// captures must not leak into the inner router, or every inner `Path<_>`
+/// sees host, rest and its own capture (ORB-20148).
+#[test]
+fn local_forward_preserves_inner_path_params() {
+    isolated(
+        "host_forward::local_forward_preserves_inner_path_params",
+        || {
+            let fixture = Fixture::new();
+            let task = seed_task(&fixture);
+            let server = fixture.server(false);
+
+            let direct_score = server.get(
+                "/api/agents/implementers/scorecard?workspace=ws_http_fixture&window=last500&min_support=1",
+            );
+            let direct_status = direct_score.status();
+            let direct_body = direct_score.text().unwrap();
+            assert_eq!(
+                direct_status.as_u16(),
+                200,
+                "direct scorecard: {direct_body}"
+            );
+            let direct_score_json: Value = serde_json::from_str(&direct_body).unwrap();
+            let forwarded_score = server.get(
+                "/api/on/http-fixture/agents/implementers/scorecard?workspace=ws_http_fixture&window=last500&min_support=1",
+            );
+            let status = forwarded_score.status();
+            let body = forwarded_score.text().unwrap();
+            assert_eq!(status.as_u16(), 200, "host-qualified scorecard: {body}");
+            let forwarded_score_json: Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(
+                forwarded_score_json, direct_score_json,
+                "host-qualified scorecard matches the direct route"
+            );
+
+            let direct_task = json_ok(server.get(&format!("/api/tasks/{task}{WS}")));
+            let forwarded_task = server.get(&format!("/api/on/http-fixture/tasks/{task}{WS}"));
+            let status = forwarded_task.status();
+            let body = forwarded_task.text().unwrap();
+            assert_eq!(status.as_u16(), 200, "host-qualified task: {body}");
+            let forwarded_task_json: Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(
+                forwarded_task_json, direct_task,
+                "host-qualified task keeps its own id param"
+            );
+        },
+    );
+}
+
 /// A scan that hits its cap on a page with no matches returns an empty page
 /// that still carries a cursor. The forward must not drop it, or the rest of
 /// the window stays unreachable from the host dashboard.

@@ -13,6 +13,7 @@
 use std::future::Future;
 use std::net::Ipv4Addr;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -31,6 +32,7 @@ use tower::ServiceExt;
 use super::audit::AUDIT_NEXT_BEFORE_HEADER;
 use super::host::{host_error_code, status_for};
 use super::routines::{action_capability, authorization_denied, authorized_caller};
+use super::session::BrowserSessions;
 use crate::host_tunnels::{ForwardError, HostTarget, Lease, RemoteIdentity};
 use crate::ssh_tunnel::TunnelOrigin;
 use crate::state::DashboardState;
@@ -371,17 +373,34 @@ async fn resolve(state: &DashboardState, host: &str) -> Result<Addressed, Forwar
 /// router, as if the client had asked for it directly.
 async fn answer_locally(
     state: DashboardState,
-    mut request: Request,
+    request: Request,
     host: &str,
     raw_rest: &str,
     query: &str,
 ) -> Response {
+    let (mut parts, body) = request.into_parts();
+    // The outer `/on/{host}/{*rest}` captures live in the request extensions
+    // as axum's private `UrlParams` (plus `MatchedPath`). The inner router
+    // would extend, not replace, those params, so an inner `Path<_>` would
+    // see the outer host/rest alongside its own capture. Rebuild with a
+    // clean extension set that carries only the browser session the inner
+    // session handlers read; method, headers, query and body stay untouched
+    // and the inner router's origin guard still runs.
+    let browser_sessions = parts
+        .extensions
+        .get::<axum::Extension<Arc<BrowserSessions>>>()
+        .cloned();
+    parts.extensions = Default::default();
+    if let Some(sessions) = browser_sessions {
+        parts.extensions.insert(sessions);
+    }
     match format!("/{raw_rest}{query}").parse() {
-        Ok(uri) => *request.uri_mut() = uri,
+        Ok(uri) => parts.uri = uri,
         Err(error) => {
             return failure(host, "invalid_input", format!("invalid path: {error}"));
         }
     }
+    let request = Request::from_parts(parts, body);
     match super::router(state.clone())
         .with_state(state)
         .oneshot(request)
