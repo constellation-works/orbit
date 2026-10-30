@@ -102,7 +102,7 @@ impl OrbitRuntime {
     /// makes the stored trials match it.
     pub fn crew_ladder_report(&self) -> Result<CrewLadderReport, OrbitError> {
         let views = self.experiment_views(None)?;
-        let plan = self.crew_ladder_plan(&views)?;
+        let plan = self.crew_ladder_plan(&views, &self.current_crew_ladder_controls())?;
         let rows = plan
             .tiers
             .iter()

@@ -31,15 +31,19 @@ impl OrbitRuntime {
     /// nothing. One tier's refused write is logged and does not stop the
     /// others; the next admission retries it.
     pub(crate) fn sync_crew_ladder_trials(&self) -> Result<(), OrbitError> {
+        // One config version for the mode check and the plan: a runtime opened
+        // before an operator's change must not retire a trial the current
+        // config still wants.
+        let controls = self.current_crew_ladder_controls();
         let views = self.experiment_views(None)?;
         let any_open = views
             .iter()
             .filter_map(LadderTrial::from_view)
             .any(|trial| trial.is_open());
-        if self.crew_ladder_settings().mode == CrewLadderMode::Off && !any_open {
+        if controls.settings.mode == CrewLadderMode::Off && !any_open {
             return Ok(());
         }
-        let plan = self.crew_ladder_plan(&views)?;
+        let plan = self.crew_ladder_plan(&views, &controls)?;
         for tier in &plan.tiers {
             for trial in tier.retired(&plan.settings) {
                 if let Err(error) = self.retire_ladder_trial(trial, tier, &plan.settings) {

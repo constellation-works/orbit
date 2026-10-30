@@ -3,6 +3,7 @@
 
 mod accessors;
 mod admission_policy;
+pub use admission_policy::CrewLadderControls;
 mod build;
 mod config;
 mod host;
