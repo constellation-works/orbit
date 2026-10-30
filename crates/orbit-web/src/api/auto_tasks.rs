@@ -582,6 +582,9 @@ fn schedule_summary(schedule: &AutoTaskSchedule) -> String {
         AutoTaskSchedule::Interval { every_minutes } => {
             format!("every {every_minutes} minutes")
         }
+        AutoTaskSchedule::Condition { condition } => {
+            format!("{} condition: {}", condition.scope.as_str(), condition.when)
+        }
     }
 }
 

@@ -4,8 +4,8 @@ owner: claude
 last_updated: 2026-10-30
 last_validated: 2026-10-30
 status: Draft
-stage: designing
-next: "Review this scope; then file phase 1 (CEL schema, load-time checking, automation explain)"
+stage: building
+next: "File phase 2: firing for task and workspace scopes"
 feature: condition-triggers
 doc_role: scope
 type: design
@@ -15,8 +15,9 @@ tags: [condition-triggers, automation-triggers, routines, auto-tasks, scheduling
 
 # Scope: Condition triggers
 
-Status: proposed. This doc is the design deliverable of [ORB-19288]; no code in this
-change. Revised 2026-10-29 with Daniel's answers to four open questions (transitions,
+Status: proposed. This doc is the design deliverable of [ORB-19288]. Phase 1 (the CEL
+schema, load-time checking and `orbit automation explain`) shipped in [ORB-19990]; nothing
+fires yet. Revised 2026-10-29 with Daniel's answers to four open questions (transitions,
 own-task exclusion with `self` reads, follower-host definitions, re-enable); see
 [Open questions › Resolved](#resolved-2026-10-29). It reverses one recorded non-goal of
 [automation triggers](../automation-triggers/1_overview.md#1-motivation), "user
@@ -514,9 +515,27 @@ that names the file, the clause and its position. The definition then counts as
 absent and never fires with defaults.
 
 The Rust implementations evaluate CEL, but they lack cel-go's complete checker.
-Phase 1 confirms what the chosen crate provides. If it falls short, Orbit adds a
-checker over the parsed AST for the admitted subset. That is feasible because the
-subset has no `dyn`, overloads or user functions.
+Phase 1 confirmed this for the chosen crate, `cel` 0.15 (cel-rust): it parses, with
+source offsets and the standard macros (`has`, `all`, `exists`, `exists_one`, `map`,
+`filter`) expanded into comprehensions, and it evaluates, but it ships no type checker.
+Orbit therefore checks the parsed AST itself (`orbit-automation`'s `condition`
+module), against the scope's declared environment:
+
+- identifiers and fields resolve in the §2 schema, with a scope-specific message for
+  `task` outside task scope and for the later-phase `host`, `system`, `file` and
+  `group` reads;
+- each admitted operator and function has its CEL overload signature, with no implicit
+  numeric conversion; anything else, `matches()` and map literals included, is refused;
+- an optional field (`task.crew`, `task.parent_id`, `task.origin`, `self.last_fired`,
+  `self.last_minted`, `self.last_minted_task`) is read only where a `has()` test proves
+  it present: on the right of `&&`, the right of `||` after `!has(...)`, or a guarded
+  `?:` branch;
+- status literals compared with a task's `status`, and `board.by_status` keys, must be
+  stored status spellings (`in_progress`, not `in-progress`);
+- comprehensions range only over lists, and the node limit counts the expanded AST.
+
+Errors name the clause (`trigger.condition.when`) and the line and column inside the
+expression. The crate is built without its `regex` and encoder features.
 
 | Candidate | Side effects | Turing complete | Load-time types | Rust | Verdict |
 |---|---|---|---|---|---|
@@ -1269,7 +1288,11 @@ target: job:media_ingest_pipeline    # workspace-defined
      admitted subset and the load-time checker;
    - `trigger.condition` and `schedule.condition` parsing, with
      `enabled: false` enforced;
-   - `orbit automation explain`, with clause trees over live state.
+   - parsing and checking of every key the later phases act on: `self` reads,
+     `board_includes_own`, `on_enable`, the fire caps, `hosts:` and the file-scope
+     keys. Host and file scopes parse and are refused as `scope_unavailable`;
+   - `orbit automation explain`, with clause trees over live state. Arm state, holds,
+     fires and `self` history show as not yet tracked.
 
    Operators see what would match before anything can fire.
 2. **Firing for task and workspace scopes.** This phase adds:
@@ -1279,13 +1302,13 @@ target: job:media_ingest_pipeline    # workspace-defined
      history, lists and the dashboard;
    - `when:` guards on `cron`, `every_minutes`, `deliveries_landed` and `state`
      kinds, plus `origin` stamping and chain depth (§11);
-   - `self` reads, own-task exclusion from `board` with `board_includes_own`, and
-     `on_enable` on re-enable.
+   - `self` fire history, own-task exclusion from `board` with `board_includes_own`,
+     and `on_enable` on re-enable (phase 1 already parses and type-checks them).
 
    Covers use case A.
 3. **Host scope and notifications.** Host facts from the sampler, notice records in
-   the decision channel, the `notify` action, and `hosts:` with follower evaluation of
-   host-local GC actions (§4). Covers use case C on the owner and on followers.
+   the decision channel, the `notify` action, and `hosts:` (parsed since phase 1) with
+   follower evaluation of host-local GC actions (§4). Covers use case C on the owner and on followers.
 4. **File scope.** This phase adds:
    - roots, the `watch_roots` allowlist, and the rescan manifest;
    - plugin-seeded templated roots checked against plugin grants;
@@ -1394,6 +1417,7 @@ Daniel's answers, folded into the sections named:
 ## Task References
 
 - [ORB-19288] — designs condition triggers (this doc).
+- [ORB-19990] — phase 1: CEL schema, load-time checking and `orbit automation explain`.
 - [ORB-12746] — added state-trigger batching (`batch_size`), which presets would need.
 - [ORB-15732] — recorded the 30-day, release-gated compatibility window.
 - [ORB-19214] — added the `not_before` scheduled hold, which `board.eligible` excludes.

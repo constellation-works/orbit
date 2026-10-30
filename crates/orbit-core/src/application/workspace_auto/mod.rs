@@ -5,6 +5,7 @@
 
 mod adopt;
 mod approvals;
+mod automation_port;
 mod classify;
 mod drains;
 mod job_port;

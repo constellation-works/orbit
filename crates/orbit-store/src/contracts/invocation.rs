@@ -24,6 +24,10 @@ pub struct InvocationQuery {
     pub model: Option<String>,
     pub tool_name: Option<String>,
     pub limit: usize,
+    /// Leave each record's `tool_calls` empty instead of loading them, for
+    /// callers that read only the invocation rows and their task links.
+    #[serde(default)]
+    pub skip_tool_calls: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

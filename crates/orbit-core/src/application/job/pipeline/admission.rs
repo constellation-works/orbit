@@ -177,6 +177,10 @@ impl OrbitRuntime {
                 self.resolve_ci_sweep_input(&spec, &mut input)?;
             }
 
+            if job_name == "ux_rules_pipeline" {
+                self.resolve_ux_rules_input(&mut input)?;
+            }
+
             // Selection, durable insertion and crew write-back share the same
             // task lock as scope updates and pilot reassessment. The submitted
             // selection then reserves the task before setup binds job_run_id.

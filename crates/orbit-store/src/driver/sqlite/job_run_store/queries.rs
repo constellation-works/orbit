@@ -502,8 +502,39 @@ pub(super) fn job_run_list_sql(
             params,
         );
     }
+    // A bounded recency page for one state must walk that state's recency
+    // index and stop at its limit. Left to the planner, a `created_since`
+    // window instead ranges over `idx_job_runs_workspace_created` and sorts
+    // the whole retained cohort, payloads included, before the limit
+    // applies [ORB-20163]: the store collects no planner statistics, so the
+    // window's selectivity is only a heuristic guess. Pin the index the
+    // multi-state path above already pins, but only when no other filter
+    // could make the walk discard most of the state's history before
+    // filling the page: a per-job, per-task or per-routine page is bounded
+    // far more cheaply by its own index, and a terminal/active set that
+    // contradicts the one state would walk the state to exhaustion.
+    let single_state = match (query.state, query.states.as_slice()) {
+        (Some(_), []) => true,
+        (Some(state), [only]) => state == *only,
+        (None, [_]) => true,
+        _ => false,
+    };
+    let indexed_by = if query.order_by == JobRunOrder::Recency
+        && query.limit.is_some()
+        && single_state
+        && query.job_id.is_none()
+        && query.task_id.is_none()
+        && query.trigger_routine.is_none()
+        && !query.terminal_only
+        && !query.active_only
+    {
+        " INDEXED BY idx_job_runs_ws_state_recency"
+    } else {
+        ""
+    };
     let mut sql = format!(
-        "SELECT {JOB_RUN_COLUMNS} FROM job_runs WHERE {where_clause} ORDER BY {order_clause}"
+        "SELECT {JOB_RUN_COLUMNS} FROM job_runs{indexed_by} \
+         WHERE {where_clause} ORDER BY {order_clause}"
     );
     if let Some(limit) = query.limit {
         sql.push_str(&format!(" LIMIT ?{}", params.len() + 1));

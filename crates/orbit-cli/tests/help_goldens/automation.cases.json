@@ -1,0 +1,4 @@
+[
+  {"argv": ["automation"], "golden": "automation/root.txt"},
+  {"argv": ["automation", "explain"], "golden": "automation/explain.txt"}
+]

@@ -1,5 +1,6 @@
 use orbit_common::governance::agents::AGENTS;
 use orbit_common::governance::auto_task::AUTO_TASK;
+use orbit_common::governance::automation::AUTOMATION;
 use orbit_common::governance::codebase::CODEBASE;
 use orbit_common::governance::crew::CREW;
 use orbit_common::governance::decision::DECISION;
@@ -69,6 +70,8 @@ pub fn register(registry: &mut ToolRegistry) {
     operation::register_noun(registry, &AGENTS);
     // The read-only crew ladder report.
     operation::register_noun(registry, &CREW);
+    // The read-only condition-trigger explain.
+    operation::register_noun(registry, &AUTOMATION);
     // The deprecated orchestrator scorecard aliases of the agents tools.
     operation::register_noun(registry, &ORCHESTRATOR);
     // Workflow ship, run reads and resume, and the auto-drain control come
