@@ -356,7 +356,7 @@ passing check clears it. The hold is read from the audit events, so it covers
 probes and deliveries alike.
 
 Probe a lane with `orbit agents vision-probe` before you declare `image_input`
-for it. See `orbit agents vision-probe` in [CLI commands](./cli/#observe).
+for it. See `orbit agents vision-probe` in [CLI commands](../cli/#observe).
 
 ## What this is not
 
