@@ -77,6 +77,42 @@ pub(super) fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
     pr_number: &str,
     auto_fix: Option<&AutoFix>,
 ) -> Result<Delivery, OrbitError> {
+    let mut diagnostic = None;
+    let result = drive_pr_to_merged_observed(
+        host,
+        input,
+        workspace_path,
+        pr_number,
+        auto_fix,
+        &mut diagnostic,
+    );
+    let result = result.map_err(|error| {
+        super::super::super::landing::checks::rerun_diagnostic::append_ci_rerun_diagnostic(
+            error,
+            diagnostic.as_ref(),
+        )
+    });
+    if let Some(auto_fix) = auto_fix {
+        super::super::super::landing::checks::rerun_diagnostic::record_ci_rerun_outcome(
+            host,
+            &auto_fix.task_ids,
+            &auto_fix.run_id,
+            &result,
+        );
+    }
+    result
+}
+
+fn drive_pr_to_merged_observed<H: RuntimeHost + ?Sized>(
+    host: &H,
+    input: &Value,
+    workspace_path: &str,
+    pr_number: &str,
+    auto_fix: Option<&AutoFix>,
+    diagnostic: &mut Option<
+        super::super::super::landing::checks::rerun_diagnostic::CiRerunDiagnostic,
+    >,
+) -> Result<Delivery, OrbitError> {
     let max_wait_seconds = bounded_u64(
         input,
         "max_wait_seconds",
@@ -192,6 +228,22 @@ pub(super) fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
             )
         }
         .map_err(observed)?;
+        let has_failures = !super::super::super::landing::checks::failed_checks(&status).is_empty();
+        if diagnostic
+            .as_ref()
+            .is_some_and(|previous| previous.head_sha != status.head_sha || !has_failures)
+        {
+            *diagnostic = None;
+        }
+        if let Some(auto_fix) = auto_fix {
+            super::super::super::landing::checks::rerun_diagnostic::observe_ci_rerun_head(
+                host,
+                &auto_fix.task_ids,
+                &auto_fix.run_id,
+                status.head_sha.as_deref(),
+                has_failures,
+            );
+        }
         let mut state = classify_pr_state(&status);
         let mut base_refresh_wait = false;
         if let Some(auto_fix) = auto_fix {
@@ -359,6 +411,7 @@ pub(super) fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                     pr_number,
                     &status,
                     completion_deadline_ms,
+                    diagnostic,
                 );
                 infrastructure_wait |= match retry {
                     Ok(waiting) => waiting,

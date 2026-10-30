@@ -49,6 +49,8 @@ impl CheckFailureClass {
 #[derive(Default)]
 pub(in crate::executor::automation::vcs) struct CheckRecovery {
     rerun: bool,
+    pub(in crate::executor::automation::vcs) rerun_diagnostic:
+        Option<super::rerun_diagnostic::CiRerunDiagnostic>,
     /// Untouched failures whose same-check base pass authorized a rerun.
     /// The rerun's later completion must not demand yet another base pass.
     /// Repeated base-evidence observations keyed by unchanged head, check and signature.
@@ -320,6 +322,8 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
             &context.candidate.base_branch,
             recovery.deadline_ms,
             Some(&jobs),
+            &context.handoff_id,
+            &mut recovery.rerun_diagnostic,
         )
     };
     match planned.unwrap_or_else(|error| {

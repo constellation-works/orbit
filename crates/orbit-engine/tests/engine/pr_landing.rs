@@ -5715,9 +5715,27 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
             }
             return Ok(answer);
         }
+        if let Some(script) = locked(&self.scripted)
+            .get(&format!("refuse:{operation}"))
+            .cloned()
+        {
+            locked(&self.scripted_inputs).insert("ci-planner-refusal-seen".into(), json!(true));
+            return Err(orbit_common::OrbitError::PrivateVcs(Box::new(
+                orbit_common::PrivateVcsFailure {
+                    operation: operation.into(),
+                    class: if script["transient"] == true {
+                        orbit_common::PrivateVcsFailureClass::TransientObservation
+                    } else {
+                        orbit_common::PrivateVcsFailureClass::Other
+                    },
+                    message: script["reason"].as_str().unwrap().into(),
+                },
+            )));
+        }
         if matches!(operation, "ci.job_log" | "ci.prerequisite_evidence")
             && let Some(answer) = locked(&self.scripted).get(operation).cloned()
         {
+            locked(&self.scripted_inputs).insert("ci-planner-log-seen".into(), json!(true));
             return Ok(answer);
         }
         if locked(&self.scripted).contains_key("test_ci_repair")

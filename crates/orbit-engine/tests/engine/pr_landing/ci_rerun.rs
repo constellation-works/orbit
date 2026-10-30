@@ -163,6 +163,7 @@ fn first_dependency_failure_reruns_before_owner_repair() {
 }
 
 mod bounded;
+mod diagnostic;
 
 #[test]
 fn dependency_adapter_refuses_incomplete_or_forged_evidence() {

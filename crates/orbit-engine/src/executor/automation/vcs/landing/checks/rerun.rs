@@ -1,5 +1,6 @@
 //! Shared first-failure planner; never reduce mixed jobs to a retry permission.
 use super::super::super::{operations, pr::PullRequestStatus};
+use super::rerun_diagnostic::{self, CiRerunDiagnostic, CiRerunStage};
 use super::{
     head::classify_logged_job,
     jobs::{answers, commit_jobs, job_label, unsuccessful},
@@ -34,6 +35,53 @@ pub(in crate::executor::automation::vcs) fn plan_ci_rerun<H: RuntimeHost + ?Size
     base_branch: &str,
     deadline_ms: u64,
     classified: Option<&[super::recovery::FailedJob]>,
+    execution: &str,
+    observation: &mut Option<CiRerunDiagnostic>,
+) -> Result<CiRerunStep, OrbitError> {
+    let mut diagnostic = CiRerunDiagnostic::for_status(status);
+    let result = plan_ci_rerun_observed(
+        host,
+        workspace,
+        tasks,
+        handoff,
+        status,
+        failed,
+        base,
+        tip,
+        base_branch,
+        deadline_ms,
+        classified,
+        &mut diagnostic,
+    );
+    *observation = match &result {
+        Ok(CiRerunStep::Wait(reason)) => Some(diagnostic.with_reason(reason)),
+        Err(error) => Some(diagnostic.with_error(error)),
+        _ => None,
+    };
+    rerun_diagnostic::record_ci_rerun_observation(
+        host,
+        tasks,
+        execution,
+        status.head_sha.as_deref(),
+        observation.as_ref(),
+    );
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+fn plan_ci_rerun_observed<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace: &Path,
+    tasks: &[String],
+    handoff: Option<&str>,
+    status: &PullRequestStatus,
+    failed: &[(Option<String>, String)],
+    base: &str,
+    tip: &str,
+    base_branch: &str,
+    deadline_ms: u64,
+    classified: Option<&[super::recovery::FailedJob]>,
+    diagnostic: &mut CiRerunDiagnostic,
 ) -> Result<CiRerunStep, OrbitError> {
     let (Some(head), Some(pr), Some(branch)) = (
         status.head_sha.as_deref(),
@@ -44,7 +92,9 @@ pub(in crate::executor::automation::vcs) fn plan_ci_rerun<H: RuntimeHost + ?Size
             "CI retry requires exact PR/head/branch identity".into(),
         ));
     };
+    diagnostic.stage = CiRerunStage::Jobs;
     let jobs = commit_jobs(host, workspace, head)?;
+    diagnostic.bind_jobs(&jobs);
     if failed.iter().any(|check| {
         !jobs
             .iter()
@@ -78,7 +128,11 @@ pub(in crate::executor::automation::vcs) fn plan_ci_rerun<H: RuntimeHost + ?Size
                 "CI retry job identity is incomplete".into(),
             ));
         };
+        diagnostic.stage = CiRerunStage::Log;
+        diagnostic.run_id = Some(run);
+        diagnostic.job_id = Some(id);
         let log = job_log(host, workspace, run, id, job)?;
+        diagnostic.stage = CiRerunStage::Classification;
         let emitted_record =
             super::super::super::super::ci::log_signature::classify_log_lines(&log)
                 .into_iter()
@@ -168,9 +222,13 @@ pub(in crate::executor::automation::vcs) fn plan_ci_rerun<H: RuntimeHost + ?Size
         return Ok(CiRerunStep::NotEligible);
     };
     let request = json!({"workspace_path":workspace,"pr":pr.to_string(),"head_sha":head,"head_branch":branch,"base_branch":base_branch,"accepted_base":base,"run_id":run_id,"roots":roots,"deadline_ms":deadline_ms});
+    diagnostic.stage = CiRerunStage::Authentication;
+    diagnostic.run_id = Some(run_id);
+    diagnostic.job_id = None;
     let response = match host.run_private_vcs_operation(operations::CI_RERUN_PLAN, request) {
         Ok(response) => response,
         Err(error) => {
+            *diagnostic = diagnostic.clone().with_error(&error);
             for root in roots.iter().filter(|root| root.classification == "flaky") {
                 if let Some(job) = jobs
                     .iter()
@@ -189,6 +247,7 @@ pub(in crate::executor::automation::vcs) fn plan_ci_rerun<H: RuntimeHost + ?Size
             )));
         }
     };
+    diagnostic.stage = CiRerunStage::PlanIdentity;
     let plan: CiRerunPlan = serde_json::from_value(response["plan"].clone()).map_err(|_| {
         OrbitError::Execution("CI retry adapter returned no authenticated plan".into())
     })?;
@@ -205,6 +264,7 @@ pub(in crate::executor::automation::vcs) fn plan_ci_rerun<H: RuntimeHost + ?Size
             "CI retry plan differs from the exact classified request".into(),
         ));
     }
+    diagnostic.stage = CiRerunStage::Admission;
     match host.admit_ci_rerun(tasks, handoff, &plan)? {
         CiRerunAdmission::Refused(reason) => {
             Ok(CiRerunStep::Wait(format!("CI retry holds: {reason}")))

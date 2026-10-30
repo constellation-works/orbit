@@ -69,6 +69,24 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
         } else {
             read_pr_status_before(host, &workspace, &pr_number, deadline_ms)?
         };
+        let has_failures = !failed_checks(&status).is_empty();
+        super::checks::rerun_diagnostic::observe_ci_rerun_head(
+            host,
+            std::slice::from_ref(&context.task_id),
+            &context.handoff_id,
+            status.head_sha.as_deref(),
+            has_failures,
+        );
+        if recovery
+            .rerun_diagnostic
+            .as_ref()
+            .is_some_and(|previous| previous.head_sha != status.head_sha || !has_failures)
+        {
+            recovery.rerun_diagnostic = None;
+            if let Some(diagnostic) = diagnostic.as_object_mut() {
+                diagnostic.remove("ci_rerun_diagnostic");
+            }
+        }
         diagnostic["pr"] = diagnostics::status(&status);
         diagnostic["base_suspicion"] = Value::Null;
         diagnostic["required_checks"] = json!({"state":"not_collected"});
@@ -340,6 +358,11 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
             }
             if let Some(observation) = recovery.required_observation.take() {
                 diagnostic["required_checks"] = observation;
+            }
+            if let Some(observation) = &recovery.rerun_diagnostic {
+                diagnostic["ci_rerun_diagnostic"] = json!(observation);
+            } else if let Some(diagnostic) = diagnostic.as_object_mut() {
+                diagnostic.remove("ci_rerun_diagnostic");
             }
             match recovered {
                 CheckRecoveryStep::Acted => {
