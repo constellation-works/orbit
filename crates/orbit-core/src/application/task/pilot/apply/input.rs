@@ -17,6 +17,7 @@ use serde_json::{Map, Value};
 
 use super::super::source::SourceSnapshot;
 use super::admission::PreparedTaskSnapshot;
+use crate::application::task::CiSweepFilingEvidence;
 
 /// One input field, read without failing the parse.
 #[derive(Default)]
@@ -151,7 +152,7 @@ pub(super) struct ApplyInput {
     results: Field<Vec<Record<PartitionResult>>>,
     prior_applied_count: Field<u64>,
     carried_task_outcomes: Field<Vec<Value>>,
-    ci_sweep_filing: Option<Record<CiSweepFiling>>,
+    ci_sweep_filing: Option<CiSweepFilingEvidence>,
     promotion_authorized: Field<bool>,
     drain_promotion: Option<Value>,
     run_id: Field<String>,
@@ -256,12 +257,6 @@ pub(super) struct AssessedTask {
     pub(super) task_id: Field<String>,
 }
 
-#[derive(Default, Deserialize)]
-#[serde(default)]
-pub(super) struct CiSweepFiling {
-    pub(super) task_id: Field<String>,
-}
-
 /// The apply input once its envelope is checked.
 pub(super) struct Envelope {
     /// The prepared payload verbatim, for the claim, source and receipt
@@ -292,7 +287,7 @@ pub(super) struct PreparedEcho {
 
 /// What the caller supplied to authorize promotion.
 pub(super) struct AuthorityInput {
-    pub(super) ci_sweep_filing: Option<Record<CiSweepFiling>>,
+    pub(super) ci_sweep_filing: Option<CiSweepFilingEvidence>,
     pub(super) promotion_authorized: Field<bool>,
     pub(super) drain_promotion: Option<Value>,
     pub(super) run_id: Option<String>,

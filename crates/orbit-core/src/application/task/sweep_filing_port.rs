@@ -13,6 +13,8 @@ use orbit_types::task::Task;
 use serde::Serialize;
 use serde_json::Value;
 
+pub(crate) use super::ci_sweep_filing::{CiSweepFilingEvidence, CiSweepFilingSource};
+
 /// Whether a pilot's admission authority permits promotion.
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -68,7 +70,7 @@ pub(in crate::application) trait TaskSweepFilingPort {
         task: &Task,
         assessment: &Value,
         selectors: &[String],
-        filing: &Value,
+        filing: &CiSweepFilingEvidence,
         promotion_authorized: bool,
         dependencies: &[String],
         is_done: &dyn Fn(&str) -> bool,

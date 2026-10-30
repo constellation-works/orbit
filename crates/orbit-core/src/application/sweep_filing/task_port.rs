@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use super::ci_failure::admission;
 use crate::OrbitRuntime;
-use crate::application::task::{CiSweepAdmission, TaskSweepFilingPort};
+use crate::application::task::{CiSweepAdmission, CiSweepFilingEvidence, TaskSweepFilingPort};
 
 impl TaskSweepFilingPort for OrbitRuntime {
     fn ci_sweep_admission(
@@ -16,7 +16,7 @@ impl TaskSweepFilingPort for OrbitRuntime {
         task: &Task,
         assessment: &Value,
         selectors: &[String],
-        filing: &Value,
+        filing: &CiSweepFilingEvidence,
         promotion_authorized: bool,
         dependencies: &[String],
         is_done: &dyn Fn(&str) -> bool,

@@ -55,6 +55,7 @@ mod schedule;
 pub(crate) use schedule::schedule_hold_in;
 mod review_port;
 pub(crate) use retained_candidate::RetainedCandidate;
+mod ci_sweep_filing;
 mod screened;
 mod steering;
 mod sweep_filing_port;
@@ -153,7 +154,8 @@ pub(in crate::application) use review_port::TaskReviewPort;
 pub use screened::{ScreenedTaskWrite, TaskUpdateAuthority, TaskWriteScreen};
 pub(in crate::application) use sweep_filing_port::TaskSweepFilingPort;
 pub(crate) use sweep_filing_port::{
-    AdmissionClosure, CiSweepAdmission, CiSweepAdmissionDecision, PromotionDecision,
+    AdmissionClosure, CiSweepAdmission, CiSweepAdmissionDecision, CiSweepFilingEvidence,
+    CiSweepFilingSource, PromotionDecision,
 };
 pub use transient_infra::TransientInfraBlockedTask;
 pub(crate) use validation_tools::positive_validation_tools;
