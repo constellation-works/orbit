@@ -1,7 +1,7 @@
 ---
 type: glossary
 summary: Vocabulary for the routines scheduler feature.
-last_validated: 2026-10-27
+last_validated: 2026-10-30
 tags: [routines, scheduler]
 ---
 

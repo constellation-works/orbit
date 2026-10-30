@@ -2,7 +2,7 @@
 title: "Scope: Scheduled tasks (not_before)"
 owner: claude
 last_updated: 2026-10-27
-last_validated: 2026-10-27
+last_validated: 2026-10-30
 status: Draft
 stage: shipped
 next: "Consumer calendar and Schedule picker in orbit-office"
