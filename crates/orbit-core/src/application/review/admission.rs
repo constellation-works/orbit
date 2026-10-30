@@ -514,9 +514,10 @@ fn upgrade_resume_admission_mismatch(
 
 /// Drop the drift a captured selective policy shows against today's resolved
 /// one when the operator's predicates are unchanged. The captured policy
-/// freezes the owner's risk model, which embeds when and from what landed
-/// history it was fitted, so every later resolution carries a different
-/// identity and digest. Only mode, risk threshold, paths and unknown-risk
+/// freezes the owner's risk model: a fitted identity embeds when and from
+/// what landed history it was fitted, so it can differ across captures as
+/// time or history changes, while an unavailable/no-fit identity may repeat
+/// with the same digest. Only mode, risk threshold, paths and unknown-risk
 /// behavior count as a policy change; their provenance does not, matching the
 /// policy digest. The comparison copy adopts today's policy, never the
 /// captured admission the run keeps.
