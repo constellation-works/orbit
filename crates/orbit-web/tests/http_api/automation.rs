@@ -398,6 +398,139 @@ fn routine_last_fire_reports_the_newer_state_triggered_run() {
     );
 }
 
+/// A condition routine's admitted runs are its fire history: the condition
+/// dispatcher stamps `JobRunTrigger::condition_routine`, so the shared
+/// trigger query serves them once the status projection lets condition
+/// routines through. Failures feed the ordinary streak [ORB-20266].
+#[test]
+fn routine_last_fire_reports_condition_triggered_runs() {
+    isolated(
+        "automation::routine_last_fire_reports_condition_triggered_runs",
+        || {
+            let fixture = Fixture::new();
+            fixture.job("cond_pipeline");
+            let routines = fixture.work.join("routines");
+            fs::create_dir_all(&routines).unwrap();
+            fs::write(
+                routines.join("condfire.yaml"),
+                "schemaVersion: 1\nname: condfire\nenabled: true\ntarget: job:cond_pipeline\ntrigger:\n  condition:\n    scope: task\n    when: \"task.status == 'done'\"\n",
+            )
+            .unwrap();
+            let start = DateTime::parse_from_rfc3339("2026-10-20T06:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc);
+            let mut failed =
+                fixture.seed_run("jrun-cond-failed", "cond_pipeline", JobRunState::Failed);
+            failed.created_at = start;
+            failed.started_at = Some(start);
+            failed.finished_at = Some(start + Duration::minutes(1));
+            let mut pipeline =
+                PipelineState::new(failed.run_id.clone(), failed.job_id.clone(), json!({}));
+            pipeline.trigger = Some(JobRunTrigger::condition_routine(
+                "condfire",
+                "condition-consumer",
+                "fire-1",
+            ));
+            fixture
+                .runtime
+                .sqlite_store()
+                .unwrap()
+                .upsert_job_run_for_workspace(
+                    &fixture.runtime.workspace_id().unwrap(),
+                    &failed,
+                    Some(&pipeline),
+                )
+                .unwrap();
+            // Same job, different routine: never this routine's fire.
+            let other = fixture.seed_run("jrun-cond-other", "cond_pipeline", JobRunState::Failed);
+            let mut other_pipeline =
+                PipelineState::new(other.run_id.clone(), other.job_id.clone(), json!({}));
+            other_pipeline.trigger = Some(JobRunTrigger::condition_routine(
+                "someone-else",
+                "condition-consumer",
+                "fire-9",
+            ));
+            fixture
+                .runtime
+                .sqlite_store()
+                .unwrap()
+                .upsert_job_run_for_workspace(
+                    &fixture.runtime.workspace_id().unwrap(),
+                    &other,
+                    Some(&other_pipeline),
+                )
+                .unwrap();
+
+            let server = fixture.server(false);
+            let status = || {
+                json_ok(server.get("/api/routines?workspace=ws_http_fixture"))["routines"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|row| row["name"] == "condfire")
+                    .unwrap()
+                    .clone()
+            };
+            let row = status();
+            assert_eq!(
+                row["recent_fires"].as_array().unwrap().len(),
+                1,
+                "only the condition run admitted for this routine: {}",
+                row["recent_fires"]
+            );
+            assert_eq!(row["last_fire"]["run_id"], "jrun-cond-failed", "{row}");
+            assert_eq!(row["last_fire"]["state"], "failed", "{row}");
+            assert_eq!(row["last_fire"], row["recent_fires"][0], "{row}");
+            assert_eq!(
+                row["failure_streak"],
+                json!({
+                    "count": 1,
+                    "since": start.to_rfc3339(),
+                    "truncated": false,
+                }),
+                "{row}"
+            );
+
+            // A newer success breaks the streak and becomes the last fire.
+            let admitted_at = start + Duration::minutes(20);
+            let mut succeeded =
+                fixture.seed_run("jrun-cond-ok", "cond_pipeline", JobRunState::Success);
+            succeeded.created_at = admitted_at;
+            succeeded.started_at = Some(admitted_at);
+            succeeded.finished_at = Some(admitted_at + Duration::minutes(1));
+            let mut ok_pipeline = PipelineState::new(
+                succeeded.run_id.clone(),
+                succeeded.job_id.clone(),
+                json!({}),
+            );
+            ok_pipeline.trigger = Some(JobRunTrigger::condition_routine(
+                "condfire",
+                "condition-consumer",
+                "fire-2",
+            ));
+            fixture
+                .runtime
+                .sqlite_store()
+                .unwrap()
+                .upsert_job_run_for_workspace(
+                    &fixture.runtime.workspace_id().unwrap(),
+                    &succeeded,
+                    Some(&ok_pipeline),
+                )
+                .unwrap();
+            let row = status();
+            assert_eq!(row["last_fire"]["run_id"], "jrun-cond-ok", "{row}");
+            assert_eq!(row["last_fire"]["state"], "succeeded", "{row}");
+            assert_eq!(row["recent_fires"].as_array().unwrap().len(), 2, "{row}");
+            assert_eq!(
+                row["failure_streak"],
+                json!({"count": 0, "since": null, "truncated": false}),
+                "{row}"
+            );
+        },
+    );
+}
+
 // Public HTTP projection: a fire is a scheduled slot, not each retry attempt.
 // Timestamps are seeded explicitly so chronology never depends on host timing.
 fn record_fire(

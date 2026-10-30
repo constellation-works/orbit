@@ -102,8 +102,9 @@ pub struct RoutineStatus {
     /// Next scheduled slot (RFC 3339, host-local), when computable.
     pub next_due: Option<String>,
     /// Most recent fire recorded on this host, from whichever trigger fired
-    /// it: the cron fire store, or for a state- or delivery-triggered routine
-    /// the newest run that routine's automation admitted when that is newer.
+    /// it: the cron fire store, or for a state-, delivery- or
+    /// condition-triggered routine the newest run that routine's automation
+    /// admitted when that is newer.
     pub last_fire: Option<RoutineFireRecord>,
     /// Recent distinct fires, newest first, including automation runs.
     pub recent_fires: Vec<RoutineFireRecord>,
@@ -547,7 +548,8 @@ pub fn routine_statuses_with_providers(
     })
 }
 
-/// Recent runs a state- or delivery-triggered routine's automation admitted.
+/// Recent runs a state-, delivery- or condition-triggered routine's
+/// automation admitted.
 ///
 /// Those fires never touch the cron fire store: the run itself carries the
 /// routine as its trigger, so the run record is the fire record. A cron-only
@@ -557,7 +559,8 @@ fn automation_fires(
     routine: &LoadedRoutine,
 ) -> Result<Vec<RoutineFireRecord>, OrbitError> {
     let trigger = &routine.definition.trigger;
-    if trigger.deliveries_landed.is_none() && trigger.state.is_none() {
+    if trigger.deliveries_landed.is_none() && trigger.state.is_none() && trigger.condition.is_none()
+    {
         return Ok(Vec::new());
     }
     let Some((_, runtime)) = discovered
