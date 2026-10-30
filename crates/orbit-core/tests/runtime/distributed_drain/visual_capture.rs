@@ -93,7 +93,7 @@ fn claimed_mock_task() -> (Pair, TempDir, String, String, VisualReviewContract) 
 }
 
 /// Hand the leaf off returning `returned`, and the owner's settlement pass.
-fn hand_off(returned: Returned) -> (Pair, Value, String) {
+fn hand_off(returned: Returned, release: bool) -> (Pair, Value, String) {
     let (pair, _kit, drain, leaf, contract) = claimed_mock_task();
     let record = pair.admission(&leaf);
     let mut delivered = handoff(&record);
@@ -206,6 +206,29 @@ fn hand_off(returned: Returned) -> (Pair, Value, String) {
             sha256: sha256_hex(&capture_json),
         });
     }
+    if release {
+        let claim = record.receipt.as_ref().unwrap().claim.as_ref().unwrap();
+        pair.wire
+            .owner
+            .serve_claim_settle(
+                &ToolSessionContext {
+                    caller_machine_id: Some(FOLLOWER.into()),
+                    process_machine_id: Some(OWNER.into()),
+                    transport: Some(McpTransport::SshMcp),
+                    effective_capabilities: BTreeSet::from([McpCapability::Agent]),
+                    ..ToolSessionContext::default()
+                },
+                &claim.claim_id,
+                Some(&leaf),
+                ClaimMutation::Release(ClaimEvidence {
+                    summary: Some("seed complete".into()),
+                    ..Default::default()
+                }),
+                orbit_store::contracts::ClaimAttribution::default(),
+            )
+            .expect("release the seeded claim");
+        return (pair, Value::Null, drain);
+    }
     pair.advance(
         &leaf,
         LocalPullMutation::Settle(Box::new(ClaimMutation::AcceptHandoff(delivered))),
@@ -218,7 +241,7 @@ fn hand_off(returned: Returned) -> (Pair, Value, String) {
 }
 
 fn a_claimed_capture_matching_its_contract_is_accepted() {
-    let (pair, settled, _) = hand_off(Returned::Matching);
+    let (pair, settled, _) = hand_off(Returned::Matching, false);
     assert!(settled["error"].is_null(), "{settled}");
     assert_eq!(pair.owner_status(&pair.tasks[0]), "review");
 }
@@ -229,7 +252,7 @@ fn a_claimed_capture_that_departs_from_its_contract_is_refused() {
         (Returned::OtherCommit, "not the handed-off candidate"),
         (Returned::Nothing, "returns no capture"),
     ] {
-        let (pair, settled, drain) = hand_off(returned);
+        let (pair, settled, drain) = hand_off(returned, false);
         assert_eq!(settled["settlement_refused"], 1, "{settled}");
         let refused = pair
             .follower
@@ -420,9 +443,143 @@ fn emitted_rejected_verdict_is_readable_by_the_preceding_reader() {
     );
 }
 
+/// Settlement consumes verifier JSON and writes the decision for each deviation.
+fn visual_settlement_records_deviation_verdicts() {
+    let (pair, _, _) = hand_off(Returned::Matching, true);
+    let owner = &pair.wire.owner;
+    let task = &pair.tasks[0];
+    let cases = [
+        (
+            "disjoint premise",
+            Some([0, 0, 10, 10]),
+            [20, 20, 5, 5],
+            Some("premise_wrong"),
+            false,
+            "unjudged",
+        ),
+        (
+            "duplicate",
+            Some([0, 0, 10, 10]),
+            [5, 5, 5, 5],
+            Some("duplicate"),
+            false,
+            "unjudged",
+        ),
+        (
+            "already fixed",
+            Some([0, 0, 10, 10]),
+            [5, 5, 5, 5],
+            Some("already_fixed"),
+            false,
+            "unjudged",
+        ),
+        (
+            "unreachable",
+            Some([0, 0, 10, 10]),
+            [5, 5, 5, 5],
+            Some("unreachable"),
+            false,
+            "unjudged",
+        ),
+        (
+            "missing reason",
+            Some([0, 0, 10, 10]),
+            [5, 5, 5, 5],
+            None,
+            false,
+            "unjudged",
+        ),
+        (
+            "premise",
+            Some([0, 0, 10, 10]),
+            [5, 5, 5, 5],
+            Some("premise_wrong"),
+            false,
+            "accepted",
+        ),
+        (
+            "no region",
+            None,
+            [99, 99, 5, 5],
+            Some("premise_wrong"),
+            false,
+            "accepted",
+        ),
+        (
+            "confirmed",
+            Some([0, 0, 10, 10]),
+            [5, 5, 5, 5],
+            None,
+            true,
+            "rejected",
+        ),
+        (
+            "disjoint confirmed",
+            Some([0, 0, 10, 10]),
+            [20, 20, 5, 5],
+            None,
+            true,
+            "unjudged",
+        ),
+    ];
+    let mut actual = Vec::new();
+    for (name, deviation_region, finding_region, reason, confirmed, expected) in cases {
+        let mut deviation =
+            json!({"mock":"mocks/checkout.png", "element":"el", "reason":"r", "basis":"data"});
+        if let Some(region) = deviation_region {
+            deviation["region"] = json!(region);
+        }
+        let finding = json!({
+            "finding_id":"f1", "source":"comparison", "question":"1", "mock":"mocks/checkout.png",
+            "title":"t", "detail":"d", "severity":"medium",
+            "evidence":[{"image":"visual/checkout/capture.png", "region":finding_region}],
+            "verdict":{"verdict":"unverified", "reasoning":"awaiting verification"}
+        });
+        let mut verdict = json!({"finding_id":"f1", "verdict": if confirmed {"CONFIRMED"} else {"REJECTED"},
+            "confidence":"high", "reasoning":"verified", "deviation_rejected":confirmed});
+        if confirmed {
+            verdict["severity"] = json!("medium");
+            verdict["evidence"] = json!([{"location":"visual/checkout/capture.png#5,5,5,5"}]);
+        } else if let Some(reason) = reason {
+            verdict["rejection"] = json!({"reason":reason, "detail":"verified"});
+        }
+        let input = json!({
+            "workspace_path":pair.owner_repo, "capture":{"captures":[{"task_id":task}]},
+            "verified":{"records":[{"task_id":task, "findings":[finding], "deviations":[deviation],
+                "catalog":{"visual/checkout/capture.png":[200,200]}}]},
+            "verify_results":{"verdicts":[verdict]}
+        });
+        owner
+            .run_deterministic("visual_settle", &json!({}), &input, ToolContext::default())
+            .expect("settlement succeeds");
+        let artifact = owner
+            .get_task_artifact(task, "visual/review.json")
+            .unwrap()
+            .expect("review is persisted");
+        let review: Value = serde_json::from_slice(&artifact.content).unwrap();
+        actual.push((
+            name,
+            review["deviations"][0]["status"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+            expected,
+        ));
+    }
+    let mismatches: Vec<_> = actual
+        .iter()
+        .filter(|(_, status, expected)| status != expected)
+        .collect();
+    assert!(
+        mismatches.is_empty(),
+        "unexpected deviation statuses: {mismatches:?}"
+    );
+}
+
 crate::scenario_table!(
     a_claimed_capture_is_checked_against_its_contract_scenarios,
     a_claimed_capture_matching_its_contract_is_accepted,
     a_claimed_capture_that_departs_from_its_contract_is_refused,
-    task_show_ignores_a_settle_for_another_candidate
+    task_show_ignores_a_settle_for_another_candidate,
+    visual_settlement_records_deviation_verdicts
 );

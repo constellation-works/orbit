@@ -340,7 +340,6 @@
         "application/tests/job_pipeline.rs::configure_pipeline_worker_stdio_rejects_traversal_in_log_directory",
         "application/tests/managed_assets.rs::create_only_write_failure_child",
         "application/tests/managed_assets.rs::failed_create_only_write_is_retried_on_the_next_reconcile",
-        "application/visual_delivery/settle.rs::deviation_accepted_only_by_touching_premise_wrong_rejection",
         "application/visual_delivery/tests/checks.rs::all_over_budget_capture_keeps_ui_rule_results",
         "bootstrap/tests/global_defaults.rs::stamp_rejects_a_symlinked_resources_directory",
         "runtime/tests/block_on_run_failure.rs::terminal_run_publication_precedes_coupled_task_cleanup",
