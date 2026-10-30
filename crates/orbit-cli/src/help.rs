@@ -4,10 +4,10 @@
 //! layout: a single description column per template derived from the longest
 //! command name in that template, plus a two-space gap. On a terminal the
 //! descriptions wrap to the available width with continuation lines indented
-//! to the column; off a terminal (width 0, the piped/golden path) every row
-//! stays on one line. The column is computed from the real names, not
-//! hand-typed spaces, so a longer name widens the column instead of stacking
-//! or drifting [ORB-19912].
+//! to the column, or stack with a smaller indent when the terminal is narrow.
+//! Off a terminal (width 0, the piped/golden path) every row stays on one line.
+//! The column is computed from the real names, not hand-typed spaces, so a
+//! longer name widens the column instead of drifting [ORB-19912].
 
 use clap::{Command, Id};
 
@@ -373,13 +373,18 @@ fn render_grouped_rows(
                     let about_len = about.chars().count();
                     if prefix_len + about_len <= width {
                         vec![format!("{prefix}{about}")]
-                    } else if width <= column {
-                        // No room to wrap beside the name: keep the name on
-                        // its own line and the description uniformly indented.
-                        let mut out = vec![format!("  {name}")];
-                        let available = column.max(10);
-                        for part in wrap_description(about, available) {
-                            out.push(format!("{}{}", " ".repeat(column), part));
+                    } else if width <= column
+                        || about
+                            .split_whitespace()
+                            .next()
+                            .is_some_and(|word| word.chars().count() > width - column)
+                    {
+                        // Stack rows when the description column leaves no room.
+                        let name_indent = GROUP_INDENT.min(width.saturating_sub(name_width(name)));
+                        let indent = GROUP_INDENT.min(width.saturating_sub(1));
+                        let mut out = vec![format!("{}{name}", " ".repeat(name_indent))];
+                        for part in wrap_description(about, width - indent) {
+                            out.push(format!("{}{}", " ".repeat(indent), part));
                         }
                         out
                     } else {
