@@ -476,7 +476,7 @@ fn selective_observation_and_nonmatch_follow_a_certified_claimed_repair() {
     ] {
         let mut leaf = ReviewedLeaf::admit_from(
             &format!(
-                "[review]\nbefore_landing = true\nselective_before_landing.mode = {mode:?}\nselective_before_landing.paths = [{paths:?}]\n[operation]\nreview_crew = {REVIEW_CREW:?}\n"
+                "[review]\ntiming = \"off\"\nbefore_landing_hosts = [{FOLLOWER:?}]\nselective_before_landing.mode = {mode:?}\nselective_before_landing.paths = [{paths:?}]\n[operation]\nreview_crew = {REVIEW_CREW:?}\n"
             ),
             "",
         );
@@ -522,7 +522,7 @@ fn a_claimed_observed_light_skip_keeps_its_receipt_through_owner_acceptance() {
     use orbit_types::task::{LightDeliveryDecision, LightDeliveryJudgement};
     let mut leaf = ReviewedLeaf::admit_launched(
         &format!(
-            "[review]\nbefore_landing = true\nselective_before_landing.mode = \"observe\"\nselective_before_landing.paths = [\"src/**\"]\n[operation]\nreview_crew = {REVIEW_CREW:?}\n[workflow]\nlight_delivery_paths = [\"src/**\"]\n"
+            "[review]\ntiming = \"off\"\nbefore_landing_hosts = [{FOLLOWER:?}]\nselective_before_landing.mode = \"observe\"\nselective_before_landing.paths = [\"src/**\"]\n[operation]\nreview_crew = {REVIEW_CREW:?}\n[workflow]\nlight_delivery_paths = [\"src/**\"]\n"
         ),
         "",
         |pair, drain| {
