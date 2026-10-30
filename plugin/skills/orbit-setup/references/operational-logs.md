@@ -10,6 +10,41 @@ Treat runtime state as evidence. Do not edit files under `~/.orbit/state/`,
 `.orbit/state/`, or the system journal to make a warning disappear. Logs can
 contain task content and command output, so report only the decisive lines.
 
+## Prompt-Size Cost Accounting
+
+Prompt-size tiers are selected per model request, using that request's whole
+input-side prompt: uncached input plus cache reads and cache-creation tokens,
+including a separate longer-lived cache-write bucket when the provider reports
+one. When per-request usage is available, every request that reaches a tier's
+threshold is priced at that tier's rates for the whole request; requests below
+the threshold use the base rates. Invocation-wide totals cannot show which
+individual requests reached the threshold.
+
+Orbit derives an estimate from the recorded model, time and available usage
+against its versioned model-rate table. A provider-reported amount, when
+available, is separate from this derived estimate. Neither figure is a promise
+about an external invoice or a claim about current provider prices.
+
+Treat an unknown derived cost as unavailable, not as zero. It can mean that no
+rate row covers the model and time, the reported input and cache buckets are
+inconsistent, or a prompt-size tier might apply but per-request usage was not
+captured. Without per-request usage, an invocation total below the tier
+threshold proves no request could have reached it, so base-rate cost remains
+known; a total at or above the threshold cannot identify the qualifying
+requests, so cost stays unknown. A captured empty list means all relevant
+requests stayed below the capture floor; a missing list means that request
+detail was unavailable.
+
+To check a cost figure, open **Analytics › Cost**, choose the workspace and
+time window, and review **Provider-reported** and **Derived estimate** with
+their coverage counts. Use **Same-invocation comparison** only when its count
+is nonzero; the separate totals can cover different invocations. The model
+token totals show normalized usage attribution, not a cross-provider cost
+ranking. If derived coverage is short, use the model and time range to check
+whether a rate applies, then whether request-level usage is available for
+invocations that could have crossed a prompt threshold. A gap in coverage is
+not evidence of zero usage or zero spend.
+
 ## Identify the Source
 
 There are four separate operational evidence sources (plus, on Linux, each
