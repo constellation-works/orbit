@@ -143,7 +143,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 
 | Feature | Next | Lead |
 | --- | --- | --- |
-| [Activity / Job](./design/activity-job/1_overview.md) | — | codex |
+| [Activity / Job](./design/activity-job/1_overview.md) | Review proposed auto-task targets and durable CEL waiting; no implementation authorized | codex |
 | [Agent Families](./design/agent-families/1_overview.md) | — | grok |
 | [Agent Scorecards](./design/agent-scorecards/1_overview.md) | — | claude |
 | [Auditability](./design/auditability/1_overview.md) | — | codex |

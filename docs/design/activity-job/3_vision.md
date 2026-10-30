@@ -3,7 +3,7 @@ summary: "Activity / Job — Vision"
 type: design
 title: "Activity / Job — Vision"
 owner: codex
-last_updated: 2026-10-14
+last_updated: 2026-10-30
 last_validated: 2026-10-19
 status: Draft
 feature: activity-job
@@ -26,6 +26,12 @@ README describes Orbit through its task queue, delivery pipeline and audit log, 
 ### 1.2 Should `target:` grow beyond `activity:<name>`?
 
 `TargetRef` is namespace-prefixed, but only `activity:<name>` exists after [T20260418-2019]. Do nested job refs, subroutine refs, or cross-workspace refs help, or would they turn this layer into a generic workflow engine?
+
+**Direction selected 2026-10-30, not implemented.** Add the bounded
+[`auto-task:<name>` target](./specs/auto-task-step.md) to reuse existing jobs for
+task composition and accepted-evidence waits. Durable CEL waiting is separate
+from existing skip guards. A separate auto-sequence carrier is unnecessary;
+nested job and cross-workspace references remain outside this proposal.
 
 ### 1.3 Is the provider model too closed-set?
 

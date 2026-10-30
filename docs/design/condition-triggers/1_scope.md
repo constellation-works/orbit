@@ -1,8 +1,8 @@
 ---
 title: "Scope: Condition triggers"
 owner: claude
-last_updated: 2026-10-29
-last_validated: 2026-10-29
+last_updated: 2026-10-30
+last_validated: 2026-10-30
 status: Draft
 stage: designing
 next: "Review this scope; then file phase 1 (CEL schema, load-time checking, automation explain)"
@@ -231,6 +231,16 @@ Every expression may also read the following. Nothing else is in the schema.
 | `group` (file scope with `group_by: stem`) | `dir`, `stem`, `files` (list of `file`, at most 16), `stable` | Root rescan |
 | `now` | Timestamp of the pass, UTC. CEL's timezone accessors give local time. | Pass clock |
 | `self` | The definition's own history: `last_fired` (timestamp of the latest fire that admitted an action, optional), `last_minted` (timestamp of the latest acknowledged mint, optional; auto-tasks only), `last_minted_task` (ID, optional), `fires_24h` (int). Test the optional fields with `has()`. | The definition's fire records in its fenced checkpoint (§3) |
+
+**Proposed job-composition extension.**
+[Auto-task steps in existing jobs](../activity-job/specs/auto-task-step.md) reuse
+CEL for `wait_until` and `expire_when`, preserving the existing job `when` skip
+guard. The extension adds `board.empty` (the explicit unfinished-task view) and
+literal `auto_tasks['name']` accepted-completion reads for readiness triggers.
+Execution-local `self.prev`, `steps[...]`, `job` and typed `result` facts belong
+only to the new job wait/reuse environment. These are not part of the base schema
+or already-filed condition-language phase-1 scope. They grant no free-text or
+arbitrary-artifact access. No new trigger carrier is needed.
 
 Rules:
 
@@ -549,6 +559,9 @@ already runs a job.
   independently, so a failed notification never re-mints. Two non-notify actions on
   one edge are two definitions with the same condition, each with its own edge state.
   A shared, named condition is an open question.
+  A routine can already target one job. The proposed auto-task step composes
+  named auto-tasks inside that job, not through an `actions[]` extension or a
+  new auto-sequence trigger carrier.
 - **Task transitions stay pipeline-only.** No phase lets a condition move a task (for
   example `blocked` to `backlog`, or `proposed` to approved). The reasons:
   - **Authority.** Re-backlogging a blocked task is "a deliberate human transition"
@@ -821,8 +834,14 @@ through the records the first one's action leaves.
 - **Depth.** `depth` is the origin fire's depth plus one, and the chain-depth guard in
   §8 refuses fires past 5. Explain shows each fire's upstream chain (§9).
 - **Ordered work.** Multi-step work with retries and stops belongs in a job. One
-  trigger starts it, and the job's steps carry the order. Triggers are not a
-  workflow engine.
+  trigger starts it, and the job's steps carry the order. The proposed
+  [auto-task step](../activity-job/specs/auto-task-step.md) binds or mints an
+  existing auto-task and waits for accepted evidence. The existing sequential
+  and parallel job structure controls ordering; a CEL wait does not remove that
+  structure or reuse the shipped skip-on-false `when` meaning. CEL can express
+  previous-step, board, time and expiry checks. Task identities and evidence
+  remain durable, without direct trigger-to-trigger links or a separate
+  auto-sequence lifecycle. Triggers themselves are not a workflow engine.
 
 **Rejected alternatives.**
 
@@ -892,6 +911,13 @@ root, and refuses to enable.
 ## Use cases, walked through
 
 ### A. Board empty → release prep
+
+This is the single-task case. For release preparation that first obtains full
+QA and security evidence, see the proposed
+[release-readiness job](../activity-job/specs/auto-task-step.md#6-release-readiness-example).
+It is triggered by an ordinary routine and uses auto-task steps, 24-hour
+completion freshness, optional 30-minute spacing and explicit expiry; these are
+not supplied by this single-task example.
 
 ```yaml
 # .orbit/auto_tasks/release-prep.yaml
