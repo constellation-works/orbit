@@ -26,13 +26,16 @@ def git(*args):
     return subprocess.check_output(["git", *args], cwd=ROOT, text=True)
 
 
-def source(path, revision):
-    # Missing commits in a shallow clone must not erase previously shipped bodies.
-    available = subprocess.run(
+def commit_available(revision):
+    return not subprocess.run(
         ["git", "cat-file", "-e", f"{revision}^{{commit}}"], cwd=ROOT,
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
-    if available.returncode:
+    ).returncode
+
+
+def source(path, revision):
+    # Missing commits in a shallow clone must not erase previously shipped bodies.
+    if not commit_available(revision):
         return None
     return git("show", f"{revision}:{path}")
 
@@ -114,7 +117,15 @@ def main():
         current = record(current_path.read_text(), "") if current_path.exists() else None
         # Only integration commits are trusted; uncommitted edits never gain provenance.
         revisions = git("log", "--first-parent", "--format=%H", "HEAD", "--", path).splitlines()
-        candidates = [old["revision"] for old in history.get(name, [])] + revisions
+        landed = set(revisions)
+        # A recorded revision that is a known commit but not on the asset's
+        # first-parent history never landed (e.g. a pre-squash draft), so it
+        # must not be retained as a shipped body. Unavailable revisions are
+        # retained below via their source fixture, as in a shallow checkout.
+        candidates = [
+            old["revision"] for old in history.get(name, [])
+            if old["revision"] in landed or not commit_available(old["revision"])
+        ] + revisions
         for revision in candidates:
             raw = source(path, revision)
             if raw is None:
