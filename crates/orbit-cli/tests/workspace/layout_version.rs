@@ -161,6 +161,26 @@ fn a_build_that_is_not_installed_cannot_migrate_past_the_installed_orbit() {
             .canonicalize()
             .expect("binary resolves")
     );
+
+    // A present installed executable that does not report compatibility keeps
+    // the migration warning path, while allowing the open to proceed.
+    fs::write(&marker, format!("{older}\n")).expect("rewind layout marker");
+    install_non_reporting_stand_in(&install_dir);
+    let opened_without_report = orbit(&["task", "list", "--json"]);
+    let stderr = String::from_utf8_lossy(&opened_without_report.stderr);
+    assert!(
+        opened_without_report.status.success(),
+        "{opened_without_report:?}"
+    );
+    assert!(
+        stderr.contains("the installed orbit did not report its state compatibility"),
+        "{stderr}"
+    );
+    assert_eq!(
+        fs::read_to_string(&marker).expect("marker"),
+        format!("{newest}\n"),
+        "the missing compatibility report must warn but allow the migration"
+    );
 }
 
 /// Install an `orbit` stand-in that reports `identity` through
@@ -188,4 +208,14 @@ fn install_stand_in(
     let installed = install_dir.join("orbit");
     fs::rename(&staged, &installed).expect("install stand-in");
     installed
+}
+
+#[cfg(unix)]
+fn install_non_reporting_stand_in(install_dir: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let staged = install_dir.join(".orbit.staged");
+    fs::write(&staged, "#!/bin/sh\nexit 1\n").expect("write non-reporting stand-in");
+    fs::set_permissions(&staged, fs::Permissions::from_mode(0o755))
+        .expect("chmod non-reporting stand-in");
+    fs::rename(staged, install_dir.join("orbit")).expect("install non-reporting stand-in");
 }

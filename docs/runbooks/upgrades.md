@@ -212,9 +212,10 @@ home with their own workspace, or install this build first with
 
 - Additive migrations and a fresh workspace or store (version 0) are never refused, and
   neither is the installed executable itself, however it is reached.
-- With no `orbit` in the managed install directory (a Homebrew, npm or `cargo install`
-  host, or a disposable QA home), or when it does not report its compatibility in time,
-  nothing is refused and the open logs a warning instead.
+- When an `orbit` exists in the managed install directory but does not report its compatibility in time,
+  nothing is refused and the open logs a warning instead. With no `orbit` there (as on a Homebrew,
+  npm or `cargo install` host, or in a disposable QA home), nothing is refused and this guard logs
+  no compatibility warning because there is no executable to query.
 - Run QA builds against their own home and workspace
   ([Manual QA from a managed lane](../DEVELOPMENT.md#manual-qa-from-a-managed-lane)), or
   deploy the build ([Deploy a locally built candidate](#deploy-a-locally-built-candidate-pinned-to-a-source-commit)),
