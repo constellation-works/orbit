@@ -7,7 +7,8 @@ use orbit_core::{
 };
 use orbit_types::task::is_valid_orb_task_id;
 use orbit_types::workflow::{
-    ChildDispatch, DrainCancelRequest, PipelineState, RunRootCause, TaskCancellationPolicy,
+    ChildDispatch, DrainCancelRequest, PipelineState, RunCancellationProvenance, RunRootCause,
+    TaskCancellationPolicy,
 };
 use orbit_types::workspace::WorkspaceCheckout;
 use serde_json::{Value, json};
@@ -1079,6 +1080,7 @@ fn failure_chain_names_the_deepest_descendant_and_projects_cancellation() {
             leaf_state.task_cancellation_policy = Some(TaskCancellationPolicy {
                 block: false,
                 note: "run cancelled by dashboard: gate exceeded: retry".into(),
+                provenance: None,
             });
             write_state(&fixture, &leaf, &leaf_state);
 
@@ -1127,6 +1129,7 @@ fn failure_chain_names_the_deepest_descendant_and_projects_cancellation() {
             drain_state.task_cancellation_policy = Some(TaskCancellationPolicy {
                 block: false,
                 note: "run cancelled by not-the-drain: note reason".into(),
+                provenance: None,
             });
             write_state(&fixture, &drain_run, &drain_state);
 
@@ -1156,8 +1159,38 @@ fn failure_chain_names_the_deepest_descendant_and_projects_cancellation() {
             actor_state.task_cancellation_policy = Some(TaskCancellationPolicy {
                 block: false,
                 note: "run cancelled by parent-cascade".into(),
+                provenance: None,
             });
             write_state(&fixture, &actor_only, &actor_state);
+
+            let mut typed = fixture.seed_run(
+                "jrun-20261010-0552-c12",
+                "task_auto_pipeline",
+                JobRunState::Cancelled,
+            );
+            typed.finished_at = Some(at(5, 45));
+            fixture.save_run(&typed);
+            let mut typed_state =
+                PipelineState::new(typed.run_id.clone(), typed.job_id.clone(), json!({}));
+            typed_state.task_cancellation_policy = Some(TaskCancellationPolicy {
+                block: false,
+                note: "run cancelled by wrong: wrong".into(),
+                provenance: Some(RunCancellationProvenance::new(
+                    "typed",
+                    "api",
+                    Some("typed: reason"),
+                )),
+            });
+            write_state(&fixture, &typed, &typed_state);
+
+            let mut malformed_state =
+                PipelineState::new(empty.run_id.clone(), empty.job_id.clone(), json!({}));
+            malformed_state.task_cancellation_policy = Some(TaskCancellationPolicy {
+                block: false,
+                note: "unrecognized legacy note".into(),
+                provenance: None,
+            });
+            write_state(&fixture, &empty, &malformed_state);
 
             let server = fixture.server(false);
             let detail = |id: &str| json_ok(server.get(&format!("/api/runs/{id}")));
@@ -1224,6 +1257,13 @@ fn failure_chain_names_the_deepest_descendant_and_projects_cancellation() {
                     "source": "cli",
                     "reason": "stopped after the gate hung",
                     "at": audit_at,
+                })
+            );
+
+            assert_eq!(
+                detail(&typed.run_id)["run"]["cancellation"],
+                json!({
+                    "actor": "typed", "source": Value::Null, "reason": "typed: reason", "at": typed.finished_at,
                 })
             );
 

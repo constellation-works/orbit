@@ -12,7 +12,7 @@ pub use admission::{
 };
 pub use controls::{
     DrainApprovalReport, DrainCancelRequest, DrainCapacity, DrainHoldFinding, DrainWaitingTask,
-    DrainWindowExtension, DrainWorkerLimit, TaskCancellationPolicy,
+    DrainWindowExtension, DrainWorkerLimit, RunCancellationProvenance, TaskCancellationPolicy,
 };
 pub use pass_counters::{DrainPassCounters, DrainPassObservation, DrainPassOutcome};
 pub use pull::{

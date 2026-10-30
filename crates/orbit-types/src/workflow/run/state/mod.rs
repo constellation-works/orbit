@@ -15,7 +15,8 @@ pub use drain::{
     DrainWindowExtension, DrainWorkerLimit, ForecastBuckets, ForecastPeak, GapFitAdmission,
     GapFitHead, GapFitHeadMiss, GapFitHeadStall, GapFitSkip, PullAdmissionFit, PullAuthExclusion,
     PullAuthRecovery, PullBreaker, PullCrewPreflight, PullDrainState, PullSinglePass,
-    PullUnfitWork, PullWindowClose, ResourcePressure, ResourceThrottle, TaskCancellationPolicy,
+    PullUnfitWork, PullWindowClose, ResourcePressure, ResourceThrottle, RunCancellationProvenance,
+    TaskCancellationPolicy,
 };
 pub use failure::{
     CONTRACT_REFUSAL_MARKER, ClaimFailureClass, OWNER_BUSY_MARKER,

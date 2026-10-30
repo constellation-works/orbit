@@ -12,7 +12,6 @@ use serde_json::{Value, json};
 
 /// Exact phrase when a cancelled run has no recorded reason.
 const NO_REASON_RECORDED: &str = "no reason recorded";
-const CANCELLATION_NOTE_PREFIX: &str = "run cancelled by ";
 
 /// Attach `failure_root` and `cancellation` to the detail run object.
 ///
@@ -111,12 +110,13 @@ fn cancellation_value(
         return value;
     }
     if let Some(policy) = state.and_then(|state| state.task_cancellation_policy.as_ref())
-        && let Some((actor, reason)) = parse_cancellation_note(&policy.note)
+        && let Some(provenance) = &policy.provenance
+        && let Some(actor) = owned(Some(&provenance.actor))
     {
         return json!({
             "actor": actor,
             "source": Value::Null,
-            "reason": reason_text(reason.as_deref()),
+            "reason": reason_text(provenance.reason.as_deref()),
             "at": run.finished_at,
         });
     }
@@ -163,17 +163,6 @@ fn cancellation_from_audit(runtime: &OrbitRuntime, run: &JobRun) -> Option<Value
         "reason": reason_text(json_text(&payload, "reason").as_deref()),
         "at": row.ts,
     }))
-}
-
-/// `cancellation_note` writes `run cancelled by <actor>` or
-/// `run cancelled by <actor>: <reason>`. The reason may itself contain colons.
-fn parse_cancellation_note(note: &str) -> Option<(String, Option<String>)> {
-    let rest = note.trim().strip_prefix(CANCELLATION_NOTE_PREFIX)?;
-    let (actor, reason) = match rest.split_once(": ") {
-        Some((actor, reason)) => (actor, owned(Some(reason))),
-        None => (rest, None),
-    };
-    Some((owned(Some(actor))?, reason))
 }
 
 fn json_text(value: &Value, key: &str) -> Option<String> {
