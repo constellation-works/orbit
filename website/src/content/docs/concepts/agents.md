@@ -627,6 +627,129 @@ implementer performance; it is off by default. Inspect the cells with
 compare recorded shares with the performance-weighted shares. See
 [Configuration](../../reference/config/#crews) for both settings.
 
+## Crew ladder
+
+The crew ladder tests whether a cheaper crew would hold up for a complexity
+tier. It is opt-in. In this release it runs only shadow trials: it records
+which tasks would go to the cheaper crew, and no task's crew changes.
+
+### Rungs, floor and candidate
+
+`workflow.crew_ladder.rungs` orders your crews from cheapest to most capable.
+For each complexity tier, the ladder reads that tier's pool
+(`workflow.<tier>_complexity_crews`):
+
+- The **floor** is the cheapest rung that is an enabled, weighted member of the
+  pool.
+- The **candidate** is the rung directly below the floor: the cheaper crew the
+  trial tests.
+
+A tier has no candidate when no rung is in its pool, or when its floor is the
+bottom rung.
+
+### Turn on shadow mode
+
+Nothing runs until `mode` is `shadow` and `tiers` names at least one tier.
+`mode` accepts only `off` and `shadow`; `propose` and `auto` are refused at
+load because later releases add them. A tier runs a trial only when you list
+it, so `xhard` runs one only when you name it.
+
+```toml
+[workflow]
+default_crew = "sonnet"
+low_complexity_crews = ["sonnet"]
+medium_complexity_crews = ["opus"]
+
+[workflow.crew_ladder]
+mode = "shadow"
+rungs = ["haiku", "sonnet", "opus"]
+tiers = ["low", "medium"]
+
+[crews.haiku]
+provider = "claude"
+model = "haiku"
+
+[crews.sonnet]
+provider = "claude"
+model = "sonnet"
+
+[crews.opus]
+provider = "claude"
+model = "opus"
+```
+
+With this config, the `low` trial tests `haiku` against `sonnet`, and the
+`medium` trial tests `sonnet` against `opus`. Each crew in `rungs` must be
+defined and enabled, and named once.
+
+### What a shadow trial does
+
+Each listed tier that has a candidate keeps one standing experiment owned by
+`system:crew-ladder`. It runs in shadow mode and is named
+`crew-ladder-<tier>-<n>`.
+
+- The **control** arm has no overlay, so tasks keep their usual crew.
+- The **candidate** arm overlays the tier's pool with the candidate crew.
+- The arms are weighted `1 − explore_rate` and `explore_rate`. `explore_rate`
+  is the share of the tier's tasks assigned to the candidate arm: `0.02` to
+  `0.25`, default `0.10`.
+- The population is the tier's tasks, minus any types in `exclude_types`
+  (`feature`, `bug`, `refactor`, `chore`). Excluding all four is refused.
+
+Assignments are recorded as for any shadow experiment. No task's crew, crew
+source or run changes.
+
+The ladder reconciles trials at each delivery admission, before the task is
+assigned, while `experiments.enabled` is true:
+
+- A tier without a trial starts one. Trials count toward
+  `experiments.max_running`, and free slots go to tiers in the order `tiers`
+  lists them.
+- A trial ends with no winner and files no promotion task when:
+  - its candidate, arm weights or population no longer match the ladder, for
+    example after a change to the pool, `rungs`, `explore_rate` or
+    `exclude_types`. A new trial then starts in its place.
+  - a running operator crew experiment covers the tier. Operator experiments
+    come first.
+  - `mode` is `off`. No trial starts either.
+
+The `margin`, `look_every`, `max_sample`, `watch_window`, `retry_after_days`,
+`quality_grade_margin` and `min_grade_coverage` keys are validated now and
+recorded for later phases, which will act on them. This release acts on none of
+them. `margin` takes quality points above 0 and at most 100, default `5`.
+`delivery_quality` accepts only `off`.
+
+### Read the ladder
+
+```bash
+orbit crew ladder
+orbit crew ladder --json
+```
+
+The report is read-only. It never starts or concludes a trial; those happen at
+delivery admission. For each tier it shows the pool, floor and candidate, then
+the trial with its status and its **would-be count**: the number of tasks
+assigned to the candidate arm. Those tasks still ran on their own crew, so the
+count shows how much work the candidate would have taken. The same payload is
+available as the read-only MCP tool `orbit.crew.ladder`.
+
+When a tier has no trial, the report gives the reason:
+
+| Reason | Meaning |
+|---|---|
+| `mode_off` | `mode` is `off`. |
+| `tier_not_listed` | The tier is not in `tiers`. |
+| `no_ladder_rung` | No rung in `rungs` is an enabled, weighted member of the tier's pool. |
+| `floor_is_bottom_rung` | The floor is the cheapest rung, so no candidate is left. |
+| `operator_experiment` | A running operator crew experiment covers the tier. |
+| `experiments_disabled` | `experiments.enabled` is `false`, so no trial can start. |
+| `max_running` | `experiments.max_running` has no free slot. |
+| `pending` | The trial starts at the next delivery admission. |
+
+Would-be counts build up as tasks pass delivery admission, so read the report
+after deliveries have run. A change to `rungs` or a pool can change the
+candidate; the current trial then concludes and a new one starts.
+
 ## Platform support
 
 Orbit wraps each spawned agent CLI in an OS sandbox scoped by the activity's
