@@ -126,13 +126,14 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Path Leases](./design/path-leases/1_overview.md) | Preemption and signed webhooks remain later work | claude |
 | [Web Terminal](./design/web-terminal/1_scope.md) | Phase 2: ORB-18489 PTY sessions and local terminal routes; phase 1 landed | claude |
 
-### Designing (7)
+### Designing (8)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
 | [Cloud Dispatch](./design/cloud-dispatch/1_scope.md) | Run the phase 0 manual cloud-session spike, then file phase 1 (no task yet) | claude |
 | [Condition Triggers](./design/condition-triggers/1_scope.md) | Review this scope; then file phase 1 (CEL schema, load-time checking, automation explain) | claude |
 | [Conflict Budget](./design/conflict-budget/1_scope.md) | Settle the open questions (sum vs max, where weights live), then file phase 1 | claude |
+| [Crew Ladder](./design/crew-ladder/1_scope.md) | Daniel reviews this scope; then file phase 1 (ladder config, shadow trials and the ladder report) | claude |
 | [Script Steps](./design/script-steps/1_scope.md) | Phase 1 landed (script manifests, `target: script:` parsing, the grant store and `orbit script grant`, with nothing executing yet); next is phase 2, Linux execution | claude |
 | [Symbol Risk Index](./design/symbol-risk-index/1_scope.md) | Daniel reviews this scope and 2_design.md; implementation tasks are filed after acceptance | claude |
 | [Ux Rules](./design/ux-rules/1_scope.md) | Phases 1-3 filed as ORB-19974..19976; build before the visual-review mock phases | claude |
@@ -206,6 +207,7 @@ a conservative title/status fallback.
 | [Condition Triggers](./design/condition-triggers/1_scope.md) | Scope: a condition trigger kind whose predicate is a type-checked CEL expression over task, workspace, host and file state, fired once per subject edge with a durable fire identity, beside the typed trigger kinds | Draft | claude |
 | [Conflict Budget](./design/conflict-budget/1_scope.md) | Scope: let footprint admission run overlapping tasks together when the expected cost of repairing their landing conflicts fits an operator budget that can be high by day and low at night, scored per path from recorded conflict history | Draft | claude |
 | [Crew Credentials](./design/crew-credentials/1_scope.md) | Scope: a crew-level env list, so one crew can run on a different provider account (an API key with prepaid credits) than the rest of its provider | Draft | claude |
+| [Crew Ladder](./design/crew-ladder/1_scope.md) | Scope: an operator-ordered ladder of crews (model and effort) per workspace; each complexity tier continuously trials the next cheaper rung on a small share of its tasks as a system-run experiment, promotes it on a sequential non-inferiority test and keeps going until a rung fails, so each tier settles at the cheapest crew that holds its quality, with demotion on evidence | Draft | claude |
 | [Crew Performance](./design/crew-performance/1_scope.md) | Scope: weight crew pool draws by each crew's implementer score on the task's type within its complexity tier, either toward the crew that does that type best (absolute) or toward the type each crew does best relative to its own work (comparative) | Draft | claude |
 | [Decision Assistance](./design/decision-assistance/1_scope.md) | Scope: optional typed model judgments for failure categorization, task quality and six later candidates. | Draft | codex |
 | [Distributed Drain](./design/distributed-drain/1_overview.md) | Run the workspace drain on more than one host against one owner store — followers pull one task at a time from the owner's ready queue over federated MCP, validate where they built, and land through the owner. | Draft | claude |
