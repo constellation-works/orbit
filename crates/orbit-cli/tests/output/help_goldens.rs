@@ -246,8 +246,7 @@ fn help_matches_the_shipped_surface() {
 /// Grouped `orbit run` / `orbit task` help must keep every description in one
 /// column with a clear gap, and never stack a description onto its own line in
 /// piped output [ORB-19912]. Piped output is width 0, so this is the wide
-/// alignment boundary; narrow TTY wrapping is validated manually via PTY
-/// captures (see execution summary), not here.
+/// alignment boundary; narrow TTY wrapping is checked separately.
 #[test]
 fn grouped_command_help_stays_aligned_without_stacked_rows() {
     let temp = tempdir().expect("tempdir");
@@ -476,4 +475,81 @@ fn update_creates_missing_family_directories_but_validation_stays_strict() {
         "invalid paths must be rejected before update writes"
     );
     assert!(!temp.path().join("outside.txt").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn grouped_help_fits_narrow_tty() {
+    use std::io::Read;
+    use std::os::fd::FromRawFd;
+    use std::process::Stdio;
+
+    let temp = tempdir().expect("tempdir");
+    for args in [&[][..], &["run"][..], &["task"][..]] {
+        for width in [8usize, 16, 20] {
+            let mut master = -1;
+            let mut slave = -1;
+            // SAFETY: openpty initializes both descriptors on success; pointers are valid.
+            let rc = unsafe {
+                libc::openpty(
+                    &mut master,
+                    &mut slave,
+                    std::ptr::null_mut(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                )
+            };
+            assert_eq!(rc, 0, "openpty: {}", std::io::Error::last_os_error());
+            // SAFETY: successful openpty returned owned, distinct file descriptors.
+            let mut master = unsafe { fs::File::from_raw_fd(master) };
+            let slave = unsafe { fs::File::from_raw_fd(slave) };
+            let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_orbit"));
+            test_env::clear_inherited_authority(|name| {
+                command.env_remove(name);
+            });
+            let mut child = command
+                .current_dir(temp.path())
+                .env("HOME", temp.path())
+                .env("USERPROFILE", temp.path())
+                .env("COLUMNS", width.to_string())
+                .env("NO_COLOR", "1")
+                .env_remove("ORBIT_FORMAT")
+                .env_remove("ORBIT_SKIP_HOST_PREREQUISITES")
+                .args(args)
+                .arg("--help")
+                .stdout(Stdio::from(slave))
+                .spawn()
+                .expect("run help on pty");
+            drop(command);
+            let mut bytes = Vec::new();
+            if let Err(error) = master.read_to_end(&mut bytes) {
+                // Linux PTY masters signal closure with EIO; other Unix systems return EOF.
+                assert_eq!(error.raw_os_error(), Some(libc::EIO), "read pty: {error}");
+            }
+            assert!(child.wait().expect("wait for help").success());
+            let output = String::from_utf8(bytes).expect("UTF-8 help");
+            let start_heading = match args.first().copied() {
+                Some("run") => "Workflows:",
+                Some("task") => "Tasks:",
+                _ => "Environment:",
+            };
+            let grouped = output
+                .split_once(start_heading)
+                .expect("grouped heading")
+                .1
+                .split_once("Options:")
+                .expect("options heading")
+                .0;
+            for line in grouped.lines().map(|line| line.trim_end_matches('\r')) {
+                if line.chars().count() > width {
+                    let words: Vec<_> = line.split_whitespace().collect();
+                    let indent = line.chars().take_while(|c| *c == ' ').count();
+                    assert!(
+                        words.len() == 1 && words[0].chars().count() > width.saturating_sub(indent),
+                        "orbit {args:?}, width {width}: overlong grouped line {line:?}"
+                    );
+                }
+            }
+        }
+    }
 }
