@@ -299,6 +299,7 @@ impl OrbitRuntime {
                     orchestrator_model: orchestrator_model.clone(),
                     orchestrator_model_source,
                     origin,
+                    rule_fingerprint: params.rule_fingerprint.clone(),
                     comments: comments.clone(),
                     context_creation: params.context_creation.authorize.clone(),
                     creation_decision: params.creation_decision.clone(),

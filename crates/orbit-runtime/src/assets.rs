@@ -137,6 +137,10 @@ pub const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../orbit-core/assets/activities/file_dependabot_alert_tasks.yaml"),
     ),
     (
+        "file_rule_findings",
+        include_str!("../../orbit-core/assets/activities/file_rule_findings.yaml"),
+    ),
+    (
         "agent_invoke",
         include_str!("../../orbit-core/assets/activities/agent_invoke.yaml"),
     ),
@@ -378,6 +382,10 @@ pub const DEFAULT_JOB_FILES: &[(&str, &str)] = &[
     (
         "dependabot_alert_sweep_pipeline",
         include_str!("../../orbit-core/assets/jobs/dependabot_alert_sweep_pipeline.yaml"),
+    ),
+    (
+        "ux_rules_pipeline",
+        include_str!("../../orbit-core/assets/jobs/ux_rules_pipeline.yaml"),
     ),
     (
         "escalation_triage_pipeline",

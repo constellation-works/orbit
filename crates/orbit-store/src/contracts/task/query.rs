@@ -19,6 +19,9 @@ pub struct TaskListFilter {
     pub task_type: Option<TaskType>,
     /// Keep only tasks recorded with this origin; tasks without one never match.
     pub origin: Option<TaskOrigin>,
+    /// Keep only the task carrying this rule-result fingerprint; tasks
+    /// without one never match.
+    pub rule_fingerprint: Option<String>,
     pub parent_id: Option<String>,
     pub job_run_id: Option<String>,
     pub tags: Vec<String>,
@@ -73,6 +76,10 @@ impl TaskListFilter {
             && self.priority.is_none_or(|value| task.priority == value)
             && self.task_type.is_none_or(|value| task.task_type == value)
             && self.origin.is_none_or(|value| task.origin == Some(value))
+            && self
+                .rule_fingerprint
+                .as_ref()
+                .is_none_or(|value| task.rule_fingerprint.as_ref() == Some(value))
             && self.parent_id.as_ref().is_none_or(|value| {
                 task.relations.iter().any(|relation| {
                     relation.relation_type == TaskRelationType::ChildOf && relation.target == *value
@@ -126,6 +133,7 @@ impl TaskListFilter {
             && self.search.is_none()
             && self.task_type.is_none()
             && self.origin.is_none()
+            && self.rule_fingerprint.is_none()
             && self.parent_id.is_none()
             && self.external_ref.is_none()
             && self.has_external_ref_system.is_none()

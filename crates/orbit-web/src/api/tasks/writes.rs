@@ -136,6 +136,7 @@ pub(in crate::api) async fn create_task_action(
         orchestrator: body.orchestrator,
         orchestrator_model: body.orchestrator_model,
         origin: body.origin,
+        rule_fingerprint: None,
         context_creation: Default::default(),
         creation_decision: None,
         not_before: None,

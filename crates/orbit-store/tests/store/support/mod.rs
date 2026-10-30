@@ -81,6 +81,7 @@ pub fn create_params(title: &str, status: TaskStatus) -> TaskCreateParams {
         orchestrator_model_source: None,
         created_by_model: None,
         origin: None,
+        rule_fingerprint: None,
         comments: vec![TaskComment {
             at: now,
             by: "daniel".to_string(),

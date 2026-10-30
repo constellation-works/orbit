@@ -66,6 +66,7 @@ fn seed_task(runtime: &OrbitRuntime) -> String {
             orchestrator_model_source: None,
             created_by_model: None,
             origin: None,
+            rule_fingerprint: None,
             comments: Vec::new(),
             context_creation: Vec::new(),
             creation_decision: None,

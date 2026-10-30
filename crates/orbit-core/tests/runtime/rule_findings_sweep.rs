@@ -1,0 +1,131 @@
+//! The rule-findings filer keeps one task per fingerprint: a new failure
+//! files once, a repeat files nothing, changed measurements comment, a
+//! pass comments exactly once, and the severity cap and floor hold.
+
+use orbit_core::{OrbitRuntime, TaskStatus};
+use orbit_engine::RuntimeHost;
+use orbit_tools::ToolContext;
+use serde_json::{Value, json};
+
+fn fixture(config: &str) -> (tempfile::TempDir, OrbitRuntime) {
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global_root = root.path().join("home/.orbit");
+    let workspace_root = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global_root).unwrap();
+    std::fs::create_dir_all(&workspace_root).unwrap();
+    std::fs::write(global_root.join("config.toml"), config).unwrap();
+    let runtime = OrbitRuntime::from_roots(&global_root, &workspace_root).unwrap();
+    (root, runtime)
+}
+
+fn file(runtime: &OrbitRuntime, results: Value, extra: Value) -> Value {
+    let mut input = json!({"results": results});
+    if let Value::Object(extra) = extra {
+        for (key, value) in extra {
+            input[key] = value;
+        }
+    }
+    runtime
+        .run_deterministic(
+            "file_rule_findings",
+            &json!({}),
+            &input,
+            ToolContext::default(),
+        )
+        .unwrap()
+}
+
+fn document(results: Vec<Value>) -> Value {
+    json!({
+        "schema_version": 1, "surface": "cli", "commit": "abc123",
+        "results": results,
+    })
+}
+
+fn result(status: &str, severity: &str, fingerprint: &str, measurements: Value) -> Value {
+    json!({
+        "rule": "cli.example", "target": {"id": "orbit run", "argv": ["run"]},
+        "status": status, "severity": severity,
+        "measurements": measurements, "evidence": [], "fingerprint": fingerprint,
+    })
+}
+
+fn failing_fingerprint_files_once_then_comments_on_change_and_pass() {
+    let (_root, runtime) = fixture("");
+    let failing = document(vec![result("fail", "high", "fp1", json!({"gap": 1}))]);
+    let first = file(&runtime, failing.clone(), json!({}));
+    assert_eq!(first["filed_count"], 1, "{first}");
+    assert_eq!(first["counts"]["fail"], 1);
+    let task_id = first["filed"][0]["task_id"].as_str().unwrap().to_string();
+    let task = runtime.get_task(&task_id).unwrap();
+    assert_eq!(task.status, TaskStatus::Proposed);
+    assert_eq!(task.rule_fingerprint.as_deref(), Some("fp1"));
+    assert!(
+        task.description.contains("--rule cli.example"),
+        "{}",
+        task.description
+    );
+    assert!(task.tags.iter().any(|tag| tag == "ux-rule:cli.example"));
+
+    // Same failure again: nothing new, no comment.
+    let second = file(&runtime, failing, json!({}));
+    assert_eq!(second["filed_count"], 0, "{second}");
+    assert_eq!(second["commented"].as_array().unwrap().len(), 0);
+
+    // Changed measurements: one comment, still proposed.
+    let changed = document(vec![result("fail", "high", "fp1", json!({"gap": 2}))]);
+    let third = file(&runtime, changed, json!({}));
+    assert_eq!(third["commented"].as_array().unwrap().len(), 1, "{third}");
+
+    // Passing: exactly one comment across two passing runs, no transition.
+    let passing = document(vec![result("pass", "high", "fp1", json!({"gap": 0}))]);
+    let fourth = file(&runtime, passing.clone(), json!({}));
+    assert_eq!(fourth["commented"].as_array().unwrap().len(), 1, "{fourth}");
+    let fifth = file(&runtime, passing, json!({}));
+    assert_eq!(fifth["commented"].as_array().unwrap().len(), 0, "{fifth}");
+    assert_eq!(
+        runtime.get_task(&task_id).unwrap().status,
+        TaskStatus::Proposed
+    );
+}
+
+fn cap_takes_highest_severity_first_and_floor_records_only() {
+    let (_root, runtime) = fixture("[ux_rules]\nmax_new_tasks = 1\nfile_at = \"low\"\n");
+    let results = document(vec![
+        result("fail", "low", "fp-low", json!({})),
+        result("fail", "critical", "fp-crit", json!({})),
+        result("fail", "nit", "fp-nit", json!({})),
+    ]);
+    let outcome = file(&runtime, results, json!({}));
+    assert_eq!(outcome["filed_count"], 1, "{outcome}");
+    assert_eq!(outcome["filed"][0]["fingerprint"], "fp-crit");
+    assert_eq!(outcome["skipped_over_cap"].as_array().unwrap().len(), 1);
+    assert_eq!(outcome["recorded_only"].as_array().unwrap().len(), 1);
+    assert_eq!(outcome["recorded_only"][0]["fingerprint"], "fp-nit");
+}
+
+fn errors_file_one_task_per_rule() {
+    let (_root, runtime) = fixture("");
+    let mut first_error = result("error", "medium", "cli.example|a", json!({"threw": "x"}));
+    let mut second_error = result("error", "medium", "cli.example|b", json!({"threw": "y"}));
+    first_error["target"] = json!({"id": "a"});
+    second_error["target"] = json!({"id": "b"});
+    let outcome = file(
+        &runtime,
+        document(vec![first_error, second_error]),
+        json!({}),
+    );
+    assert_eq!(outcome["filed_count"], 1, "{outcome}");
+    assert_eq!(outcome["filed"][0]["error_task"], true);
+    let task_id = outcome["filed"][0]["task_id"].as_str().unwrap();
+    let task = runtime.get_task(task_id).unwrap();
+    assert!(task.tags.iter().any(|tag| tag == "ux-rules-error"));
+    assert_eq!(task.rule_fingerprint.as_deref(), Some("error|cli.example"));
+}
+
+crate::scenario_table!(
+    rule_findings_sweep_scenarios,
+    failing_fingerprint_files_once_then_comments_on_change_and_pass,
+    cap_takes_highest_severity_first_and_floor_records_only,
+    errors_file_one_task_per_rule
+);

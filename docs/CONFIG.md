@@ -2509,6 +2509,12 @@ After creating or reusing a PR, Orbit unions the allowlisted tags present on eve
 | `seeding.auto_tasks` | `all` | Which shipped default auto-tasks this workspace seeds: `"all"`, `"none"` or a list of names. See [below](#seeding--which-shipped-defaults-a-workspace-carries). |
 | `decision_channel.enabled` | `false` | Raise decision requests for work held on a human decision. |
 | `security_alert_sweep.min_severity` | `moderate` | **Advanced.** Lowest Dependabot and Code scanning severity the security alert sweep files. See [below](#security_alert_sweep--security-finding-severity). |
+| `ux_rules.surfaces` | `[]` | **Advanced.** Surfaces the ux-rules routine runs (for example `ui` and `cli`); empty disables it. See [below](#ux_rules--scheduled-rule-checks). |
+| `ux_rules.runner` | `"scripts/ux-rules/run.mjs"` | **Advanced.** Workspace-relative rule runner the ux-rules script step runs and filed tasks name in their reproduce command. |
+| `ux_rules.ui_base_url` | `"http://127.0.0.1:7878"` | **Advanced.** Live dashboard URL the ux-rules runner measures for UI surfaces. |
+| `ux_rules.max_new_tasks` | `10` | **Advanced.** Most new tasks one rule-findings filing run creates, highest severity first. |
+| `ux_rules.file_at` | `"low"` | **Advanced.** Lowest rule-result severity the rule-findings filer files: `critical`, `high`, `medium`, `low` or `nit`; lower results are recorded only. |
+| `ux_rules.disabled` | `[]` | **Advanced.** Rule ids the ux-rules runner does not run. |
 
 Agent relay output goes to `orbit-agent.jsonl` with its own 200 MiB archive budget and 50 MiB active-file limit, so it cannot consume the operational budget; each feed is pruned by its own size and age limits. A full agent queue blocks the relay instead of dropping lines. The operational feed can still drop a line when its queue is full. The dashboard and `orbit log tail` merge both active feeds. Full rotation runs in long-lived processes (`orbit mcp serve`, `orbit clock tick`/`orbit sweep`, `orbit web serve`); short-lived commands only roll an oversized active file.
 
@@ -2522,6 +2528,16 @@ min_severity = "high"
 ```
 
 Precedence: run/job `min_severity` input, then workspace, then global, then `moderate`; `orbit run job dependabot_alert_sweep_pipeline --input min_severity=critical` overrides one run. Scheduled routines use the configured floor without shadowing the job. An invalid value fails validation naming the key. The file step records `min_severity`, `min_severity_source` (`input`, `workspace`, `global` or `built-in`) and `excluded_below_min_severity`; `orbit run show <RUN_ID>` summarizes the filed count, floor and source, and excluded alert count and numbers, even when the sweep succeeded.
+
+### `[ux_rules]` — scheduled rule checks
+
+The seeded `ux-rules` routine (disabled by default) runs `ux_rules_pipeline` daily: a granted script step (`ux_rules_runner`, a workspace Script manifest an operator creates and grants with `orbit script grant ux_rules_runner`) runs `ux_rules.runner` once per surface in `ux_rules.surfaces` and prints one merged results document, and the deterministic `file_rule_findings` activity keeps one task per result fingerprint (stored in the task's `rule_fingerprint` field). A new failure files one proposed bug task with the measurements, evidence and a reproduce command; an open owner is commented when measurements change and once when the rule passes again (never transitioned); rule errors file one task per rule tagged `ux-rules-error`. `ux_rules.max_new_tasks` caps new tasks per run, highest severity first, and results below `ux_rules.file_at` or for rules in `ux_rules.disabled` are recorded in the run output only. `orbit run show` for the run carries the pass/fail/error/skipped counts and the tasks filed or commented in the filing step's output. A network-`none` script step cannot reach a dashboard on the host's loopback, so a live UI surface at `ux_rules.ui_base_url` needs the runner's fixture mode until script steps gain a network phase.
+
+```toml
+[ux_rules]
+surfaces = ["cli"]
+file_at = "medium"
+```
 
 ### `[lease]` — path leases
 

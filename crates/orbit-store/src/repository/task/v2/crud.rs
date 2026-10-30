@@ -209,6 +209,7 @@ impl TaskV2Store {
                 orchestrator_model: params.orchestrator_model,
                 orchestrator_model_source: params.orchestrator_model_source,
                 origin: params.origin,
+                rule_fingerprint: params.rule_fingerprint,
                 relations,
                 tags: normalize_task_tags(params.tags),
                 required_tools: orbit_types::task::normalize_required_tools(params.required_tools),
