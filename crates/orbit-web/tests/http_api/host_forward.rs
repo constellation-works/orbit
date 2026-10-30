@@ -1185,6 +1185,100 @@ fn forwarded_audit_cursor_walks_the_remote_window_page_by_page() {
     );
 }
 
+// Run the public ticket issuer in the server's HOME without changing the test process environment.
+#[test]
+#[ignore]
+fn local_session_ticket_child() {
+    orbit_web::open_dashboard(orbit_web::OpenArgs { no_open: true }).unwrap();
+}
+
+fn local_session_ticket(fixture: &Fixture) -> String {
+    let home = fixture.path("");
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    orbit_common::test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    command
+        .current_dir(&home)
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .env_remove("RUST_TEST_THREADS")
+        .args([
+            "--exact",
+            "host_forward::local_session_ticket_child",
+            "--ignored",
+            "--nocapture",
+        ]);
+    let logs = tempfile::tempdir().unwrap();
+    let output =
+        orbit_common::test_env::run_child_test(&mut command, "local session ticket", logs.path());
+    assert!(output.status.success(), "ticket issuer failed");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    stdout
+        .split("#orbit-session=")
+        .nth(1)
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_owned()
+}
+
+#[test]
+fn local_forward_preserves_browser_sessions() {
+    isolated(
+        "host_forward::local_forward_preserves_browser_sessions",
+        || {
+            let disabled = Fixture::new();
+            let server = disabled.server(true);
+            assert_eq!(server.get("/api/on/http-fixture/session").status(), 404);
+            assert_eq!(
+                server
+                    .request("POST", "/api/on/http-fixture/session")
+                    .header("origin", &server.origin)
+                    .body("invalid")
+                    .send()
+                    .unwrap()
+                    .status(),
+                404
+            );
+            drop(server);
+
+            let fixture = Fixture::new();
+            OpenOptions::new()
+                .append(true)
+                .open(fixture.global.join("config.toml"))
+                .unwrap()
+                .write_all(b"\n[machine.web_terminal]\nenabled = true\n")
+                .unwrap();
+            let server = fixture.server(true);
+            let direct = json_ok(server.get("/api/session"));
+            let ticket = local_session_ticket(&fixture);
+            let post = |path: &str, ticket: &str| {
+                server
+                    .request("POST", path)
+                    .header("origin", &server.origin)
+                    .body(ticket.to_owned())
+                    .send()
+                    .unwrap()
+            };
+            let direct_post = post("/api/session", &ticket);
+            assert_eq!(direct_post.status(), 204);
+            assert!(direct_post.headers().contains_key("set-cookie"));
+            let ticket = local_session_ticket(&fixture);
+            let forwarded_post = post("/api/on/http-fixture/session", &ticket);
+            assert_eq!(forwarded_post.status(), 204);
+            assert!(forwarded_post.headers().contains_key("set-cookie"));
+            assert_eq!(post("/api/on/http-fixture/session", &ticket).status(), 401);
+            assert_eq!(
+                post("/api/on/http-fixture/session", "invalid").status(),
+                401
+            );
+            assert_eq!(json_ok(server.get("/api/on/http-fixture/session")), direct);
+        },
+    );
+}
+
 /// The serving host's own name is answered locally: outer `/on/<host>/<rest>`
 /// captures must not leak into the inner router, or every inner `Path<_>`
 /// sees host, rest and its own capture (ORB-20148).
