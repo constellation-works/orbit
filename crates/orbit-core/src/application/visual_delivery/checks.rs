@@ -262,7 +262,7 @@ fn rule_findings(runtime: &OrbitRuntime, scratch: Option<&Path>) -> RuleOutcome 
 }
 
 impl OrbitRuntime {
-    /// `ux_rules.disabled`: rule ids no runner runs.
+    /// `ux_rules.disabled`: rule ids whose results are recorded only.
     fn ux_rules_disabled(&self) -> Vec<String> {
         orbit_config::load_effective_config(&orbit_config::ConfigRoots::new(
             self.global_root(),
