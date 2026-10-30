@@ -1,6 +1,7 @@
 pub mod agents;
 pub mod audit;
 pub mod auto_task;
+pub mod automation;
 pub mod browser_kit;
 pub mod clock;
 pub mod codebase;
@@ -123,6 +124,7 @@ Scheduler:
   sweep        Compatibility alias for `orbit clock tick`
   routine      Inspect and control scheduled routines on this machine
   auto-task    Define recurring auto-task templates (the scheduler primitive)
+  automation   Explain what condition-triggered routines and auto-tasks would match
 
 Services:
   mcp          Register MCP client integrations and run the MCP server
@@ -194,6 +196,7 @@ pub enum Commands {
     Routine(routine::RoutineCommand),
     #[command(name = "auto-task")]
     AutoTask(auto_task::AutoTaskCommand),
+    Automation(automation::AutomationCommand),
 
     // ── Services ──
     Mcp(mcp::McpCommand),

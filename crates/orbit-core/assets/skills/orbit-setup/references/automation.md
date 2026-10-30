@@ -328,13 +328,31 @@ the dashboard's **Automation › Routines** row has an **edit** link beside the
 cadence, and `orbit.routine.control` takes `action: "set_trigger"` with the
 observed `target` and `expected_trigger` and the replacement `trigger`. Both run
 the same write: it refuses a target or trigger that changed since you read it,
-checks the new trigger as the loader would (exactly one of `cron`, `state` or
-`deliveries_landed`; a cron that parses; a state kind whose job is the routine's
-target; `overlap: forbid` for state and delivery triggers), and rewrites only
+checks the new trigger as the loader would (exactly one of `cron`, `state`,
+`deliveries_landed` or `condition`; a cron that parses; a state kind whose job
+is the routine's target; `overlap: forbid` for state and delivery triggers; a
+condition that type-checks on a disabled routine), and rewrites only
 the `trigger:` block. Comments inside that block are not kept; the rest of the
 file is. Name, target, policy and `enabled` are not editable this way. Editing a
 seeded routine makes it a local edit: `orbit workspace sync` keeps your file and
 stops refreshing it from Orbit's template.
+
+### Condition triggers (checked and explained, not fired)
+
+A routine's `trigger.condition` or an auto-task's `schedule.condition` is a CEL
+predicate over task and workspace state. This Orbit type-checks it when the
+file loads and refuses, per file, an unknown field, a non-`bool` result, a
+computed `tasks[...]` or `board.by_tag[...]` index, a task scope without a
+top-level status or literal-tag conjunct, an optional field (`task.origin`,
+`task.crew`, `self.last_fired`, ...) read without `has()`, `matches()`, and an
+expression over 4 KiB, 200 nodes or two nested comprehensions. The error names
+the file, the clause and the line:column in the expression. A condition never
+fires yet: one with `enabled: true` fails to load, and toggling it on is
+refused. `orbit automation explain <name>` (MCP `orbit.automation.explain`)
+shows its matches, closest misses and one subject's clause tree over live
+state, read-only. An older Orbit refuses such a file as an unknown field and
+keeps loading the rest. The keys and the readable schema are in the website's
+Scheduling YAML reference, Condition triggers.
 
 ## Routines a plugin seeds
 

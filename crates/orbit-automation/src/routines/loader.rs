@@ -12,6 +12,7 @@ use orbit_common::protocol::yaml::parse_routine_yaml;
 use orbit_types::workflow::RoutineDefinition;
 
 use super::due::parse_cron;
+use crate::condition::{ConditionCarrier, check_condition};
 
 /// Directory under a source workspace's `.orbit/` holding routine YAML files.
 pub const ROUTINES_DIR: &str = "routines";
@@ -503,6 +504,54 @@ fn collect_declared_names(
     }
 }
 
+/// The routine file in the workspace rooted at `orbit_dir` that declares
+/// `name`, across both origins, with its definition or the reason it does not
+/// load (shape, cron or condition checks; target resolution is not
+/// consulted). A file that does not parse is matched by its stem. `None`
+/// means no file declares the name.
+pub fn find_routine_definition(
+    orbit_dir: &Path,
+    name: &str,
+) -> Option<(PathBuf, Result<RoutineDefinition, String>)> {
+    for origin in [RoutineOrigin::Workspace, RoutineOrigin::Local] {
+        let Ok(paths) = yaml_files_in(orbit_dir, origin) else {
+            continue;
+        };
+        for path in paths {
+            let parsed = fs::read_to_string(&path)
+                .map_err(|error| format!("read failed: {error}"))
+                .and_then(|raw| parse_routine_yaml(&raw).map_err(|error| error.to_string()));
+            match parsed {
+                Ok(definition) if definition.name == name => {
+                    let checked = check_routine_definition(&definition).map(|()| definition);
+                    return Some((path, checked));
+                }
+                Err(error) if path.file_stem().and_then(|stem| stem.to_str()) == Some(name) => {
+                    return Some((path, Err(error)));
+                }
+                _ => {}
+            }
+        }
+    }
+    None
+}
+
+/// The checks a parsed definition passes before it loads: a cron trigger
+/// parses, and a condition type-checks against its scope's schema.
+fn check_routine_definition(definition: &RoutineDefinition) -> Result<(), String> {
+    // Load-time cron validation: a routine with an unparsable trigger never
+    // reaches the due computation.
+    if definition.trigger.is_cron() {
+        parse_cron(&definition.trigger.cron).map_err(|error| error.to_string())?;
+    }
+    // A condition is type-checked against its scope's schema; a refused
+    // expression names its clause and position, and the routine is absent.
+    if let Some(condition) = &definition.trigger.condition {
+        check_condition(condition, ConditionCarrier::Routine).map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
 /// A definition that parsed: either evaluable this pass, or retired.
 enum RoutineLoad {
     Active(Box<LoadedRoutine>),
@@ -591,11 +640,7 @@ fn load_routine_file(
         );
     }
 
-    // Load-time cron validation: a routine with an unparsable trigger never
-    // reaches the due computation.
-    if definition.trigger.deliveries_landed.is_none() && definition.trigger.state.is_none() {
-        parse_cron(&definition.trigger.cron).map_err(|error| error.to_string())?;
-    }
+    check_routine_definition(&definition)?;
 
     Ok(RoutineLoadOutcome {
         routine: RoutineLoad::Active(Box::new(LoadedRoutine {
