@@ -407,11 +407,11 @@ fn oversized_argv_reports_actionable_size_limit() {
     };
     assert!(
         message.contains("size limit"),
-        "E2BIG must name the OS size limit: {message}"
+        "[ORB-20181] E2BIG must name the OS size limit: {message}"
     );
     assert!(
         message.contains("reduce") && message.contains("file") && message.contains("stdin"),
-        "E2BIG must say how to reduce or move input: {message}"
+        "[ORB-20181] E2BIG must say how to reduce or move input: {message}"
     );
     assert!(
         !message.contains("touch"),
