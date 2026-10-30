@@ -520,6 +520,12 @@ fn bounded_listing_reports_malformed_definition() {
     fs::write(dir.join("malformed.yaml"), "name: [broken\n").unwrap();
     let page = bounded(&fixture);
     assert!(page["total"].as_u64().unwrap() > 0, "{page}");
+    assert!(
+        page["items"]
+            .as_array()
+            .is_some_and(|items| !items.is_empty()),
+        "a valid sibling remains visible beside a malformed definition: {page}"
+    );
     let errors = page["load_errors"].as_array().expect("load errors");
     assert_eq!(errors.len(), 1, "{page}");
     assert!(
