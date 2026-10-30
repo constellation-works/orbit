@@ -48,7 +48,7 @@ A UI `check(ctx)` reads `ctx.page` and `ctx.target`, and returns results built w
 | `ui.aligned-starts` | First content of neighbouring grid/flex-row columns starts within 8px of the same top. |
 | `ui.even-row-panels` | Panels side by side in one row have heights within 4px. |
 | `ui.bounded-length` | Page `scrollHeight` at most 12 viewports; lists over 150 rows need a pagination control. |
-| `ui.nested-card` | No bordered box directly inside a bordered panel without a grouping role or label. |
+| `ui.nested-card` | No bordered or filled box directly inside a bordered panel without a grouping role or label. |
 | `ui.contrast` | Visible text at least 4.5:1 (3:1 large) against its effective background; gradient-backed text is recorded unmeasurable. |
 | `ui.accessible-name` | Visible buttons, links, inputs, selects, textareas and images have a name (text, `aria-label`/`aria-labelledby`, label, `alt`, or title); decorative images (`alt=""`) pass. |
 | `ui.console-clean` | No page errors, console errors, failed same-origin requests, off-loopback requests, or blocked non-GET requests while rendering. |
