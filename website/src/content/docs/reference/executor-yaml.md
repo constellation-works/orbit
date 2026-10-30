@@ -335,6 +335,13 @@ probe below: `claude` uses `native_read` (`png`, `jpeg`, `webp`, `gif`),
 `--image {path}` (`png`). The other shipped executors declare none, so their
 crews cannot take images.
 
+Only regular files are staged. A requested image that is a FIFO, socket,
+directory, device or another non-regular file — including a symlink that
+resolves to one — is refused before launch with a `stage image …: not a
+regular file` error that names the path. The source is opened without
+blocking, so a named pipe with no writer cannot stall preparation before
+provider supervision starts.
+
 A crew can also opt out on an image-capable lane. A crew that sets
 `vision = false` in `config.toml` is never given images, even when its
 executor declares `image_input`. The default is `true`. Set it to `false` for
