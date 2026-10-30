@@ -505,10 +505,31 @@ fn upgrade_resume_admission_mismatch(
         Err(reason) => return Some(reason),
     };
     previous.captured_at = current.captured_at;
+    adopt_unchanged_selective_policy(&mut previous, &current);
     (previous != current).then(|| {
         "the captured review admission differs from the current review policy; submit a new run to capture it"
             .to_string()
     })
+}
+
+/// Drop the drift a captured selective policy shows against today's resolved
+/// one when the operator's predicates are unchanged. The captured policy
+/// freezes the owner's risk model, which embeds when and from what landed
+/// history it was fitted, so every later resolution carries a different
+/// identity and digest. Only mode, risk threshold, paths and unknown-risk
+/// behavior count as a policy change; their provenance does not, matching the
+/// policy digest. The comparison copy adopts today's policy, never the
+/// captured admission the run keeps.
+fn adopt_unchanged_selective_policy(previous: &mut ReviewAdmission, current: &ReviewAdmission) {
+    if let (Some(captured), Some(resolved)) = (
+        &previous.selective_before_landing,
+        &current.selective_before_landing,
+    ) && captured.same_predicates(resolved)
+    {
+        previous
+            .selective_before_landing
+            .clone_from(&current.selective_before_landing);
+    }
 }
 
 /// Unlike ordinary checkpoint resume, completion observation only needs the
@@ -522,6 +543,7 @@ fn completion_admission_mismatch(
         Ok(pair) => pair,
         Err(reason) => return Some(reason),
     };
+    adopt_unchanged_selective_policy(&mut previous, &current);
     let gated = |timing| matches!(timing, ReviewTiming::BeforePr | ReviewTiming::BeforeLanding);
     let same = if !gated(previous.timing)
         && !gated(current.timing)

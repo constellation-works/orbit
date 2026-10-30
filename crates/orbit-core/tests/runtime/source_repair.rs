@@ -55,6 +55,7 @@ use completion::mutation::{
 use completion::policy::{
     candidate_drift_refuses_equivalent_policy_retry, equivalent_policy_drift_retries_observation,
     relevant_policy_drift_preserves_publication,
+    risk_threshold_policy_retries_observation_until_a_predicate_changes,
 };
 use completion::prerequisite::{
     later_prerequisite_read_failure_resumes_only_completion,
@@ -890,6 +891,7 @@ crate::scenario_table!(
     unchanged_publication_retries_only_completion,
     equivalent_policy_drift_retries_observation,
     relevant_policy_drift_preserves_publication,
+    risk_threshold_policy_retries_observation_until_a_predicate_changes,
     candidate_drift_refuses_equivalent_policy_retry,
     moved_base_and_empty_requirements_retry_unchanged_completion,
     empty_requirements_still_bind_completion_policy,

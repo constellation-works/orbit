@@ -1,5 +1,6 @@
 //! Config drift cannot turn a read-only forge outage into an operator repair.
 use super::*;
+use crate::risk_history;
 
 fn reload(f: &mut Fixture) {
     f.runtime = orbit_core::OrbitRuntime::from_roots(
@@ -25,6 +26,11 @@ fn capture_legacy_no_gate(f: &mut Fixture, checkout: &std::path::Path) {
         "baseline_commands":[], "host_evidence":[], "captured_at":Utc::now(),
     });
     published_owner::save_run(f, &f.source);
+    validate_candidate(f, checkout);
+}
+
+/// Record the native validation receipt, which binds the run input as saved.
+fn validate_candidate(f: &Fixture, checkout: &std::path::Path) {
     let validation = f.action(
         "candidate_validate",
         json!({
@@ -249,5 +255,93 @@ pub(crate) fn candidate_drift_refuses_equivalent_policy_retry() {
                 .lines()
                 .any(|l| l.starts_with("api repos/"))
         );
+    }
+}
+
+/// [ORB-20235] A captured risk-threshold selective policy carries the frozen
+/// risk-model identity, which differs from any later resolution of the same
+/// operator configuration. Only a changed predicate is a policy change.
+pub(crate) fn risk_threshold_policy_retries_observation_until_a_predicate_changes() {
+    const SELECTIVE: &str = "selective_before_landing.mode = \"observe\"\nselective_before_landing.risk_threshold = 0.4\n";
+    for change in [
+        None,
+        Some("mode"),
+        Some("risk_threshold"),
+        Some("paths"),
+        Some("unknown_risk"),
+    ] {
+        let (mut f, checkout) = fixture();
+        let config = f.repo.join(".orbit/config.toml");
+        let text = std::fs::read_to_string(&config).unwrap();
+        std::fs::write(
+            &config,
+            text.replace(
+                "before_pr = false",
+                &format!("before_pr = false\n{SELECTIVE}"),
+            ),
+        )
+        .unwrap();
+        reload(&mut f);
+        risk_history::seed_fitted_history(&f.runtime);
+        capture_legacy_no_gate(&mut f, &checkout);
+        f.source.input.as_mut().unwrap()["review"]["selective_before_landing"] =
+            json!(risk_history::frozen_selective_policy(&f.runtime));
+        published_owner::save_run(&f, &f.source);
+        validate_candidate(&f, &checkout);
+        // Later landed history refits the model, as time passing would.
+        risk_history::land_one_more_clean_task(&f.runtime);
+        if let Some(change) = change {
+            let text = std::fs::read_to_string(&config).unwrap();
+            let changed = match change {
+                "mode" => text.replace("mode = \"observe\"", "mode = \"off\""),
+                "risk_threshold" => text.replace("risk_threshold = 0.4", "risk_threshold = 0.6"),
+                "paths" => text.replace(
+                    SELECTIVE,
+                    &format!("{SELECTIVE}selective_before_landing.paths = [\"src/**\"]\n"),
+                ),
+                "unknown_risk" => text.replace(
+                    SELECTIVE,
+                    &format!("{SELECTIVE}selective_before_landing.unknown_risk = \"skip\"\n"),
+                ),
+                _ => unreachable!(),
+            };
+            assert_ne!(changed, text, "{change}");
+            std::fs::write(&config, changed).unwrap();
+            reload(&mut f);
+        }
+        tail_forge(&f, "lost_read");
+        let (outcome, started) = run_tail(&f);
+        let after = f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap();
+        let decision = &after.final_recovery.as_ref().unwrap().decision;
+        match change {
+            None => {
+                assert!(outcome.as_ref().is_ok_and(|o| o.success), "{outcome:?}");
+                assert_eq!(
+                    f.runtime.get_task(&f.task).unwrap().status,
+                    TaskStatus::Done
+                );
+                assert!(
+                    matches!(decision, Some(orbit_types::workflow::FinalRecoveryDecision::Resume { rationale, .. })
+                        if rationale.contains("transient-observation")),
+                    "{decision:?}"
+                );
+            }
+            Some(change) => {
+                assert!(
+                    !outcome.as_ref().is_ok_and(|o| o.success),
+                    "{change}: {outcome:?}"
+                );
+                assert_eq!(started, ["complete_pr"], "{change}");
+                assert_eq!(
+                    f.runtime.get_task(&f.task).unwrap().status,
+                    TaskStatus::Backlog
+                );
+                assert!(
+                    matches!(decision, Some(orbit_types::workflow::FinalRecoveryDecision::Requeue { reason })
+                        if reason.contains("policy-changed") && reason.contains("selective review policy")),
+                    "{change}: {decision:?}"
+                );
+            }
+        }
     }
 }

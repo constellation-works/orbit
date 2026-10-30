@@ -162,6 +162,18 @@ impl SelectiveBeforeLandingPolicy {
         format!("sha256:{hex}")
     }
 
+    /// Whether `other` states the same operator-configured predicates (mode,
+    /// risk threshold, paths and unknown-risk behavior). The frozen risk-model
+    /// identity, the digest derived from it and the provenance map are not
+    /// predicates: the identity records when and from what history the owner
+    /// fitted the model, so it differs between any two captures.
+    pub fn same_predicates(&self, other: &Self) -> bool {
+        self.mode == other.mode
+            && self.risk_threshold == other.risk_threshold
+            && self.paths == other.paths
+            && self.unknown_risk == other.unknown_risk
+    }
+
     /// Freeze the owner's risk snapshot and bind it to the policy digest.
     pub fn freeze_risk_model(&mut self, identity: String) {
         self.risk_model_identity = Some(identity);
