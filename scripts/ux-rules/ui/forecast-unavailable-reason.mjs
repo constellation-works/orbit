@@ -36,7 +36,7 @@ export async function check(ctx) {
     return uiResultOf(rule, target, "pass", { measurements: { api_unavailable: false, dom_reasons: dom } });
   }
   const named = dom.filter((entry) => KNOWN_REASONS.includes(entry.reason) && entry.text !== "");
-  const covers = named.some((entry) => reasons.includes(entry.reason)) || (named.length > 0 && reasons.every((r) => KNOWN_REASONS.includes(r)));
+  const covers = named.some((entry) => reasons.includes(entry.reason));
   return uiResultOf(rule, target, covers ? "pass" : "fail", {
     selector: covers ? "" : "[data-forecast-reason]",
     measurements: { api_unavailable: true, api_reasons: reasons, dom_reasons: dom, known_reasons: KNOWN_REASONS },
