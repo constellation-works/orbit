@@ -353,10 +353,16 @@ function ruleApplies(rule, mock) {
   const views = targets.views ?? "*";
   if (views !== "*" && !views.includes(mock.view)) return false;
   const states = targets.states ?? ["default"];
-  return states.includes(mock.state);
+  if (!states.includes(mock.state)) return false;
+  // Same width selection as expandTargets in scripts/ux-rules/lib/ui-context.mjs:
+  // a rule runs only at its declared widths (default [1440]), and a
+  // non-responsive view only at the first of them.
+  const widths = targets.widths ?? [1440];
+  const viewWidths = mock.view_def.responsive === false ? widths.slice(0, 1) : widths;
+  return viewWidths.includes(mock.width);
 }
 
-async function runRulesForMock(modules, state, mock, page, diagnostics, baseUrl) {
+export async function runRulesForMock(modules, state, mock, page, diagnostics, baseUrl) {
   const target = {
     id: `${mock.view}|${mock.theme}|${mock.width}|${mock.state}`,
     view: mock.view,
