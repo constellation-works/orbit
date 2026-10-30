@@ -1,7 +1,7 @@
 ---
 title: Routines — Design
 owner: claude
-last_updated: 2026-10-28
+last_updated: 2026-10-30
 last_validated: 2026-10-19
 status: Accepted
 feature: routines
@@ -158,7 +158,7 @@ first) and `failure_streak` (`count`, `since`, `truncated`).
 
 A routine is one YAML file under the registered checkout's gitignored
 `.orbit/routines/`. Choose exactly one of `trigger.cron`,
-`trigger.deliveries_landed`, `trigger.state` or `trigger.condition`. A `condition` is checked and explained but never fired in this release, so the routine must stay disabled. Routines use `schemaVersion: 1`;
+`trigger.deliveries_landed`, `trigger.state` or `trigger.condition`. A `condition` fires once per subject edge on the workspace owner and submits one run with the subject and fire in its input; `cron`, `state` and `deliveries_landed` take an optional `when` guard ([condition triggers](../condition-triggers/1_scope.md)). Routines use `schemaVersion: 1`;
 interval (`every_minutes`) scheduling belongs to auto-tasks, not routines.
 The cron form is:
 

@@ -668,6 +668,13 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
                     state, and a deleted shipped default stays out of later reseeds",
     },
     GovernedOperation {
+        id: "orbit.automation.clear_stall",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "clearing a condition stall lets a storm, loop or oscillation fire again; \
+                    only an operator may decide it was looked at",
+    },
+    GovernedOperation {
         id: "orbit.auto_task.reset",
         surface: OperationSurface::Tool,
         allowed: &[McpCapability::Operator],

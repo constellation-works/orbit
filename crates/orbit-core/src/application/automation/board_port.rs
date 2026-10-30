@@ -1,4 +1,4 @@
-//! What condition explain needs from the drain [ORB-19990].
+//! What condition evaluation needs from the drain [ORB-19990].
 //!
 //! `board.eligible` is the drain's own admission view and
 //! `board.drain_running` its live coordinator. `workspace_auto` owns both and
@@ -12,8 +12,8 @@ use orbit_common::OrbitError;
 pub(in crate::application) trait AutomationBoardPort {
     /// Backlog tasks the drain's admission view would admit now, observed
     /// without its commit boundary: scheduled, held and excluded tasks are
-    /// not counted.
-    fn eligible_task_count(&self) -> Result<usize, OrbitError>;
+    /// not listed.
+    fn eligible_task_ids(&self) -> Result<Vec<String>, OrbitError>;
 
     /// Whether this workspace's local drain is running.
     fn local_drain_running(&self) -> Result<bool, OrbitError>;

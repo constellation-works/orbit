@@ -1111,9 +1111,9 @@ fn fixture_config_and_compatibility(root: &Path) -> FixtureResult {
         )?;
         let mut compat: Value = serde_json::from_str(&compat)?;
         compat["version"] = json!(71);
-        conn.execute_batch("DROP TRIGGER IF EXISTS delivery_runs_stamp_run_insert; DROP TRIGGER IF EXISTS delivery_runs_stamp_run_delete; DROP TRIGGER IF EXISTS delivery_runs_stamp_run_update; DROP TRIGGER IF EXISTS delivery_runs_stamp_minute_insert; DROP TRIGGER IF EXISTS delivery_runs_stamp_minute_delete; DROP TRIGGER IF EXISTS delivery_runs_stamp_minute_rekey; DROP TABLE IF EXISTS delivery_runs_stamp; DROP TABLE script_grant; DROP TABLE worker_resource_limits; DROP TABLE assistance_slots; DROP TABLE assistance_attempts; DROP TABLE assistance_work; DROP TABLE assistance_budgets;
+        conn.execute_batch("DROP TRIGGER IF EXISTS delivery_runs_stamp_run_insert; DROP TRIGGER IF EXISTS delivery_runs_stamp_run_delete; DROP TRIGGER IF EXISTS delivery_runs_stamp_run_update; DROP TRIGGER IF EXISTS delivery_runs_stamp_minute_insert; DROP TRIGGER IF EXISTS delivery_runs_stamp_minute_delete; DROP TRIGGER IF EXISTS delivery_runs_stamp_minute_rekey; DROP TABLE IF EXISTS delivery_runs_stamp; DROP TABLE script_grant; DROP TABLE worker_resource_limits; DROP TABLE assistance_slots; DROP TABLE assistance_attempts; DROP TABLE assistance_work; DROP TABLE assistance_budgets; DROP TABLE IF EXISTS automation_condition_audit; DROP TABLE IF EXISTS automation_condition_states;
             DROP INDEX IF EXISTS idx_job_run_steps_activity_window;
-            DELETE FROM schema_meta WHERE key='migration.v0076'; DELETE FROM schema_meta WHERE key='migration.v0075'; DELETE FROM schema_meta WHERE key='migration.v0074'; DELETE FROM schema_meta WHERE key='migration.v0073'; DELETE FROM schema_meta WHERE key='migration.v0072'; CREATE TABLE old_writer_fixture(value TEXT);")?;
+            DELETE FROM schema_meta WHERE key='migration.v0077'; DELETE FROM schema_meta WHERE key='migration.v0076'; DELETE FROM schema_meta WHERE key='migration.v0075'; DELETE FROM schema_meta WHERE key='migration.v0074'; DELETE FROM schema_meta WHERE key='migration.v0073'; DELETE FROM schema_meta WHERE key='migration.v0072'; CREATE TABLE old_writer_fixture(value TEXT);")?;
         conn.execute(
             "UPDATE schema_meta SET value=?1 WHERE key='migration.compat'",
             [compat.to_string()],

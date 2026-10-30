@@ -713,12 +713,22 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::super::apply_job_run_step_activity_window_index,
     },
+    // Condition triggers phase 2: per-consumer condition state (arm states,
+    // holds, fire records) and the audit of operator clear-stall actions.
+    // New tables only, which an older binary never reads; its loaders refuse
+    // condition definitions and leave these rows alone.
+    Migration {
+        version: 77,
+        name: "condition_triggers",
+        compat: MigrationCompatibility::Additive,
+        apply: super::super::apply_condition_triggers,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 76;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 77;
 
 /// A migration recorded as applied in the `schema_meta` ledger.
 #[derive(Debug, Clone, PartialEq, Eq)]

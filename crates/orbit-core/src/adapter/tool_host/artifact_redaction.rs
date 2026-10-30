@@ -403,7 +403,7 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
             },
         },
         OrbitBuiltinAction::Automation(verb) => match verb {
-            AutomationVerb::Explain => ActionPolicy {
+            AutomationVerb::Explain | AutomationVerb::ClearStall => ActionPolicy {
                 declared: verb.spec().params,
                 ..NO_REDACTION
             },
@@ -491,7 +491,7 @@ fn is_covered_mutating_action(action: OrbitBuiltinAction) -> bool {
             AgentsVerb::Scorecard | AgentsVerb::Show => false,
         },
         OrbitBuiltinAction::Automation(verb) => match verb {
-            AutomationVerb::Explain => false,
+            AutomationVerb::Explain | AutomationVerb::ClearStall => false,
         },
         OrbitBuiltinAction::Crew(verb) => match verb {
             CrewVerb::Ladder => false,

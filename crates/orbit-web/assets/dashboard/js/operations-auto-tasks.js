@@ -1,7 +1,7 @@
 // Auto-task operations [ORB-10876].
 
 import { el, fetchJson, getWorkspace, postJson, requestPanel, statusPill, relativeTime } from './common.js';
-import { renderAutomation } from './automation.js';
+import { conditionStateLabel, renderAutomation, renderCondition } from './automation.js';
 import { autoTaskDraft, autoTaskScheduleEditor, closeEditors, editingIn, editorObserved, isOpen, openEditor, scheduleEditButton } from './schedule-editor.js';
 
 import {
@@ -130,6 +130,8 @@ function autoTaskGroupReveal(payload, title, matchedCount, visibleCount) {
 
 function lastEvaluationText(definition) {
   const evaluation = definition.last_evaluation;
+  const pass = definition.condition?.last_pass;
+  if (!evaluation && pass?.at) return `${time(pass.at)} · ${pass.matched} matched, ${pass.fired} fired`;
   if (!evaluation) return "Never evaluated";
   if (evaluation.kind === "fired") {
     const task = evaluation.last_task_id ? ` · ${evaluation.last_task_id}` : "";
@@ -312,13 +314,16 @@ function autoTaskRow(payload, definition, workspaceId) {
   const next = definition.next_evaluation;
   const nextCell = next?.state === "scheduled" && next.at
     ? whenCell("Next mint", next.at)
-    : operationCell("Next mint", [el("span", { class: `operation-cell-main${on ? "" : " muted"}`, text: nextEvaluationText(next) })]);
+    : operationCell("Next mint", [el("span", { class: `operation-cell-main${on ? "" : " muted"}`, text: nextEvaluationText(next, null, definition.schedule) })]);
   const card = el("article", { class: `operation-card operation-row auto-task-card ${state}` });
   card.append(
     el("div", { class: "operation-row-head" }, [
       operationCell("", [autoTaskToggleButton(payload, definition)], "operation-cell-control"),
       operationCell("Definition", [
-        el("div", { class: "operation-identity" }, [el("strong", { text: definition.name })]),
+        el("div", { class: "operation-identity" }, [
+          el("strong", { text: definition.name }),
+          definition.condition?.stall ? el("span", { class: "operation-state blocked", text: "stalled" }) : null,
+        ]),
         el("span", { class: "operation-cell-sub operation-chips" }, [
           template.crew ? autoTaskChip(template.crew, "crew") : null,
           template.priority ? autoTaskChip(template.priority) : null,
@@ -326,7 +331,7 @@ function autoTaskRow(payload, definition, workspaceId) {
       ], "operation-cell-identity"),
       operationCell("Trigger", [
         el("span", { class: "operation-cell-main", text: definition.schedule?.cron ? cronText(definition.schedule.cron) : (definition.schedule_summary || "—") }),
-        el("span", { class: "operation-cell-sub", text: [definition.schedule?.cron, definition.dedupe === "always" ? "always fire" : "skip if open"].filter(Boolean).join(" · ") }),
+        el("span", { class: "operation-cell-sub", text: [definition.schedule?.cron, definition.condition ? conditionStateLabel(definition.condition) : null, definition.dedupe === "always" ? "always fire" : "skip if open"].filter(Boolean).join(" · ") }),
         autoTaskEditButton(payload, definition),
       ]),
       nextCell,
@@ -340,11 +345,12 @@ function autoTaskRow(payload, definition, workspaceId) {
         field("Dedupe", definition.dedupe === "always" ? "always fire" : "skip if open"),
         field("Last scheduler evaluation", lastEvaluationText(definition)),
         field("Last minted task", lastMintedText(definition)),
-        field("Next evaluation", nextEvaluationText(definition.next_evaluation)),
+        field("Next evaluation", nextEvaluationText(definition.next_evaluation, null, definition.schedule)),
         field("Open duplicate", duplicate),
         field("Template", [template.crew && `crew ${template.crew}`, template.priority && `priority ${template.priority}`, template.complexity && `complexity ${template.complexity}`, `→ ${template.status || "backlog"}`].filter(Boolean).join(" · ")),
       ]),
       renderAutomation(definition.automation, `${detailsKey}:automation`, { kind: "auto-task", name: definition.name, workspace: getWorkspace() }),
+      renderCondition(definition.condition, `${detailsKey}:condition`, { kind: "auto-task", name: definition.name }),
       definition.description ? el("p", { class: "operation-description", text: definition.description }) : null,
       el("p", {
         class: "operation-control-note operation-mint-warning",

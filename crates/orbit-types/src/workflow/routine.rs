@@ -70,10 +70,17 @@ pub struct RoutineTrigger {
     pub cron: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deliveries_landed: Option<super::automation::DeliveryTrigger>,
-    /// A CEL predicate over workspace state. Checked and explained, never
-    /// fired in this release, so the routine must stay disabled.
+    /// A CEL predicate over workspace state; the routine's job runs once on
+    /// each subject's false-to-true edge.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub condition: Option<super::automation::ConditionTrigger>,
+    /// An optional CEL guard beside `cron`, `deliveries_landed` or `state`:
+    /// a due fire waits while it is false or unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when: Option<String>,
+    /// What a false or unknown guard does to a due cron slot. Cron only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guard_miss: Option<super::automation::ConditionGuardMiss>,
     /// What to do about scheduled slots that fell in a gap. Defaults to
     /// `skip` (wait for the next natural slot).
     #[serde(default)]
@@ -84,6 +91,14 @@ impl RoutineTrigger {
     /// Whether this is a cron trigger: no delivery, state or condition form.
     pub fn is_cron(&self) -> bool {
         self.deliveries_landed.is_none() && self.state.is_none() && self.condition.is_none()
+    }
+
+    /// The `when:` guard beside the typed kind, if any.
+    pub fn guard(&self) -> super::automation::ScheduleGuard {
+        super::automation::ScheduleGuard {
+            when: self.when.clone(),
+            guard_miss: self.guard_miss,
+        }
     }
 }
 
@@ -269,12 +284,16 @@ impl RoutineDefinition {
                     "trigger.condition: a condition routine takes exactly one trigger".into(),
                 ));
             }
-            if self.enabled {
-                return Err(super::automation::condition_enabled_refusal(
-                    "trigger.condition",
+            if !self.trigger.guard().is_empty() {
+                return Err(WorkflowError::Invalid(
+                    "trigger.when: a condition takes no guard; its own `when` is the expression"
+                        .into(),
                 ));
             }
         }
+        self.trigger
+            .guard()
+            .validate("trigger", self.trigger.is_cron())?;
         if let Some(state) = &self.trigger.state {
             state.validate()?;
             if !self.trigger.cron.is_empty()

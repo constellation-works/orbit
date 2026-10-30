@@ -168,11 +168,12 @@ export function clockServiceText(clock) {
   return clock.enabled ? "enabled" : "paused";
 }
 
-// What a waiting definition waits for, by the trigger that holds it. A
-// definition without a trigger of its own (an auto-task) waits for deliveries.
+// What a waiting definition waits for, by the trigger (a routine's) or
+// schedule (an auto-task's) that holds it.
 function waitingText(trigger) {
   if (trigger?.state?.kind === "execution_failed") return "Waiting for failed tasks";
   if (trigger?.state) return "Waiting for task creation or edits";
+  if (trigger?.condition) return "Each clock pass, on a condition edge";
   return "Waiting for deliveries";
 }
 
@@ -239,12 +240,17 @@ export function routineScheduleText(routine) {
     return `${routine.trigger.deliveries_landed.threshold} verified deliveries on ${routine.trigger.deliveries_landed.branch}`;
   }
   if (routine.trigger?.state) return stateTriggerText(routine.trigger.state);
-  return routine.cron || "—";
+  if (routine.trigger?.condition) {
+    return `${routine.trigger.condition.scope} condition: ${routine.trigger.condition.when}`;
+  }
+  const guard = routine.trigger?.when ? ` · when ${routine.trigger.when}` : "";
+  return routine.cron ? `${routine.cron}${guard}` : "—";
 }
 
-// Delivery- and state-triggered routines have no cron cadence to describe.
+// Delivery-, state- and condition-triggered routines have no cron cadence to
+// describe.
 export function routineEventDriven(routine) {
-  return Boolean(routine.trigger?.deliveries_landed || routine.trigger?.state);
+  return Boolean(routine.trigger?.deliveries_landed || routine.trigger?.state || routine.trigger?.condition);
 }
 
 function operationIdentity(name, state) {

@@ -258,7 +258,7 @@ fn qa_full_sweep_tool_contracts_and_symbolic_cursor_mints_next_sweep() {
     // bundled cursor selector and task payload tags are used unchanged.
     let mut definition = definition;
     definition.enabled = true;
-    definition.schedule = AutoTaskSchedule::Interval { every_minutes: 1 };
+    definition.schedule = AutoTaskSchedule::every_minutes(1);
     definition.skip_if_unchanged.as_mut().unwrap().reference = "sweep-fixture".into();
     std::fs::write(
         workspace.join("auto_tasks/qa-full-sweep.yaml"),

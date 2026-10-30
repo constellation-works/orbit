@@ -1,26 +1,27 @@
 //! `orbit automation explain` [ORB-19990]: evaluate one definition's
-//! condition over live workspace state and say what matches and why, without
-//! writing anything (`docs/design/condition-triggers/1_scope.md` §9).
+//! condition over live workspace state and say what matches and why, beside
+//! its durable state: arm states and holds, the stall, recent fires with
+//! their upstream chain, and `self`. Nothing is written
+//! (`docs/design/condition-triggers/1_scope.md` §9).
 //!
-//! Conditions do not fire in this release, so there is no arm state, hold,
-//! fire record or `self` history to show; the report says so instead of
-//! inventing values. `job:<name>` explains a job's auto-task steps instead
-//! ([`job`]).
+//! `job:<name>` explains a job's auto-task steps instead ([`job`]).
 
-mod facts;
 mod job;
 
-use chrono::Utc;
+use std::collections::BTreeSet;
+
+use chrono::{DateTime, Utc};
 use orbit_automation::condition::{
-    CheckedCondition, ClauseNode, ConditionCarrier, ConditionEvaluator, TaskFacts, Truth,
-    check_condition,
+    CheckedCondition, ClauseNode, ConditionEvaluator, TaskFacts, Truth, own_task_ids, self_facts,
 };
-use orbit_automation::routines::loader::find_routine_definition;
 use orbit_common::{NotFoundKind, OrbitError};
-use orbit_types::workflow::AutoTaskSchedule;
-use orbit_types::workflow::automation::{ConditionScope, ConditionTrigger};
+use orbit_types::workflow::automation::{
+    CONDITION_SUBJECTS_PER_PASS, CONDITION_WORKSPACE_SUBJECT, ConditionScope,
+};
 use serde::Serialize;
 
+use super::condition::facts::{self, FactInputs};
+use super::condition::{ConditionStatus, Target, condition_consumer, condition_status};
 use crate::OrbitRuntime;
 pub use job::JobStepsExplain;
 
@@ -28,7 +29,7 @@ pub use job::JobStepsExplain;
 const MAX_LISTED: usize = 20;
 
 /// The subject key of a workspace-scope condition.
-const WORKSPACE_SUBJECT: &str = "workspace";
+const WORKSPACE_SUBJECT: &str = CONDITION_WORKSPACE_SUBJECT;
 
 /// The `orbit.automation.explain` payload: a condition's report, or a job's
 /// auto-task steps for `job:<name>`.
@@ -64,7 +65,9 @@ pub struct ConditionExplain {
     /// Values the board could not read; expressions reading them are unknown.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub unavailable: Vec<String>,
-    pub tracking: ExplainTracking,
+    /// The durable state: ownership, arm states and holds, the stall, recent
+    /// fires with their upstream chain, and `self`.
+    pub tracking: ConditionStatus,
 }
 
 #[derive(Debug, Serialize)]
@@ -119,6 +122,13 @@ pub struct ExplainMatch {
     pub subject: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// `armed`, `fired`, or `untracked` before the first pass records it.
+    pub arm: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub true_since: Option<DateTime<Utc>>,
+    /// Minutes of `for_minutes` still to hold before a fire.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hold_remaining_minutes: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -149,19 +159,6 @@ pub struct ExplainSubject {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rearm: Option<ClauseNode>,
 }
-
-/// What firing would track. Nothing is tracked until conditions fire.
-#[derive(Debug, Serialize)]
-pub struct ExplainTracking {
-    pub arm_state: &'static str,
-    pub holds: &'static str,
-    pub fires: &'static str,
-    #[serde(rename = "self")]
-    pub self_reads: &'static str,
-    pub note: &'static str,
-}
-
-const NOT_TRACKED: &str = "not_tracked";
 
 impl OrbitRuntime {
     /// Explain `definition`: `job:<name>` reports that job's auto-task
@@ -198,39 +195,87 @@ impl OrbitRuntime {
         definition: &str,
         subject: Option<&str>,
     ) -> Result<ConditionExplain, OrbitError> {
-        let found = self.condition_definition(definition)?;
-        let checked = check_condition(&found.condition, found.carrier).map_err(|error| {
-            OrbitError::InvalidInput(format!(
-                "{} '{}' does not load ({}): {error}",
-                found.carrier.kind(),
-                found.name,
-                found.path
-            ))
-        })?;
+        let found = self.condition_definition_for(definition)?;
+        let condition = found.condition_definition()?;
+        let checked =
+            orbit_automation::condition::check_condition(condition.condition, found.carrier)
+                .map_err(|error| {
+                    OrbitError::InvalidInput(format!(
+                        "{} '{}' does not load ({}): {error}",
+                        found.carrier.kind(),
+                        found.name,
+                        found.path
+                    ))
+                })?;
         let now = Utc::now();
-        let gathered = facts::gather(self, &checked, now)?;
+        let consumer = condition_consumer(self, found.carrier, &found.name)?;
+        let state = self.automation_store()?.condition_state(&consumer)?;
+        // Explain sees what the next pass would: the definition's own minted
+        // tasks are neither subjects nor, unless `board_includes_own`, board.
+        let own = match condition.target {
+            Target::Mint(_) => own_task_ids(state.as_ref()),
+            Target::Job(_) => BTreeSet::new(),
+        };
+        let own_tag = match condition.target {
+            Target::Mint(definition) => {
+                Some(orbit_types::workflow::auto_task_tag(&definition.name))
+            }
+            Target::Job(_) => None,
+        };
+        let inputs = FactInputs {
+            own_tasks: if condition.condition.board_includes_own {
+                BTreeSet::new()
+            } else {
+                own.clone()
+            },
+            self_facts: self_facts(state.as_ref(), now),
+        };
+        let gathered = facts::gather(self, &checked.reads, now, &inputs)?;
         let evaluator = ConditionEvaluator::new(&gathered.facts);
+        let tracking = condition_status(self, &condition, now)?;
         let mut report = Report::default();
+        let mut selected = 1;
+        let mut subjects = Vec::new();
         match checked.scope {
             ConditionScope::Task => {
-                for task in &gathered.subjects {
+                let prefiltered = facts::prefiltered(&gathered.tasks, &checked.prefilter)
+                    .into_iter()
+                    .filter(|task| {
+                        !own.contains(&task.id)
+                            && own_tag.as_ref().is_none_or(|tag| !task.tags.contains(tag))
+                    })
+                    .collect::<Vec<_>>();
+                selected = prefiltered.len();
+                for task in prefiltered.into_iter().take(CONDITION_SUBJECTS_PER_PASS) {
+                    subjects.push(facts::task_facts(self, task, &checked.reads)?.0);
+                }
+                for task in &subjects {
                     report.record(
                         &evaluator,
                         &checked,
                         Some(task),
                         &task.id,
                         Some(&task.title),
+                        &tracking,
                     );
                 }
             }
-            _ => report.record(&evaluator, &checked, None, WORKSPACE_SUBJECT, None),
+            _ => report.record(
+                &evaluator,
+                &checked,
+                None,
+                WORKSPACE_SUBJECT,
+                None,
+                &tracking,
+            ),
         }
-        let subject = self.explained_subject(&evaluator, &checked, &gathered, &report, subject)?;
+        let subject =
+            self.explained_subject(&evaluator, &checked, &gathered, &subjects, &report, subject)?;
         Ok(ConditionExplain {
             definition: ExplainedDefinition {
                 kind: found.carrier.kind(),
-                name: found.name,
-                path: found.path,
+                name: found.name.clone(),
+                path: found.path.clone(),
                 enabled: found.enabled,
             },
             scope: checked.scope.as_str(),
@@ -248,9 +293,9 @@ impl OrbitRuntime {
             ownership: self.condition_ownership(),
             evaluated_at: now.to_rfc3339(),
             subjects: ExplainSubjects {
-                selected: gathered.selected,
+                selected,
                 evaluated: report.evaluated,
-                truncated: gathered.selected > report.evaluated,
+                truncated: selected > report.evaluated,
                 matched: report.matched,
                 missed: report.missed,
                 unknown: report.unknown,
@@ -259,128 +304,23 @@ impl OrbitRuntime {
             closest_misses: report.closest_misses,
             subject,
             unavailable: gathered.unavailable,
-            tracking: ExplainTracking {
-                arm_state: NOT_TRACKED,
-                holds: NOT_TRACKED,
-                fires: NOT_TRACKED,
-                self_reads: NOT_TRACKED,
-                note: "conditions do not fire in this Orbit: nothing is armed, held or fired, \
-                       and self reads no fire history",
-            },
+            tracking,
         })
-    }
-
-    /// Find the named definition among this checkout's routines and
-    /// auto-tasks and require that it carries a condition.
-    fn condition_definition(&self, selector: &str) -> Result<FoundCondition, OrbitError> {
-        let selector = selector.trim();
-        let (kinds, name) = match selector.split_once(':') {
-            Some(("routine", name)) => (&[ConditionCarrier::Routine][..], name),
-            Some(("auto-task", name)) => (&[ConditionCarrier::AutoTask][..], name),
-            _ => (
-                &[ConditionCarrier::Routine, ConditionCarrier::AutoTask][..],
-                selector,
-            ),
-        };
-        if name.is_empty() {
-            return Err(OrbitError::InvalidInput(
-                "definition must name a routine or auto-task".into(),
-            ));
-        }
-        let mut found = Vec::new();
-        for carrier in kinds {
-            if let Some(definition) = self.load_condition_carrier(*carrier, name)? {
-                found.push(definition);
-            }
-        }
-        match found.len() {
-            0 => Err(OrbitError::InvalidInput(format!(
-                "no {} named '{name}' in this workspace",
-                match kinds {
-                    [only] => only.kind(),
-                    _ => "routine or auto-task",
-                }
-            ))),
-            1 => {
-                let carrier = found.remove(0);
-                let condition = carrier.condition.ok_or_else(|| {
-                    OrbitError::InvalidInput(format!(
-                        "{} '{}' has no condition; explain covers {} triggers only",
-                        carrier.carrier.kind(),
-                        carrier.name,
-                        carrier.carrier.clause()
-                    ))
-                })?;
-                Ok(FoundCondition {
-                    carrier: carrier.carrier,
-                    name: carrier.name,
-                    path: carrier.path,
-                    enabled: carrier.enabled,
-                    condition,
-                })
-            }
-            _ => Err(OrbitError::InvalidInput(format!(
-                "both a routine and an auto-task are named '{name}'; pass routine:{name} or \
-                 auto-task:{name}"
-            ))),
-        }
-    }
-
-    fn load_condition_carrier(
-        &self,
-        carrier: ConditionCarrier,
-        name: &str,
-    ) -> Result<Option<LoadedCarrier>, OrbitError> {
-        match carrier {
-            ConditionCarrier::Routine => {
-                let Some((path, loaded)) = find_routine_definition(&self.shared_root(), name)
-                else {
-                    return Ok(None);
-                };
-                let definition = loaded.map_err(|error| {
-                    OrbitError::InvalidInput(format!(
-                        "routine '{name}' does not load ({}): {error}",
-                        path.display()
-                    ))
-                })?;
-                Ok(Some(LoadedCarrier {
-                    carrier,
-                    name: definition.name,
-                    path: path.display().to_string(),
-                    enabled: definition.enabled,
-                    condition: definition.trigger.condition,
-                }))
-            }
-            ConditionCarrier::AutoTask => {
-                let Some((_, path)) = self.auto_task_read_source(name)? else {
-                    return Ok(None);
-                };
-                let definition = self.auto_task_show(name)?.ok_or_else(|| {
-                    OrbitError::InvalidInput(format!("auto-task '{name}' is no longer defined"))
-                })?;
-                let condition = match definition.schedule {
-                    AutoTaskSchedule::Condition { condition } => Some(condition),
-                    _ => None,
-                };
-                Ok(Some(LoadedCarrier {
-                    carrier,
-                    name: definition.name,
-                    path: path.display().to_string(),
-                    enabled: definition.enabled,
-                    condition,
-                }))
-            }
-        }
     }
 
     /// Workspace and task conditions are the owner checkout's (§4).
     fn condition_ownership(&self) -> ExplainOwnership {
         let ownership = super::ownership::resolve(self, None);
+        let replica = self.coordination_write_owner().is_some();
         ExplainOwnership {
-            verdict: ownership.refusal().unwrap_or("owned_here"),
+            verdict: if replica {
+                "replica_checkout"
+            } else {
+                ownership.refusal().unwrap_or("owned_here")
+            },
             owner_machine: ownership.owner_machine,
             this_host: self.automation_machine_identity().map(str::to_owned),
-            replica: self.coordination_write_owner().is_some(),
+            replica,
         }
     }
 
@@ -389,6 +329,7 @@ impl OrbitRuntime {
         evaluator: &ConditionEvaluator,
         checked: &CheckedCondition,
         gathered: &facts::GatheredFacts,
+        subjects: &[TaskFacts],
         report: &Report,
         requested: Option<&str>,
     ) -> Result<Option<ExplainSubject>, OrbitError> {
@@ -423,20 +364,20 @@ impl OrbitRuntime {
                         .first()
                         .map(|miss| miss.subject.clone())
                 })
-                .or_else(|| gathered.subjects.first().map(|task| task.id.clone()))
+                .or_else(|| subjects.first().map(|task| task.id.clone()))
             {
                 Some(key) => key,
                 None => return Ok(None),
             },
         };
-        let task = match gathered.subjects.iter().find(|task| task.id == key) {
+        let task = match subjects.iter().find(|task| task.id == key) {
             Some(task) => task.clone(),
             None => {
                 let task = gathered
                     .tasks
                     .get(&key)
                     .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, key.as_str()))?;
-                facts::task_facts(self, task, checked.reads.status_since)?
+                facts::task_facts(self, task, &checked.reads)?.0
             }
         };
         let in_prefilter = gathered
@@ -452,23 +393,6 @@ impl OrbitRuntime {
             in_prefilter,
         )))
     }
-}
-
-/// A routine or auto-task by that name, with its condition if it has one.
-struct LoadedCarrier {
-    carrier: ConditionCarrier,
-    name: String,
-    path: String,
-    enabled: bool,
-    condition: Option<ConditionTrigger>,
-}
-
-struct FoundCondition {
-    carrier: ConditionCarrier,
-    name: String,
-    path: String,
-    enabled: bool,
-    condition: ConditionTrigger,
 }
 
 fn subject_tree(
@@ -519,15 +443,28 @@ impl Report {
         task: Option<&TaskFacts>,
         key: &str,
         title: Option<&String>,
+        tracking: &ConditionStatus,
     ) {
         self.evaluated += 1;
         match evaluator.truth(&checked.when, task) {
             Truth::True => {
                 self.matched += 1;
                 if self.matches.len() < MAX_LISTED {
+                    let tracked = tracking.subjects.iter().find(|subject| subject.key == key);
                     self.matches.push(ExplainMatch {
                         subject: key.to_string(),
                         title: title.cloned(),
+                        arm: tracked.map_or(
+                            if tracking.tracked {
+                                "armed"
+                            } else {
+                                "untracked"
+                            },
+                            |subject| subject.arm,
+                        ),
+                        true_since: tracked.and_then(|subject| subject.true_since),
+                        hold_remaining_minutes: tracked
+                            .and_then(|subject| subject.hold_remaining_minutes),
                     });
                 }
                 return;

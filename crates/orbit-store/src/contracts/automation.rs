@@ -2,7 +2,9 @@
 
 use orbit_common::OrbitError;
 use orbit_types::workflow::automation::recovery::RecoveryRecord;
-use orbit_types::workflow::automation::{AcceptedCoverage, AutomationState, BatchWaiver, Delivery};
+use orbit_types::workflow::automation::{
+    AcceptedCoverage, AutomationState, BatchWaiver, ConditionAudit, ConditionState, Delivery,
+};
 
 pub trait AutomationStoreBackend: Send + Sync {
     fn automation_waive(
@@ -132,4 +134,76 @@ pub trait AutomationStoreBackend: Send + Sync {
         consumer: &str,
         limit: usize,
     ) -> Result<Vec<AcceptedCoverage>, OrbitError>;
+
+    /// One condition consumer's state. A row that does not decode, or carries
+    /// another schema version, is an error, never `None`: missing state would
+    /// read as a fresh baseline.
+    fn condition_state(&self, _consumer: &str) -> Result<Option<ConditionState>, OrbitError> {
+        Err(OrbitError::Store(
+            "condition state persistence unavailable".into(),
+        ))
+    }
+
+    /// Condition states whose consumer keys start with the literal `prefix`,
+    /// ordered by key, strictly after `after`, at most `limit` (capped at 100).
+    fn condition_states_page(
+        &self,
+        _prefix: &str,
+        _after: Option<&str>,
+        _limit: usize,
+    ) -> Result<Vec<ConditionState>, OrbitError> {
+        Err(OrbitError::Store(
+            "condition state persistence unavailable".into(),
+        ))
+    }
+
+    /// Insert a consumer's first state at generation 0. `false` when another
+    /// writer inserted it first.
+    fn condition_initialize(&self, _state: &ConditionState) -> Result<bool, OrbitError> {
+        Err(OrbitError::Store(
+            "condition state persistence unavailable".into(),
+        ))
+    }
+
+    /// Replace `previous` with `next` when the stored row is still exactly
+    /// `previous` at its generation and `next` is the following generation.
+    /// `false` means another evaluator moved it: this one writes nothing.
+    fn condition_commit(
+        &self,
+        _previous: &ConditionState,
+        _next: &ConditionState,
+    ) -> Result<bool, OrbitError> {
+        Err(OrbitError::Store(
+            "condition state persistence unavailable".into(),
+        ))
+    }
+
+    /// [`Self::condition_commit`] and the audit record of the operator action
+    /// that made it, in one transaction.
+    fn condition_commit_audited(
+        &self,
+        _previous: &ConditionState,
+        _next: &ConditionState,
+        _audit: &ConditionAudit,
+    ) -> Result<bool, OrbitError> {
+        Err(OrbitError::Store(
+            "condition audit persistence unavailable".into(),
+        ))
+    }
+
+    /// Audited operator actions on a condition consumer, newest first.
+    fn condition_audits(
+        &self,
+        _consumer: &str,
+        _limit: usize,
+    ) -> Result<Vec<ConditionAudit>, OrbitError> {
+        Ok(vec![])
+    }
+
+    /// Forget a deleted definition's condition state. Its audit stays.
+    fn condition_delete(&self, _consumer: &str) -> Result<(), OrbitError> {
+        Err(OrbitError::Store(
+            "condition state persistence unavailable".into(),
+        ))
+    }
 }

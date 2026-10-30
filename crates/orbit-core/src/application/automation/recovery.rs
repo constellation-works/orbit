@@ -29,6 +29,7 @@ pub fn recover_auto_task(
 ) -> Result<RecoveryPreview, OrbitError> {
     let AutoTaskSchedule::Deliveries {
         deliveries_landed: declared,
+        ..
     } = &definition.schedule
     else {
         return Err(OrbitError::InvalidInput("not a delivery definition".into()));

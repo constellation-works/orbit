@@ -83,6 +83,10 @@ pub struct ConditionReads {
     pub status_since: bool,
     /// `steps['<id>']` step IDs a job wait reads.
     pub steps: BTreeSet<String>,
+    /// Whether any `origin` is read, which needs task history.
+    pub origin: bool,
+    /// Whether `self` is read.
+    pub self_history: bool,
 }
 
 /// A condition that passed every load-time check.
@@ -206,6 +210,50 @@ pub(crate) fn check_expression(
         ast,
         info: Arc::new(info),
     })
+}
+
+/// A checked `when:` guard beside a typed trigger kind.
+#[derive(Debug, Clone)]
+pub struct CheckedGuard {
+    pub when: CheckedExpression,
+    pub reads: ConditionReads,
+}
+
+/// Check a `when:` guard beside `cron`, `every_minutes`, `deliveries_landed`
+/// or `state` (§11). It reads the workspace environment with no bound subject
+/// and no fire history: the kind supplies identity, not edges, so `self` is
+/// refused. `clause` is where the guard sits (`trigger.when`).
+pub fn check_guard(
+    source: &str,
+    clause: &str,
+    carrier: ConditionCarrier,
+) -> Result<CheckedGuard, ConditionCheckError> {
+    if source.trim().is_empty() {
+        return Err(ConditionCheckError {
+            clause: clause.to_string(),
+            position: None,
+            message: "must not be empty when present".into(),
+        });
+    }
+    let mut reads = ConditionReads::default();
+    let when = check_expression(
+        source,
+        clause,
+        Environment::Condition {
+            scope: ConditionScope::Workspace,
+            carrier,
+        },
+        &mut reads,
+    )?;
+    if reads.self_history {
+        return Err(ConditionCheckError {
+            clause: clause.to_string(),
+            position: Some((1, 1)),
+            message: "a guard reads no `self`: the trigger kind keeps no fire history for it"
+                .into(),
+        });
+    }
+    Ok(CheckedGuard { when, reads })
 }
 
 /// Whether `expr` reads the bound subject's status (`task.status`).

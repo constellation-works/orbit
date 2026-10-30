@@ -358,7 +358,7 @@
       },
       {
         "name": "schedule",
-        "description": "Schedule object: exactly one of `{ cron: string }` (5-field cron) `{ every_minutes: number }`, `{ deliveries_landed: { branch, threshold, max_wait_minutes, coverage, owner_machine?, max_items?, retries? } }` (coverage: landed_code_review_v1; owner_machine defaults to this workspace's registered owner machine), or `{ condition: { ... } }` (checked and explained but never fired in this release; definition must stay `enabled: false`). Required.",
+        "description": "Schedule object: exactly one of `{ cron: string }` (5-field cron) `{ every_minutes: number }`, `{ deliveries_landed: { branch, threshold, max_wait_minutes, coverage, owner_machine?, max_items?, retries? } }` (coverage: landed_code_review_v1; owner_machine defaults to this workspace's registered owner machine), or `{ condition: { ... } }` (fires once per subject edge on the workspace owner). `cron`, `every_minutes` and `deliveries_landed` take an optional `when` CEL guard over workspace state; `cron` and `every_minutes` also take `guard_miss` (`wait`, the default, or `skip`). Required.",
         "param_type": "object",
         "required": true
       },
@@ -466,7 +466,7 @@
       },
       {
         "name": "schedule",
-        "description": "New schedule object: `{ cron: string }` `{ every_minutes: number }`, `{ deliveries_landed: { branch, threshold, max_wait_minutes, coverage, owner_machine?, max_items?, retries? } }` (owner_machine defaults to this workspace's registered owner machine) (coverage: landed_code_review_v1), or `{ condition: { ... } }` (checked and explained but never fired in this release; definition must stay `enabled: false`).",
+        "description": "New schedule object: `{ cron: string }` `{ every_minutes: number }`, `{ deliveries_landed: { branch, threshold, max_wait_minutes, coverage, owner_machine?, max_items?, retries? } }` (owner_machine defaults to this workspace's registered owner machine) (coverage: landed_code_review_v1), or `{ condition: { ... } }` (fires once per subject edge on the workspace owner). `cron`, `every_minutes` and `deliveries_landed` take an optional `when` CEL guard over workspace state; `cron` and `every_minutes` also take `guard_miss` (`wait`, the default, or `skip`).",
         "param_type": "object",
         "required": false
       },
@@ -504,7 +504,7 @@
   },
   {
     "name": "orbit.automation.explain",
-    "description": "Explain one routine's `trigger.condition` or auto-task's `schedule.condition` over the workspace's live state, without writing anything: its scope, the store prefilter and literal cross-reads, the ownership verdict, the current matches (up to 20) and closest misses (up to 20; subjects failing exactly one top-level clause), and for one subject the tree of top-level && and || clauses with each clause's value and the operand values it read. Values that cannot be read evaluate as unknown, never false. Conditions do not fire in this Orbit, so arm state, holds, fires and `self` values are reported as not yet tracked. With `job:<name>` it reports that job's auto-task steps as checked at load instead: the outer `expire_when` bound, whether admission pins a source revision, and for each step its target auto-task (resolved, missing or unreadable, with its file digest, enabled state and own condition guard), `when`, `wait_until`, `expire_when`, `reuse_when`, `require_result` and the earlier steps it reads. Such a job cannot be enabled or run yet, so nothing is evaluated, waited on or minted.",
+    "description": "Explain one routine's `trigger.condition` or auto-task's `schedule.condition` over the workspace's live state, without writing anything: its scope, the store prefilter and literal cross-reads, the ownership verdict, the current matches (up to 20, each with its arm state and remaining hold) and closest misses (up to 20; subjects failing exactly one top-level clause), and for one subject the tree of top-level && and || clauses with each clause's value and the operand values it read. Values that cannot be read evaluate as unknown, never false. `tracking` is the durable state: arm states and holds, any stall, the last pass and skip, recent fires with their upstream chain, and `self`. With `job:<name>` it reports that job's auto-task steps as checked at load instead: the outer `expire_when` bound, whether admission pins a source revision, and for each step its target auto-task (resolved, missing or unreadable, with its file digest, enabled state and own condition guard), `when`, `wait_until`, `expire_when`, `reuse_when`, `require_result` and the earlier steps it reads. Such a job cannot be enabled or run yet, so nothing is evaluated, waited on or minted.",
     "enabled": true,
     "active": true,
     "status": "active",

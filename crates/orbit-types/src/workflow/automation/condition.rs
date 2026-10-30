@@ -1,11 +1,10 @@
 //! Condition triggers: a routine's `trigger.condition` or an auto-task's
 //! `schedule.condition`, a typed CEL predicate over workspace state.
 //!
-//! This is the persisted shape only. The expression language, its schema and
-//! the load-time checker live in `orbit-automation`. In this release a
-//! condition is type-checked and explained but never fires, so a definition
-//! that carries one must stay `enabled: false`
-//! (`docs/design/condition-triggers/1_scope.md`, phase 1).
+//! This is the persisted shape only. The expression language, its schema,
+//! the load-time checker and the edge rules live in `orbit-automation`. Task
+//! and workspace conditions fire on the workspace owner; host and file scopes
+//! parse and are refused (`docs/design/condition-triggers/1_scope.md`).
 
 use serde::{Deserialize, Serialize};
 
@@ -286,11 +285,68 @@ impl ConditionTrigger {
     }
 }
 
-/// The load error for an enabled condition definition: nothing evaluates
-/// conditions yet, so an enabled one would look scheduled and never run.
-pub fn condition_enabled_refusal(clause: &str) -> WorkflowError {
-    WorkflowError::Invalid(format!(
-        "{clause}: conditions cannot fire yet in this Orbit; set `enabled: false` (use \
-         `orbit automation explain` to see what it would match)"
-    ))
+/// What a false or unknown `when:` guard does to a due cron or interval slot.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConditionGuardMiss {
+    /// Leave the slot unconsumed: it fires on the first later pass where the
+    /// guard is true, and the next slot collapses it.
+    #[default]
+    Wait,
+    /// Consume the slot without firing.
+    Skip,
+}
+
+impl ConditionGuardMiss {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Wait => "wait",
+            Self::Skip => "skip",
+        }
+    }
+}
+
+/// An optional `when:` guard beside a typed trigger kind (`cron`,
+/// `every_minutes`, `deliveries_landed`, `state`): a CEL predicate over the
+/// workspace, checked at each due moment. The kind decides when to look; the
+/// guard decides whether to fire (§11).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScheduleGuard {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guard_miss: Option<ConditionGuardMiss>,
+}
+
+impl ScheduleGuard {
+    /// Whether no guard is configured.
+    pub fn is_empty(&self) -> bool {
+        self.when.is_none() && self.guard_miss.is_none()
+    }
+
+    /// Shape checks. `slot_based` is true for `cron` and `every_minutes`, the
+    /// only kinds `guard_miss` applies to.
+    pub fn validate(&self, clause: &str, slot_based: bool) -> Result<(), WorkflowError> {
+        if self
+            .when
+            .as_deref()
+            .is_some_and(|when| when.trim().is_empty())
+        {
+            return Err(WorkflowError::Invalid(format!(
+                "{clause}.when: must not be empty when present"
+            )));
+        }
+        if self.guard_miss.is_some() && self.when.is_none() {
+            return Err(WorkflowError::Invalid(format!(
+                "{clause}.guard_miss: requires a `when` guard"
+            )));
+        }
+        if self.guard_miss.is_some() && !slot_based {
+            return Err(WorkflowError::Invalid(format!(
+                "{clause}.guard_miss: applies to cron and every_minutes only; a false guard \
+                 keeps delivery debt and state members"
+            )));
+        }
+        Ok(())
+    }
 }

@@ -81,7 +81,7 @@ fn add_auto_task(runtime: &OrbitRuntime, name: &str) {
         .auto_task_add(AutoTaskAddParams {
             name: name.into(),
             description: "Full QA sweep".into(),
-            schedule: AutoTaskSchedule::Interval { every_minutes: 60 },
+            schedule: AutoTaskSchedule::every_minutes(60),
             template: AutoTaskTemplate {
                 title: "Full QA sweep".into(),
                 description: "Sweep".into(),

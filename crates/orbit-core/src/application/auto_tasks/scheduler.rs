@@ -9,6 +9,7 @@ use orbit_automation::auto_tasks::scheduler::{
 pub use orbit_automation::auto_tasks::scheduler::{
     AutoTaskFireReport, AutoTaskSchedulerOutcome, SchedulerOptions,
 };
+use orbit_automation::condition::GuardVerdict;
 use orbit_common::OrbitError;
 use orbit_types::task::{Task, TaskStatus};
 use orbit_types::workflow::{AutoTaskDefinition, SkipIfUnchanged, auto_task_tag};
@@ -36,6 +37,19 @@ impl AutoTaskDispatch for CachedDispatch<'_> {
             now,
             Some(self.cache),
         )
+    }
+
+    fn evaluate_condition(
+        &self,
+        definition: &AutoTaskDefinition,
+        dry_run: bool,
+        now: DateTime<Utc>,
+    ) -> Result<orbit_automation::condition::ConditionDiagnostic, OrbitError> {
+        self.runtime.evaluate_condition(definition, dry_run, now)
+    }
+
+    fn evaluate_guard(&self, definition: &AutoTaskDefinition, now: DateTime<Utc>) -> GuardVerdict {
+        self.runtime.evaluate_guard(definition, now)
     }
 
     fn definition_root(&self) -> PathBuf {
@@ -98,6 +112,34 @@ impl AutoTaskDispatch for OrbitRuntime {
         now: DateTime<Utc>,
     ) -> Result<orbit_types::workflow::automation::AutomationDiagnostic, OrbitError> {
         crate::application::automation::evaluate_auto_task(self, definition, dry_run, now)
+    }
+
+    fn evaluate_condition(
+        &self,
+        definition: &AutoTaskDefinition,
+        dry_run: bool,
+        now: DateTime<Utc>,
+    ) -> Result<orbit_automation::condition::ConditionDiagnostic, OrbitError> {
+        crate::application::automation::condition::evaluate_auto_task_condition(
+            self, definition, dry_run, now,
+        )
+    }
+
+    fn evaluate_guard(&self, definition: &AutoTaskDefinition, now: DateTime<Utc>) -> GuardVerdict {
+        let Some(when) = definition
+            .schedule
+            .guard()
+            .and_then(|guard| guard.when.as_deref())
+        else {
+            return GuardVerdict::Open;
+        };
+        crate::application::automation::condition::evaluate_guard(
+            self,
+            when,
+            "schedule.when",
+            orbit_automation::condition::ConditionCarrier::AutoTask,
+            now,
+        )
     }
 
     fn definition_root(&self) -> PathBuf {
@@ -345,6 +387,28 @@ pub(super) fn mint_task(
     runtime: &OrbitRuntime,
     definition: &AutoTaskDefinition,
 ) -> Result<Task, OrbitError> {
+    let mut params = mint_params(runtime, definition);
+    // A manual mint of a condition auto-task has no subject: its
+    // `{{subject.*}}` placeholders render `(none)`.
+    if matches!(
+        definition.schedule,
+        orbit_types::workflow::AutoTaskSchedule::Condition { .. }
+    ) {
+        params.title =
+            crate::application::automation::condition::render_placeholders(&params.title, None);
+        params.description = crate::application::automation::condition::render_placeholders(
+            &params.description,
+            None,
+        );
+    }
+    runtime.add_task(params)
+}
+
+/// The template's task parameters plus the seeding plugin's provenance tag.
+pub(crate) fn mint_params(
+    runtime: &OrbitRuntime,
+    definition: &AutoTaskDefinition,
+) -> TaskAddParams {
     let mut params = template_params(runtime, definition);
     // A task minted from a plugin's seeded definition carries `plugin:<ns>`
     // beside `auto-task:<name>`, so its provenance survives in task history
@@ -363,7 +427,7 @@ pub(super) fn mint_task(
             params.tags.push(tag);
         }
     }
-    runtime.add_task(params)
+    params
 }
 
 pub(crate) fn template_params(

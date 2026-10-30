@@ -20,11 +20,12 @@ Global options (see 'orbit --help' for descriptions):
   --json
   --header
 
-Explain reads the task store, the drain's eligibility view and open runs, and writes
-nothing. A task-scope condition is evaluated over the tasks its status or tag prefilter
-selects, at most 200 per explain. Conditions do not fire yet: arm state, holds, fires
-and `self` values are shown as not yet tracked. job:<name> shows a job's auto-task steps
-as checked at load, with each named auto-task resolved; such jobs cannot run yet.
+Explain reads the task store, the drain's eligibility view, open runs and the
+condition's stored state, and writes nothing. A task-scope condition is evaluated over
+the tasks its status or tag prefilter selects, at most 200 per explain. Tracking shows
+arm states and holds, any stall, recent fires with their upstream chain, and `self`.
+job:<name> shows a job's auto-task steps as checked at load, with each named auto-task
+resolved; such jobs cannot run yet.
 Examples:
   orbit automation explain release-prep
   orbit automation explain routine:release-on-prep-done --subject <task-id> --json

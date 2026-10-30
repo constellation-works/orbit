@@ -10,7 +10,7 @@ fn chore_params(name: &str) -> AutoTaskAddParams {
     AutoTaskAddParams {
         name: name.to_string(),
         description: format!("Definition {name}"),
-        schedule: AutoTaskSchedule::Interval { every_minutes: 60 },
+        schedule: AutoTaskSchedule::every_minutes(60),
         template: AutoTaskTemplate {
             title: format!("Chore {name}"),
             description: "Recurring chore body.".to_string(),

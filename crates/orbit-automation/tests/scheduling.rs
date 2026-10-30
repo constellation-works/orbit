@@ -42,6 +42,8 @@ use orbit_types::workflow::{
     MissedRunPolicy,
 };
 
+#[path = "scheduling/condition_guards.rs"]
+mod condition_guards;
 #[path = "scheduling/definition_symlinks.rs"]
 mod definition_symlinks;
 #[path = "scheduling/delivery.rs"]
@@ -312,7 +314,7 @@ fn due_decisions_respect_dst_cadence_and_collapse_downtime() {
 #[test]
 fn interval_decisions_validate_ranges_and_preserve_the_anchor() {
     let baseline = at("2026-01-01T00:07:30Z");
-    let schedule = AutoTaskSchedule::Interval { every_minutes: 60 };
+    let schedule = AutoTaskSchedule::every_minutes(60);
     for (name, now, consumed, expected, next) in [
         (
             "before baseline",
@@ -366,9 +368,7 @@ fn interval_decisions_validate_ranges_and_preserve_the_anchor() {
         );
     }
     for minutes in [0, MAX_AUTO_TASK_INTERVAL_MINUTES + 1, u64::MAX] {
-        let schedule = AutoTaskSchedule::Interval {
-            every_minutes: minutes,
-        };
+        let schedule = AutoTaskSchedule::every_minutes(minutes);
         assert!(
             validate_schedule(&schedule).is_err(),
             "invalid interval {minutes} is rejected by validation"
@@ -383,9 +383,7 @@ fn interval_decisions_validate_ranges_and_preserve_the_anchor() {
         );
     }
     for minutes in [1, MAX_AUTO_TASK_INTERVAL_MINUTES] {
-        let schedule = AutoTaskSchedule::Interval {
-            every_minutes: minutes,
-        };
+        let schedule = AutoTaskSchedule::every_minutes(minutes);
         validate_schedule(&schedule).unwrap();
         let boundary = baseline + Duration::minutes(i64::try_from(minutes).unwrap());
         assert_eq!(

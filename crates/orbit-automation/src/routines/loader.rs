@@ -12,7 +12,7 @@ use orbit_common::protocol::yaml::parse_routine_yaml;
 use orbit_types::workflow::RoutineDefinition;
 
 use super::due::parse_cron;
-use crate::condition::{ConditionCarrier, check_condition};
+use crate::condition::{ConditionCarrier, check_condition, check_guard};
 
 /// Directory under a source workspace's `.orbit/` holding routine YAML files.
 pub const ROUTINES_DIR: &str = "routines";
@@ -537,7 +537,7 @@ pub fn find_routine_definition(
 }
 
 /// The checks a parsed definition passes before it loads: a cron trigger
-/// parses, and a condition type-checks against its scope's schema.
+/// parses, and a condition or `when:` guard type-checks against its schema.
 fn check_routine_definition(definition: &RoutineDefinition) -> Result<(), String> {
     // Load-time cron validation: a routine with an unparsable trigger never
     // reaches the due computation.
@@ -548,6 +548,10 @@ fn check_routine_definition(definition: &RoutineDefinition) -> Result<(), String
     // expression names its clause and position, and the routine is absent.
     if let Some(condition) = &definition.trigger.condition {
         check_condition(condition, ConditionCarrier::Routine).map_err(|error| error.to_string())?;
+    }
+    if let Some(when) = &definition.trigger.when {
+        check_guard(when, "trigger.when", ConditionCarrier::Routine)
+            .map_err(|error| error.to_string())?;
     }
     Ok(())
 }

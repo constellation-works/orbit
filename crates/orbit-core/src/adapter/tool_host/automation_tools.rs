@@ -1,4 +1,5 @@
-//! The `orbit.automation.*` tools: the read-only condition and job explain.
+//! The `orbit.automation.*` tools: the read-only condition and job explain, and
+//! the operator's audited clear-stall.
 use crate::OrbitRuntime;
 use orbit_common::{
     OrbitError,
@@ -19,6 +20,13 @@ pub(super) fn dispatch(
             let report = runtime.explain_automation(&definition, subject.as_deref())?;
             serde_json::to_value(report)
                 .map_err(|error| OrbitError::Execution(format!("automation explain: {error}")))
+        }
+        AutomationVerb::ClearStall => {
+            let definition = input.required_string("definition")?;
+            let reason = input.required_string("reason")?;
+            let cleared = runtime.clear_condition_stall(&definition, &reason)?;
+            serde_json::to_value(cleared)
+                .map_err(|error| OrbitError::Execution(format!("automation clear-stall: {error}")))
         }
     }
 }

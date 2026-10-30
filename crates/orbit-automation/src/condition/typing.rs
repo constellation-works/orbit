@@ -133,6 +133,9 @@ impl Checker<'_> {
             }
         };
         if let Some(ty) = schema::variable(scope, carrier, name) {
+            if name == "self" {
+                self.reads.self_history = true;
+            }
             return Ok(ty);
         }
         if let Some(why) = schema::unavailable_variable(scope, name) {
@@ -169,6 +172,9 @@ impl Checker<'_> {
                 }
                 if kind.is_board() {
                     self.reads.board.insert(field.name);
+                }
+                if field.name == "origin" {
+                    self.reads.origin = true;
                 }
                 Ok(CelType::Bool)
             }
@@ -233,6 +239,9 @@ impl Checker<'_> {
                 }
                 if field.name == "status_since" {
                     self.reads.status_since = true;
+                }
+                if field.name == "origin" {
+                    self.reads.origin = true;
                 }
                 Ok(field.ty.cel_type())
             }

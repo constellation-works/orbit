@@ -97,10 +97,25 @@ fn list(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
             )?;
             listed["last_fire"] =
                 last_fire_json(runtime, &row.listed.definition, row.cursor.as_ref())?;
+            if let Some(condition) = condition_listing_json(runtime, &row.listed.definition) {
+                listed["condition"] = condition;
+            }
             Ok(listed)
         })
         .collect::<Result<Vec<Value>, OrbitError>>()?;
     Ok(Value::Array(array))
+}
+
+/// A condition definition's listing: ownership, counts, any stall, and the
+/// last fire and skip. A host that cannot read it lists the reason instead.
+fn condition_listing_json(
+    runtime: &OrbitRuntime,
+    definition: &AutoTaskDefinition,
+) -> Option<Value> {
+    match runtime.auto_task_condition_listing(definition) {
+        Ok(listing) => listing.map(|listing| serde_json::to_value(listing).unwrap_or(Value::Null)),
+        Err(error) => Some(json!({"unavailable": error.to_string()})),
+    }
 }
 
 /// Project only the latest scheduler fire or recorded precondition skip.
@@ -114,6 +129,38 @@ fn last_fire_json(
     // leftover cursor from an earlier time schedule must not shadow it.
     if matches!(definition.schedule, AutoTaskSchedule::Deliveries { .. }) {
         return delivery_last_fire_json(runtime, definition);
+    }
+    // A condition mints through its fire records, never the slot cursor.
+    if matches!(definition.schedule, AutoTaskSchedule::Condition { .. }) {
+        let listing = runtime
+            .auto_task_condition_listing(definition)
+            .ok()
+            .flatten();
+        let fire = listing
+            .as_ref()
+            .and_then(|listing| listing.last_fire.clone());
+        let skip = listing.and_then(|listing| listing.last_skip);
+        return Ok(match (fire, skip) {
+            (Some(fire), Some(skip)) if skip.at > fire.observed_at => json!({
+                "kind": "skipped",
+                "at": skip.at.to_rfc3339(),
+                "skip_reason": skip.reason,
+            }),
+            (Some(fire), _) => match fire.action_id {
+                Some(task) => fired_json(runtime, fire.observed_at.to_rfc3339(), Some(task))?,
+                None => json!({
+                    "kind": "fired",
+                    "at": fire.observed_at.to_rfc3339(),
+                    "fire_state": fire.state,
+                }),
+            },
+            (None, Some(skip)) => json!({
+                "kind": "skipped",
+                "at": skip.at.to_rfc3339(),
+                "skip_reason": skip.reason,
+            }),
+            (None, None) => Value::Null,
+        });
     }
     let Some(cursor) = cursor else {
         return Ok(Value::Null);
@@ -309,6 +356,9 @@ fn show(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
     {
         value["crew_overridden"] = json!(note);
     }
+    if let Some(condition) = condition_listing_json(runtime, &definition) {
+        value["condition"] = condition;
+    }
     if matches!(definition.schedule, AutoTaskSchedule::Deliveries { .. }) {
         let diagnostic = if input.optional_bool("preview")?.unwrap_or(false) {
             crate::application::automation::evaluate_auto_task(
@@ -414,7 +464,30 @@ fn toggle(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, Orbit
             )));
         }
     };
-    to_json(&runtime.auto_task_toggle(&name, enabled)?)
+    let condition = runtime.auto_task_show(&name)?.is_some_and(|definition| {
+        matches!(definition.schedule, AutoTaskSchedule::Condition { .. })
+    });
+    if input.optional_bool("dry_run")?.unwrap_or(false) {
+        if !enabled {
+            return Err(OrbitError::InvalidInput(
+                "--dry-run previews enabling a condition definition; use `on`".into(),
+            ));
+        }
+        let preview = runtime.auto_task_enable_preview(&name)?;
+        return serde_json::to_value(&preview)
+            .map_err(|error| OrbitError::Io(format!("encode enable preview: {error}")));
+    }
+    // Enabling a condition runs its dry run first; the write refuses
+    // `too_many_matches` itself, and the preview says what the enable did.
+    let preview = (enabled && condition)
+        .then(|| runtime.auto_task_enable_preview(&name))
+        .transpose()?;
+    let mut value = to_json(&runtime.auto_task_toggle(&name, enabled)?)?;
+    if let Some(preview) = preview {
+        value["enable_preview"] = serde_json::to_value(&preview)
+            .map_err(|error| OrbitError::Io(format!("encode enable preview: {error}")))?;
+    }
+    Ok(value)
 }
 
 fn delete(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitError> {

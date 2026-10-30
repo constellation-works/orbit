@@ -5,6 +5,7 @@ use orbit_common::OrbitError;
 
 mod after_landing;
 mod board_port;
+pub(crate) mod condition;
 mod deadline;
 mod direct;
 mod evaluation;
@@ -33,6 +34,10 @@ pub use after_landing::{
     AfterLandingHealth, AfterLandingSource, after_landing_health, after_landing_switch,
 };
 pub(in crate::application) use board_port::AutomationBoardPort;
+pub use condition::{
+    ConditionChainLink, ConditionEnablePreview, ConditionFireView, ConditionListing,
+    ConditionStallCleared, ConditionStatus,
+};
 pub(crate) use deadline::expiring_frozen_batch_tasks;
 pub(crate) use direct::record_direct_landing_intent;
 use evaluation::{auto_task_action_liveness, auto_task_admission_deferral};

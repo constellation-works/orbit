@@ -146,7 +146,7 @@ impl RoutineShowArgs {
         } else if let Some(condition) = &definition.trigger.condition {
             let _ = writeln!(
                 out,
-                "Trigger: {} condition \"{}\" (not evaluated in this Orbit; see `orbit automation \
+                "Trigger: {} condition \"{}\" (fires once per subject edge; see `orbit automation \
                  explain {}`)",
                 condition.scope.as_str(),
                 condition.when,
@@ -161,6 +161,13 @@ impl RoutineShowArgs {
                     orbit_core::MissedRunPolicy::CatchUpOnce => "catch_up_once",
                     orbit_core::MissedRunPolicy::Skip => "skip",
                 }
+            );
+        }
+        if let Some(when) = &definition.trigger.when {
+            let _ = writeln!(
+                out,
+                "Guard: when \"{when}\" (guard_miss: {})",
+                definition.trigger.guard_miss.unwrap_or_default().as_str()
             );
         }
         let _ = writeln!(

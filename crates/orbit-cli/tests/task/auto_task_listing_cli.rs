@@ -60,7 +60,7 @@ fn listing_reports_last_fire_outcomes_from_scheduler_cursors() {
             .auto_task_add(AutoTaskAddParams {
                 name: name.into(),
                 description: "last fire listing fixture".into(),
-                schedule: AutoTaskSchedule::Interval { every_minutes: 60 },
+                schedule: AutoTaskSchedule::every_minutes(60),
                 template: AutoTaskTemplate {
                     title: format!("Last fire {name}"),
                     description: "Last fire listing fixture".into(),
@@ -164,7 +164,7 @@ fn listing_reports_last_fire_from_a_delivery_admission() {
         .auto_task_add(AutoTaskAddParams {
             name: "stale-source".into(),
             description: "stale cursor fixture".into(),
-            schedule: AutoTaskSchedule::Interval { every_minutes: 60 },
+            schedule: AutoTaskSchedule::every_minutes(60),
             template: AutoTaskTemplate {
                 title: "Stale source".into(),
                 description: "Stale cursor fixture".into(),
@@ -416,13 +416,11 @@ fn bounded_listing_marks_unprojectable_rows_unavailable_without_failing() {
     toggle(&fixture, "on");
     let runtime = open_runtime(&fixture);
     for (name, schedule) in [
-        ("hourly", AutoTaskSchedule::Interval { every_minutes: 60 }),
+        ("hourly", AutoTaskSchedule::every_minutes(60)),
         (
             // Parses, yet no 30 February ever arrives.
             "never",
-            AutoTaskSchedule::Cron {
-                cron: "0 0 30 2 *".into(),
-            },
+            AutoTaskSchedule::cron("0 0 30 2 *"),
         ),
     ] {
         runtime
