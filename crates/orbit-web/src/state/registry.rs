@@ -137,10 +137,13 @@ impl RegistrySource {
             workspace_registry::WorkspaceValidationMode::InMemory,
         )?;
         let mut unavailable = HashSet::new();
+        // The registry file sits directly under the global root whose
+        // generation authority registered these checkouts.
+        let global_root = self.registry_path.parent().unwrap_or(Path::new(""));
         let entries: Vec<WsEntry> = workspace_registry::local_workspaces(&registry)
             .map(|(workspace, checkout)| {
                 let binding = (workspace.status == WorkspaceStatus::Active)
-                    .then(|| workspace_runtime_binding(workspace, checkout))
+                    .then(|| workspace_runtime_binding(global_root, workspace, checkout))
                     .and_then(|result| match result {
                         Ok(binding) => Some(binding),
                         Err(error) => {

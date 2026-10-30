@@ -150,6 +150,43 @@ feature migrations declared compatibility compare feature versions exactly, so s
 build stays refused beside a newer feature schema. Distinct executables share the
 authority; identical copies trivially do.
 
+#### The authority that protects a workspace
+
+The generation authority is chosen from `--root`, `ORBIT_ROOT` or the home directory
+(`~/.orbit`), while the workspace `.orbit` is discovered from the working directory.
+The two can disagree. A process with a fresh home, run from an uninitialized directory
+inside a live checkout, joins an empty authority but discovers that checkout. The
+workspace layout is the one part of a compatibility identity that belongs to the
+workspace, so a pending layout migration is admitted only under the authority whose
+participants use the workspace:
+
+- A workspace records that authority's canonical path in
+  `.orbit/state/generation-authority.json`. A registered open records it the first
+  time: a `--workspace` selection, or a cwd inside a checkout that the authority's
+  `workspaces.json` registers. A brand-new workspace records its creator. A data
+  directory opened as its own explicit root records nothing.
+- A pending layout migration under any other authority is refused before bootstrap
+  writes anything to the workspace. The refusal reads `upgrade admission refused:
+  workspace '<path>' has a pending layout upgrade (vN to vM) but its clients are
+  protected by generation authority '<A>', not this process's '<B>'`.
+- A workspace that recorded nothing, for example one last opened by an older binary,
+  accepts a pending migration only from the authority that registered the checkout.
+  It also accepts the workspace data directory itself when that directory is the
+  explicit `--root` or `ORBIT_ROOT`. Any other authority is refused the same way,
+  with `it has recorded no generation authority and this process's authority '<B>'
+  has not registered it`. An unreadable or malformed record also refuses.
+- The guard applies only when a layout migration is pending. Opening a current
+  workspace, or joining read-only beside a foreign generation, never consults it.
+  Registered followers, managed children (which use the dispatching host's registry
+  authority) and explicit-root data directories keep working.
+
+To recover from this refusal, run the command under the authority the workspace's
+clients use: the same home directory, `--root` or `ORBIT_ROOT`. Admission there waits
+for incompatible clients to quiesce, as described below. Do not delete the record,
+the layout marker or admission files, and do not point a scratch home at a live
+checkout. Retrying from a fresh home does not help: releasing the other authority's
+clients does not authorize a process that does not protect the workspace.
+
 #### A migration older processes cannot keep: the quiesce wait
 
 A newer **writing** command whose migrations the live processes cannot keep (a

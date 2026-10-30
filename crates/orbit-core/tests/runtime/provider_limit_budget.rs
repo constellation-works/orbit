@@ -51,6 +51,7 @@ impl Fixture {
                 repo_root: repo,
                 ship_mode: ShipMode::Local,
                 base_branch: Some("main".into()),
+                generation_authority: None,
             },
         )
         .unwrap()
