@@ -150,9 +150,7 @@ impl ImageInputPlan {
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_default();
             let target = directory.path().join(format!("{:02}-{name}", index + 2));
-            std::fs::copy(&source, &target).map_err(|error| {
-                permanent(format!("stage image `{}`: {error}", image.display()))
-            })?;
+            copy_image_file(&source, &target, &image.display().to_string()).map_err(permanent)?;
             paths.push(target.display().to_string());
         }
         Ok(StagedImages {
@@ -164,6 +162,67 @@ impl ImageInputPlan {
             paths,
         })
     }
+}
+
+/// Copy one requested image to its staged path. Only regular files are
+/// staged: the source is opened with `O_NONBLOCK` so a FIFO (or another
+/// blocking special file) without a writer cannot block preparation before
+/// provider supervision starts, and the open handle's type is checked before
+/// any byte is copied. `symlink_metadata` is not consulted: the open follows
+/// a symlink, so a symlink to a regular image stages while a symlink to a
+/// FIFO is refused as a FIFO.
+#[cfg(unix)]
+fn copy_image_file(source: &Path, target: &Path, display: &str) -> Result<(), String> {
+    use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    options.custom_flags(libc::O_NONBLOCK);
+    let mut reader = options
+        .open(source)
+        .map_err(|error| format!("stage image `{display}`: {error}"))?;
+    let file_type = reader
+        .metadata()
+        .map_err(|error| format!("stage image `{display}`: {error}"))?
+        .file_type();
+    if !file_type.is_file() {
+        let kind = if file_type.is_dir() {
+            "directory"
+        } else if file_type.is_fifo() {
+            "FIFO"
+        } else if file_type.is_socket() {
+            "socket"
+        } else if file_type.is_char_device() {
+            "character device"
+        } else if file_type.is_block_device() {
+            "block device"
+        } else {
+            "non-regular file"
+        };
+        return Err(format!(
+            "stage image `{display}`: not a regular file (found {kind}); only regular image \
+             files are staged"
+        ));
+    }
+    let mut writer = std::fs::File::create(target)
+        .map_err(|error| format!("stage image `{display}`: {error}"))?;
+    std::io::copy(&mut reader, &mut writer)
+        .map_err(|error| format!("stage image `{display}`: {error}"))?;
+    Ok(())
+}
+
+/// Copy one requested image without blocking on special files. Non-Unix
+/// hosts have no FIFOs; a metadata kind check before the copy is enough.
+#[cfg(not(unix))]
+fn copy_image_file(source: &Path, target: &Path, display: &str) -> Result<(), String> {
+    let metadata =
+        std::fs::metadata(source).map_err(|error| format!("stage image `{display}`: {error}"))?;
+    if !metadata.file_type().is_file() {
+        return Err(format!(
+            "stage image `{display}`: not a regular file; only regular image files are staged"
+        ));
+    }
+    std::fs::copy(source, target).map_err(|error| format!("stage image `{display}`: {error}"))?;
+    Ok(())
 }
 
 fn instruction(mode: ImageInputMode, paths: &[String]) -> String {

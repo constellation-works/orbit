@@ -755,6 +755,271 @@ fn scenario_j_cli_executor_static_args_are_audited() -> Result<(), Box<dyn std::
     Ok(())
 }
 
+/// [ORB-20151] A FIFO image source must not block host preparation before
+/// provider supervision starts. The dispatch runs on a thread with no writer
+/// on the FIFO and no live provider: the fake CLI touches a marker file only
+/// when it spawns, so a missing marker plus a refusal that names the image
+/// path within a bounded wait proves no child started. A regression here
+/// hangs instead of failing, which is why the test fails on timeout.
+#[cfg(unix)]
+#[test]
+fn image_input_fifo_is_refused_without_blocking_or_spawning()
+-> Result<(), Box<dyn std::error::Error>> {
+    use std::os::unix::ffi::OsStrExt;
+
+    let fixture = TempDir::new()?;
+    let fifo = fixture.path().join("pipe.png");
+    let cpath = std::ffi::CString::new(fifo.as_os_str().as_bytes())?;
+    // SAFETY: `cpath` is a NUL-terminated path in a test-owned tempdir.
+    let created = unsafe { libc::mkfifo(cpath.as_ptr(), 0o600) };
+    assert_eq!(created, 0, "mkfifo must succeed for the FIFO fixture");
+    let marker = fixture.path().join("spawned-marker");
+
+    let report = run_image_dispatch_on_thread(
+        vec![fifo.display().to_string()],
+        "cli-image-fifo".to_string(),
+        "cli_image_fifo".to_string(),
+        marker.clone(),
+    )?;
+    let display = report.error_display.expect("a FIFO image must be refused");
+    assert!(
+        report.outcome_message.is_none(),
+        "a refused FIFO stage must error, not return an outcome"
+    );
+    assert!(
+        display.contains("stage image") && display.contains("pipe.png"),
+        "the refusal must name the image path, got: {display}"
+    );
+    assert!(
+        display.contains("not a regular file"),
+        "the refusal must say the source is not a regular file, got: {display}"
+    );
+    assert!(
+        !report.marker_spawned,
+        "the provider must not spawn for a refused FIFO image"
+    );
+    assert!(
+        !report.invocation_started,
+        "no cli.invocation.started event may precede a refused FIFO stage"
+    );
+    assert!(
+        report.elapsed < Duration::from_secs(10),
+        "FIFO preparation must stay bounded without a writer (elapsed {:?})",
+        report.elapsed
+    );
+    assert!(!marker.exists(), "the spawn marker must stay absent");
+    Ok(())
+}
+
+/// [ORB-20151] A symlink to a FIFO is the same defect through a link: the
+/// link carries a supported `.png` extension past admission, so staging must
+/// follow it and refuse the FIFO target without a blocking open or a spawn.
+#[cfg(unix)]
+#[test]
+fn image_input_symlink_to_fifo_is_refused_without_spawning()
+-> Result<(), Box<dyn std::error::Error>> {
+    use std::os::unix::ffi::OsStrExt;
+
+    let fixture = TempDir::new()?;
+    let target = fixture.path().join("real-fifo");
+    let cpath = std::ffi::CString::new(target.as_os_str().as_bytes())?;
+    // SAFETY: `cpath` is a NUL-terminated path in a test-owned tempdir.
+    let created = unsafe { libc::mkfifo(cpath.as_ptr(), 0o600) };
+    assert_eq!(created, 0, "mkfifo must succeed for the FIFO target");
+    let link = fixture.path().join("link.png");
+    std::os::unix::fs::symlink(&target, &link)?;
+    let marker = fixture.path().join("spawned-marker");
+
+    let report = run_image_dispatch_on_thread(
+        vec![link.display().to_string()],
+        "cli-image-symlink-fifo".to_string(),
+        "cli_image_symlink_fifo".to_string(),
+        marker.clone(),
+    )?;
+    let display = report
+        .error_display
+        .expect("a symlink-to-FIFO image must be refused");
+    assert!(
+        report.outcome_message.is_none(),
+        "a refused symlink stage must error, not return an outcome"
+    );
+    assert!(
+        display.contains("stage image") && display.contains("link.png"),
+        "the refusal must name the symlink image path, got: {display}"
+    );
+    assert!(
+        display.contains("not a regular file"),
+        "the refusal must say the source is not a regular file, got: {display}"
+    );
+    assert!(
+        !report.marker_spawned,
+        "the provider must not spawn for a refused symlink-to-FIFO image"
+    );
+    assert!(
+        !report.invocation_started,
+        "no cli.invocation.started event may precede a refused symlink stage"
+    );
+    assert!(!marker.exists(), "the spawn marker must stay absent");
+    Ok(())
+}
+
+/// [ORB-20151] Supported inputs keep working: a regular image stages and the
+/// provider runs (its canned reply misses the fresh canary, which is the
+/// expected `[image_not_seen]` outcome, not a staging error), and a
+/// canary-only request behaves the same way.
+#[cfg(unix)]
+#[test]
+fn image_input_regular_and_canary_only_stage_and_reach_provider()
+-> Result<(), Box<dyn std::error::Error>> {
+    for name in ["regular", "canary-only"] {
+        let fixture = TempDir::new()?;
+        let marker = fixture.path().join(format!("spawned-marker-{name}"));
+        let image_paths: Vec<String> = if name == "regular" {
+            let photo = fixture.path().join("photo.png");
+            // Staging copies bytes verbatim; a PNG signature keeps the
+            // fixture faithful without needing a real picture.
+            let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+            bytes.extend_from_slice(b"fixture-image-bytes");
+            fs::write(&photo, bytes)?;
+            vec![photo.display().to_string()]
+        } else {
+            Vec::new()
+        };
+
+        let tmp_audit = tempfile::tempdir()?;
+        let (writer, _store) = build_writer(tmp_audit.path(), "cli-image-ok")?;
+        let fake = fake_cli(
+            "claude",
+            &format!(
+                "#!/bin/sh\ntouch '{}'\ncat > /dev/null\necho '{{\"schemaVersion\":1,\"status\":\"success\",\"result\":{{}},\"error\":null}}'\n",
+                marker.display()
+            ),
+        )?;
+        let spec = cli_agent_loop_spec(None);
+        let host = ScriptHost::new(fake.cli_path()).with_image_input(image_test_declaration());
+        let outcome = dispatch_v2_activity(V2DispatchInput {
+            activity_name: "cli_image_ok",
+            spec: &ActivityV2Spec::AgentLoop(spec),
+            fs_profile: None,
+            input: serde_json::json!({
+                "prompt": "hello",
+                "crew": "test-crew",
+                "image_input": { "images": image_paths },
+            }),
+            audit: writer,
+            run_id: "cli-image-ok",
+            host: Some(&host),
+        })?;
+        assert!(
+            marker.exists(),
+            "{name}: the provider must spawn for a supported image input"
+        );
+        assert!(
+            !outcome.success,
+            "{name}: the canned reply misses the fresh canary, so the run fails closed"
+        );
+        let message = outcome.message.unwrap_or_default();
+        assert!(
+            message.contains("[image_not_seen]"),
+            "{name}: expected a canary miss, not a staging error, got: {message}"
+        );
+    }
+    Ok(())
+}
+
+/// Image-input declaration shared by the staging regression tests: canary
+/// plus one image on a `native_read` lane.
+#[cfg(unix)]
+fn image_test_declaration() -> orbit_types::workflow::ExecutorImageInput {
+    orbit_types::workflow::ExecutorImageInput {
+        mode: orbit_types::workflow::ImageInputMode::NativeRead,
+        formats: vec![
+            orbit_types::workflow::ImageFormat::Png,
+            orbit_types::workflow::ImageFormat::Jpeg,
+        ],
+        max_images: 5,
+        attach_args: None,
+    }
+}
+
+/// Outcome of one threaded image-input dispatch: `error_display` is `None`
+/// when dispatch returned `Ok` and names the error otherwise.
+#[cfg(unix)]
+struct ThreadedImageReport {
+    error_display: Option<String>,
+    outcome_message: Option<String>,
+    marker_spawned: bool,
+    invocation_started: bool,
+    elapsed: Duration,
+}
+
+/// Run one image-input dispatch on a worker thread and wait at most 20
+/// seconds. Everything the dispatch borrows is built inside the thread, so
+/// only owned paths cross into it; a regression that blocks on the FIFO
+/// surfaces here as a timeout failure instead of hanging the harness. No
+/// synthetic load is generated: at most one dispatch runs per test.
+#[cfg(unix)]
+fn run_image_dispatch_on_thread(
+    image_paths: Vec<String>,
+    run_id: String,
+    activity_name: String,
+    marker: PathBuf,
+) -> Result<ThreadedImageReport, Box<dyn std::error::Error>> {
+    let (tx, rx) = std::sync::mpsc::channel::<ThreadedImageReport>();
+    std::thread::spawn(move || {
+        let started = Instant::now();
+        let tmp_audit = tempfile::tempdir().expect("audit tempdir");
+        let (writer, store) = build_writer(tmp_audit.path(), &run_id).expect("audit writer");
+        let fake = fake_cli(
+            "claude",
+            &format!(
+                "#!/bin/sh\ntouch '{}'\ncat > /dev/null\necho '{{\"schemaVersion\":1,\"status\":\"success\",\"result\":{{}},\"error\":null}}'\n",
+                marker.display()
+            ),
+        )
+        .expect("fake cli");
+        let spec = cli_agent_loop_spec(None);
+        let host = ScriptHost::new(fake.cli_path()).with_image_input(image_test_declaration());
+        let dispatched = dispatch_v2_activity(V2DispatchInput {
+            activity_name: &activity_name,
+            spec: &ActivityV2Spec::AgentLoop(spec),
+            fs_profile: None,
+            input: serde_json::json!({
+                "prompt": "hello",
+                "crew": "test-crew",
+                "image_input": { "images": image_paths },
+            }),
+            audit: writer,
+            run_id: &run_id,
+            host: Some(&host),
+        });
+        let elapsed = started.elapsed();
+        let events = events_snapshot(&store, &run_id).unwrap_or_default();
+        let invocation_started = events
+            .iter()
+            .any(|event| event.envelope.event_type == "cli.invocation.started");
+        let (error_display, outcome_message) = match dispatched {
+            Ok(outcome) => (None, outcome.message.clone()),
+            Err(error) => (Some(error.to_string()), None),
+        };
+        let _ = tx.send(ThreadedImageReport {
+            error_display,
+            outcome_message,
+            marker_spawned: marker.exists(),
+            invocation_started,
+            elapsed,
+        });
+    });
+    match rx.recv_timeout(Duration::from_secs(20)) {
+        Ok(report) => Ok(report),
+        Err(_) => Err(
+            "image-input staging blocked: no dispatch outcome within 20s (a FIFO must be \
+             refused without waiting for a writer)"
+                .into(),
+        ),
+    }
+}
+
 /// A crafted workspace activity whose tool policy breaks a load-time rule is
 /// refused by the catalog loader Core uses for workspace activity
 /// directories, and the refusal names the offending asset. Each refused shape
@@ -1169,6 +1434,7 @@ struct ScriptHost {
     requires_claude_credential: bool,
     /// Variables the host's allowlist admits, beyond the baseline.
     admitted_env: Vec<(String, String)>,
+    image_input: Option<orbit_types::workflow::ExecutorImageInput>,
 }
 impl ScriptHost {
     fn new(path: &Path) -> Self {
@@ -1181,7 +1447,13 @@ impl ScriptHost {
             args,
             requires_claude_credential: false,
             admitted_env: Vec::new(),
+            image_input: None,
         }
+    }
+
+    fn with_image_input(mut self, declaration: orbit_types::workflow::ExecutorImageInput) -> Self {
+        self.image_input = Some(declaration);
+        self
     }
 
     fn requiring_claude_credential(mut self, admitted_env: &[(&str, &str)]) -> Self {
@@ -1221,7 +1493,7 @@ impl orbit_engine::test_support::NullRuntimeHost for ScriptHost {
             command: self.command.clone(),
             args: self.args.clone(),
             inspection_args: None,
-            image_input: None,
+            image_input: self.image_input.clone(),
         })
     }
 
