@@ -138,6 +138,7 @@ impl ObjectKind {
         match self {
             Self::Task => Some(Statuses::Task),
             Self::SelfStep | Self::PrevStep | Self::StepObservation => Some(Statuses::Step),
+            Self::ReadinessResult => Some(Statuses::Result),
             _ => None,
         }
     }
@@ -428,6 +429,8 @@ pub(crate) enum Statuses {
     Task,
     /// An auto-task step's observed status (spec §2).
     Step,
+    /// A `release-readiness/v1` receipt's status (spec §4).
+    Result,
 }
 
 /// Observed statuses of an auto-task step, as `self.status`,
@@ -444,6 +447,9 @@ pub const AUTO_TASK_STEP_STATUSES: &[&str] = &[
     "cancelled",
     "skipped",
 ];
+
+/// The statuses a `release-readiness/v1` receipt may record.
+pub(crate) const READINESS_RESULT_STATUSES: &[&str] = &["passed", "blocked", "unavailable"];
 
 /// The variables one scope binds.
 pub(crate) fn variable(
@@ -504,6 +510,13 @@ pub(crate) fn require_status_in(statuses: Statuses, literal: &str) -> Result<(),
         Statuses::Step => (
             "step",
             AUTO_TASK_STEP_STATUSES
+                .iter()
+                .map(|status| (*status).to_owned())
+                .collect(),
+        ),
+        Statuses::Result => (
+            "result",
+            READINESS_RESULT_STATUSES
                 .iter()
                 .map(|status| (*status).to_owned())
                 .collect(),

@@ -403,6 +403,17 @@ fn each_refusal_names_its_field_and_reason() {
             "spec.steps",
             "at most 32",
         ),
+        (
+            "misspelled readiness result status",
+            with_step(
+                sequential(),
+                &[0],
+                "reuse_when",
+                json!("result.status == 'pased' && result.revision == job.source_revision"),
+            ),
+            "spec.steps.qa.reuse_when",
+            "'pased'",
+        ),
     ];
     for (case, spec, clause, reason) in cases {
         let message = refusal(spec);

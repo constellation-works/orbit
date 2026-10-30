@@ -720,7 +720,8 @@ over a typed job environment:
 
 A step status is one of `waiting`, `queued`, `running`, `done`, `held`,
 `failed`, `timeout`, `cancelled` and `skipped`; a misspelled literal fails
-to load. An auto-task step inside a `loop` or `fan_out` is refused, and so
+to load. A `release-readiness/v1` receipt's `status` is `passed`, `blocked`
+or `unavailable`, and a misspelled literal there fails the same way. An auto-task step inside a `loop` or `fan_out` is refused, and so
 is a job with more than 32 of them. Every refusal names the job file and
 the field (`spec.steps.<id>.wait_until`), and for an expression its
 line:column.
