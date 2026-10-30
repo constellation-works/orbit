@@ -694,12 +694,22 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::super::apply_script_grants,
     },
+    // A counter that triggers bump whenever the delivery freshness probe may
+    // change, so a resource-profile cache hit skips the probe while it holds.
+    // The triggers fire on an older binary's writes too, and an older binary
+    // never reads the table.
+    Migration {
+        version: 75,
+        name: "delivery_runs_stamp",
+        compat: MigrationCompatibility::Additive,
+        apply: super::super::apply_delivery_runs_stamp,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 74;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 75;
 
 /// A migration recorded as applied in the `schema_meta` ledger.
 #[derive(Debug, Clone, PartialEq, Eq)]
