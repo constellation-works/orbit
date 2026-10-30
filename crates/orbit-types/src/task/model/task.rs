@@ -106,6 +106,11 @@ pub struct Task {
     /// recorded and on interactive filings that did not state one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<TaskOrigin>,
+    /// Stable rule-result fingerprint this task owns, written by the
+    /// rule-findings filer at filing so a retitled task keeps its identity.
+    /// Absent on every task the filer did not create.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule_fingerprint: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -201,6 +206,7 @@ impl Task {
             orchestrator_model: envelope.orchestrator_model,
             orchestrator_model_source: envelope.orchestrator_model_source,
             origin: envelope.origin,
+            rule_fingerprint: envelope.rule_fingerprint,
             created_at: envelope.created_at,
             updated_at: envelope.updated_at,
         }

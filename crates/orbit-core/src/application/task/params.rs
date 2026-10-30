@@ -147,6 +147,9 @@ pub struct TaskAddParams {
     /// for an interactive filing; a `system_created` filing or a sweep finding
     /// its provenance tag marks records [`TaskOrigin::Automation`] instead.
     pub origin: Option<TaskOrigin>,
+    /// Rule-result fingerprint the rule-findings filer stamps at filing.
+    /// Every other creator leaves it unset.
+    pub rule_fingerprint: Option<String>,
     /// Creation intent an operator surface's selector screening established
     /// for `context_files` ([`OrbitRuntime::add_task_screened`]).
     ///
@@ -185,6 +188,7 @@ impl Default for TaskAddParams {
             orchestrator: None,
             orchestrator_model: None,
             origin: None,
+            rule_fingerprint: None,
             context_creation: ContextCreationAuthorization::default(),
             creation_decision: None,
         }

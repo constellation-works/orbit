@@ -61,6 +61,10 @@ pub struct TaskCreateParams {
     /// Why the task was filed; absent on legacy creation contracts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<TaskOrigin>,
+    /// Rule-result fingerprint stamped by the rule-findings filer; absent
+    /// on legacy creation contracts and every other filing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule_fingerprint: Option<String>,
     pub comments: Vec<TaskComment>,
     /// Exact canonical `context_files` selectors an operator surface accepted
     /// for creation under `allow_missing_context`. Recorded as the task's

@@ -37,6 +37,7 @@ pub(crate) fn sample_bundle(id: &str) -> TaskBundleV2 {
             orchestrator_model_source: None,
             created_by_model: None,
             origin: None,
+            rule_fingerprint: None,
             relations: Vec::new(),
             tags: vec!["task-artifacts".to_string()],
             required_tools: Vec::new(),

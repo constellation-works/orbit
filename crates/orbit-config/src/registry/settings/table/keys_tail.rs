@@ -800,6 +800,48 @@ macro_rules! with_tail_keys {
         tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
     },
+    ux_rules_surfaces: Vec<String> => Vec<String> {
+        key: "ux_rules.surfaces", value_type: "array<string>",
+        description: "Surfaces the ux-rules routine runs (for example ui and cli); empty disables it.",
+        section: ConfigSection::Housekeeping, order: 180,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<Vec<String>>| resolve_name_list(raw, "ux_rules.surfaces"),
+    },
+    ux_rules_runner: String => String {
+        key: "ux_rules.runner", value_type: "string",
+        description: "Workspace-relative rule runner the ux-rules script step runs and filed tasks name in their reproduce command.",
+        section: ConfigSection::Housekeeping, order: 181,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<String>| resolve_non_empty(raw, "scripts/ux-rules/run.mjs", "ux_rules.runner"),
+    },
+    ux_rules_ui_base_url: String => String {
+        key: "ux_rules.ui_base_url", value_type: "string",
+        description: "Live dashboard URL the ux-rules runner measures for UI surfaces.",
+        section: ConfigSection::Housekeeping, order: 182,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<String>| resolve_non_empty(raw, "http://127.0.0.1:7878", "ux_rules.ui_base_url"),
+    },
+    ux_rules_max_new_tasks: u32 => u32 {
+        key: "ux_rules.max_new_tasks", value_type: "integer",
+        description: "Most new tasks one rule-findings filing run creates, highest severity first.",
+        section: ConfigSection::Housekeeping, order: 183,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<u32>| resolve_bounded_count(raw, 10, 50, "ux_rules.max_new_tasks"),
+    },
+    ux_rules_file_at: String => String {
+        key: "ux_rules.file_at", value_type: "string",
+        description: "Lowest rule-result severity the rule-findings filer files: critical, high, medium, low or nit; lower results are recorded only.",
+        section: ConfigSection::Housekeeping, order: 184,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<String>| resolve_choice(raw, "low", "ux_rules.file_at", &["critical", "high", "medium", "low", "nit"]),
+    },
+    ux_rules_disabled: Vec<String> => Vec<String> {
+        key: "ux_rules.disabled", value_type: "array<string>",
+        description: "Rule ids the ux-rules runner does not run.",
+        section: ConfigSection::Housekeeping, order: 185,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<Vec<String>>| resolve_name_list(raw, "ux_rules.disabled"),
+    },
         }
     };
 }

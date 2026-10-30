@@ -100,6 +100,7 @@ mod review_held_resume;
 mod review_record_ids;
 mod review_report_revisions;
 mod review_run_option;
+mod rule_findings_sweep;
 mod sandbox_off;
 mod scheduled_tasks;
 mod search_hydration;

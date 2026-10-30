@@ -136,7 +136,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Crew Ladder](./design/crew-ladder/1_scope.md) | Daniel reviews this scope; then file phase 1 (ladder config, shadow trials and the ladder report) | claude |
 | [Script Steps](./design/script-steps/1_scope.md) | Phases 1 and 2 landed (manifests, grants, and Linux execution under `linux-bwrap-script-v1` with `script.execution` audit and `orbit script history`); next is phase 3, files and macOS | claude |
 | [Symbol Risk Index](./design/symbol-risk-index/1_scope.md) | Daniel reviews this scope and 2_design.md; implementation tasks are filed after acceptance | claude |
-| [Ux Rules](./design/ux-rules/1_scope.md) | Phases 1-3 filed as ORB-19974..19976; build before the visual-review mock phases | claude |
+| [Ux Rules](./design/ux-rules/1_scope.md) | Phases 1-3 built (ORB-19974..19976); enabling the routine needs an operator-granted ux_rules_runner script, and a live UI surface waits for script steps' network phase | claude |
 | [Visual Review](./design/visual-review/1_scope.md) | UX rules ORB-19974/19975 first (view manifest, browser settings); then phases 1-6 as ORB-19977..19982 | claude |
 
 ### Shipped (34)

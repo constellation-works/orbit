@@ -50,6 +50,7 @@ fn make_bundle(id: &str, title: &str, relations: Vec<TaskRelation>) -> TaskBundl
             orchestrator_model_source: None,
             created_by_model: None,
             origin: None,
+            rule_fingerprint: None,
             relations,
             tags: vec!["migration".to_string()],
             required_tools: Vec::new(),

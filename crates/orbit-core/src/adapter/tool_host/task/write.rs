@@ -181,6 +181,7 @@ pub(super) fn add(
             orchestrator: optional_string(input, "orchestrator")?,
             orchestrator_model: optional_string(input, "orchestrator_model")?,
             origin: parse_optional_task_origin(input, "origin")?,
+            rule_fingerprint: None,
             context_creation: ContextCreationAuthorization::default(),
             creation_decision: None,
         },

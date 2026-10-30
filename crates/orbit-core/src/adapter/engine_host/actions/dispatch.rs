@@ -15,6 +15,7 @@ use crate::application::sweep_filing::ci_failure::filing as ci_failure_filing;
 use crate::application::sweep_filing::dependabot::{
     consolidate as dependabot_consolidate, filing as dependabot_filing,
 };
+use crate::application::sweep_filing::rule_findings as rule_findings_filing;
 use crate::application::task::pilot as task_pilot;
 use crate::application::task::{
     blocked_recovery, escalation_triage_steps, finding_verification_steps,
@@ -198,6 +199,12 @@ pub(crate) fn run_deterministic(
         }
         CoreDeterministicAction::FileDependabotAlertTasks => {
             dependabot_filing::file_dependabot_alert_tasks(runtime, input)
+                .map_err(|error| DispatchError::action_failed(action, error.to_string()))
+        }
+        // Keep one task per rule-result fingerprint from a results document
+        // any workspace script wrote; surface-agnostic by schema.
+        CoreDeterministicAction::FileRuleFindings => {
+            rule_findings_filing::file_rule_findings(runtime, input)
                 .map_err(|error| DispatchError::action_failed(action, error.to_string()))
         }
         // The admissible work for one drain iteration [ORB-10819]: the

@@ -152,6 +152,7 @@ fn envelope(
         orchestrator_model_source: None,
         created_by_model: None,
         origin: None,
+        rule_fingerprint: None,
         relations,
         tags,
         required_tools: Vec::new(),

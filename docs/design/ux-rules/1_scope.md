@@ -5,7 +5,7 @@ last_updated: 2026-10-29
 last_validated: 2026-10-29
 status: Draft
 stage: designing
-next: "Phases 1-3 filed as ORB-19974..19976; build before the visual-review mock phases"
+next: "Phases 1-3 built (ORB-19974..19976); enabling the routine needs an operator-granted ux_rules_runner script, and a live UI surface waits for script steps' network phase"
 feature: ux-rules
 doc_role: scope
 type: design
@@ -15,7 +15,7 @@ tags: [ux-rules, ui, cli, mcp, routines, auto-tasks, browser-kit, visual-review]
 
 # Scope: UX rules
 
-Status: design only, nothing built. Daniel, 2026-10-29: "run a routine on periodic UI checks
+Status: phases 1-3 built (runner, CLI and UI rule sets, `file_rule_findings`, the `rule_fingerprint` field, `ux_rules_pipeline` and the seeded daily `ux-rules` routine, disabled until an operator grants the runner script and enables it). Open question 1 is answered: a network-`none` script step cannot reach host loopback, so a live-dashboard UI surface waits for script steps' network phase; CLI and fixture-mode UI runs work. Daniel, 2026-10-29: "run a routine on periodic UI checks
 on a list of rules ... break it down into rules, and automate the validation", and the same
 for the CLI. This is the first slice of the shared visual infrastructure: the view manifest
 and capture driver it introduces are the ones [visual review](../visual-review/1_scope.md)
