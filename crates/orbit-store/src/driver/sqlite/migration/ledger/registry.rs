@@ -684,12 +684,22 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::super::apply_worker_resource_limits,
     },
+    // Script steps phase 1: the host-local operator grant for one
+    // workspace script at one content digest. A new table only, which an
+    // older binary never reads; its job loader refuses `target: script:`
+    // and runs nothing.
+    Migration {
+        version: 74,
+        name: "script_grants",
+        compat: MigrationCompatibility::Additive,
+        apply: super::super::apply_script_grants,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 73;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 74;
 
 /// A migration recorded as applied in the `schema_meta` ledger.
 #[derive(Debug, Clone, PartialEq, Eq)]

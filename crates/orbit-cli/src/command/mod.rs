@@ -25,6 +25,7 @@ pub use operation::args as operation_args;
 pub mod plugin;
 pub mod routine;
 pub mod run;
+pub mod script;
 pub mod search;
 pub mod skill;
 pub mod sweep;
@@ -100,6 +101,7 @@ Knowledge:
 Operate:
   run          Run workflows, drain the backlog, and inspect runs
   job          Define, list, and manage job workflows
+  script       Grant and inspect workspace scripts a job step may run
   experiment   Define, run and conclude experiments over agent treatments
   lease        Coordinate path leases with the workspace owner
   tool         Manage and run Orbit tools, including external MCP plugins
@@ -167,6 +169,7 @@ pub enum Commands {
     // ── Operate ──
     Run(run::RunCommand),
     Job(job::JobCommand),
+    Script(script::ScriptCommand),
     Experiment(experiment::ExperimentCommand),
     Lease(lease::LeaseCommand),
     Tool(tool::ToolCommand),

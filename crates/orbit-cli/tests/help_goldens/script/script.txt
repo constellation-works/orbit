@@ -1,0 +1,27 @@
+Grant and inspect workspace scripts a job step may run
+
+Usage: orbit script [OPTIONS] <COMMAND>
+
+Commands:
+  list    List workspace scripts with their entry, digest and grant state
+  show    Show one script's manifest facts, grant and staleness
+  grant   Grant one script at its current manifest and entry digests
+  revoke  Revoke one script's grant on this host
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header
+
+A script is a manifest at `.orbit/resources/scripts/<name>.yaml` whose
+`entry` names a program file in the workspace. A job step names it
+as `target: script:<name>`. Grants are host-local consent bound to
+the manifest and entry digests: editing either file makes the grant
+stale until an operator grants again. Script execution is not
+available yet; a script step currently refuses at dispatch.

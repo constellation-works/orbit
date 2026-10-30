@@ -1,0 +1,4 @@
+[
+  {"argv": ["script"], "golden": "script/script.txt"},
+  {"argv": ["script", "grant"], "golden": "script/grant.txt"}
+]

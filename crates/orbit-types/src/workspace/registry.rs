@@ -181,6 +181,10 @@ pub struct WorkspacePaths {
     pub state_dir: PathBuf,
     pub activities_dir: PathBuf,
     pub jobs_dir: PathBuf,
+    /// Workspace-only script manifests (`.orbit/resources/scripts`). The
+    /// global root's `resources/` holds no scripts, so no script reaches
+    /// every workspace on a host.
+    pub scripts_dir: PathBuf,
     pub skills_dir: PathBuf,
     pub executors_dir: PathBuf,
     pub policies_dir: PathBuf,
@@ -208,6 +212,7 @@ impl WorkspacePaths {
             state_dir: state_dir.clone(),
             activities_dir: resources_dir.join("activities"),
             jobs_dir: resources_dir.join("jobs"),
+            scripts_dir: resources_dir.join("scripts"),
             skills_dir: resources_dir.join("skills"),
             executors_dir: resources_dir.join("executors"),
             policies_dir: resources_dir.join("policies"),

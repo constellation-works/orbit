@@ -117,6 +117,13 @@ Reference an activity:
   target: activity:agent_assess_diff
 ```
 
+Reference a workspace script (see [Script steps](#script-steps)):
+
+```yaml
+- id: package
+  target: script:package
+```
+
 Inline a type-specific activity spec:
 
 ```yaml
@@ -559,3 +566,56 @@ process supervisor confined by the `cwd` check above, and each step
 reports the backend it actually ran under in `sandbox` (`"none"` for the
 shipped definition). Add a `sandbox` to the executor definition and an
 `fsProfile` to the activity to confine shell steps at the kernel level.
+
+## Script steps
+
+A step may instead name a workspace script: `target: script:<name>`. The
+name resolves to a manifest at `.orbit/resources/scripts/<name>.yaml`
+(workspace-only; the global root holds no scripts):
+
+```yaml
+schemaVersion: 1
+kind: Script
+metadata:
+  name: package
+spec:
+  description: Package the built site into a tarball and report its digest.
+  entry: tools/package.sh            # workspace-relative; resolved physically
+  interpreter: [bash]                  # optional; or the entry's `#!` line
+  args: ["--out", "out/", "--label={{ input.label }}"]
+  requests:                            # asks only; the grant decides
+    network: none
+    timeout_seconds: 300
+```
+
+The manifest names code in a file, never inline code:
+
+- `entry` must resolve physically (after symlinks) to a regular file
+  beneath the workspace root, outside `.git/` and `.orbit/state/`. A
+  manifest that is missing, whose entry escapes, or whose interpreter
+  carries an inline-code flag (`-c` for `sh`, `bash`, `zsh`, `dash` and
+  `python*`; `-e` for `perl`, `ruby` and `node`) fails to load, with the
+  manifest file named. Unknown fields are refused, so a `command:` or
+  `script:` text field cannot be added.
+- `interpreter:` is a launcher argv (`[bash]`, `[uv, run, --offline,
+  --script]`), or comes from the entry's `#!` line in the honored forms
+  `#!/abs/path [one-arg]` and `#!/usr/bin/env <name>`; neither means a
+  native executable. Interpreter arguments are literal.
+- Each `args:` element is exactly one argv element; `{{ … }}` templates
+  render against the step input and are never split or globbed.
+
+A script runs only under an operator grant bound to the digests of the
+manifest and the entry file. `orbit script grant <name>` records it
+(host-local, witnessed outside the database; agent sessions cannot
+grant or revoke), `orbit script list` and `orbit script show <name>`
+report each script as `granted`, `stale` (either file changed since the
+grant, with both digests), `ungranted` or `orphaned`, and `orbit doctor`
+carries the same findings. `orbit script revoke <name>` withdraws a
+grant.
+
+Routines never name a script directly — wrap it in a one-step job and
+target `job:<name>` — and `type: shell` remains a load error. Script
+execution is not available yet: a valid script step loads, then refuses
+at dispatch with `script_steps_unavailable`, and nothing is spawned.
+An older Orbit binary meeting `target: script:` reports a load error
+and runs nothing.

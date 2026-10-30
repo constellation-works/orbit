@@ -33,6 +33,7 @@
 use std::collections::BTreeSet;
 
 use super::ACTIVITY_REF_PREFIX;
+use super::SCRIPT_REF_PREFIX;
 use super::job_v2::{JobV2, JobV2Step, JobV2StepBody};
 
 /// The activity ids a job can dispatch, split by the structural role the job
@@ -113,6 +114,11 @@ fn insert_activity(set: &mut BTreeSet<String>, raw: Option<&str>) {
     let Some(raw) = raw else {
         return;
     };
+    // A script step dispatches no activity, so its `script:<name>` target
+    // never enters the activity role set (the step id already does).
+    if raw.starts_with(SCRIPT_REF_PREFIX) {
+        return;
+    }
     let name = raw.strip_prefix(ACTIVITY_REF_PREFIX).unwrap_or(raw).trim();
     if !name.is_empty() {
         set.insert(name.to_string());

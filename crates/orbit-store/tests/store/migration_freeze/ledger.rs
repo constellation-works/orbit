@@ -493,6 +493,7 @@ fn legacy_db_adopts_versioned_ledger() {
                 "migration.v0073".to_string(),
                 "worker_resource_limits".to_string(),
             ),
+            ("migration.v0074".to_string(), "script_grants".to_string(),),
         ]
     );
 }

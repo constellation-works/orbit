@@ -14,7 +14,7 @@ use orbit_common::{NotFoundKind, OrbitError};
 use orbit_engine::activity_job::load_job_asset;
 use orbit_engine::{
     JobOutcome, V2AuditWriter, dispatch_error_to_orbit, execute_job_with_resume,
-    resolve_job_catalog_refs_for_execution,
+    resolve_job_catalog_refs_with_scripts_for_execution,
 };
 use orbit_store::contracts::{JobRunStepParams, TaskReservationReleaseReason};
 use orbit_types::record::OrbitEvent;
@@ -358,11 +358,17 @@ impl OrbitRuntime {
         })?;
 
         // Phase 4: resolve `target: activity:<name>` refs before any other
-        // pass, so retired-feature rejection sees concrete specs.
+        // pass, so retired-feature rejection sees concrete specs. The
+        // workspace's script catalog rides along so a `target:
+        // script:<name>` step loads (its manifest is validated and its
+        // entry resolved inside the workspace) and then refuses at
+        // dispatch with `script_steps_unavailable`; a missing or invalid
+        // manifest fails this load, naming the manifest file.
         let catalog = self
             .v2_activity_catalog()
             .map_err(|err| OrbitError::InvalidInput(format!("build activity catalog: {err}")))?;
-        resolve_job_catalog_refs_for_execution(&mut asset.spec, &catalog)
+        let scripts = self.v2_script_catalog()?;
+        resolve_job_catalog_refs_with_scripts_for_execution(&mut asset.spec, &catalog, &scripts)
             .map_err(dispatch_error_to_orbit)?;
 
         // [ORB-10801] Reject retired declarations at load time so a run never

@@ -31,6 +31,7 @@ mod plugins;
 mod resource_minutes;
 mod retention_analytics;
 mod routine;
+mod scripts;
 mod task_commit_journal;
 mod task_reservations;
 mod worker_resource_limits;
@@ -87,6 +88,7 @@ use resource_minutes::{
 };
 use retention_analytics::apply_retention_analytics;
 use routine::apply_routine_scheduler_schema;
+use scripts::apply_script_grants;
 use task_commit_journal::apply_task_commit_journal;
 use task_reservations::{
     apply_lease_notices, apply_task_reservation_lease_queue, apply_task_reservation_lease_token,

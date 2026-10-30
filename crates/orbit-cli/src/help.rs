@@ -229,6 +229,10 @@ const ROOT_OPERATE: &[GroupedRow] = &[
     ("run", "Run workflows, drain the backlog, and inspect runs"),
     ("job", "Define, list, and manage job workflows"),
     (
+        "script",
+        "Grant and inspect workspace scripts a job step may run",
+    ),
+    (
         "experiment",
         "Define, run and conclude experiments over agent treatments",
     ),

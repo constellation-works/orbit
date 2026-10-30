@@ -295,8 +295,12 @@ pub struct JobV2Step {
 ///
 /// `TargetRef` and `Target` are distinct variants so the executor only ever
 /// sees `Target` after `resolve_job_target_refs` runs at
-/// load time. A `TargetRef` that survives into dispatch is a caller bug —
-/// the job executor should never have to look up an activity by name.
+/// load time. An `activity:` `TargetRef` that survives into dispatch is a
+/// caller bug — the job executor should never have to look up an activity
+/// by name. A `script:` ref is the one deliberate exception in script
+/// steps phase 1: resolution validates it against the workspace's script
+/// catalog and retains the ref, and dispatch refuses it with
+/// `script_steps_unavailable` because nothing executes yet.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 // The resolved Target carries the activity snapshot inline in persisted job
 // steps. Boxing it would churn every executor reader for a size heuristic;
@@ -480,9 +484,9 @@ pub struct TargetStep {
 /// `timeout_seconds`, `session`) carry through unchanged.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TargetRef {
-    /// Reference string — currently `activity:<name>`. Namespace-prefixed so
-    /// future kinds (`job:<name>` for nested-job refs, etc.) land without a
-    /// breaking shape change.
+    /// Reference string — `activity:<name>` or `script:<name>`.
+    /// Namespace-prefixed so future kinds (`job:<name>` for nested-job
+    /// refs, etc.) land without a breaking shape change.
     pub target: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_input: Option<Value>,

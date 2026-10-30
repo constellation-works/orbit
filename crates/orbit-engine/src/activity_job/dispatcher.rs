@@ -323,6 +323,15 @@ pub enum DispatchError {
         reason: String,
     },
 
+    /// A `target: script:<name>` step reached dispatch. Script manifests,
+    /// grants and load-time validation exist, but no phase of this build
+    /// executes a script yet, so the step refuses without spawning
+    /// anything. Non-retryable: another attempt meets the same refusal.
+    #[error(
+        "script_steps_unavailable: step `{step_id}` targets script `{script}`, but script execution is not available yet; nothing was spawned"
+    )]
+    ScriptStepsUnavailable { step_id: String, script: String },
+
     /// Job validation rejected the spec at load time.
     #[error("job validation failed: {0}")]
     JobValidation(String),
@@ -382,6 +391,7 @@ impl DispatchError {
                 | DispatchError::ReviewEvidenceHold(_)
                 | DispatchError::ForgeUnavailableHold(_)
                 | DispatchError::ChildRunCancelled { .. }
+                | DispatchError::ScriptStepsUnavailable { .. }
                 | DispatchError::ProtocolSkew(_)
         )
     }
@@ -395,6 +405,7 @@ impl DispatchError {
         let text = || self.to_string();
         match self {
             DispatchError::WorktreeIntegrity { code, .. } => code,
+            DispatchError::ScriptStepsUnavailable { .. } => "script_steps_unavailable",
             DispatchError::RecoverableVcsConflict(_) => "recoverable_vcs_conflict",
             DispatchError::TaskCompletionLiveRun { .. } => "task_completion_live_run",
             DispatchError::ImageInputUnavailable { .. } => wf::IMAGE_INPUT_UNAVAILABLE_ERROR_CODE,

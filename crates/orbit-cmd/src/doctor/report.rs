@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 use super::browser_kit::browser_kit_rows;
 use super::git_protection::git_protection_row;
 use super::permissions::state_directory_permissions_row;
+use super::script_grants::script_grant_rows;
 use super::worker_containment::worker_containment_row;
 use super::{DoctorProbe, WORKSPACE_PROBES, WorkspaceDoctorResult, WorkspaceDoctorStatus};
 
@@ -28,6 +29,7 @@ const REPORT_PROBES: &[DoctorProbe] = &[
     DoctorProbe::one("worker-containment", |runtime, _| {
         worker_containment_row(runtime)
     }),
+    DoctorProbe::many("script-grants", |runtime, _| script_grant_rows(runtime)),
     DoctorProbe::many("provider", |runtime, _| routed_provider_rows(runtime)),
     DoctorProbe::many("provider-auth", |runtime, _| provider_auth_rows(runtime)),
     DoctorProbe::many("provider-limits", |runtime, _| provider_limit_rows(runtime)),
