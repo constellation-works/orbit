@@ -61,6 +61,10 @@ missing_docs = "warn"
 [workspace.dependencies]
 assert_cmd = "2"
 base64 = "0.22"
+# Condition triggers parse and evaluate CEL predicates [ORB-19990]. Orbit owns
+# the type checker over the parsed AST (the crate ships none); regex and the
+# encoder extension stay off because `matches()` is refused.
+cel = { version = "0.15", default-features = false, features = ["chrono"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio"] }
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"

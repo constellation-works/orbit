@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use orbit_common::OrbitError;
 use orbit_common::governance::agents::AgentsVerb;
 use orbit_common::governance::auto_task::AutoTaskVerb;
+use orbit_common::governance::automation::AutomationVerb;
 use orbit_common::governance::codebase::CodebaseVerb;
 use orbit_common::governance::crew::CrewVerb;
 use orbit_common::governance::decision::DecisionVerb;
@@ -109,6 +110,8 @@ pub enum OrbitBuiltinAction {
     AgentInvoke,
     /// Read-only agent scorecard verbs.
     Agents(AgentsVerb),
+    /// Read-only automation verbs: condition explain.
+    Automation(AutomationVerb),
     /// Read-only codebase analytics verbs.
     Codebase(CodebaseVerb),
     CommandExec,
@@ -161,6 +164,12 @@ impl From<ExperimentVerb> for OrbitBuiltinAction {
 impl From<CodebaseVerb> for OrbitBuiltinAction {
     fn from(verb: CodebaseVerb) -> Self {
         Self::Codebase(verb)
+    }
+}
+
+impl From<AutomationVerb> for OrbitBuiltinAction {
+    fn from(verb: AutomationVerb) -> Self {
+        Self::Automation(verb)
     }
 }
 

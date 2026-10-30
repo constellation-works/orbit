@@ -92,6 +92,11 @@ across polls. Web's host-wide routine memo uses the existing runtime-memo
 single-flight mechanism with a separate host namespace and file/database input
 stamps.
 
+Automation parses and evaluates condition-trigger predicates with the `cel`
+crate (cel-rust, no regex or encoder features). That crate ships no type
+checker, so `orbit-automation::condition` checks the parsed AST against the
+declared task and workspace schema itself. There is no new internal crate edge.
+
 Core exposes Exec's shared Bubblewrap capability probe to CLI onboarding and
 diagnostics. The CLI's dev-only edges to Engine, Exec and Tools support the real
 sandbox broker integration test, which pairs the host runtime with the built

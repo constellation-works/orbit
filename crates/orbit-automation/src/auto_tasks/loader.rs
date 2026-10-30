@@ -11,10 +11,11 @@ use std::path::{Path, PathBuf};
 use std::{fmt, fs};
 
 use orbit_common::protocol::yaml::parse_auto_task_yaml;
-use orbit_types::workflow::AutoTaskDefinition;
+use orbit_types::workflow::{AutoTaskDefinition, AutoTaskSchedule};
 
 use super::schedule::validate_schedule;
 use super::settings::{AutoTaskSettingsTable, load_settings_table};
+use crate::condition::{ConditionCarrier, check_condition};
 
 /// Directory under a workspace's `.orbit/` holding auto-task YAML files.
 pub const AUTO_TASKS_DIR: &str = "auto_tasks";
@@ -226,6 +227,10 @@ fn load_definition_with_settings(
             .map_err(|error| format!("auto-task settings for '{}': {error}", definition.name))?;
     }
     validate_schedule(&definition.schedule).map_err(|error| error.to_string())?;
+    if let AutoTaskSchedule::Condition { condition } = &definition.schedule {
+        check_condition(condition, ConditionCarrier::AutoTask)
+            .map_err(|error| error.to_string())?;
+    }
 
     // The file stem is the definition identity: reject a mismatch so CRUD (which
     // writes `<name>.yaml`) and the provenance tag stay consistent.

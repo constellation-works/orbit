@@ -203,6 +203,13 @@ fn fire_definition(
     now: DateTime<Utc>,
     options: SchedulerOptions,
 ) -> Result<AutoTaskFireReport, OrbitError> {
+    // Conditions are checked and explained, never fired, in this release.
+    if matches!(
+        definition.schedule,
+        orbit_types::workflow::AutoTaskSchedule::Condition { .. }
+    ) {
+        return Ok(skipped(definition, "condition_not_evaluated"));
+    }
     // A plugin-seeded definition whose plugin is inactive cannot admit work.
     if let Some(skip) = host.skip_reason(definition) {
         let warning = InactivePluginWarning {
