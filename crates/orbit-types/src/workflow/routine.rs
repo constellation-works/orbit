@@ -70,10 +70,21 @@ pub struct RoutineTrigger {
     pub cron: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deliveries_landed: Option<super::automation::DeliveryTrigger>,
+    /// A CEL predicate over workspace state. Checked and explained, never
+    /// fired in this release, so the routine must stay disabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub condition: Option<super::automation::ConditionTrigger>,
     /// What to do about scheduled slots that fell in a gap. Defaults to
     /// `skip` (wait for the next natural slot).
     #[serde(default)]
     pub missed_run: MissedRunPolicy,
+}
+
+impl RoutineTrigger {
+    /// Whether this is a cron trigger: no delivery, state or condition form.
+    pub fn is_cron(&self) -> bool {
+        self.deliveries_landed.is_none() && self.state.is_none() && self.condition.is_none()
+    }
 }
 
 /// Missed-fire policy for gaps (sleep, downtime) between sweeps.
@@ -248,6 +259,22 @@ impl RoutineDefinition {
                 self.name
             )));
         }
+        if let Some(condition) = &self.trigger.condition {
+            condition.validate("trigger.condition")?;
+            if !self.trigger.cron.is_empty()
+                || self.trigger.deliveries_landed.is_some()
+                || self.trigger.state.is_some()
+            {
+                return Err(WorkflowError::Invalid(
+                    "trigger.condition: a condition routine takes exactly one trigger".into(),
+                ));
+            }
+            if self.enabled {
+                return Err(super::automation::condition_enabled_refusal(
+                    "trigger.condition",
+                ));
+            }
+        }
         if let Some(state) = &self.trigger.state {
             state.validate()?;
             if !self.trigger.cron.is_empty()
@@ -266,10 +293,7 @@ impl RoutineDefinition {
                 ));
             }
         }
-        if self.trigger.cron.trim().is_empty()
-            && self.trigger.deliveries_landed.is_none()
-            && self.trigger.state.is_none()
-        {
+        if self.trigger.cron.trim().is_empty() && self.trigger.is_cron() {
             return Err(WorkflowError::Invalid(format!(
                 "routine '{}' trigger.cron must not be empty",
                 self.name

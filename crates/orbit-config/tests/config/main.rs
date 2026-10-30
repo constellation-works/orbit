@@ -60,6 +60,7 @@ include!("agent_stall.rs");
 include!("config_paths.rs");
 include!("config_store.rs");
 include!("crew_env.rs");
+include!("lease_workspace.rs");
 include!("default_crew.rs");
 include!("delivery_conventions.rs");
 include!("fallbacks.rs");

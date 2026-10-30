@@ -2538,7 +2538,7 @@ After creating or reusing a PR, Orbit unions the allowlisted tags present on eve
 | `ux_rules.ui_base_url` | `"http://127.0.0.1:7878"` | **Advanced.** Live dashboard URL the ux-rules runner measures for UI surfaces. |
 | `ux_rules.max_new_tasks` | `10` | **Advanced.** Most new tasks one rule-findings filing run creates, highest severity first. |
 | `ux_rules.file_at` | `"low"` | **Advanced.** Lowest rule-result severity the rule-findings filer files: `critical`, `high`, `medium`, `low` or `nit`; lower results are recorded only. |
-| `ux_rules.disabled` | `[]` | **Advanced.** Rule ids the ux-rules runner does not run. |
+| `ux_rules.disabled` | `[]` | **Advanced.** Rule ids whose results are recorded only, not filed; the runner still runs them. |
 
 Agent relay output goes to `orbit-agent.jsonl` with its own 200 MiB archive budget and 50 MiB active-file limit, so it cannot consume the operational budget; each feed is pruned by its own size and age limits. A full agent queue blocks the relay instead of dropping lines. The operational feed can still drop a line when its queue is full. The dashboard and `orbit log tail` merge both active feeds. Full rotation runs in long-lived processes (`orbit mcp serve`, `orbit clock tick`/`orbit sweep`, `orbit web serve`); short-lived commands only roll an oversized active file.
 

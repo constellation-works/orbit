@@ -179,10 +179,15 @@ pub(super) fn map_invocation_accounting_fact(
 pub(super) fn hydrate_invocation_records(
     store: &Store,
     records: &mut [InvocationRecord],
+    with_tool_calls: bool,
 ) -> Result<(), OrbitError> {
     let invocation_ids = records.iter().map(|record| record.id).collect::<Vec<_>>();
     let task_ids = store.load_invocation_task_ids(&invocation_ids)?;
-    let tool_calls = store.load_invocation_tool_calls(&invocation_ids)?;
+    let tool_calls = if with_tool_calls {
+        store.load_invocation_tool_calls(&invocation_ids)?
+    } else {
+        Default::default()
+    };
     let index_by_id = records
         .iter()
         .enumerate()
