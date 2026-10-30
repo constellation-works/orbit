@@ -355,6 +355,30 @@ fn ux_rules_pipeline_preserves_custom_manifest_defaults_when_config_unset() {
         input.get("ui_base_url").is_none_or(Value::is_null),
         "unset config must leave ui_base_url to the manifest default, got {input}"
     );
+
+    // Per-key nulls are unsupplied too: remove them from the run input so
+    // engine merging can use the custom manifest defaults.
+    let refused = runtime.run_job_v2_from_yaml(
+        &job_path,
+        json!({"surfaces": null, "runner": null, "ui_base_url": null}),
+    );
+    assert!(
+        format!("{refused:?}").contains("not granted"),
+        "{refused:?}"
+    );
+    let input = persisted_input(&runtime);
+    assert!(
+        input.get("surfaces").is_none(),
+        "unset config must remove null surfaces so the manifest default applies, got {input}"
+    );
+    assert!(
+        input.get("runner").is_none(),
+        "unset config must remove null runner so the manifest default applies, got {input}"
+    );
+    assert!(
+        input.get("ui_base_url").is_none(),
+        "unset config must remove null ui_base_url so the manifest default applies, got {input}"
+    );
 }
 
 fn errors_file_one_task_per_rule() {

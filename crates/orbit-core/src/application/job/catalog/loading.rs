@@ -188,14 +188,14 @@ impl OrbitRuntime {
         if input.is_null() {
             *input = serde_json::json!({});
         }
-        if !input.is_object() {
+        let Some(input_object) = input.as_object_mut() else {
             return Err(OrbitError::InvalidInput(
                 "ux-rules run input must be an object".to_string(),
             ));
-        }
+        };
         let needs = ["surfaces", "runner", "ui_base_url"]
             .iter()
-            .any(|key| input.get(*key).is_none_or(Value::is_null));
+            .any(|key| input_object.get(*key).is_none_or(Value::is_null));
         if !needs {
             return Ok(());
         }
@@ -208,17 +208,20 @@ impl OrbitRuntime {
             ("runner", "ux_rules.runner"),
             ("ui_base_url", "ux_rules.ui_base_url"),
         ] {
-            if input.get(input_key).is_none_or(Value::is_null)
-                && let Some(value) = config
+            if input_object.get(input_key).is_none_or(Value::is_null) {
+                let configured_value = config
                     .values()
                     .iter()
                     .find(|entry| {
                         entry.key == config_key
                             && entry.source.kind() != orbit_config::ConfigValueSourceKind::BuiltIn
                     })
-                    .map(|entry| entry.value.clone())
-            {
-                input[input_key] = value;
+                    .map(|entry| entry.value.clone());
+                if let Some(value) = configured_value {
+                    input_object.insert(input_key.to_string(), value);
+                } else {
+                    input_object.remove(input_key);
+                }
             }
         }
         Ok(())
