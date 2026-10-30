@@ -539,7 +539,7 @@ driver keeps each context open until its checks have run). Two kinds of check:
 |---|---|---|
 | `render_timeout` | The `ready` selector never became visible. | high |
 | `setup_failed` | The candidate's setup failed for this app. | high |
-| `image_over_budget` | Neither capture image fits the artifact limit; no capture images are attached. | medium |
+| `image_over_budget` | Either the capture or the side-by-side image still exceeds the artifact limit after WebP encoding; no capture images are attached. | medium |
 | `off_loopback_request` | A browser request off loopback, blocked. | medium |
 | `color_scheme_leak` | A `color_scheme_invariant` app whose light-preference capture differs from its dark one. | medium |
 | `unstable_view` | §4.3; recorded against the manifest. | low |
