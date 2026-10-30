@@ -7,7 +7,9 @@
 //! rerun, and a blocking check finding still present stays unresolved. A
 //! must-address finding left unfixed, or disputed without the operator
 //! accepting the dispute (`orbit visual accept-dispute`), holds the
-//! candidate for the operator.
+//! candidate for the operator. A blocking finding the review gate issued
+//! no reviewer for (selective `not_required`, a review-skip tag) cannot be
+//! resolved, so it becomes a `high` follow-up instead of a hold.
 
 use std::path::{Path, PathBuf};
 
@@ -359,6 +361,7 @@ fn resolve_task(
     let head = candidate_head(workspace)?;
     let changed = head != record.candidate_sha;
     let resolutions = reviewer_resolutions(runtime, task_id)?;
+    let issued = reviewer_issued_findings(runtime, task_id, &record)?;
     let acceptances = accepted_disputes(runtime, task_id)?;
     let snapshot = record.clone();
     for finding in record.findings.iter_mut().filter(|f| reviewer_resolves(f)) {
@@ -372,6 +375,16 @@ fn resolve_task(
         {
             finding.resolution = Some(VisualResolution::DisputeAccepted);
             finding.resolution_reason = Some(acceptance.reason.clone());
+            continue;
+        }
+        if finding.must_address() && !issued.contains(&finding.finding_id) {
+            // Settle classified from the captured admission; the review gate
+            // then ran no reviewer (selective `not_required`, a review-skip
+            // tag), so nothing can resolve or dispute this finding. It is
+            // filed as a `high` follow-up rather than held (§11.3).
+            finding.disposition = Some(VisualDisposition::FollowUpHigh);
+            finding.resolution = None;
+            finding.resolution_reason = None;
             continue;
         }
         let claimed = resolutions
@@ -476,6 +489,31 @@ fn reviewer_resolutions(
         }
         _ => Vec::new(),
     })
+}
+
+/// The ids of `record`'s findings a before-landing reviewer was issued: the
+/// `visual_findings` of a manifest the review gate wrote after settle
+/// recorded `record`. A delivery whose gate ran no reviewer has none.
+fn reviewer_issued_findings(
+    runtime: &OrbitRuntime,
+    task_id: &str,
+    record: &VisualReviewRecord,
+) -> Result<Vec<String>, OrbitError> {
+    let Some(manifest) = runtime
+        .get_task_artifact(task_id, REVIEW_MANIFEST_ARTIFACT)?
+        .and_then(|artifact| serde_json::from_slice::<ReviewManifest>(&artifact.content).ok())
+    else {
+        return Ok(Vec::new());
+    };
+    let settled_at = chrono::DateTime::parse_from_rfc3339(&record.recorded_at).ok();
+    if settled_at.is_some_and(|settled_at| manifest.issued_at < settled_at) {
+        return Ok(Vec::new());
+    }
+    Ok(manifest
+        .visual_findings
+        .into_iter()
+        .map(|finding| finding.finding_id)
+        .collect())
 }
 
 /// Recapture the changed candidate and rerun its checks only (§1),
