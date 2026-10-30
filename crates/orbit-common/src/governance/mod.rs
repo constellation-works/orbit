@@ -2,6 +2,7 @@ pub mod agents;
 pub mod authorization;
 pub mod auto_task;
 pub mod codebase;
+pub mod crew;
 pub mod decision;
 pub mod drain;
 pub mod experiment;

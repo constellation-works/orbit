@@ -3,6 +3,7 @@ mod agents;
 mod auto_task;
 mod codebase;
 pub mod command;
+mod crew;
 mod decision;
 mod domain_control;
 pub mod drain;

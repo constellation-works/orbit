@@ -68,6 +68,7 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
             "orbit.codebase.related",
             "orbit.codebase.show",
             "orbit.command.exec",
+            "orbit.crew.ladder",
             "orbit.decision.digest",
             "orbit.decision.list",
             "orbit.decision.show",

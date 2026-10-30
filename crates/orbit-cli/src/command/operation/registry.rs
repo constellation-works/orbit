@@ -510,6 +510,10 @@ impl Commands {
             Commands::Codebase(command) => {
                 registry_operation(&command.command, runtime_dispatch!(Codebase))
             }
+            // The crew ladder report is registry-driven like codebase.
+            Commands::Crew(command) => {
+                registry_operation(&command.command, runtime_dispatch!(Crew))
+            }
             // The agent scorecards are registry-driven like codebase.
             Commands::Agents(command) => {
                 use super::super::agents::AgentsSubcommand;

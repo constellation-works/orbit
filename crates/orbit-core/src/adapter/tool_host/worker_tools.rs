@@ -2,6 +2,7 @@
 use orbit_common::governance::agents::AgentsVerb;
 use orbit_common::governance::auto_task::AutoTaskVerb;
 use orbit_common::governance::codebase::CodebaseVerb;
+use orbit_common::governance::crew::CrewVerb;
 use orbit_common::governance::drain::DrainVerb;
 use orbit_common::governance::friction::FrictionVerb;
 use orbit_common::governance::operation::OperationVerb;
@@ -49,6 +50,9 @@ pub(crate) fn execute(
         },
         OrbitBuiltinAction::Agents(verb) => match verb {
             AgentsVerb::Scorecard | AgentsVerb::Show => false,
+        },
+        OrbitBuiltinAction::Crew(verb) => match verb {
+            CrewVerb::Ladder => false,
         },
         OrbitBuiltinAction::Orchestrator(verb) => match verb {
             OrchestratorVerb::Scorecard | OrchestratorVerb::Show => false,
@@ -362,6 +366,9 @@ pub(crate) fn execute(
         },
         OrbitBuiltinAction::Agents(verb) => match verb {
             AgentsVerb::Scorecard | AgentsVerb::Show => return Ok(None),
+        },
+        OrbitBuiltinAction::Crew(verb) => match verb {
+            CrewVerb::Ladder => return Ok(None),
         },
         OrbitBuiltinAction::Orchestrator(verb) => match verb {
             OrchestratorVerb::Scorecard | OrchestratorVerb::Show => return Ok(None),

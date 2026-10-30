@@ -254,6 +254,10 @@ const ROOT_OBSERVE: &[GroupedRow] = &[
         "agents",
         "Score orchestrators, implementers, reviewers and pilots by crew and model",
     ),
+    (
+        "crew",
+        "Show how crews are laddered across complexity tiers",
+    ),
     ("log", "Tail the unified Orbit log feed"),
     (
         "doctor",

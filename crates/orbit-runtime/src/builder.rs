@@ -406,6 +406,7 @@ pub(crate) fn build_context_from_roots(
             runtime_config.snapshot.decision_channel_enabled,
             crate::task::locks::LeasePolicy::admit(&runtime_config.snapshot)?,
             runtime_config.snapshot.experiments(),
+            runtime_config.snapshot.crew_ladder(),
             runtime_config.snapshot.machine_labels.clone(),
         ),
     ))
