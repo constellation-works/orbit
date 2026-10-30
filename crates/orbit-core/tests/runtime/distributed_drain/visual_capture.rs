@@ -385,6 +385,41 @@ fn a_verdict_without_rejection_reason_still_deserializes() {
     );
 }
 
+/// The preceding reader denies unknown verdict fields in a review artifact.
+#[test]
+fn emitted_rejected_verdict_is_readable_by_the_preceding_reader() {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    #[allow(dead_code)]
+    struct PreviousVerdict {
+        verdict: orbit_types::task::VisualVerdictKind,
+        crew: Option<String>,
+        confidence: Option<String>,
+        severity: Option<String>,
+        escalated: bool,
+        reasoning: String,
+        deviation_rejected: bool,
+    }
+
+    let verdict = orbit_types::task::VisualFindingVerdict {
+        verdict: orbit_types::task::VisualVerdictKind::Rejected,
+        crew: None,
+        confidence: Some("high".into()),
+        severity: None,
+        escalated: false,
+        reasoning: "basis holds".into(),
+        deviation_rejected: false,
+        rejection_reason: Some("premise_wrong".into()),
+    };
+    let emitted = serde_json::to_vec(&verdict).unwrap();
+    let previous: PreviousVerdict = serde_json::from_slice(&emitted)
+        .expect("the preceding reader accepts an emitted rejected verdict");
+    assert_eq!(
+        previous.verdict,
+        orbit_types::task::VisualVerdictKind::Rejected
+    );
+}
+
 crate::scenario_table!(
     a_claimed_capture_is_checked_against_its_contract_scenarios,
     a_claimed_capture_matching_its_contract_is_accepted,
