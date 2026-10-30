@@ -156,7 +156,12 @@ export async function startFixtureServer(app, fixture, repoRoot) {
         try {
           await Promise.race([closed, new Promise((resolve) => setTimeout(resolve, 100))]);
           signalGroup("SIGKILL");
-          await closed;
+          // Bound the post-KILL wait so a signal handler awaiting stop()
+          // cannot hang termination on a wedged fixture server.
+          await Promise.race([
+            closed,
+            new Promise((resolve) => setTimeout(resolve, 5000)),
+          ]);
         } finally {
           activeFixtureStops.delete(stop);
         }
@@ -618,12 +623,30 @@ async function main() {
   const browserVersion = browser.version();
   const servers = new Map();
   let shuttingDown = false;
-  const stopFixtureServers = () => {
+  let receivedSignal = null;
+  const shutdownOnSignal = (signal, exitCode) => {
+    if (receivedSignal) {
+      process.exit(1);
+      return;
+    }
+    receivedSignal = signal;
     shuttingDown = true;
-    for (const stop of activeFixtureStops) void stop();
+    const stops = [...activeFixtureStops].map((stop) => stop());
+    void (async () => {
+      try {
+        await Promise.race([
+          Promise.allSettled(stops),
+          new Promise((resolve) => setTimeout(resolve, 5000)),
+        ]);
+      } finally {
+        process.exit(exitCode);
+      }
+    })();
   };
-  process.on("SIGTERM", stopFixtureServers);
-  process.on("SIGINT", stopFixtureServers);
+  const onSigterm = () => shutdownOnSignal("SIGTERM", 143);
+  const onSigint = () => shutdownOnSignal("SIGINT", 130);
+  process.on("SIGTERM", onSigterm);
+  process.on("SIGINT", onSigint);
   const ruleResults = [];
   const entries = [];
   const serverFor = async (mock) => {
@@ -688,8 +711,8 @@ async function main() {
     }
   } finally {
     await Promise.all([...activeFixtureStops].map((stop) => stop()));
-    process.off("SIGTERM", stopFixtureServers);
-    process.off("SIGINT", stopFixtureServers);
+    process.off("SIGTERM", onSigterm);
+    process.off("SIGINT", onSigint);
     await browser.close().catch(() => {});
   }
   ruleResults.sort((a, b) => String(a.fingerprint).localeCompare(String(b.fingerprint)));

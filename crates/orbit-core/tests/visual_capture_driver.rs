@@ -4,6 +4,12 @@
 
 use std::process::Command;
 
+#[cfg(unix)]
+use std::process::{Child, Stdio};
+
+#[cfg(unix)]
+use std::time::{Duration, Instant};
+
 use serde_json::{Value, json};
 
 const DRIVER: &str = concat!(
@@ -189,4 +195,230 @@ if (alive) {
         "setup cleanup probe failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+// ORB-20090: the driver installed SIGTERM/SIGINT handlers that only flagged
+// shutdown and never exited, so a supervisor SIGTERM during a long capture
+// waited out the whole mock loop. The driver must exit promptly after
+// fixture cleanup instead. These tests hang the browser inside the first
+// capture, signal the driver, and assert it exits quickly with fixture
+// cleanup, rather than running to natural completion.
+#[cfg(unix)]
+#[test]
+fn sigterm_terminates_hanging_driver_after_fixture_cleanup() {
+    run_signal_case(libc::SIGTERM, "SIGTERM", 143);
+}
+
+#[cfg(unix)]
+#[test]
+fn sigint_terminates_hanging_driver_after_fixture_cleanup() {
+    run_signal_case(libc::SIGINT, "SIGINT", 130);
+}
+
+#[cfg(unix)]
+fn run_signal_case(signal: i32, signal_name: &str, expected_code: i32) {
+    let temp = tempfile::tempdir().unwrap();
+    let marker = temp.path().join("capture-started");
+    let pid_file = temp.path().join("setup.pid");
+    let kit_dir = temp.path().join("kit");
+    let png_dir = kit_dir.join("node_modules").join("pngjs");
+    std::fs::create_dir_all(&png_dir).unwrap();
+    std::fs::write(kit_dir.join("package.json"), "{}\n").unwrap();
+    std::fs::write(
+        png_dir.join("package.json"),
+        "{\"name\":\"pngjs\",\"version\":\"0.0.0\",\"main\":\"index.js\"}\n",
+    )
+    .unwrap();
+    std::fs::write(png_dir.join("index.js"), "exports.PNG = {};\n").unwrap();
+
+    let stub = temp.path().join("stub-playwright.mjs");
+    std::fs::write(
+        &stub,
+        r#"export const chromium = {
+  launch: async () => ({
+    version: () => "stub",
+    close: async () => {},
+    newContext: async () => {
+      const marker = process.env.DRIVER_TEST_READY_MARKER;
+      if (marker) {
+        const { writeFile } = await import("node:fs/promises");
+        await writeFile(marker, "ready");
+      }
+      // Hold the event loop open like a real browser wait (goto 60s,
+      // waitFor 30s): a bare pending promise would let Node drain and exit
+      // 0 even with the old swallow-the-signal handlers, hiding the hang.
+      setInterval(() => {}, 1000);
+      await new Promise(() => {});
+    },
+  }),
+};
+"#,
+    )
+    .unwrap();
+
+    let out_dir = temp.path().join("out");
+    std::fs::create_dir_all(&out_dir).unwrap();
+    let mock_file = temp.path().join("mock.png");
+    std::fs::write(&mock_file, [0x89, 0x50, 0x4e, 0x47]).unwrap();
+
+    let setup_script = "const fs = require('node:fs'); \
+        fs.writeFileSync(process.argv[1], String(process.pid)); \
+        console.log('ORBIT_VISUAL_URL=http://127.0.0.1:9/'); \
+        setInterval(() => {}, 1000);";
+    let request = serde_json::json!({
+        "repo_root": temp.path().display().to_string(),
+        "out_dir": out_dir.display().to_string(),
+        "kit_npm_project": kit_dir.display().to_string(),
+        "captures_per_mock": 1,
+        "frozen_instant": "2026-01-01T12:00:00.000Z",
+        "rules_dir": null,
+        "mocks": [
+            {
+                "artifact": "mocks/a.png",
+                "name": "a",
+                "mock_file": mock_file.display().to_string(),
+                "mock_ext": "png",
+                "view": "tasks-list",
+                "state": "default",
+                "theme": "dark",
+                "width": 1440,
+                "view_def": {
+                    "id": "tasks-list",
+                    "app": "orbit-web",
+                    "title": "tasks",
+                    "route": "/",
+                    "fixture": "tasks",
+                    "ready": "body",
+                    "responsive": true,
+                    "states": ["default"]
+                },
+                "app_def": {
+                    "name": "orbit-web",
+                    "setup": ["node", "-e", setup_script, pid_file.display().to_string()],
+                    "setup_timeout_s": 10,
+                    "themes": [],
+                    "color_scheme_invariant": false
+                }
+            }
+        ],
+    });
+    let request_path = temp.path().join("request.json");
+    std::fs::write(&request_path, serde_json::to_string(&request).unwrap()).unwrap();
+
+    let mut child = Command::new("node")
+        .arg(DRIVER)
+        .arg("--request")
+        .arg(&request_path)
+        .env("PLAYWRIGHT_MODULE", &stub)
+        .env("DRIVER_TEST_READY_MARKER", &marker)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|error| panic!("node must be on PATH to run the capture driver: {error}"));
+
+    let mut wait_for = |path: &std::path::Path, what: &str| {
+        let start = Instant::now();
+        let limit = Duration::from_secs(30);
+        while !path.exists() {
+            if start.elapsed() >= limit {
+                cleanup_child(&mut child);
+                panic!("capture driver did not reach {what} within {limit:?} (ORB-20090)");
+            }
+            if let Ok(Some(status)) = child.try_wait() {
+                let stderr = child.stderr.take().map(|mut pipe| {
+                    use std::io::Read as _;
+                    let mut text = String::new();
+                    let _ = pipe.read_to_string(&mut text);
+                    text
+                });
+                panic!(
+                    "capture driver exited {status:?} before reaching {what}; stderr: {}",
+                    stderr.unwrap_or_default()
+                );
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    };
+    wait_for(&marker, "in-flight capture");
+    wait_for(&pid_file, "fixture pid");
+
+    let pid_text = std::fs::read_to_string(&pid_file).unwrap();
+    let fixture_pid: i32 = pid_text.trim().parse().unwrap();
+    // The fixture must be alive when the signal lands; otherwise the test
+    // would not prove cleanup ran after the signal.
+    assert_eq!(
+        unsafe { libc::kill(fixture_pid, 0) },
+        0,
+        "fixture server {fixture_pid} must be alive before {signal_name} (ORB-20090)"
+    );
+
+    let before_signal = Instant::now();
+    let sent = unsafe { libc::kill(child.id() as libc::pid_t, signal) };
+    assert_eq!(
+        sent, 0,
+        "failed to send {signal_name} to the capture driver"
+    );
+
+    let deadline = Duration::from_secs(15);
+    let status = loop {
+        if let Ok(Some(status)) = child.try_wait() {
+            break status;
+        }
+        if before_signal.elapsed() >= deadline {
+            let fixture_status = unsafe { libc::kill(fixture_pid, 0) };
+            cleanup_child(&mut child);
+            unsafe {
+                libc::kill(-fixture_pid, libc::SIGKILL);
+                libc::kill(fixture_pid, libc::SIGKILL);
+            }
+            panic!(
+                "capture driver did not exit within {deadline:?} of {signal_name} \
+                 (fixture alive: {fixture_status}); it continued the capture loop \
+                 instead of terminating after fixture cleanup (ORB-20090)"
+            );
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let shutdown_duration = before_signal.elapsed();
+    assert!(
+        !status.success(),
+        "signalled driver must not exit 0 with a normal capture report \
+         after {shutdown_duration:?} (ORB-20090)"
+    );
+    assert_eq!(
+        status.code(),
+        Some(expected_code),
+        "signalled driver must exit {expected_code} for {signal_name}, got {status:?} \
+         after {shutdown_duration:?} (ORB-20090)"
+    );
+
+    // Fixture cleanup is part of the prompt exit: the server the driver
+    // started must be gone once the driver is gone.
+    let start = Instant::now();
+    let gone = loop {
+        if unsafe { libc::kill(fixture_pid, 0) } != 0 {
+            break true;
+        }
+        if start.elapsed() >= Duration::from_secs(5) {
+            break false;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    if !gone {
+        unsafe {
+            libc::kill(-fixture_pid, libc::SIGKILL);
+            libc::kill(fixture_pid, libc::SIGKILL);
+        }
+        let _ = child.wait();
+        panic!(
+            "fixture server {fixture_pid} remained alive after signalled driver exit (ORB-20090)"
+        );
+    }
+    let _ = child.wait();
+}
+
+#[cfg(unix)]
+fn cleanup_child(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
 }
