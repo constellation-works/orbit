@@ -80,6 +80,14 @@ candidates and the bump in
 script's version unless the human overrides it, and tag any confirmed
 *detected, untagged* task `breaking-change`.
 
+The MCP check includes closing an existing object's `additionalProperties`,
+including when the old schema omitted that keyword. Removing a branch's
+`type` inside `oneOf` is also a breaking signal: widening a branch can make
+an input match two alternatives, so the schema rejects it. Reopening a root
+object, removing a root type constraint, and inserting a provably disjoint
+`oneOf` alternative remain additive. Offline CLI fixtures in
+`scripts/test-release-breaking-changes.py` check these classifications.
+
 1. **Bump Cargo, npm, and MCP Registry metadata together.**
 
    - Update `[workspace.package].version` in

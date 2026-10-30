@@ -226,6 +226,8 @@ def schema_facts(schema, path, facts):
     if not isinstance(schema, dict):
         return
     facts.setdefault("schema_nodes", set()).add(path)
+    if schema.get("additionalProperties") is False:
+        facts.setdefault("closed_objects", set()).add(path)
     if "type" in schema:
         facts.setdefault("type", {})[path] = json.dumps(schema["type"], sort_keys=True)
     if "enum" in schema:
@@ -641,6 +643,12 @@ def detect_mcp_changes(git, parent, commit, changed):
         after_enums = translated_facts(after.get("enum", {}), path_map, unmatched)
         after_nodes = translated_facts(
             {path: True for path in after.get("schema_nodes", set())}, path_map, unmatched)
+        after_closed = translated_facts(
+            {path: True for path in after.get("closed_objects", set())}, path_map, unmatched)
+        for path in sorted(after_closed):
+            if (path in before.get("schema_nodes", set())
+                    and path not in before.get("closed_objects", set())):
+                report(f"`{name}` `{path}` additionalProperties closed")
         after_properties_keywords = translated_facts(
             {path: True for path in after.get("properties_keywords", set())}, path_map, unmatched)
         for path, names in sorted(before.get("properties", {}).items()):
@@ -654,7 +662,12 @@ def detect_mcp_changes(git, parent, commit, changed):
             for prop in sorted(names - after_properties[path]):
                 report(f"`{name}` property `{path}.{prop}` removed or renamed")
         for path, kind in sorted(before.get("type", {}).items()):
-            if path in after_types and after_types[path] != kind:
+            if path not in after_types:
+                if path in after_nodes and inside_oneof(path):
+                    report(f"`{name}` `{path}` type constraint removed "
+                           "inside oneOf alternative")
+                continue
+            if after_types[path] != kind:
                 report(f"`{name}` `{path}` type {kind} → {after_types[path]}")
         for path, values in sorted(before.get("enum", {}).items()):
             if path not in after_enums:

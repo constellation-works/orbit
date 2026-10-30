@@ -20,6 +20,7 @@ import unittest
 
 from workflow_helper_tests import WorkflowHelperRevisionTests
 from ci_cache_workflow_tests import CiDependencyCacheWorkflowTests
+from self_test_hang_regression import assert_hang_group_identity
 
 try:
     import yaml
@@ -402,6 +403,11 @@ exit "${FIXTURE_VERSION_EXIT:-0}"
                     self.assertEqual(running, [], "run() must terminate fixture processes before returning")
                 finally:
                     _stop_owned_processes(record, marker)
+
+    def test_ready_file_timeout_preserves_group_identity(self):
+        assert_hang_group_identity(self, lambda: self_test_hang.run(
+            ["fixture"], step="identity fixture", ready_file="empty-ready-file",
+            capture_output=True, timeout=1))
 
 
 def _recorded_pids(path):

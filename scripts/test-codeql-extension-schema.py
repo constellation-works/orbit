@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import sys
+import subprocess
 import tempfile
 import unittest
 
@@ -180,7 +181,9 @@ def release_row(callable_path=RELEASE_CALLABLE, output=RELEASE_OUTPUT, kind="tra
 
 class CodeqlExtensionSchemaTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="orbit-codeql-schema-")
+        scratch = REPO_ROOT / ".orbit/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        self.temporary = tempfile.TemporaryDirectory(prefix="orbit-codeql-schema-", dir=scratch)
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
 
@@ -198,6 +201,37 @@ class CodeqlExtensionSchemaTests(unittest.TestCase):
     def test_two_valid_four_field_rows_pass(self):
         self.write_pack(TWO_VALID_ROWS)
         self.assertEqual(self.errors(), [])
+
+    def test_flow_separators_through_cli(self):
+        data_file = self.write_pack(TWO_VALID_ROWS)
+        valid = '''extensions: [{addsTo: {pack: "codeql/rust-all", extensible: "barrierModel",}, data: [["orbit_store::driver::file::friction_store::validated_friction_root", "ReturnValue", "path-injection", "manual",],],},]
+'''
+        cases = {
+            "valid nesting and trailing commas": (valid, None),
+            "missing sequence comma": (valid.replace('"path-injection", "manual"',
+                                                       '"path-injection" "manual"'), "flow sequence"),
+            "repeated sequence comma": (valid.replace('"path-injection", "manual"',
+                                                        '"path-injection",, "manual"'), "flow sequence"),
+            "leading sequence comma": (valid.replace('data: [[', 'data: [,['), "flow sequence"),
+            "missing mapping comma": (valid.replace('"codeql/rust-all", extensible:',
+                                                      '"codeql/rust-all" extensible:'), "flow mapping"),
+            "repeated mapping comma": (valid.replace('"codeql/rust-all", extensible:',
+                                                       '"codeql/rust-all",, extensible:'), "flow mapping"),
+            "leading mapping comma": (valid.replace('addsTo: {pack:', 'addsTo: {,pack:'), "flow mapping"),
+        }
+        for label, (source, diagnostic) in cases.items():
+            with self.subTest(case=label):
+                data_file.write_text(source, encoding="utf-8")
+                result = subprocess.run(
+                    [sys.executable, str(CHECKER_PATH), "--root", str(self.root)],
+                    capture_output=True, text=True, timeout=120)
+                if diagnostic is None:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                else:
+                    self.assertNotEqual(result.returncode, 0, result.stdout)
+                    self.assertIn("malformed YAML", result.stderr)
+                    self.assertIn(diagnostic, result.stderr)
+                    self.assertIn(data_file.relative_to(self.root).as_posix(), result.stderr)
 
     def test_five_field_merged_barrier_reports_file_predicate_and_row(self):
         data_file = self.write_pack(FIVE_FIELD_MERGED_ROW)
