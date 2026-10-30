@@ -19,7 +19,7 @@ use orbit_common::OrbitError;
 use orbit_config::{PRE_LANDING_REVIEW_CREW_KEY, REVIEW_CREW_KEY};
 use orbit_types::workflow::{
     REVIEW_ADMISSION_KEY, REVIEW_CONTRACT_VERSION, REVIEW_REQUEST_KEY, REVIEW_RUN_OPTION_SOURCE,
-    ReviewAdmission, ReviewLayer, ReviewTiming,
+    ReviewAdmission, ReviewLayer, ReviewTiming, SelectiveBeforeLandingMode,
 };
 use serde_json::Value;
 
@@ -90,6 +90,16 @@ fn install_review_admission(
             layer,
             &admission.timing_source,
         )));
+    }
+    if job_name == LOCAL_ROUTE_JOB && admission.selective_policy().is_some() {
+        return Err(OrbitError::InvalidInput(
+            "review.selective_before_landing selects review of an open pull request before \
+             it lands and is unsupported on the local-only delivery route, which opens none; \
+             ship through the PR route or set review.selective_before_landing.mode = off for \
+             local delivery (local-only work is never silently unreviewed or observed at an \
+             invented landing point)"
+                .to_string(),
+        ));
     }
 
     let object = input.as_object_mut().ok_or_else(|| {
@@ -244,6 +254,33 @@ pub(crate) fn resolve(
     request: Option<ReviewLayer>,
 ) -> Result<ReviewAdmission, OrbitError> {
     let mut admission = snapshot(runtime)?;
+    if let Some(policy) = admission.selective_policy().cloned() {
+        policy
+            .validate()
+            .map_err(|error| OrbitError::InvalidInput(format!("selective review: {error}")))?;
+        if policy.mode == SelectiveBeforeLandingMode::Enforce {
+            if request == Some(ReviewLayer::BeforePr) {
+                return Err(OrbitError::InvalidInput(
+                    "--review before-pr is incompatible with active selective before-landing \
+                     enforcement (review.selective_before_landing.mode = enforce): the \
+                     deprecated before-PR layer cannot relocate or evade a mandatory \
+                     selective rule; submit without --review, or strengthen with \
+                     --review before-landing"
+                        .to_string(),
+                ));
+            }
+            // Enforce mode needs a resolvable pre-landing reviewer pool
+            // before dispatch, even though no diff exists yet.
+            if admission.crew.is_none() && admission.crew_pool.is_empty() {
+                let unset = pre_landing_review_crew_unset();
+                return Err(OrbitError::InvalidInput(format!(
+                    "review.selective_before_landing.mode = enforce requires a reviewer crew \
+                     before dispatch, but {unset}; configure {PRE_LANDING_REVIEW_CREW_KEY} or \
+                     {REVIEW_CREW_KEY} (automatic review never inherits the implementer's crew)"
+                )));
+            }
+        }
+    }
     let Some(layer) = request else {
         warn_before_pr_policy(&admission);
         return Ok(admission);
@@ -363,6 +400,17 @@ pub(crate) fn snapshot(runtime: &OrbitRuntime) -> Result<ReviewAdmission, OrbitE
     if crew.is_some() {
         crew_pool.clear();
     }
+    let mut selective = policy.selective_before_landing_policy();
+    if let Some(selective) = &mut selective
+        && selective.risk_threshold.is_some()
+    {
+        selective.freeze_risk_model(
+            runtime
+                .task_riskiness_model()
+                .map(|model| model.diff_model_identity())
+                .unwrap_or_else(|_| "owner-risk-model/unknown".to_string()),
+        );
+    }
     Ok(ReviewAdmission {
         contract_version: REVIEW_CONTRACT_VERSION,
         policy_version: policy.version,
@@ -388,6 +436,10 @@ pub(crate) fn snapshot(runtime: &OrbitRuntime) -> Result<ReviewAdmission, OrbitE
         ),
         baseline_commands: runtime.review_baseline_commands().to_vec(),
         host_evidence: policy.review_host_evidence.value.clone(),
+        // Freeze the owner-resolved selective policy with its per-field
+        // provenance and digest; candidate configuration edits and agent
+        // run input cannot supply or weaken it.
+        selective_before_landing: selective,
         captured_at: Utc::now(),
     })
 }
@@ -471,7 +523,10 @@ fn completion_admission_mismatch(
         Err(reason) => return Some(reason),
     };
     let gated = |timing| matches!(timing, ReviewTiming::BeforePr | ReviewTiming::BeforeLanding);
-    let same = if !gated(previous.timing) && !gated(current.timing) {
+    let same = if !gated(previous.timing)
+        && !gated(current.timing)
+        && previous.selective_before_landing == current.selective_before_landing
+    {
         previous.contract_version == current.contract_version
             && previous.policy_version == current.policy_version
             && previous.required_validation_commands == current.required_validation_commands
@@ -507,6 +562,10 @@ fn completion_admission_mismatch(
         (
             previous.host_evidence != current.host_evidence,
             "host evidence",
+        ),
+        (
+            previous.selective_before_landing != current.selective_before_landing,
+            "selective review policy",
         ),
     ]
     .into_iter()

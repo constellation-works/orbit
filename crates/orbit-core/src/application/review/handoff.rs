@@ -889,8 +889,13 @@ fn review_summary(review: &orbit_types::workflow::handoff::HandoffReview) -> Str
             evidence.attempt_id,
             evidence.reviewed_head_sha
         ),
-        None => {
-            "review not required (policy none) — no reviewer ran and no verdict exists".to_string()
-        }
+        None => match &review.selective_receipt {
+            Some(receipt) => format!(
+                "no reviewer ran — {} (selection evidence only, never a passed review)",
+                receipt.summary()
+            ),
+            None => "review not required (policy none) — no reviewer ran and no verdict exists"
+                .to_string(),
+        },
     }
 }

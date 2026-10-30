@@ -124,6 +124,7 @@ impl OrbitRuntime {
                 )));
             }
         }
+        self.verify_selective_receipt(handoff, &candidate, &receipt.request.ship)?;
         let review = self.observe_handoff_review(handoff, &candidate)?;
         let light_delivery = self.owner_light_delivery(&handoff.task_id, &candidate)?;
         // An empty list is no required check: the handoff is accepted with no
@@ -137,6 +138,159 @@ impl OrbitRuntime {
             known_red: Vec::new(),
             light_delivery,
         })
+    }
+
+    /// Re-evaluate a claimed selective selection against the owner's own
+    /// reading of the candidate diff: an agent's claimed non-match is
+    /// insufficient. The receipt's frozen model coefficients decide the
+    /// risk predicate, so owner and leaf judge the same model.
+    fn verify_selective_receipt(
+        &self,
+        handoff: &TaskHandoff,
+        candidate: &HandoffCandidate,
+        ship: &orbit_store::contracts::AdmissionShipContract,
+    ) -> Result<(), OrbitError> {
+        use orbit_types::workflow::{SelectiveReviewResult, selective_path_matches};
+        let Some(policy) = ship.selective_policy() else {
+            return Ok(());
+        };
+        if matches!(handoff.candidate.delivery, HandoffDelivery::NoDiff { .. }) {
+            return Ok(());
+        }
+        let Some(receipt) = &handoff.review.selective_receipt else {
+            return Err(refusal::refused(
+                "the claim captured an active selective before-landing policy; the handoff \
+                 carries no selection receipt",
+            ));
+        };
+        if policy.risk_threshold.is_some()
+            && (policy.risk_model_identity.is_none()
+                || receipt.risk_model_identity != policy.risk_model_identity)
+        {
+            return Err(refusal::refused(
+                "selection_unavailable: receipt risk model is not the frozen owner snapshot",
+            ));
+        }
+        // Selection describes the original candidate. A stronger review may
+        // certify repairs at a later head; Store verifies that certificate's
+        // original/final linkage before acceptance changes any task state.
+        let selected = orbit_engine::review_gate::candidate_identity_at(
+            &self.paths().repo_root,
+            &receipt.base_sha,
+            &receipt.head_sha,
+        )
+        .map_err(|error| {
+            refusal::refused(format!(
+                "selection_unavailable: owner cannot read the selected candidate identity: {error}"
+            ))
+        })?;
+        if selected.base.commit != candidate.base.commit
+            || selected.base.commit != receipt.base_sha
+            || selected.base.tree != receipt.base_tree
+            || selected.head.commit != receipt.head_sha
+            || selected.head.tree != receipt.head_tree
+            || (selected.head != candidate.candidate && handoff.review.evidence().is_none())
+        {
+            return Err(refusal::refused(
+                "selection_stale: receipt does not pin the original candidate or carry review evidence for its continuation",
+            ));
+        }
+        // Generic candidate/Git/footprint proof already succeeded above.
+        // Observe-mode predicate gaps and disagreements are telemetry only;
+        // they cannot add a delivery gate. Identity/certificate checks remain.
+        if policy.mode == orbit_types::workflow::SelectiveBeforeLandingMode::Observe {
+            return Ok(());
+        }
+        let pairs = orbit_engine::review_gate::changed_path_pairs(
+            &self.paths().repo_root,
+            &selected.base.commit,
+            &selected.head.commit,
+        )
+        .map_err(|error| {
+            refusal::refused(format!(
+                "selection_unavailable: owner cannot read the candidate path diff: {error}"
+            ))
+        })?;
+        if pairs
+            .iter()
+            .flat_map(|(old, new)| old.iter().chain(new.iter()))
+            .any(|path| orbit_types::policy::normalize_glob_path(path).is_err())
+        {
+            return Err(refusal::refused(
+                "selection_unavailable: owner cannot normalize the complete candidate path diff",
+            ));
+        }
+        if receipt.result == SelectiveReviewResult::NotRequired {
+            for (old, new) in &pairs {
+                for path in old.iter().chain(new.iter()) {
+                    if policy
+                        .paths
+                        .iter()
+                        .any(|pattern| selective_path_matches(pattern, path))
+                    {
+                        return Err(refusal::refused(format!(
+                            "selective receipt contradicted: owner-measured diff path \
+                             `{path}` matches the captured selective paths, but the \
+                             receipt records not_required"
+                        )));
+                    }
+                }
+            }
+            if let (Some(threshold), Some(identity)) = (
+                policy.risk_threshold_value(),
+                policy.risk_model_identity.as_deref(),
+            ) {
+                let coefficient = |name: &str| {
+                    identity
+                        .split_whitespace()
+                        .find_map(|field| field.strip_prefix(name))
+                        .and_then(|value| value.parse::<f64>().ok())
+                        .filter(|value| value.is_finite())
+                };
+                let unknown = identity == "owner-risk-model/unknown"
+                    || identity.split_whitespace().any(|field| field == "fit=none")
+                    || receipt.task_ids.len() != 1;
+                if unknown
+                    && policy.unknown_risk == orbit_types::workflow::SelectiveUnknownRisk::Review
+                {
+                    return Err(refusal::refused(
+                        "selective receipt contradicted: frozen owner risk is unknown and captured unknown_risk requires review",
+                    ));
+                }
+                if !unknown
+                    && (coefficient("intercept=").is_none() || coefficient("slope=").is_none())
+                {
+                    return Err(refusal::refused(
+                        "selection_unavailable: malformed frozen owner model",
+                    ));
+                }
+                if let (Some(intercept), Some(slope)) =
+                    (coefficient("intercept="), coefficient("slope="))
+                {
+                    let lines = orbit_engine::review_gate::diff_lines_between(
+                        &self.paths().repo_root,
+                        &selected.base.commit,
+                        &selected.head.commit,
+                    )
+                    .map_err(|error| {
+                        refusal::refused(format!(
+                            "selection_unavailable: owner cannot measure the candidate \
+                             diff: {error}"
+                        ))
+                    })?;
+                    let hazard = (intercept + slope * (lines as f64).ln_1p()).exp();
+                    let probability = -(-hazard).exp_m1();
+                    if probability > threshold {
+                        return Err(refusal::refused(format!(
+                            "selective receipt contradicted: owner-measured risk \
+                             {probability:.6} exceeds the captured threshold, but the \
+                             receipt records not_required"
+                        )));
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// The owner's reading of the facts a before-PR certificate stands on

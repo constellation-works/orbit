@@ -129,6 +129,7 @@ fn admitted_run(runtime: &OrbitRuntime, job: &str, task_ids: &[String]) -> JobRu
         ),
         baseline_commands: runtime.review_baseline_commands().to_vec(),
         host_evidence: policy.review_host_evidence.value.clone(),
+        selective_before_landing: None,
         captured_at: Utc::now(),
     })
     .unwrap();

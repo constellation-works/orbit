@@ -11,7 +11,7 @@ use crate::contracts::MigrationCompatibility;
 
 /// Highest workspace-layout version this binary knows how to produce.
 /// Bump together with a new `LAYOUT_MIGRATIONS` entry — never without one.
-pub const SUPPORTED_LAYOUT_VERSION: u32 = 3;
+pub const SUPPORTED_LAYOUT_VERSION: u32 = 4;
 
 /// One entry in the layout-migration registry.
 pub(crate) struct LayoutMigration {
@@ -62,6 +62,15 @@ pub(crate) const LAYOUT_MIGRATIONS: &[LayoutMigration] = &[
         // write.
         compat: MigrationCompatibility::Breaking,
         apply: remove_legacy_task_projections,
+    },
+    LayoutMigration {
+        version: 4,
+        name: "selective-review-contracts",
+        description: "fence clients that cannot enforce captured selective before-landing review contracts; preserve existing records unchanged",
+        // Additive JSON fields change delivery authority. Older readers
+        // silently discard them, so they must not read or write this state.
+        compat: MigrationCompatibility::Breaking,
+        apply: apply_baseline_layout,
     },
 ];
 

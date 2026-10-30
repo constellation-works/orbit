@@ -321,6 +321,7 @@ fn the_owner_accepts_only_owner_owed_codeql_its_rule_declared_hosted() {
         serde_json::from_value(settled["handoff_evidence"].clone()).expect("handoff evidence");
     let head = revision(&leaf.pair.follower_repo, "HEAD");
     let landing = |evidence: HandoffReviewEvidence| HandoffReview {
+        selective_receipt: None,
         policy: ReviewTiming::BeforeLanding,
         disposition: HandoffReviewDisposition::BeforeLanding(Box::new(evidence)),
     };

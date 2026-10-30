@@ -778,6 +778,10 @@ spec:
         # ORB-14849: set only when the before-landing review settled; it then
         # is the head to merge, and the published head after a reviewer fix.
         landing_reviewed_head_sha: "{{ steps.landing_review_gate_settle.output.reviewed_head_sha }}"
+        # Selective before-landing review: the head the landing gate's
+        # selection receipt evaluated, or empty when no selective policy
+        # was captured. Completion refuses a live head it does not pin.
+        selective_selection_head_sha: "{{ steps.landing_review_gate_settle.output.selective_selection_head_sha }}"
         re_review_on_conflict: true
         base: "{{ steps.sync_base.output.base }}"
         base_sync: "{{ input.base_sync }}"

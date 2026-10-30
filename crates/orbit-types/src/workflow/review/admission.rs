@@ -7,6 +7,9 @@ use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
+use super::selective::{
+    SelectiveBeforeLandingMode, SelectiveBeforeLandingPolicy, SelectiveReviewReceipt,
+};
 use super::{HostGateResult, ReviewConsumption};
 use crate::workflow::{ReviewAdmissionError, ReviewEvidenceRequirement};
 
@@ -252,6 +255,11 @@ pub struct ReviewAdmission {
     /// host owes for the paths it changed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub host_evidence: Vec<super::super::HostEvidenceRule>,
+    /// The owner's selective before-landing policy, frozen with its
+    /// provenance and digest. Absent on admissions captured before the
+    /// feature or with the mode off: today's behavior, never reinterpreted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selective_before_landing: Option<SelectiveBeforeLandingPolicy>,
     /// When the snapshot was captured.
     pub captured_at: DateTime<Utc>,
 }
@@ -294,6 +302,21 @@ impl ReviewAdmission {
     /// review layer before landing.
     pub fn gates_merge(&self) -> bool {
         self.gates_pr() || self.gates_landing()
+    }
+
+    /// The captured selective policy, when it evaluates candidates.
+    pub fn selective_policy(&self) -> Option<&SelectiveBeforeLandingPolicy> {
+        self.selective_before_landing
+            .as_ref()
+            .filter(|policy| policy.is_active())
+    }
+
+    /// Whether selective enforcement may still require a review of this
+    /// run's candidate even though `timing` alone is `none`: a pending or
+    /// absent selection is not `not_required`.
+    pub fn selective_enforced(&self) -> bool {
+        self.selective_policy()
+            .is_some_and(|policy| policy.mode == SelectiveBeforeLandingMode::Enforce)
     }
 }
 
@@ -450,6 +473,11 @@ pub struct ReviewGateAdmitted {
     /// When the attempt started.
     #[serde(serialize_with = "serialize_rfc3339")]
     pub started_at: DateTime<Utc>,
+    /// The selective-selection receipt that required this review, when
+    /// selective enforcement selected it. Absent on records written before
+    /// the field existed and on unconditional reviews.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selective_receipt: Option<Box<SelectiveReviewReceipt>>,
 }
 
 /// The reviewer an admitted gate names. A held review names the reviewer
@@ -495,6 +523,10 @@ pub struct ReviewGateNotApplicable {
     /// Which layer decided the timing; `null` with it.
     #[serde(default)]
     pub timing_source: Option<String>,
+    /// The selective-selection receipt behind a selective not-required or
+    /// observe outcome. Selection evidence only: never a passed review.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selective_receipt: Option<Box<SelectiveReviewReceipt>>,
 }
 
 impl ReviewGateNotApplicable {
@@ -504,6 +536,20 @@ impl ReviewGateNotApplicable {
             reason: reason.to_string(),
             timing: admission.map(|admission| admission.timing),
             timing_source: admission.map(|admission| admission.timing_source.clone()),
+            selective_receipt: None,
+        }
+    }
+
+    /// Not applicable for `reason`, carrying the host-authored selective
+    /// selection receipt that decided it.
+    pub fn with_selective_receipt(
+        reason: &str,
+        admission: Option<&ReviewAdmission>,
+        receipt: SelectiveReviewReceipt,
+    ) -> Self {
+        Self {
+            selective_receipt: Some(Box::new(receipt)),
+            ..Self::new(reason, admission)
         }
     }
 }

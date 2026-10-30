@@ -1026,6 +1026,7 @@ fn configure_review(f: &mut Fixture, checkout: &std::path::Path) -> PathBuf {
         ),
         baseline_commands: f.runtime.review_baseline_commands().to_vec(),
         host_evidence: policy.review_host_evidence.value.clone(),
+        selective_before_landing: None,
         captured_at: Utc::now(),
     };
     f.source.input.as_mut().unwrap()["review"] = json!(admission);

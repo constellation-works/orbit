@@ -451,6 +451,7 @@ fn admission(
     let request = AdmissionRequest {
         caller_before_pr: false,
         review_gate: false,
+        selective_review: false,
         ..admission_request(
             format!("request-{}", owner.receipts.lock().unwrap().len()),
             AdmissionRunContext {

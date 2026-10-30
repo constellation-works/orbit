@@ -479,8 +479,12 @@ fn claim_review_admission(
         policy_version: 0,
         timing: if request.ship.before_landing {
             ReviewTiming::BeforeLanding
-        } else {
+        } else if request.ship.before_pr {
             ReviewTiming::BeforePr
+        } else {
+            // A selective-only contract: the leaf gate evaluates the
+            // captured policy at its open PR's pinned head.
+            ReviewTiming::None
         },
         timing_source: CLAIM_SOURCE.into(),
         crew: review.crew.clone(),
@@ -491,6 +495,7 @@ fn claim_review_admission(
         required_validation_commands: review.required_validation_commands.clone(),
         baseline_commands: review.baseline_commands.clone(),
         host_evidence: review.host_evidence.clone(),
+        selective_before_landing: review.selective_before_landing.clone(),
         captured_at: now,
     })
 }
@@ -564,6 +569,15 @@ pub(super) fn allocate(
         return Err(invalid(
             "an owner with review.timing = before_pr or before_landing admits only a PR leaf \
              that runs the review gate",
+        ));
+    }
+    if request.ship.selective_policy().is_some()
+        && !(request.selective_review && request.review_gate && request.ship.mode == "pr")
+    {
+        return Err(invalid(
+            "an owner with an active selective before-landing policy admits only a PR leaf \
+             that declares selective-review capability; an older executor is refused rather \
+             than allowed to drop the policy",
         ));
     }
     store.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {

@@ -4058,6 +4058,7 @@ fn admitted_review(attempt_id: &str, lineage: &str) -> Value {
             budget: ReviewBudget::default(),
             remaining: ReviewConsumption { seconds: 1800 },
             started_at: Utc::now(),
+            selective_receipt: None,
         },
     )))
     .unwrap()

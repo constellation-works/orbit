@@ -33,7 +33,8 @@ use super::conflict::{
 };
 use super::mutation::{observation_failure, request_merge, resolved_capabilities};
 use super::reviewed::{
-    ensure_pr_head_is_reviewed, merge_condition_sha, merge_wait_timeout, reviewed_head_sha,
+    ensure_pr_head_is_reviewed, ensure_pr_head_matches_selection, merge_condition_sha,
+    merge_wait_timeout, reviewed_head_sha, selective_selection_head_sha,
 };
 
 /// Default budget for waiting out required checks before giving up.
@@ -164,6 +165,7 @@ fn drive_pr_to_merged_observed<H: RuntimeHost + ?Sized>(
     let mut base_race: Option<String> = None;
 
     let reviewed_head_sha = reviewed_head_sha(input);
+    let selective_head_sha = selective_selection_head_sha(input);
     // [ORB-11982] The candidate this run is authorized to deliver. It moves
     // through authenticated repair publications, or when bounded conflict
     // repair rewrites and lease-pushes the same branch.
@@ -308,6 +310,11 @@ fn drive_pr_to_merged_observed<H: RuntimeHost + ?Sized>(
             pin.ensure_pinned_candidate(&status, pr_number)?;
             if !base_adopted {
                 ensure_pr_head_is_reviewed(&status, pr_number, reviewed_head_sha.as_deref())?;
+                ensure_pr_head_matches_selection(
+                    &status,
+                    pr_number,
+                    selective_head_sha.as_deref(),
+                )?;
             }
         }
         state = checked_pr_state(

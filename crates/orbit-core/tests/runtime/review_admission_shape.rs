@@ -57,6 +57,7 @@ pub(crate) fn admitted_review(attempt_id: &str, lineage: &str, head_sha: &str) -
             budget: ReviewBudget::default(),
             remaining: ReviewConsumption { seconds: 1800 },
             started_at: Utc::now(),
+            selective_receipt: None,
         },
     )))
     .unwrap()
@@ -318,6 +319,57 @@ fn a_run_captured_under_the_deprecated_switches_gates_as_it_captured() {
                     "timing": "before-landing",
                     "timing_source": "workspace",
                 }))
+            );
+        }
+    }
+}
+
+/// ORB-20218: a light-delivery skip must retain the observed/nonselected
+/// receipt; a positive enforced selection overrides that same skip tag.
+#[test]
+fn selective_receipt_survives_a_light_skip_beside_a_stronger_landing_layer() {
+    for (mode, paths, required) in [
+        ("observe", vec!["candidate.txt"], false),
+        ("enforce", vec!["unrelated/**"], false),
+        ("enforce", vec!["candidate.txt"], true),
+    ] {
+        let mut fixture = Fixture::selective_landing(mode, &paths);
+        fixture
+            .runtime
+            .update_task_as_human(
+                &fixture.task_id,
+                TaskUpdateParams {
+                    tags: Some(vec!["skip-review".into()]),
+                    ..Default::default()
+                },
+                "Fixture operator".into(),
+            )
+            .unwrap();
+        fixture.input["before_landing"] = json!(true);
+        fixture.admit();
+        let admitted = &fixture.input["admission"];
+        assert_eq!(admitted["applies"], required, "{admitted}");
+        let receipt = &admitted["selective_receipt"];
+        assert_eq!(receipt["mode"], mode, "{admitted}");
+        assert!(receipt["head_sha"].as_str().is_some(), "{admitted}");
+        if required {
+            assert_eq!(receipt["result"], "required", "{admitted}");
+            assert!(admitted["attempt_id"].as_str().is_some(), "{admitted}");
+        } else {
+            assert_eq!(
+                admitted["reason"], "skip_review_light_delivery",
+                "{admitted}"
+            );
+            let settled = fixture.settle().unwrap();
+            assert_eq!(settled["gate"], "not_required", "{settled}");
+            assert_eq!(&settled["selective_receipt"], receipt, "{settled}");
+            assert_eq!(
+                settled["selective_selection_head_sha"], receipt["head_sha"],
+                "{settled}"
+            );
+            assert!(
+                settled["handoff_evidence"].is_null(),
+                "observation is not a review certificate"
             );
         }
     }

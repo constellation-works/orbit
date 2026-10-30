@@ -103,6 +103,7 @@ pub(super) fn reconcile_settled(
     runtime: &OrbitRuntime,
     context: &GateContext,
     certificate: ReviewCertificate,
+    selection: Option<&orbit_types::workflow::SelectiveReviewReceipt>,
 ) -> Result<Settled, OrbitError> {
     let attempt_id = certificate.attempt_id.as_str();
     if certificate.verdict.passed() {
@@ -123,9 +124,10 @@ pub(super) fn reconcile_settled(
     }
     // Settlement may have stopped before every task carried the evidence
     // or its known-red decisions. Both writes reconcile only missing entries.
+    output::validate_selection(&certificate, selection)?;
     publication::publish_certificate(runtime, context, &certificate)?;
     if certificate.verdict.passed() {
         baseline::record_known_red(runtime, &context.task_ids, &certificate.known_red)?;
     }
-    output::settled_outcome(runtime, context, certificate)
+    output::settled_outcome(runtime, context, certificate, selection)
 }

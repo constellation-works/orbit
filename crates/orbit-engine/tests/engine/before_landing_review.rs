@@ -443,6 +443,8 @@ impl Host {
             return Ok(json!({
                 "gate": "not_required",
                 "reviewed_head_sha": "",
+                "selective_selection_head_sha": "",
+                "selective_receipt": null,
                 "reviewed_base_sha": "",
                 "reviewer_fixed": false,
                 "review_fixes": "",
@@ -453,6 +455,8 @@ impl Host {
             return Ok(json!({
                 "gate": "passed",
                 "reviewed_head_sha": "rebased-head",
+                "selective_selection_head_sha": "",
+                "selective_receipt": null,
                 "reviewed_base_sha": "rebased-base",
                 "implementation_head_sha": "rebased-head",
                 "reviewer_fixed": false,
@@ -470,6 +474,8 @@ impl Host {
             Outcome::Approve => Ok(json!({
                 "gate": "passed",
                 "reviewed_head_sha": "candidate",
+                "selective_selection_head_sha": "",
+                "selective_receipt": null,
                 "reviewed_base_sha": "base-sha",
                 "implementation_head_sha": "candidate",
                 "reviewer_fixed": false,
@@ -478,6 +484,8 @@ impl Host {
             Outcome::Fix => Ok(json!({
                 "gate": "passed",
                 "reviewed_head_sha": "landing-fix",
+                "selective_selection_head_sha": "",
+                "selective_receipt": null,
                 "reviewed_base_sha": "base-sha",
                 "implementation_head_sha": "candidate",
                 "reviewer_fixed": true,
@@ -843,6 +851,8 @@ impl orbit_engine::test_support::NullRuntimeHost for LeafHost {
                     json!({
                         "gate": "passed",
                         "reviewed_head_sha": reviewed,
+                        "selective_selection_head_sha": "",
+                        "selective_receipt": null,
                         "reviewed_base_sha": "base-sha",
                         "implementation_head_sha": "candidate",
                         "reviewer_fixed": self.fix,
@@ -853,6 +863,8 @@ impl orbit_engine::test_support::NullRuntimeHost for LeafHost {
                     json!({
                         "gate": "not_required",
                         "reviewed_head_sha": "",
+                        "selective_selection_head_sha": "",
+                        "selective_receipt": null,
                         "reviewed_base_sha": "",
                         "reviewer_fixed": false,
                         "review_fixes": "",

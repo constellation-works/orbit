@@ -246,6 +246,7 @@ fn clock_sweep_resumes_upgrade_interrupted_run_once_after_generation_settles() {
             caller_fingerprint: None,
             caller_before_pr: false,
             review_gate: false,
+            selective_review: false,
             run_context: AdmissionRunContext {
                 run_id: "parent-run".into(),
                 job_name: "workspace_auto_pipeline".into(),
@@ -511,6 +512,7 @@ fn review_admission(runtime: &OrbitRuntime) -> ReviewAdmission {
             runtime.workflow_required_validation_commands().to_vec(),
         ),
         baseline_commands: runtime.review_baseline_commands().to_vec(),
+        selective_before_landing: None,
         captured_at: Utc::now(),
         host_evidence: Vec::new(),
     }

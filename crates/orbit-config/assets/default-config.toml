@@ -19,6 +19,19 @@ pass = [
 [execution.codex]
 sandbox = "danger-full-access"
 
+# Selective before-landing review is off by default. To watch what it would
+# select without invoking reviewers or changing delivery, an operator may
+# set (example only; `review.timing` stays "off"):
+#
+# [review.selective_before_landing]
+# mode = "observe"
+# risk_threshold = 0.40
+# paths = [".github/workflows/**"]
+# unknown_risk = "review"
+#
+# Change only `mode` to "enforce" (with a pre-landing reviewer crew
+# configured) when selected candidates must review before landing.
+
 [workflow]
 
 # Footprint lock modes. Any overlap between two tasks' context selectors keeps

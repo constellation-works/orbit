@@ -53,7 +53,8 @@ use orbit_types::policy::compile_glob_regex;
 use orbit_types::task::validate_relative_artifact_path;
 use orbit_types::workflow::{
     DEFAULT_REVIEW_MINUTES, EvidenceHostOs, HostEvidenceRule, HostSandboxCommand, ReviewBudget,
-    ReviewEvidenceKind,
+    ReviewEvidenceKind, SelectiveBeforeLandingMode, SelectiveBeforeLandingPolicy,
+    SelectiveUnknownRisk, validate_risk_threshold, validate_selective_path_glob,
 };
 use serde::{Deserialize, Serialize};
 
@@ -76,7 +77,11 @@ use crate::registry::read_optional;
 /// [ORB-15677]: an older snapshot never carries it, and a rule without it
 /// keeps the review's hold. Nor did
 /// `workflow.purpose_crews.pre_landing_review`: an admission captures the
-/// pool it resolved in the fields it always had.
+/// pool it resolved in the fields it always had. Nor did
+/// `review.selective_before_landing`: an admission captured before it
+/// carries no selective policy, which reads as off exactly as it behaved,
+/// and a captured active policy travels in its own field an older
+/// snapshot never carries.
 pub const OPERATION_POLICY_VERSION: u32 = 5;
 
 const MAX_REVIEW_MINUTES: u32 = 1_440;
@@ -100,6 +105,16 @@ pub const LEGACY_REVIEW_BEFORE_LANDING_KEY: &str = "review.before_landing";
 pub const REVIEW_BEFORE_LANDING_HOSTS_KEY: &str = "review.before_landing_hosts";
 /// The before-PR review's time limit.
 pub const REVIEW_MINUTES_KEY: &str = "review.minutes";
+/// Whether selective before-landing review observes or enforces.
+pub const SELECTIVE_MODE_KEY: &str = "review.selective_before_landing.mode";
+/// Probability a candidate's estimated risk must strictly exceed to be
+/// selected; unset disables the risk predicate.
+pub const SELECTIVE_RISK_THRESHOLD_KEY: &str = "review.selective_before_landing.risk_threshold";
+/// Repository-relative path globs that select a candidate; empty disables
+/// the path predicate.
+pub const SELECTIVE_PATHS_KEY: &str = "review.selective_before_landing.paths";
+/// What a configured risk predicate does without a usable estimate.
+pub const SELECTIVE_UNKNOWN_RISK_KEY: &str = "review.selective_before_landing.unknown_risk";
 /// The retired review timing enum, translated on load.
 pub const LEGACY_REVIEW_POLICY_KEY: &str = "operation.review_policy";
 /// The retired lineage minutes, translated to [`REVIEW_MINUTES_KEY`].
@@ -215,6 +230,112 @@ impl ReviewTimingSetting {
     pub fn is_deprecated(self) -> bool {
         self == Self::BeforePr
     }
+}
+
+/// Parse `review.selective_before_landing.mode`.
+pub fn selective_mode_parse(raw: &str) -> Result<SelectiveBeforeLandingMode, OrbitError> {
+    match raw.trim() {
+        "off" => Ok(SelectiveBeforeLandingMode::Off),
+        "observe" => Ok(SelectiveBeforeLandingMode::Observe),
+        "enforce" => Ok(SelectiveBeforeLandingMode::Enforce),
+        other => Err(OrbitError::InvalidInput(format!(
+            "{SELECTIVE_MODE_KEY} has invalid value '{other}'; expected one of: {}",
+            SelectiveBeforeLandingMode::CHOICES.join(", ")
+        ))),
+    }
+}
+
+/// Parse `review.selective_before_landing.unknown_risk`.
+pub fn selective_unknown_risk_parse(raw: &str) -> Result<SelectiveUnknownRisk, OrbitError> {
+    match raw.trim() {
+        "review" => Ok(SelectiveUnknownRisk::Review),
+        "skip" => Ok(SelectiveUnknownRisk::Skip),
+        other => Err(OrbitError::InvalidInput(format!(
+            "{SELECTIVE_UNKNOWN_RISK_KEY} has invalid value '{other}'; expected one of: {}",
+            SelectiveUnknownRisk::CHOICES.join(", ")
+        ))),
+    }
+}
+
+/// Validate a settings-snapshot `risk_threshold` and keep its canonical
+/// decimal spelling; unset stays unset (the risk predicate is off).
+pub(crate) fn selective_threshold_value(raw: Option<f64>) -> Result<Option<String>, OrbitError> {
+    let Some(value) = raw else { return Ok(None) };
+    if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+        return Err(OrbitError::InvalidInput(format!(
+            "{SELECTIVE_RISK_THRESHOLD_KEY} has invalid value {value}; expected a finite \
+             probability in [0, 1]"
+        )));
+    }
+    Ok(Some(if value.fract() == 0.0 {
+        format!("{value:.1}")
+    } else {
+        value.to_string()
+    }))
+}
+
+/// Validate one layer's `review.selective_before_landing.paths`: every
+/// pattern a positive repository-relative glob. The list replaces an
+/// earlier layer's list outright, never appends.
+pub(crate) fn selective_paths(raw: Option<Vec<String>>) -> Result<Option<Vec<String>>, OrbitError> {
+    let Some(raw) = raw else { return Ok(None) };
+    let mut paths = Vec::with_capacity(raw.len());
+    for (index, pattern) in raw.iter().enumerate() {
+        let pattern = pattern.trim();
+        validate_selective_path_glob(pattern).map_err(|error| {
+            OrbitError::InvalidInput(format!("{SELECTIVE_PATHS_KEY}[{index}]: {error}"))
+        })?;
+        if !paths.iter().any(|known| known == pattern) {
+            paths.push(pattern.to_string());
+        }
+    }
+    Ok(Some(paths))
+}
+
+/// Read `risk_threshold` from a document: a TOML float or integer in
+/// `[0, 1]`, kept in its canonical decimal spelling.
+fn selective_threshold(
+    document: &toml::Value,
+    config_path: &Path,
+) -> Result<Option<String>, OrbitError> {
+    let Some(value) = value_at_path(document, SELECTIVE_RISK_THRESHOLD_KEY) else {
+        return Ok(None);
+    };
+    let raw = match value {
+        toml::Value::Float(value) => {
+            if value.fract() == 0.0 && value.is_finite() {
+                format!("{value:.1}")
+            } else {
+                value.to_string()
+            }
+        }
+        toml::Value::Integer(value) => value.to_string(),
+        _ => {
+            return Err(OrbitError::InvalidInput(format!(
+                "{}: {SELECTIVE_RISK_THRESHOLD_KEY} must be a number in [0, 1]",
+                config_path.display()
+            )));
+        }
+    };
+    validate_risk_threshold(&raw).map_err(|error| {
+        OrbitError::InvalidInput(format!("{SELECTIVE_RISK_THRESHOLD_KEY}: {error}"))
+    })?;
+    Ok(Some(raw))
+}
+
+/// The selective statements one layer makes. Each subfield inherits
+/// independently; a stated `paths` list (even empty) replaces the lower
+/// layer's list.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SelectiveLayer {
+    /// Explicit `review.selective_before_landing.mode`.
+    pub mode: Option<SelectiveBeforeLandingMode>,
+    /// Explicit `risk_threshold`, canonical decimal spelling.
+    pub risk_threshold: Option<String>,
+    /// Explicit `paths` replacement list.
+    pub paths: Option<Vec<String>>,
+    /// Explicit `unknown_risk`.
+    pub unknown_risk: Option<SelectiveUnknownRisk>,
 }
 
 /// A retired `operation.review_policy` value, read only to translate it.
@@ -360,6 +481,8 @@ pub struct OperationLayer {
     /// review: `Some(true)` for `after-landing`, `Some(false)` for any other
     /// value, `None` when the layer does not state the legacy key.
     pub legacy_after_landing: Option<bool>,
+    /// Explicit `[review.selective_before_landing]` statements.
+    pub selective_before_landing: SelectiveLayer,
 }
 
 impl OperationLayer {
@@ -409,6 +532,20 @@ impl OperationLayer {
             .transpose()?,
             legacy_after_landing: LegacyReviewPolicy::read(document, config_path)?
                 .map(|policy| policy == LegacyReviewPolicy::AfterLanding),
+            selective_before_landing: SelectiveLayer {
+                mode: read_optional::<String>(document, SELECTIVE_MODE_KEY, config_path)?
+                    .map(|raw| selective_mode_parse(&raw))
+                    .transpose()?,
+                risk_threshold: selective_threshold(document, config_path)?,
+                paths: selective_paths(read_optional(document, SELECTIVE_PATHS_KEY, config_path)?)?,
+                unknown_risk: read_optional::<String>(
+                    document,
+                    SELECTIVE_UNKNOWN_RISK_KEY,
+                    config_path,
+                )?
+                .map(|raw| selective_unknown_risk_parse(&raw))
+                .transpose()?,
+            },
         })
     }
 
@@ -416,6 +553,61 @@ impl OperationLayer {
     pub fn is_empty(&self) -> bool {
         *self == Self::default()
     }
+}
+
+/// The resolved `[review.selective_before_landing]` fields, each with its
+/// winning layer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SelectiveResolved {
+    /// Resolved `mode` (default `off`).
+    #[serde(default = "selective_mode_off")]
+    pub mode: OperationField<SelectiveBeforeLandingMode>,
+    /// Resolved `risk_threshold` spelling; unset disables the predicate.
+    #[serde(default = "no_selective_threshold")]
+    pub risk_threshold: OperationField<Option<String>>,
+    /// Resolved `paths` replacement list.
+    #[serde(default = "no_selective_paths")]
+    pub paths: OperationField<Vec<String>>,
+    /// Resolved `unknown_risk` (default `review`).
+    #[serde(default = "selective_unknown_review")]
+    pub unknown_risk: OperationField<SelectiveUnknownRisk>,
+}
+
+impl Default for SelectiveResolved {
+    fn default() -> Self {
+        Self::built_in()
+    }
+}
+
+impl SelectiveResolved {
+    fn built_in() -> Self {
+        Self {
+            mode: selective_mode_off(),
+            risk_threshold: no_selective_threshold(),
+            paths: no_selective_paths(),
+            unknown_risk: selective_unknown_review(),
+        }
+    }
+
+    fn is_built_in(&self) -> bool {
+        *self == Self::built_in()
+    }
+}
+
+fn selective_mode_off() -> OperationField<SelectiveBeforeLandingMode> {
+    OperationField::built_in(SelectiveBeforeLandingMode::Off)
+}
+
+fn no_selective_threshold() -> OperationField<Option<String>> {
+    OperationField::built_in(None)
+}
+
+fn no_selective_paths() -> OperationField<Vec<String>> {
+    OperationField::built_in(Vec::new())
+}
+
+fn selective_unknown_review() -> OperationField<SelectiveUnknownRisk> {
+    OperationField::built_in(SelectiveUnknownRisk::Review)
 }
 
 /// The fully resolved review preferences with per-field provenance.
@@ -460,6 +652,11 @@ pub struct OperationPolicy {
     /// legacy statement asks for it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub legacy_after_landing: Option<OperationLayerSource>,
+    /// Resolved selective before-landing policy. An all-built-in value is
+    /// not serialized, so a resolution that never states the keys reads
+    /// exactly as it did before they existed.
+    #[serde(default, skip_serializing_if = "SelectiveResolved::is_built_in")]
+    pub selective_before_landing: SelectiveResolved,
 }
 
 impl Default for OperationPolicy {
@@ -481,6 +678,7 @@ impl OperationPolicy {
             pre_landing_review_crew: no_pre_landing_review_crew(),
             review_host_evidence: no_host_evidence(),
             legacy_after_landing: None,
+            selective_before_landing: SelectiveResolved::built_in(),
         }
     }
 
@@ -515,6 +713,42 @@ impl OperationPolicy {
                 self.review_before_pr.source.label(),
                 self.review_before_landing.source.label(),
             )));
+        }
+        let selective = &self.selective_before_landing;
+        if selective.mode.value.is_active() {
+            if selective.risk_threshold.value.is_none() && selective.paths.value.is_empty() {
+                return Err(OrbitError::InvalidInput(format!(
+                    "{SELECTIVE_MODE_KEY} is {} ({}) but neither {SELECTIVE_RISK_THRESHOLD_KEY} \
+                     nor {SELECTIVE_PATHS_KEY} configures a predicate; set at least one, or set \
+                     the mode to off",
+                    selective.mode.value.as_str(),
+                    selective.mode.source.label(),
+                )));
+            }
+            if self.review_before_pr.value {
+                return Err(OrbitError::InvalidInput(format!(
+                    "{SELECTIVE_MODE_KEY} is {} ({}) and {REVIEW_TIMING_KEY} is before_pr ({}): \
+                     selective review extends only before-landing review and never converts a \
+                     deprecated before-PR policy; migrate explicitly with `orbit config set \
+                     review.timing off` (then keep or enable selective review) or `orbit config \
+                     set review.timing before_landing` for unconditional review, or set \
+                     {SELECTIVE_MODE_KEY} to off",
+                    selective.mode.value.as_str(),
+                    selective.mode.source.label(),
+                    self.review_before_pr.source.label(),
+                )));
+            }
+            if self.review_before_landing.value {
+                return Err(OrbitError::InvalidInput(format!(
+                    "{SELECTIVE_MODE_KEY} is {} ({}) and {REVIEW_TIMING_KEY} is before_landing \
+                     ({}): unconditional before-landing review and selective review are one \
+                     layer, not two; set {REVIEW_TIMING_KEY} to off to use selective review, \
+                     or set {SELECTIVE_MODE_KEY} to off",
+                    selective.mode.value.as_str(),
+                    selective.mode.source.label(),
+                    self.review_before_landing.source.label(),
+                )));
+            }
         }
         if self.review_before_pr.value && !self.review_before_landing_hosts.value.is_empty() {
             return Err(OrbitError::InvalidInput(format!(
@@ -560,6 +794,49 @@ impl OperationPolicy {
         if let Some(after_landing) = layer.legacy_after_landing {
             self.legacy_after_landing = after_landing.then_some(source);
         }
+        let selective = &layer.selective_before_landing;
+        self.selective_before_landing
+            .mode
+            .set(selective.mode.as_ref(), source);
+        if selective.risk_threshold.is_some() {
+            self.selective_before_landing
+                .risk_threshold
+                .set(Some(&selective.risk_threshold), source);
+        }
+        self.selective_before_landing
+            .paths
+            .set(selective.paths.as_ref(), source);
+        self.selective_before_landing
+            .unknown_risk
+            .set(selective.unknown_risk.as_ref(), source);
+    }
+
+    /// The selective policy an admission captures, or `None` while the
+    /// mode is `off` (the default: no selective scan, today's behavior).
+    pub fn selective_before_landing_policy(&self) -> Option<SelectiveBeforeLandingPolicy> {
+        let selective = &self.selective_before_landing;
+        if !selective.mode.value.is_active() {
+            return None;
+        }
+        let sources = [
+            (SELECTIVE_MODE_KEY, selective.mode.source),
+            (
+                SELECTIVE_RISK_THRESHOLD_KEY,
+                selective.risk_threshold.source,
+            ),
+            (SELECTIVE_PATHS_KEY, selective.paths.source),
+            (SELECTIVE_UNKNOWN_RISK_KEY, selective.unknown_risk.source),
+        ]
+        .into_iter()
+        .map(|(key, source)| (key.to_string(), source.label().to_string()))
+        .collect();
+        Some(SelectiveBeforeLandingPolicy::new(
+            selective.mode.value,
+            selective.risk_threshold.value.clone(),
+            selective.paths.value.clone(),
+            selective.unknown_risk.value,
+            sources,
+        ))
     }
 
     /// The pool before-PR and before-landing review draw from:

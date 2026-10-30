@@ -1236,6 +1236,7 @@ fn light_base_update(tag: LightTag, outside: bool) {
             required_validation_commands: Some(commands.clone()),
             baseline_commands: Vec::new(),
             host_evidence: Vec::new(),
+            selective_before_landing: None,
         }),
     };
     let boundary = TaskCommitBoundary::new(
@@ -1252,6 +1253,7 @@ fn light_base_update(tag: LightTag, outside: bool) {
         caller_fingerprint: None,
         caller_before_pr: false,
         review_gate: captured_review,
+        selective_review: false,
         run_context: AdmissionRunContext {
             run_id: "drain".into(),
             job_name: "workspace_pull_pipeline".into(),

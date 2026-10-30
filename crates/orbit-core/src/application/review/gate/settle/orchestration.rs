@@ -73,7 +73,12 @@ pub(crate) fn review_gate_settle(
             ));
         }
         Some(ReviewGateAdmissionOutput::NotApplicable(not_applicable)) => {
-            return Ok(output::not_required(Some(not_applicable.reason)));
+            let mut output = output::not_required(Some(not_applicable.reason));
+            if let Some(receipt) = not_applicable.selective_receipt {
+                output["selective_selection_head_sha"] = json!(receipt.head_sha);
+                output["selective_receipt"] = json!(receipt);
+            }
+            return Ok(output);
         }
         None => return Ok(output::not_required(None)),
     };
@@ -88,6 +93,32 @@ pub(crate) fn review_gate_settle(
             action,
             "review_gate_stale: the run no longer carries a review admission".to_string(),
         ));
+    }
+    if let Some(selection) = admitted.selective_receipt.as_deref()
+        && selection.requires_review()
+    {
+        let captured = context.admission.as_mut().ok_or_else(|| {
+            DispatchError::action_failed(
+                action,
+                "review_gate_stale: missing captured admission".to_string(),
+            )
+        })?;
+        if captured
+            .selective_policy()
+            .is_none_or(|policy| policy.digest != selection.policy_digest)
+        {
+            return Err(DispatchError::action_failed(
+                action,
+                "selection_stale: admitted selection does not bind captured owner policy"
+                    .to_string(),
+            ));
+        }
+        // This is only the effective settlement layer. The immutable run
+        // admission remains unchanged, including its captured model/policy.
+        if !captured.gates_landing() {
+            captured.timing = orbit_types::workflow::ReviewTiming::BeforeLanding;
+            captured.timing_source = "selective_before_landing".to_string();
+        }
     }
     if admitted.attempt_id.trim().is_empty() {
         return Err(DispatchError::action_failed(
@@ -247,7 +278,12 @@ fn settle(
     if recorded.is_some()
         && let Some(certificate) = store.review_certificate(&context.workspace_id, attempt_id)?
     {
-        return candidate::reconcile_settled(runtime, context, certificate);
+        return candidate::reconcile_settled(
+            runtime,
+            context,
+            certificate,
+            admitted.selective_receipt.as_deref(),
+        );
     }
 
     let head = orbit_engine::review_gate::revision(&context.workspace_path, "HEAD")?;
@@ -565,10 +601,16 @@ fn settle(
             )?;
         }
     }
+    output::validate_selection(&certificate, admitted.selective_receipt.as_deref())?;
     store.review_certificate_record(&context.workspace_id, &certificate)?;
     publication::publish_certificate(runtime, context, &certificate)?;
     if certificate.verdict.passed() {
         baseline::record_known_red(runtime, &context.task_ids, &certificate.known_red)?;
     }
-    output::settled_outcome(runtime, context, certificate)
+    output::settled_outcome(
+        runtime,
+        context,
+        certificate,
+        admitted.selective_receipt.as_deref(),
+    )
 }

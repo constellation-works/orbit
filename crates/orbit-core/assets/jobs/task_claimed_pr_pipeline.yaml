@@ -721,6 +721,10 @@ spec:
         review_evidence: "{{ steps.review_gate_settle.output.handoff_evidence }}"
         # [ORB-14849] The settled before-landing verdict, or null.
         landing_review_evidence: "{{ steps.landing_review_gate_settle.output.handoff_evidence }}"
+        # The leaf gate's selective-selection receipt, or null when the
+        # claim captured no selective policy: the owner verifies it
+        # against the captured contract and this candidate.
+        selective_receipt: "{{ steps.landing_review_gate_settle.output.selective_receipt }}"
         # A claim binds exactly one task, so the loop ran once and this is
         # that task's implementer output; its summary becomes the owner's.
         implementation: "{{ steps.implement_one.output }}"

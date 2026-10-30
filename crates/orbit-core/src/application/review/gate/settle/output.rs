@@ -21,6 +21,8 @@ pub(super) fn not_required(reason: Option<String>) -> Value {
         "gate": "not_required",
         "reason": reason,
         "reviewed_head_sha": "",
+        "selective_selection_head_sha": "",
+        "selective_receipt": null,
         "reviewed_base_sha": "",
         "reviewer_fixed": false,
         "review_fixes": "",
@@ -42,6 +44,7 @@ pub(super) fn settled_outcome(
     runtime: &OrbitRuntime,
     context: &GateContext,
     certificate: ReviewCertificate,
+    selection: Option<&orbit_types::workflow::SelectiveReviewReceipt>,
 ) -> Result<Settled, OrbitError> {
     // An owner before-landing run already promoted its task to review and
     // leaves the PR open for a recorded decision. A claimed leaf has not
@@ -89,8 +92,14 @@ pub(super) fn settled_outcome(
         }
         return Ok(Settled::Blocked(Box::new(certificate)));
     }
+    validate_selection(&certificate, selection)?;
     apply_mutation_proposals(runtime, context, &certificate)?;
     let mut output = passed_output(&certificate);
+    if let Some(selection) = selection {
+        // Only trusted settlement may carry selection across reviewer repairs.
+        output["selective_selection_head_sha"] = json!(certificate.final_candidate.commit);
+        output["selective_receipt"] = json!(selection);
+    }
     if context.claimed {
         output["handoff_evidence"] =
             serde_json::to_value(handoff_evidence(runtime, context, &certificate)?).map_err(
@@ -98,6 +107,26 @@ pub(super) fn settled_outcome(
             )?;
     }
     Ok(Settled::Passed(output))
+}
+
+/// A selection may advance only through the certificate that reviewed its
+/// original candidate. Check before publishing evidence or applying proposals.
+pub(super) fn validate_selection(
+    certificate: &ReviewCertificate,
+    selection: Option<&orbit_types::workflow::SelectiveReviewReceipt>,
+) -> Result<(), OrbitError> {
+    if let Some(selection) = selection
+        && (selection.head_sha != certificate.reviewed_candidate.commit
+            || selection.head_tree != certificate.reviewed_candidate.tree
+            || selection.base_sha != certificate.base.commit
+            || selection.base_tree != certificate.base.tree)
+    {
+        return Err(OrbitError::CapabilityDenied(
+            "selection_stale: review certificate does not continue the selected candidate"
+                .to_string(),
+        ));
+    }
+    Ok(())
 }
 
 /// [granted-tools §4] Apply the mutation proposals this passed attempt's
@@ -209,6 +238,8 @@ fn passed_output(certificate: &ReviewCertificate) -> Value {
         "assurance": certificate.assurance.map(|assurance| assurance.as_str()),
         "attempt_id": certificate.attempt_id,
         "reviewed_head_sha": certificate.final_candidate.commit,
+        "selective_selection_head_sha": "",
+        "selective_receipt": null,
         "reviewed_base_sha": certificate.base.commit,
         "implementation_head_sha": certificate.reviewed_candidate.commit,
         "final_candidate_tree": certificate.final_candidate.tree,

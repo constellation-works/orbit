@@ -685,6 +685,7 @@ fn native_artifact_put_preserves_operator_evidence_and_requeues_once() {
         budget: ReviewBudget { minutes: 10 },
         required_validation_commands: Some(vec!["native fixture".into()]),
         baseline_commands: Vec::new(),
+        selective_before_landing: None,
         captured_at: Utc::now(),
         host_evidence: Vec::new(),
     };

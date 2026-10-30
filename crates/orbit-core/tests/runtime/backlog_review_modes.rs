@@ -68,6 +68,7 @@ fn admission(timing: ReviewTiming) -> ReviewAdmission {
         required_validation_commands: Some(Vec::new()),
         baseline_commands: Vec::new(),
         host_evidence: Vec::new(),
+        selective_before_landing: None,
         captured_at: Utc::now(),
     }
 }

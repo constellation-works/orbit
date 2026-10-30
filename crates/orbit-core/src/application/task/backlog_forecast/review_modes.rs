@@ -9,7 +9,7 @@ use orbit_common::OrbitError;
 use orbit_types::task::{Task, TaskStatus};
 use orbit_types::workflow::{
     JobRun, JobRunState, JobTargetType, ReviewAdmission, ReviewGateAdmissionOutput, ReviewTiming,
-    ShipMode,
+    SelectiveBeforeLandingMode, ShipMode,
 };
 use serde::Serialize;
 
@@ -135,18 +135,34 @@ impl ReviewHistory {
             }
             return Ok(captured.map_or(
                 (ReviewMode::Unknown, "missing_run_admission".into()),
-                |admission| {
-                    (
-                        ReviewMode::from_timing(admission.timing),
-                        format!("captured:{}", admission.timing_source),
-                    )
-                },
+                |admission| assumed_selective_mode(&admission, "captured"),
             ));
         }
         if task.tags.iter().any(|tag| tag == "no-diff-expected") {
             return Ok((ReviewMode::None, "no_diff_expected".into()));
         }
-        let mode = ReviewMode::from_timing(self.current.timing);
+        let (mode, selective_source) = match self.current.selective_policy() {
+            Some(policy) if self.current.timing == ReviewTiming::None => {
+                match policy.mode {
+                    // Candidate-dependent: no mode can be assumed before
+                    // the pinned diff exists.
+                    SelectiveBeforeLandingMode::Enforce => {
+                        (ReviewMode::Unknown, Some("selective_pending"))
+                    }
+                    // Observation never enforces a review.
+                    SelectiveBeforeLandingMode::Observe => {
+                        (ReviewMode::None, Some("selective_observe"))
+                    }
+                    SelectiveBeforeLandingMode::Off => {
+                        (ReviewMode::from_timing(self.current.timing), None)
+                    }
+                }
+            }
+            _ => (ReviewMode::from_timing(self.current.timing), None),
+        };
+        if let Some(source) = selective_source {
+            return Ok((mode, source.to_string()));
+        }
         let route = runtime.forecast_task_delivery_mode(task);
         let Ok(route) = route else {
             return Ok((ReviewMode::Unknown, "unresolved_delivery_route".into()));
@@ -159,6 +175,33 @@ impl ReviewHistory {
         }
         Ok((mode, format!("current:{}", self.current.timing_source)))
     }
+}
+
+/// The assumed mode of a captured admission: selective enforcement is
+/// candidate-dependent (unknown until the pinned diff is evaluated) and
+/// observation enforces nothing, so neither reads as a completed
+/// before-landing review.
+fn assumed_selective_mode(admission: &ReviewAdmission, origin: &str) -> (ReviewMode, String) {
+    if admission.timing == ReviewTiming::None
+        && let Some(policy) = admission.selective_policy()
+    {
+        return match policy.mode {
+            SelectiveBeforeLandingMode::Enforce => {
+                (ReviewMode::Unknown, format!("{origin}:selective_pending"))
+            }
+            SelectiveBeforeLandingMode::Observe => {
+                (ReviewMode::None, format!("{origin}:selective_observe"))
+            }
+            SelectiveBeforeLandingMode::Off => (
+                ReviewMode::from_timing(admission.timing),
+                format!("{origin}:{}", admission.timing_source),
+            ),
+        };
+    }
+    (
+        ReviewMode::from_timing(admission.timing),
+        format!("{origin}:{}", admission.timing_source),
+    )
 }
 
 fn enforced_review_mode(
@@ -196,11 +239,20 @@ fn enforced_review_mode(
             })
         });
     if !reviewers.is_empty() {
-        return Ok(if executed_review && mode != ReviewMode::None && !exempt {
-            mode
-        } else {
-            ReviewMode::Unknown
-        });
+        // A selectively required review runs as a before-landing review
+        // under a `none` timing; the executed reviewer is its proof.
+        let selective_enforced = admission.selective_enforced();
+        return Ok(
+            if executed_review && !exempt && (mode != ReviewMode::None || selective_enforced) {
+                if selective_enforced && mode == ReviewMode::None {
+                    ReviewMode::BeforeLanding
+                } else {
+                    mode
+                }
+            } else {
+                ReviewMode::Unknown
+            },
+        );
     }
     if run
         .steps
@@ -212,12 +264,55 @@ fn enforced_review_mode(
     if exempt {
         return Ok(ReviewMode::None);
     }
+    if admission.selective_enforced() && mode == ReviewMode::None {
+        // No reviewer ran under selective enforcement: only the gate's
+        // recorded selection distinguishes a skip from a pending or
+        // missing decision, so absence of a reviewer proves neither.
+        return Ok(match selective_gate_decision(runtime, run)? {
+            Some(true) => ReviewMode::Unknown,
+            Some(false) => ReviewMode::None,
+            None => ReviewMode::Unknown,
+        });
+    }
     if mode == ReviewMode::None {
         return Ok(mode);
     }
     // Only a recorded gate decision proves that a configured review was
     // exempted. Absence of reviewer telemetry alone proves nothing.
     Ok(ReviewMode::Unknown)
+}
+
+/// The run's recorded selective decision: `Some(true)` required,
+/// `Some(false)` not required, `None` for unavailable, observe-only, or
+/// no recorded decision. Read from the landing gate's checkpointed
+/// output, never inferred from reviewer absence.
+fn selective_gate_decision(
+    runtime: &OrbitRuntime,
+    run: &JobRun,
+) -> Result<Option<bool>, OrbitError> {
+    use orbit_types::workflow::SelectiveReviewResult;
+    let state = runtime.stored_run_state(&run.run_id)?;
+    let output = state
+        .as_ref()
+        .and_then(|state| state.pipeline.get("landing_review_gate_admit"));
+    let Some(output) = output else {
+        return Ok(None);
+    };
+    let Ok(parsed) = serde_json::from_value::<ReviewGateAdmissionOutput>(output.clone()) else {
+        return Ok(None);
+    };
+    let receipt = match &parsed {
+        ReviewGateAdmissionOutput::Admitted(admitted) => {
+            return Ok(admitted.selective_receipt.as_ref().map(|_| true));
+        }
+        ReviewGateAdmissionOutput::NotApplicable(decision) => decision.selective_receipt.as_ref(),
+        ReviewGateAdmissionOutput::PreflightPassed { .. } => None,
+    };
+    Ok(receipt.and_then(|receipt| match receipt.result {
+        SelectiveReviewResult::Required => Some(true),
+        SelectiveReviewResult::NotRequired => Some(false),
+        SelectiveReviewResult::Unavailable => None,
+    }))
 }
 
 fn run_review_exempt(runtime: &OrbitRuntime, run: &JobRun) -> Result<bool, OrbitError> {
