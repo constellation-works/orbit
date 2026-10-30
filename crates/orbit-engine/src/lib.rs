@@ -36,7 +36,9 @@ pub mod activity_job;
 /// Scoped hooks and the null host base for test fixtures, enabled only in tests.
 #[cfg(feature = "test-support")]
 pub mod test_support {
-    pub use crate::activity_job::cli_runner::with_cli_supervision_clock;
+    pub use crate::activity_job::cli_runner::{
+        with_bwrap_probe_unavailable, with_cli_supervision_clock,
+    };
     pub use crate::activity_job::job_executor::loop_clock::with_loop_clock;
     pub use crate::context::NullRuntimeHost;
     #[cfg(any(target_os = "linux", target_os = "macos"))]

@@ -16,6 +16,8 @@ mod spawn_diagnostics;
 mod stdout_preview;
 mod supervisor;
 #[cfg(feature = "test-support")]
+pub use spawn::with_bwrap_probe_unavailable;
+#[cfg(feature = "test-support")]
 pub use supervisor::with_cli_supervision_clock;
 
 #[cfg(test)]
