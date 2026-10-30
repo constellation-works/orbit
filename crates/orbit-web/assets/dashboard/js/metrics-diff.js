@@ -2,6 +2,10 @@
 // added and deleted by landed deliveries in each bucket, as four line kinds
 // or one line per implementing crew.
 //
+// The Cumulative and Per day views (metrics-running.js) sum the line kinds
+// and add net code, net tests and the tests-to-code share; they ignore the
+// statistic, which only describes one bucket.
+//
 // The complexity filter is the endpoint's and refetches only this trend;
 // grouping, statistic (totals or per-task mean/median) and the crew measure
 // are local and redraw from the cached payload. Crews draw from complexity
@@ -10,6 +14,7 @@
 // metrics.js, which passes its helpers in.
 
 import { el, fetchJson, getWorkspaceRevision } from './common.js';
+import { runningModel } from './metrics-running.js';
 
 const COMPLEXITIES = [["", "All complexities"], ["low", "Low"], ["medium", "Medium"], ["hard", "Hard"], ["xhard", "Xhard"], ["unassessed", "Unassessed"]];
 const GROUPS = [["lines", "Line kind"], ["crew", "Crew"]];
@@ -93,7 +98,7 @@ function linesScale(min, max) {
 
 /// The filter row: complexity (refetches), grouping, statistic and, for the
 /// crew view, the measure.
-export function diffTools({ segGroup, windowKey, rerender, onChange }) {
+export function diffTools({ segGroup, windowKey, rerender, onChange, countView }) {
   const complexity = el("select", { class: "mx-select", "aria-label": "Task complexity" },
     COMPLEXITIES.map(([value, text]) => option(value, text, value === filters.complexity)));
   complexity.addEventListener("change", () => {
@@ -114,7 +119,7 @@ export function diffTools({ segGroup, windowKey, rerender, onChange }) {
   return [
     complexity,
     segGroup("Group by", GROUPS, diffView.group, (key) => key !== diffView.group && local({ group: key })),
-    segGroup("Statistic", STATS, diffView.stat, (key) => key !== diffView.stat && local({ stat: key })),
+    countView === "bucket" ? segGroup("Statistic", STATS, diffView.stat, (key) => key !== diffView.stat && local({ stat: key })) : null,
     diffView.group === "crew" ? measure : null,
   ];
 }
@@ -147,7 +152,7 @@ function statOf(cell, measure) {
 }
 
 /// The trend model metrics.js draws: cards, chart, table, or an empty state.
-export function diffModel(payload, { windowKey, shown, bucketTitle, bucketWidthLabel }) {
+export function diffModel(payload, { windowKey, shown, countView, bucketTitle, bucketWidthLabel }) {
   const blurb = "Lines added and deleted by deliveries that landed in each bucket, split into code and tests by the workspace's test-path setting. Pick one complexity to compare crews like for like.";
   if (!payload) return { blurb, cards: [], empty: { title: "Loading lines changed…", detail: "", noWiden: true } };
   if (payload.unavailable) return { blurb, cards: [], empty: { title: "Lines changed unavailable", detail: payload.unavailable, noWiden: true } };
@@ -161,7 +166,8 @@ export function diffModel(payload, { windowKey, shown, bucketTitle, bucketWidthL
   const statWord = STAT_WORDS[diffView.stat];
   const measureLabel = (MEASURES.find(([key]) => key === diffView.measure) || [null, diffView.measure])[1];
 
-  const cards = series.map((entry) => {
+  const running = countView !== "bucket";
+  const cards = running ? runningCards(payload, series, isShown) : series.map((entry) => {
     const cell = entry.data.total;
     return {
       key: entry.key,
@@ -187,6 +193,8 @@ export function diffModel(payload, { windowKey, shown, bucketTitle, bucketWidthL
       },
     };
   }
+
+  if (running) return { blurb, cards, ...diffRunningModel(payload, series, { windowKey, countView, isShown, bucketTitle, bucketWidthLabel }) };
 
   const visible = series.filter((entry) => isShown(entry.key));
   let min = 0;
@@ -268,4 +276,83 @@ export function diffModel(payload, { windowKey, shown, bucketTitle, bucketWidthL
       })).reverse(),
     },
   };
+}
+
+/// What a running view plots for one series: the line kinds, then net code and
+/// net tests (the legend's "net = code and tests added minus deleted", per
+/// class); a crew plots its measure.
+function runningSeries(series) {
+  const base = series.map((entry) => ({ ...entry, value: (cell) => cell.sum[entry.measure] }));
+  if (diffView.group !== "lines") return base;
+  return [
+    ...base,
+    { key: "net_code", swatch: "c4", label: "Net code", dashed: false, data: base[0].data, value: (cell) => cell.sum.code_added - cell.sum.code_deleted },
+    { key: "net_tests", swatch: "c5", label: "Net tests", dashed: false, data: base[0].data, value: (cell) => cell.sum.tests_added - cell.sum.tests_deleted },
+  ];
+}
+
+function sharePercent(tests, code) {
+  return code > 0 ? `${Math.round(tests / code * 100)}%` : "—";
+}
+
+/// Cards for a running view: each series' window total, the number a
+/// Cumulative line ends on, and for line kinds the tests-to-code share.
+function runningCards(payload, series, isShown) {
+  const total = payload.overall.total;
+  const cards = runningSeries(series).map((entry) => ({
+    key: entry.key,
+    swatch: entry.swatch,
+    dashed: entry.dashed,
+    label: entry.label,
+    tag: "",
+    on: isShown(entry.key),
+    value: fmtLines(entry.value(entry.data.total)),
+    sub: "window total",
+    foot: deliveries(entry.data.total.n),
+  }));
+  if (diffView.group === "lines") {
+    cards.push({
+      key: "tests_share",
+      static: true,
+      label: "Tests ÷ code",
+      tag: "",
+      value: sharePercent(total.sum.tests_added, total.sum.code_added),
+      sub: `${fmtLines(total.sum.tests_added)} tests added ÷ ${fmtLines(total.sum.code_added)} code added`,
+      foot: deliveries(total.n),
+    });
+  }
+  return cards;
+}
+
+function diffRunningModel(payload, series, { windowKey, countView, isShown, bucketTitle, bucketWidthLabel }) {
+  const starts = payload.bucket_starts || [];
+  const measure = diffView.group === "crew" ? ` (${(MEASURES.find(([key]) => key === diffView.measure) || [null, diffView.measure])[1].toLowerCase()})` : "";
+  const notes = ["time = when the delivery landed", "net = code and tests added minus deleted"];
+  if (diffView.group === "crew" && !filters.complexity) notes.push("all complexities mixed: crews draw from complexity pools");
+  return runningModel({
+    mode: countView,
+    kind: "diff",
+    windowKey,
+    seconds: payload.window.bucket_seconds,
+    starts,
+    series: runningSeries(series).map((entry) => ({
+      key: entry.key,
+      swatch: entry.swatch,
+      label: entry.label,
+      dashed: entry.dashed,
+      on: isShown(entry.key),
+      values: entry.data.points.map((cell) => entry.value(cell)),
+      lead: (entry.data.lead_points || []).map((cell) => entry.value(cell)),
+    })),
+    fmt: fmtLines,
+    noun: "lines",
+    subject: `Lines changed by landed deliveries${measure}`,
+    notes,
+    tipExtra: diffView.group === "lines" ? (index, valueOf) => {
+      const share = sharePercent(valueOf("tests_added") || 0, valueOf("code_added") || 0);
+      return share === "—" ? null : `tests ÷ code ${countView === "day" ? "over these 24h" : "so far"}: ${share}`;
+    } : null,
+    bucketTitle,
+    bucketWidthLabel,
+  });
 }

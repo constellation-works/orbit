@@ -163,6 +163,8 @@ export async function assertDashboardNavigationRepairs(page, evidence) {
       await (await import('/js/metrics.js')).fetchAndRenderMetrics();
     });
     await page.getByRole('tab', { name: 'Tasks completed', exact: true }).click();
+    // The `all` window opens on Cumulative; the label under test is the per-bucket one.
+    await page.getByRole('button', { name: 'Per bucket' }).click();
     assert.match(await page.locator('.mx-plot').getAttribute('aria-label'), /per 2 weeks/);
     assert.match(await page.locator('#metrics-trend-view .mx-notes').textContent(), /2-week/);
     await shots('metrics-multiweek');

@@ -77,9 +77,11 @@ fn completion_trend(
     runtime: &OrbitRuntime,
     range: &DiagnosticsRange,
 ) -> Result<Value, orbit_core::OrbitError> {
-    let transitions = runtime.task_terminal_transitions(TrendWindow::read_since(range))?;
-    let window = TrendWindow::new(range, transitions.first().map(|row| row.at));
+    let transitions =
+        runtime.task_terminal_transitions(TrendWindow::read_since_with_day_lead(range))?;
+    let window = TrendWindow::with_day_lead(range, transitions.first().map(|row| row.at));
     let mut buckets = vec![Counts::default(); window.bucket_count()];
+    let mut lead = vec![Counts::default(); window.lead_count()];
     let mut current = Counts::default();
     let mut previous = Counts::default();
     for row in &transitions {
@@ -88,6 +90,9 @@ fn completion_trend(
             current.record(row.status, &row.complexity);
         } else if window.in_previous(row.at) {
             previous.record(row.status, &row.complexity);
+        }
+        if let Some(index) = window.lead_bucket_of(row.at) {
+            lead[index].record(row.status, &row.complexity);
         }
     }
     let buckets: Vec<Value> = buckets
@@ -102,6 +107,7 @@ fn completion_trend(
     Ok(json!({
         "window": window.to_json(),
         "buckets": buckets,
+        "lead_buckets": lead.iter().map(Counts::to_json).collect::<Vec<_>>(),
         "current": current.to_json(),
         "previous": window.previous.map(|_| previous.to_json()),
     }))

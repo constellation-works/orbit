@@ -19,6 +19,8 @@ const MAX_BUCKETS: i64 = 60;
 const WEEK_OFFSET_SECS: i64 = 4 * 86_400;
 /// Widest ladder width, used to widen `all` windows in whole weeks.
 const WEEK_SECS: i64 = 604_800;
+/// Length of the trailing sum a "per day" view draws at each bucket.
+const DAY_SECS: i64 = 86_400;
 
 /// Window a trend request without `since` or `month` covers.
 const DEFAULT_SINCE: &str = "24h";
@@ -101,12 +103,25 @@ pub(super) struct TrendWindow {
     bucket_secs: i64,
     /// `[start - (until - start), start)`; `None` for an `all` window.
     pub(super) previous: Option<(DateTime<Utc>, DateTime<Utc>)>,
+    /// Buckets of history before `start` that a trailing 24h sum at the
+    /// first bucket needs; zero when buckets are a day or wider.
+    lead: usize,
 }
 
 impl TrendWindow {
     /// An `all` range (no `since`) opens at `earliest`, the oldest sample the
     /// caller read, or at `until` when there is none.
     pub(super) fn new(range: &DiagnosticsRange, earliest: Option<DateTime<Utc>>) -> Self {
+        Self::build(range, earliest, false)
+    }
+
+    /// [`Self::new`] plus the lead buckets a trailing-24h sum needs at the
+    /// first bucket, for the count series that offer a per-day view.
+    pub(super) fn with_day_lead(range: &DiagnosticsRange, earliest: Option<DateTime<Utc>>) -> Self {
+        Self::build(range, earliest, true)
+    }
+
+    fn build(range: &DiagnosticsRange, earliest: Option<DateTime<Utc>>, day_lead: bool) -> Self {
         let until = range.until.min(Utc::now());
         let open = range.since.or(earliest).unwrap_or(until).min(until);
         let span = (until - open).num_seconds().max(1);
@@ -120,12 +135,18 @@ impl TrendWindow {
                 .checked_sub_signed(until - start)
                 .map(|previous_start| (previous_start, start))
         });
+        let lead = if day_lead && bucket_secs < DAY_SECS && DAY_SECS % bucket_secs == 0 {
+            usize::try_from(DAY_SECS / bucket_secs - 1).unwrap_or(0)
+        } else {
+            0
+        };
         Self {
             key: range.key.clone(),
             start,
             until,
             bucket_secs,
             previous,
+            lead,
         }
     }
 
@@ -136,6 +157,38 @@ impl TrendWindow {
             let window = Self::new(range, None);
             window.previous.map_or(window.start, |(start, _)| start)
         })
+    }
+
+    /// [`Self::read_since`] reaching back far enough to fill the lead buckets.
+    pub(super) fn read_since_with_day_lead(range: &DiagnosticsRange) -> Option<DateTime<Utc>> {
+        range.since.map(|_| {
+            let window = Self::with_day_lead(range, None);
+            let oldest = window.previous.map_or(window.start, |(start, _)| start);
+            oldest.min(window.lead_start())
+        })
+    }
+
+    /// Buckets of history before the window that [`Self::lead_bucket_of`]
+    /// places rows in, oldest first.
+    pub(super) fn lead_count(&self) -> usize {
+        self.lead
+    }
+
+    /// Where the lead buckets open: `lead_count` bucket widths before `start`.
+    fn lead_start(&self) -> DateTime<Utc> {
+        let offset = Duration::seconds(self.bucket_secs.saturating_mul(self.lead as i64));
+        self.start.checked_sub_signed(offset).unwrap_or(self.start)
+    }
+
+    /// The lead bucket `at` falls in, or `None` outside `[lead start, start)`.
+    pub(super) fn lead_bucket_of(&self, at: DateTime<Utc>) -> Option<usize> {
+        if self.lead == 0 || at < self.lead_start() || at >= self.start {
+            return None;
+        }
+        let index = (at - self.lead_start()).num_seconds() / self.bucket_secs;
+        usize::try_from(index)
+            .ok()
+            .map(|index| index.min(self.lead - 1))
     }
 
     pub(super) fn bucket_count(&self) -> usize {
@@ -170,6 +223,7 @@ impl TrendWindow {
             "since": self.start.to_rfc3339(),
             "until": self.until.to_rfc3339(),
             "bucket_seconds": self.bucket_secs,
+            "lead_buckets": self.lead,
             "previous_since": self.previous.map(|(start, _)| start.to_rfc3339()),
             "previous_until": self.previous.map(|(_, end)| end.to_rfc3339()),
         })

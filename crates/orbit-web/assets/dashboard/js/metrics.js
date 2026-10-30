@@ -4,7 +4,9 @@
 // window, with the per-actor tables beneath. The tokens,
 // turns-to-first-edit, lines-changed and delivery-friction trends keep
 // their filters and models in metrics-tokens.js, metrics-turns.js,
-// metrics-diff.js and metrics-friction.js.
+// metrics-diff.js and metrics-friction.js. The count trends (Tasks completed,
+// Defects, Tokens and Lines changed) also offer Per bucket, Cumulative and Per
+// day views, derived in metrics-running.js.
 // Pure vanilla JS, split into ES modules with no build step.
 //
 // One panel request reads the summary/detail endpoints and the selected
@@ -20,7 +22,8 @@ import {
   bindTaskLink, DASHBOARD_WINDOWS,
 } from './common.js';
 import { linePath, sparkline as lineSparkline, svg } from './sparkline.js';
-import { fetchTokens, isCurrentTokensPayload, tokensModel, tokensQuery, tokensTools } from './metrics-tokens.js';
+import { fetchTokens, isCurrentTokensPayload, tokenSpendModel, tokensModel, tokensQuery, tokensTools } from './metrics-tokens.js';
+import { availableCountViews, countViewHash, countViewsFromQuery, isCountTrend, resolveCountView, runningModel } from './metrics-running.js';
 import { fetchTurns, isCurrentTurnsPayload, turnsModel, turnsQuery, turnsTools, turnsView } from './metrics-turns.js';
 import { diffModel, diffQuery, diffTools, diffView, fetchDiff, isCurrentDiffPayload } from './metrics-diff.js';
 import { fetchFriction, frictionModel, frictionQuery, frictionTools, frictionView, isCurrentFrictionPayload } from './metrics-friction.js';
@@ -52,7 +55,7 @@ const SERIES = [
 const STACK = ["low", "medium", "hard", "other"];
 const COMPLEXITY_TABS = ["low", "medium", "hard", "xhard", "unset"];
 const STATS = [["avg", "Avg"], ["p50", "p50"], ["p95", "p95"]];
-const TRENDS = [["duration", "implement_one duration"], ["completed", "Tasks completed"], ["defects", "Defects"], ["tokens", "Tokens per task"], ["turns", "Turns to first edit"], ["diff", "Lines changed"], ["friction", "Delivery friction"]];
+const TRENDS = [["duration", "implement_one duration"], ["completed", "Tasks completed"], ["defects", "Defects"], ["tokens", "Tokens per task"], ["tokens-total", "Tokens"], ["turns", "Turns to first edit"], ["diff", "Lines changed"], ["friction", "Delivery friction"]];
 const DEFECT_GROUPS = [["lineage", "Lineage"], ["origin", "Origin"]];
 // Lineage: what a bug's `regression_from` relations name as its cause.
 const LINEAGE_SERIES = [
@@ -93,6 +96,7 @@ const view = {
     "defects-origin": Object.fromEntries(["all", ...ORIGIN_CHART, "other"].map((key) => [key, true])),
     // Series the API sends vary with the tag filter; absent keys are shown.
     tokens: {},
+    "tokens-total": {},
     turns: {},
     // Lines changed: line kinds, or crews (which vary with the window).
     "diff-lines": {},
@@ -100,6 +104,9 @@ const view = {
     // Delivery friction: the families the picker fetched.
     friction: {},
   },
+  // The Per bucket | Cumulative | Per day view each count trend was last given,
+  // by trend; the hash query remembers it.
+  countViews: {},
   hover: null,
   allActors: false,
   complexity: null,
@@ -126,6 +133,7 @@ export function placeholdMetricsAggregate() {
 export function fetchAndRenderMetrics() {
   const hashQuery = new URLSearchParams(window.location.hash.split("?")[1] || "");
   view.outcome = hashQuery.get("outcome") === "all" ? "all" : "succeeded";
+  view.countViews = countViewsFromQuery(hashQuery);
   wireMetricsWindowSelector();
   if (isAggregateView()) {
     placeholdMetricsAggregate();
@@ -149,7 +157,7 @@ export function fetchAndRenderMetrics() {
     fetchJson(`/api/diagnostics/defects?${since}`).catch((error) => ({
       unavailable: error.status === 404 ? "This host's Orbit does not report defects yet. Upgrade it to see this trend." : error.message,
     })),
-    view.trend === "tokens" ? fetchTokens(selectedWindow) : null,
+    view.trend === "tokens" || view.trend === "tokens-total" ? fetchTokens(selectedWindow) : null,
     view.trend === "diff" ? fetchDiff(selectedWindow) : null,
     view.trend === "friction" ? fetchFriction(selectedWindow) : null,
     view.trend === "turns" ? fetchTurns(selectedWindow) : null,
@@ -224,7 +232,7 @@ function sectionHash(index) {
   const { hover, ...state } = view;
   const p = lastPayload;
   const parts = [
-    [state.outcome, state.trend, state.group, state.stat, state.mode, state.shown, p.windowKey, p.durations.buckets, p.durations.current, p.durations.previous, p.completions, p.defects, p.tokens, tokensQuery(p.windowKey), p.turns, turnsQuery(p.windowKey), turnsView, p.diff, diffQuery(p.windowKey), diffView, p.friction, frictionQuery(p.windowKey), frictionView],
+    [state.outcome, state.trend, state.group, state.stat, state.mode, state.shown, state.countViews, p.windowKey, p.durations.buckets, p.durations.current, p.durations.previous, p.completions, p.defects, p.tokens, tokensQuery(p.windowKey), p.turns, turnsQuery(p.windowKey), turnsView, p.diff, diffQuery(p.windowKey), diffView, p.friction, frictionQuery(p.windowKey), frictionView],
     [state.allActors, p.durations.actors, p.durations.slowest],
     [state.complexity, p.durations.implement_one_by_complexity, p.outcome],
   ];
@@ -397,7 +405,7 @@ function pickTrend(key) {
   // reading the current selection, using the same fences as filter changes.
   if (lastPayload) {
     const selectedWindow = lastPayload.windowKey;
-    if (key === "tokens") {
+    if (key === "tokens" || key === "tokens-total") {
       applyTokens(null);
       fetchTokens(selectedWindow).then(applyTokens);
     } else if (key === "turns") {
@@ -486,20 +494,47 @@ function applyFriction(payload) {
   rerender();
 }
 
+// The payload whose bucket width decides which count views a trend offers.
+function countPayload() {
+  return { completed: lastPayload.completions, defects: lastPayload.defects, "tokens-total": lastPayload.tokens, diff: lastPayload.diff }[view.trend];
+}
+
+// The count view on screen for the selected trend, or null for a per-run
+// trend: the one the hash remembers if the trend can draw it, else the
+// window's default.
+function activeCountView() {
+  if (!isCountTrend(view.trend)) return null;
+  const payload = countPayload();
+  const seconds = payload && !payload.unavailable && payload.window ? payload.window.bucket_seconds : null;
+  return { seconds, mode: resolveCountView(view.countViews[view.trend], lastPayload.windowKey, seconds) };
+}
+
+// A view change redraws locally and rewrites the address in place: it is not
+// a route, so nothing refetches.
+function pickCountView(mode) {
+  view.countViews[view.trend] = mode;
+  view.hover = null;
+  window.history.replaceState(null, "", countViewHash(window.location.hash, view.trend, mode));
+  rerender();
+}
+
 function trendSection() {
   const isDuration = view.trend === "duration";
   const isDefects = view.trend === "defects";
   const isTokens = view.trend === "tokens";
+  const isTokenSpend = view.trend === "tokens-total";
+  const count = activeCountView();
   const isTurns = view.trend === "turns";
   const isDiff = view.trend === "diff";
   const isFriction = view.trend === "friction";
   const model = isDuration ? durationModel()
-    : isDefects ? defectsModel()
+    : isDefects ? defectsModel(count.mode)
       : isTokens ? tokensModel(lastPayload.tokens, { windowKey: lastPayload.windowKey, shown: view.shown.tokens, bucketTitle, bucketWidthLabel })
+        : isTokenSpend ? tokenSpendModel(lastPayload.tokens, { windowKey: lastPayload.windowKey, shown: view.shown["tokens-total"], countView: count.mode, bucketTitle, bucketWidthLabel })
         : isTurns ? turnsModel(lastPayload.turns, { windowKey: lastPayload.windowKey, shown: view.shown.turns, bucketTitle, bucketWidthLabel })
-          : isDiff ? diffModel(lastPayload.diff, { windowKey: lastPayload.windowKey, shown: view.shown[shownKey()], bucketTitle, bucketWidthLabel })
+          : isDiff ? diffModel(lastPayload.diff, { windowKey: lastPayload.windowKey, shown: view.shown[shownKey()], countView: count.mode, bucketTitle, bucketWidthLabel })
             : isFriction ? frictionModel(lastPayload.friction, { windowKey: lastPayload.windowKey, shown: view.shown.friction, bucketTitle, bucketWidthLabel })
-              : completedModel();
+              : completedModel(count && count.mode);
   const tools = el("div", { class: "mx-trend-tools" }, [
     isDuration ? segGroup("Run outcome", OUTCOMES, view.outcome, (key) => {
       if (key === view.outcome) return;
@@ -510,10 +545,11 @@ function trendSection() {
     }) : null,
     isDuration ? segGroup("Statistic", STATS, view.stat, (key) => { view.stat = key; rerender(); }) : null,
     isDefects ? segGroup("Group by", DEFECT_GROUPS, view.group, (key) => { view.group = key; view.hover = null; rerender(); }) : null,
-    ...(isTokens ? tokensTools({ segGroup, windowKey: lastPayload.windowKey, payload: lastPayload.tokens, onChange: applyTokens }) : []),
+    ...(isTokens || isTokenSpend ? tokensTools({ segGroup, windowKey: lastPayload.windowKey, payload: lastPayload.tokens, onChange: applyTokens }) : []),
     ...(isTurns ? turnsTools({ segGroup, windowKey: lastPayload.windowKey, payload: lastPayload.turns, rerender: () => { view.hover = null; rerender(); }, onChange: applyTurns }) : []),
-    ...(isDiff ? diffTools({ segGroup, windowKey: lastPayload.windowKey, rerender: () => { view.hover = null; rerender(); }, onChange: applyDiff }) : []),
+    ...(isDiff ? diffTools({ segGroup, countView: count.mode, windowKey: lastPayload.windowKey, rerender: () => { view.hover = null; rerender(); }, onChange: applyDiff }) : []),
     ...(isFriction ? frictionTools({ segGroup, windowKey: lastPayload.windowKey, payload: lastPayload.friction, rerender: () => { view.hover = null; rerender(); }, onChange: applyFriction }) : []),
+    count ? segGroup("Count view", availableCountViews(count.seconds), count.mode, pickCountView) : null,
     segGroup("View", MODES, view.mode, (key) => { view.mode = key; view.hover = null; rerender(); }),
   ]);
   const panel = el("div", { class: "mx-trend-view", id: "metrics-trend-view", role: "tabpanel" }, [
@@ -532,6 +568,15 @@ function trendSection() {
 
 function seriesCards(cards) {
   return el("div", { class: "mx-series", role: "group", "aria-label": "Series" }, cards.map((card) => {
+    // A figure derived from the series, not a series: no toggle.
+    if (card.static) {
+      return el("div", { class: "mx-sc mx-sc-static", role: "group", "aria-label": card.label }, [
+        el("span", { class: "mx-sc-label", text: card.label }),
+        el("span", { class: "mx-sc-value", text: card.value }),
+        el("span", { class: "mx-sc-delta" }, [el("span", { class: "mx-sc-sub", text: card.sub })]),
+        el("span", { class: "mx-sc-foot", text: card.foot }),
+      ]);
+    }
     const button = el("button", {
       class: `mx-sc mx-s-${card.swatch || card.key}${card.on ? " on" : " off"}`,
       type: "button",
@@ -699,7 +744,7 @@ function doneCount(counts, key) {
   return key === "all" ? counts.done.total : counts.done[key];
 }
 
-function completedModel() {
+function completedModel(countView) {
   const payload = lastPayload.completions;
   const windowKeyValue = lastPayload.windowKey;
   const buckets = payload.buckets || [];
@@ -731,6 +776,36 @@ function completedModel() {
   const blurb = "Tasks that moved to done in each bucket, by complexity.";
   if (!current.done.total && !current.rejected && !current.archived) {
     return { blurb, cards, empty: { title: `No tasks closed in the last ${windowKeyValue === "all" ? "recorded history" : windowKeyValue}`, detail: "" } };
+  }
+
+  if (countView !== "bucket") {
+    const lead = payload.lead_buckets || [];
+    return {
+      blurb,
+      cards,
+      ...runningModel({
+        mode: countView,
+        kind: "completed",
+        windowKey: windowKeyValue,
+        seconds,
+        starts: buckets.map((bucket) => bucket.start),
+        series: SERIES.map((series) => ({
+          key: series.key,
+          swatch: series.key,
+          label: series.doneLabel,
+          strong: series.key === "all",
+          on: !!shown[series.key],
+          values: buckets.map((bucket) => doneCount(bucket, series.key)),
+          lead: lead.map((bucket) => doneCount(bucket, series.key)),
+        })),
+        fmt: String,
+        noun: "tasks",
+        subject: "Tasks moved to done",
+        notes: ["time = the task's last write after it closed", "xhard and unset count toward the total only"],
+        bucketTitle,
+        bucketWidthLabel,
+      }),
+    };
   }
 
   const stackValue = (bucket) => STACK.reduce((sum, key) => sum + (key === "other" ? (shown.all ? bucket.done.other : 0) : (shown[key] ? bucket.done[key] : 0)), 0);
@@ -814,7 +889,7 @@ function pct(part, whole) {
   return whole ? Math.round(part / whole * 100) : 0;
 }
 
-function defectsModel() {
+function defectsModel(countView) {
   const payload = lastPayload.defects;
   const windowKeyValue = lastPayload.windowKey;
   if (payload.unavailable) {
@@ -855,6 +930,36 @@ function defectsModel() {
     : "Bug tasks filed in each bucket, by the review or sweep that filed them.";
   if (!current.total) {
     return { blurb, cards, empty: { title: `No defects filed in the last ${windowKeyValue === "all" ? "recorded history" : windowKeyValue}`, detail: "" } };
+  }
+
+  if (countView !== "bucket") {
+    const lead = payload.lead_buckets || [];
+    return {
+      blurb,
+      cards,
+      ...runningModel({
+        mode: countView,
+        kind: "defects",
+        windowKey: windowKeyValue,
+        seconds,
+        starts: buckets.map((bucket) => bucket.start),
+        series: [{ key: "all", label: "Defects (total)" }, ...series].map((entry) => ({
+          key: entry.key,
+          swatch: entry.key,
+          label: entry.label,
+          strong: entry.key === "all",
+          on: !!shown[entry.key],
+          values: buckets.map((bucket) => defectCount(bucket, entry.key)),
+          lead: lead.map((bucket) => defectCount(bucket, entry.key)),
+        })),
+        fmt: String,
+        noun: "defects",
+        subject: "Bug tasks filed",
+        notes: ["time = when the bug task was filed"],
+        bucketTitle,
+        bucketWidthLabel,
+      }),
+    };
   }
 
   const keys = series.map((entry) => entry.key);

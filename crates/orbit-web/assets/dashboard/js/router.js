@@ -22,6 +22,7 @@
 import { el, isAggregateView, renderPanelPlaceholder, getWindow, setWindow, setWorkspace, parseDashboardWindow, persistScopeToUrl, syncWindowSelectors, notifyScopeChange } from './common.js';
 import { renderRuns } from './runs.js';
 import { AGENT_ROLES } from './agents.js';
+import { countViewsHashSuffix } from './metrics-running.js';
 import { initBackgroundNotifications, setDashboardTitle, startDashboardPolling } from './polling.js';
 
 const $ = (id) => document.getElementById(id);
@@ -193,7 +194,7 @@ function analyticsHash(ctx, query) {
   if (sub === "agents") return agentsHash(ctx);
   let hash = `#${analyticsSubtabRoute(ctx, sub)}?${windowQuery()}`;
   if (sub === "cost" && costTab !== COST_TABS[0]) hash += `&tab=${costTab}`;
-  if (sub === "metrics") hash += `&outcome=${query.get("outcome") === "all" ? "all" : "succeeded"}`;
+  if (sub === "metrics") hash += `&outcome=${query.get("outcome") === "all" ? "all" : "succeeded"}${countViewsHashSuffix(query)}`;
   return hash;
 }
 

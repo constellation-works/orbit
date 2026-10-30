@@ -2,12 +2,16 @@
 // normalized tokens of tasks that closed in each bucket, one line per
 // complexity, optionally split into with-tag and without-tag cohorts.
 //
+// The Tokens tab (ORB-20003) reads the same payload and filters as total tokens
+// per bucket, with the Cumulative and Per day views of metrics-running.js.
+//
 // The trend owns its filters (outcome, invocation scope, implementing model
 // and tags) and refetches only its own endpoint when they change; the window
 // comes from the shared selector with the rest of the Metrics panel. Chart
 // drawing and tooltips stay in metrics.js, which passes its helpers in.
 
 import { el, fetchJson, getWorkspaceRevision } from './common.js';
+import { runningModel } from './metrics-running.js';
 
 const COMPLEXITY_LABELS = { low: "Low", medium: "Medium", hard: "Hard", xhard: "Xhard", unset: "Unassessed" };
 const OUTCOMES = [["done", "Done"], ["all", "All closed"]];
@@ -248,5 +252,97 @@ export function tokensModel(payload, { windowKey, shown, bucketTitle, bucketWidt
         }),
       })).reverse(),
     },
+  };
+}
+
+/// The Tokens tab's model: total normalized tokens of the tasks that closed in
+/// each bucket, per complexity (and tag cohort) and in all, as metrics.js
+/// draws them in `countView`.
+export function tokenSpendModel(payload, { windowKey, shown, countView, bucketTitle, bucketWidthLabel }) {
+  const blurb = "Total normalized tokens of the tasks that closed in each bucket, by complexity. A task's total sums every managed invocation linked to it, whenever it ran. Tokens per task shows the mean.";
+  if (!payload) return { blurb, cards: [], empty: { title: "Loading tokens…", detail: "", noWiden: true } };
+  if (payload.unavailable) return { blurb, cards: [], empty: { title: "Tokens unavailable", detail: payload.unavailable, noWiden: true } };
+
+  const starts = payload.bucket_starts || [];
+  const series = (payload.series || []).map((entry) => ({ ...entry, key: seriesKey(entry), label: seriesLabel(entry) }));
+  const isShown = (key) => shown[key] !== false;
+  const total = payload.total || {};
+  const excluded = (cell) => (cell.excluded_uncovered || 0) + (cell.excluded_no_invocations || 0);
+  const sum = (cell) => cell.sum || 0;
+
+  const cards = [
+    { key: "all", swatch: "all", label: "Tokens (total)", tag: "", on: isShown("all"), value: fmtTokens(sum(total)), sub: "window total", foot: `${tasks(total.n)}${excluded(total) ? ` · ${excluded(total)} excluded` : ""}` },
+    ...series.map((entry) => ({
+      key: entry.key,
+      swatch: entry.complexity,
+      dashed: entry.cohort === "without",
+      label: entry.label,
+      tag: "",
+      on: isShown(entry.key),
+      value: fmtTokens(sum(entry.total)),
+      sub: "window total",
+      foot: `${tasks(entry.total.n)}${excluded(entry.total) ? ` · ${excluded(entry.total)} excluded` : ""}`,
+    })),
+  ];
+
+  if (!total.n) {
+    const left = excluded(total);
+    return {
+      blurb,
+      cards,
+      empty: {
+        title: `No ${payload.outcome === "done" ? "done" : "closed"} tasks with token totals in the last ${windowKey === "all" ? "recorded history" : windowKey}`,
+        detail: left ? `${tasks(left)} excluded: ${total.excluded_uncovered} with an uncovered model, ${total.excluded_no_invocations} with no linked invocation in scope.` : "",
+      },
+    };
+  }
+
+  const columns = (cells) => cells.map(sum);
+  const addColumns = (lists, length) => Array.from({ length }, (_, i) => lists.reduce((sumSoFar, list) => sumSoFar + (list[i] || 0), 0));
+  const leadLength = Math.max(0, ...series.map((entry) => (entry.lead_points || []).length));
+  const notes = [
+    "time = the task's last write after it closed",
+    payload.scope === "implement" ? "implement invocations only" : "every linked invocation",
+  ];
+  if (payload.tags.length) notes.push(`with tag = carries ${payload.tags.join(" or ")} now (current tags, not tags at the time); dashed = without`);
+  if (payload.model) notes.push(`implementing model ${payload.model}; ${tasks(payload.excluded_other_model)} on other models left out`);
+  if (excluded(total)) notes.push(`excluded: ${total.excluded_uncovered} with an uncovered model, ${total.excluded_no_invocations} with no linked invocation`);
+
+  return {
+    blurb,
+    cards,
+    ...runningModel({
+      mode: countView,
+      kind: "tokens",
+      windowKey,
+      seconds: payload.window.bucket_seconds,
+      starts,
+      series: [
+        {
+          key: "all",
+          swatch: "all",
+          label: "Tokens (total)",
+          strong: true,
+          on: isShown("all"),
+          values: addColumns(series.map((entry) => columns(entry.points)), starts.length),
+          lead: addColumns(series.map((entry) => columns(entry.lead_points || [])), leadLength),
+        },
+        ...series.map((entry) => ({
+          key: entry.key,
+          swatch: entry.complexity,
+          label: entry.label,
+          dashed: entry.cohort === "without",
+          on: isShown(entry.key),
+          values: columns(entry.points),
+          lead: columns(entry.lead_points || []),
+        })),
+      ],
+      fmt: fmtTokens,
+      noun: "tokens",
+      subject: "Total normalized tokens of closed tasks",
+      notes,
+      bucketTitle,
+      bucketWidthLabel,
+    }),
   };
 }
