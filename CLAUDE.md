@@ -37,7 +37,7 @@ Loaded as both `AGENTS.md` and `CLAUDE.md`. For any Orbit lifecycle work, invoke
 
 - Layering and scoping: [`ARCHITECTURE.md`](ARCHITECTURE.md). Reusable patterns: [`docs/design-patterns/`](docs/design-patterns/).
 - Skill docs are canonical under `crates/orbit-core/assets/skills/`; after editing, run `scripts/sync-plugin-skills.sh` to regenerate `plugin/skills/`.
-- Lints live in `[workspace.lints]`: `unwrap`/`expect` warn in production code; propagate errors, with `OrbitError` at crate boundaries. No `print!` (use `tracing`), no lock guards across `.await`. `missing_docs` is enforced in `orbit-config` and `orbit-web`; other crate roots opt out.
+- Lints live in `[workspace.lints]`: `unwrap`/`expect` warn in production code; propagate errors, with `OrbitError` at crate boundaries. No `print!` (use `tracing`), no lock guards across `.await`. `missing_docs` is enforced in `orbit-auth`, `orbit-config` and `orbit-web`; other crate roots opt out.
 - Default to `pub(crate)`, `.workspace = true` deps, bounded channels and typed `thiserror` variants.
 - Prefer the fewest moving parts: delete dead code and stale docs together; keep compatibility only for an external contract or persisted format.
 - Past ~800 lines, check whether a file holds more than one responsibility and split along those; don't scatter closely related code.
