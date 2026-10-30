@@ -322,13 +322,22 @@ pub fn is_valid_script_name(name: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
 }
 
-/// The inline-code flag refused for one interpreter program basename, if
-/// the program is one whose inline form is known.
-fn inline_code_flag(program_basename: &str) -> Option<&'static str> {
+/// The inline-code spellings refused for one interpreter program basename,
+/// if the program is one whose inline form is known. The tuple is
+/// (inline short-option letters, inline long options, other short-option
+/// letters that take an argument). An argument-taking letter ends a
+/// single-dash cluster: the rest of that element is its argument, so the
+/// `c` in `python3 -Xpycache_prefix=x` and the `e` in `perl -MExporter`
+/// are argument text, not inline flags.
+fn inline_code_flag(
+    program_basename: &str,
+) -> Option<(&'static [u8], &'static [&'static str], &'static [u8])> {
     match program_basename {
-        "sh" | "bash" | "zsh" | "dash" => Some("-c"),
-        "perl" | "ruby" | "node" => Some("-e"),
-        other if other.starts_with("python") => Some("-c"),
+        "sh" | "bash" | "zsh" | "dash" => Some((b"c", &[], b"o")),
+        "perl" => Some((b"eE", &[], b"0CDFIMim")),
+        "ruby" => Some((b"e", &[], b"0CEFIKTWri")),
+        "node" => Some((b"ep", &["--eval", "--print"], b"r")),
+        other if other.starts_with("python") => Some((b"c", &[], b"mWX")),
         _ => None,
     }
 }
@@ -340,7 +349,8 @@ fn program_basename(program: &str) -> &str {
 /// Refuse an interpreter argv that could run inline code instead of the
 /// entry file. Every element is checked: a known interpreter named
 /// anywhere in a launcher list may not be followed by its inline flag, in
-/// either the separate (`-c`) or glued (`-c…`) spelling.
+/// the separate (`-c`), glued (`-c…`), bundled (`-ec`, `-xc`) or long
+/// (`--eval`) spelling.
 pub fn validate_script_interpreter(interpreter: &[String]) -> Result<(), ScriptValidationError> {
     for (index, element) in interpreter.iter().enumerate() {
         if element.is_empty() {
@@ -351,15 +361,43 @@ pub fn validate_script_interpreter(interpreter: &[String]) -> Result<(), ScriptV
         }
     }
     for (index, element) in interpreter.iter().enumerate() {
-        let Some(flag) = inline_code_flag(program_basename(element)) else {
+        let Some((inline_letters, long_flags, argument_letters)) =
+            inline_code_flag(program_basename(element))
+        else {
             continue;
         };
         for argument in &interpreter[index + 1..] {
-            if argument == flag || (argument.len() > flag.len() && argument.starts_with(flag)) {
-                return Err(ScriptValidationError::InlineCodeFlag {
-                    program: element.clone(),
-                    flag: argument.clone(),
+            if argument == "--" {
+                break;
+            }
+            if let Some(long) = argument.strip_prefix("--") {
+                let is_inline = long_flags.iter().any(|flag| {
+                    long == flag.trim_start_matches('-')
+                        || long
+                            .strip_prefix(flag.trim_start_matches('-'))
+                            .is_some_and(|rest| rest.starts_with('='))
                 });
+                if is_inline {
+                    return Err(ScriptValidationError::InlineCodeFlag {
+                        program: element.clone(),
+                        flag: argument.clone(),
+                    });
+                }
+                continue;
+            }
+            let Some(cluster) = argument.strip_prefix('-').filter(|rest| !rest.is_empty()) else {
+                continue;
+            };
+            for letter in cluster.bytes() {
+                if inline_letters.contains(&letter) {
+                    return Err(ScriptValidationError::InlineCodeFlag {
+                        program: element.clone(),
+                        flag: argument.clone(),
+                    });
+                }
+                if argument_letters.contains(&letter) {
+                    break;
+                }
             }
         }
     }
