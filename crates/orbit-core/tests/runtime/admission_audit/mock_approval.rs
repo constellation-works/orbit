@@ -7,9 +7,11 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use orbit_core::OrbitRuntime;
 use orbit_core::application::task::TaskAddParams;
+use orbit_types::desktop::{DesktopTaskFields, DesktopTaskOperation, DesktopTaskRequest};
 use orbit_types::task::TaskStatus;
 use serde_json::json;
 
+use super::desktop_support::session;
 use super::engine_support::runtime_with_workspace_config;
 use super::review_support::git;
 use crate::admission_audit::tool_support::run_tool_as_operator;
@@ -48,13 +50,39 @@ fn automatic_promotion(runtime: &OrbitRuntime, id: &str) -> Result<(), OrbitErro
     runtime.approve_task(id, None, None).map(|_| ())
 }
 
-const APPROVAL_ENTRY_POINTS: [(&str, ApprovalEntry); 3] = [
+/// The desktop approval: an `Edit` to `backlog`, read against the task's
+/// current revision through the in-process desktop API.
+fn desktop_backlog_edit(runtime: &OrbitRuntime, id: &str) -> Result<(), OrbitError> {
+    let operator = session(true);
+    let revision = runtime.desktop_task_snapshot(id, &operator)?.revision;
+    runtime
+        .desktop_task_write(
+            DesktopTaskRequest {
+                request_id: "desktop-proposal-approval".into(),
+                operation: DesktopTaskOperation::Edit {
+                    id: id.to_string(),
+                    expected_revision: revision,
+                    fields: DesktopTaskFields {
+                        status: Some(TaskStatus::Backlog),
+                        ..Default::default()
+                    },
+                },
+            },
+            None,
+            None,
+            &operator,
+        )
+        .map(|_| ())
+}
+
+const APPROVAL_ENTRY_POINTS: [(&str, ApprovalEntry); 4] = [
     (
         "task tool proposed-to-backlog transition",
         tool_backlog_transition,
     ),
     ("operator approval (--approve)", operator_approval),
     ("automatic proposal promotion", automatic_promotion),
+    ("desktop proposal edit to backlog", desktop_backlog_edit),
 ];
 
 /// A git-backed workspace. The base branch commits [`MANIFEST`] at
