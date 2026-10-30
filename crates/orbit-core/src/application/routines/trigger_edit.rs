@@ -175,8 +175,15 @@ pub fn set_routine_trigger(
     edited
         .validate()
         .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
-    if edited.trigger.deliveries_landed.is_none() && edited.trigger.state.is_none() {
+    if edited.trigger.is_cron() {
         parse_cron(&edited.trigger.cron)?;
+    }
+    if let Some(condition) = &edited.trigger.condition {
+        orbit_automation::condition::check_condition(
+            condition,
+            orbit_automation::condition::ConditionCarrier::Routine,
+        )
+        .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
     }
     let rendered = rewrite_trigger_block(&raw, &edited.trigger)?;
     if parse_routine_yaml(&rendered)? != edited {

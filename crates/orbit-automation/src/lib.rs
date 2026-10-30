@@ -8,6 +8,7 @@
 
 pub mod auto_tasks;
 mod checkpoint;
+pub mod condition;
 pub mod delivery;
 mod error;
 pub mod members;

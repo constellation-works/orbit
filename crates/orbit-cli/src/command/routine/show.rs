@@ -143,6 +143,15 @@ impl RoutineShowArgs {
                     crate::command::clock::tick::format_batch(&batch)
                 );
             }
+        } else if let Some(condition) = &definition.trigger.condition {
+            let _ = writeln!(
+                out,
+                "Trigger: {} condition \"{}\" (not evaluated in this Orbit; see `orbit automation \
+                 explain {}`)",
+                condition.scope.as_str(),
+                condition.when,
+                definition.name
+            );
         } else {
             let _ = writeln!(
                 out,

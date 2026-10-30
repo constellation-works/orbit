@@ -206,7 +206,9 @@ fn schedule_state(
         return (ScheduleDisplayState::Unavailable, None);
     }
     match schedule {
-        AutoTaskSchedule::Deliveries { .. } => (ScheduleDisplayState::Waiting, None),
+        AutoTaskSchedule::Deliveries { .. } | AutoTaskSchedule::Condition { .. } => {
+            (ScheduleDisplayState::Waiting, None)
+        }
         AutoTaskSchedule::Cron { .. } | AutoTaskSchedule::Interval { .. }
             if cursor_state_unavailable =>
         {

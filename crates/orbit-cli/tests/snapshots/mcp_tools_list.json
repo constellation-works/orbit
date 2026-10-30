@@ -183,7 +183,7 @@
               }
             }
           ],
-          "description": "Schedule object: exactly one of `{ cron: string }` (5-field cron) `{ every_minutes: number }`, or `{ deliveries_landed: { branch, threshold, max_wait_minutes, coverage, owner_machine?, max_items?, retries? } }` (coverage: landed_code_review_v1; owner_machine defaults to this workspace's registered owner machine). Required."
+          "description": "Schedule object: exactly one of `{ cron: string }` (5-field cron) `{ every_minutes: number }`, `{ deliveries_landed: { branch, threshold, max_wait_minutes, coverage, owner_machine?, max_items?, retries? } }` (coverage: landed_code_review_v1; owner_machine defaults to this workspace's registered owner machine), or `{ condition: { ... } }` (checked and explained but never fired in this release; definition must stay `enabled: false`). Required."
         },
         "template": {
           "anyOf": [
@@ -327,7 +327,7 @@
               }
             }
           ],
-          "description": "New schedule object: `{ cron: string }` `{ every_minutes: number }`, or `{ deliveries_landed: { branch, threshold, max_wait_minutes, coverage, owner_machine?, max_items?, retries? } }` (owner_machine defaults to this workspace's registered owner machine) (coverage: landed_code_review_v1)."
+          "description": "New schedule object: `{ cron: string }` `{ every_minutes: number }`, `{ deliveries_landed: { branch, threshold, max_wait_minutes, coverage, owner_machine?, max_items?, retries? } }` (owner_machine defaults to this workspace's registered owner machine) (coverage: landed_code_review_v1), or `{ condition: { ... } }` (checked and explained but never fired in this release; definition must stay `enabled: false`)."
         },
         "template": {
           "anyOf": [
@@ -369,6 +369,40 @@
       "readOnlyHint": false,
       "destructiveHint": false,
       "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "orbit_automation_explain",
+    "description": "Explain one routine's `trigger.condition` or auto-task's `schedule.condition` over the workspace's live state, without writing anything: its scope, the store prefilter and literal cross-reads, the ownership verdict, the current matches (up to 20) and closest misses (up to 20; subjects failing exactly one top-level clause), and for one subject the tree of top-level && and || clauses with each clause's value and the operand values it read. Values that cannot be read evaluate as unknown, never false. Conditions do not fire in this Orbit, so arm state, holds, fires and `self` values are reported as not yet tracked.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "definition": {
+          "type": "string",
+          "description": "The routine or auto-task carrying the condition: its name, or `routine:<name>` / `auto-task:<name>` when a routine and an auto-task share the name."
+        },
+        "subject": {
+          "type": "string",
+          "description": "The subject whose clause tree to show: a task ID for a task-scope condition, `workspace` for a workspace-scope one. Default: the first match, else the first closest miss, else the first subject evaluated."
+        },
+        "model": {
+          "type": "string",
+          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Gg][Rr][Oo][Kk]|[Mm][Uu][Ss][Ee]|[Gg][Pp][Tt]-.*|[Oo]1.*|[Oo]3.*|[Cc][Ll][Aa][Uu][Dd][Ee]-.*|[Oo][Pp][Uu][Ss].*|[Ss][Oo][Nn][Nn][Ee][Tt].*|[Ff][Aa][Bb][Ll][Ee].*|[Gg][Ee][Mm][Ii][Nn][Ii]-.*|[Gg][Rr][Oo][Kk]-.*|[Gg][Rr][Oo][Kk]3.*|[Mm][Uu][Ss][Ee]-.*)$",
+          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
+        },
+        "workspace": {
+          "type": "string",
+          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd."
+        }
+      },
+      "required": [
+        "definition"
+      ],
+      "additionalProperties": true
+    },
+    "annotations": {
+      "readOnlyHint": true,
       "openWorldHint": false
     }
   },

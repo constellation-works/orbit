@@ -299,6 +299,12 @@ fn schedule_summary(schedule: &Value) -> String {
         )
     } else if let Some(cron) = schedule.get("cron") {
         format!("cron={}", cron.as_str().unwrap_or_default())
+    } else if let Some(condition) = schedule.get("condition") {
+        format!(
+            "condition scope={} when={}",
+            text(condition, "scope"),
+            text(condition, "when")
+        )
     } else {
         format!("every={}m", schedule["every_minutes"])
     }

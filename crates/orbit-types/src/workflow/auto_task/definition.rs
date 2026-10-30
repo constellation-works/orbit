@@ -218,6 +218,11 @@ pub enum AutoTaskSchedule {
     Cron { cron: String },
     /// Fire every N minutes, anchored at the definition's first-observed slot.
     Interval { every_minutes: u64 },
+    /// A CEL predicate over workspace state. Checked and explained, never
+    /// fired in this release, so the definition must stay disabled.
+    Condition {
+        condition: super::super::automation::ConditionTrigger,
+    },
 }
 
 /// Wire representation used to preserve field-specific errors while enforcing
@@ -228,6 +233,7 @@ struct RawSchedule {
     cron: Option<String>,
     every_minutes: Option<u64>,
     deliveries_landed: Option<super::super::automation::DeliveryTrigger>,
+    condition: Option<super::super::automation::ConditionTrigger>,
 }
 
 impl<'de> Deserialize<'de> for AutoTaskSchedule {
@@ -247,13 +253,24 @@ impl<'de> Deserialize<'de> for AutoTaskSchedule {
         if raw.deliveries_landed.is_some() {
             forms.push("deliveries_landed");
         }
+        if raw.condition.is_some() {
+            forms.push("condition");
+        }
 
-        match (raw.cron, raw.every_minutes, raw.deliveries_landed) {
-            (Some(cron), None, None) => Ok(Self::Cron { cron }),
-            (None, Some(every_minutes), None) => Ok(Self::Interval { every_minutes }),
-            (None, None, Some(deliveries_landed)) => Ok(Self::Deliveries { deliveries_landed }),
+        match (
+            raw.cron,
+            raw.every_minutes,
+            raw.deliveries_landed,
+            raw.condition,
+        ) {
+            (Some(cron), None, None, None) => Ok(Self::Cron { cron }),
+            (None, Some(every_minutes), None, None) => Ok(Self::Interval { every_minutes }),
+            (None, None, Some(deliveries_landed), None) => {
+                Ok(Self::Deliveries { deliveries_landed })
+            }
+            (None, None, None, Some(condition)) => Ok(Self::Condition { condition }),
             _ => Err(<D::Error as serde::de::Error>::custom(format!(
-                "schedule must have exactly one of cron, every_minutes, deliveries_landed; found: {}",
+                "schedule must have exactly one of cron, every_minutes, deliveries_landed, condition; found: {}",
                 if forms.is_empty() {
                     "none".to_string()
                 } else {
@@ -385,6 +402,14 @@ impl AutoTaskDefinition {
         }
         match &self.schedule {
             AutoTaskSchedule::Deliveries { deliveries_landed } => deliveries_landed.validate()?,
+            AutoTaskSchedule::Condition { condition } => {
+                condition.validate("schedule.condition")?;
+                if self.enabled {
+                    return Err(super::super::automation::condition_enabled_refusal(
+                        "schedule.condition",
+                    ));
+                }
+            }
             AutoTaskSchedule::Cron { cron } if cron.trim().is_empty() => {
                 return Err(WorkflowError::Invalid(format!(
                     "auto-task '{}' schedule.cron must not be empty",
