@@ -239,6 +239,32 @@ async function codeLinkUnderlinePainted(page, text) {
   return !underlined.equals(plain);
 }
 
+// Summarize the whole failure set so a red run names every kind and where it
+// occurred. The first ten entries stay in full; the rest are counted.
+function failureReport(failures) {
+  const detailLimit = 10;
+  const siteLimit = 6;
+  const kinds = new Map();
+  for (const { kind, route, width } of failures) {
+    const entry = kinds.get(kind) ?? { count: 0, sites: new Set() };
+    entry.count++;
+    entry.sites.add(`${route} ${width}px`);
+    kinds.set(kind, entry);
+  }
+  const summary = [...kinds].map(([kind, { count, sites }]) => {
+    const listed = [...sites].slice(0, siteLimit);
+    const more = sites.size > siteLimit ? `, +${sites.size - siteLimit} more` : '';
+    return `${kind} (${count}): ${listed.join(', ')}${more}`;
+  });
+  const shown = Math.min(detailLimit, failures.length);
+  return [
+    `${failures.length} failures, ${failures.length - shown} not shown in full`,
+    ...summary,
+    `Evidence: ${path.join(evidenceDir, 'inline-code-browser.json')}`,
+    `First ${shown} in full: ${JSON.stringify(failures.slice(0, shown))}`,
+  ].join('\n');
+}
+
 const routes = await htmlRoutes(fileURLToPath(new URL('../dist/', import.meta.url)));
 assert.ok(routes.length, 'Build the website before running the browser check');
 const fixtures = [
@@ -361,7 +387,7 @@ try {
     codes: evidence.viewports.reduce((sum, result) => sum + result.codes, 0),
     failures: evidence.failures.length, evidence: path.join(evidenceDir, 'inline-code-browser.json') }));
   assert.equal(evidence.failures.length, 0,
-    `Inline code must wrap at token boundaries and fit its container: ${JSON.stringify(evidence.failures.slice(0, 10))}`);
+    `Inline code must wrap at token boundaries and fit its container: ${failureReport(evidence.failures)}`);
 } finally {
   await browser.close();
 }
