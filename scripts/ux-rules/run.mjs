@@ -6,15 +6,29 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { writeFile } from "node:fs/promises";
 
 import { createCliContext, resultOf } from "./lib/cli-context.mjs";
+import { loadManifest } from "./lib/manifest.mjs";
+import {
+  closeTarget,
+  createUiContext,
+  expandTargets,
+  resolveRoute,
+  startFixtureServer,
+  uiResultOf,
+} from "./lib/ui-context.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+const DEFAULT_UI_MANIFEST = "crates/orbit-web/visual/views.toml";
 
 function usage() {
   return [
     "usage: node scripts/ux-rules/run.mjs --surface cli|ui --out <dir> [--orbit <binary>] [--rule <id>]",
+    "       node scripts/ux-rules/run.mjs --surface ui --out <dir> (--base-url <url> | --fixture) [--manifest <path>...] [--rule <id>]",
     "",
     "Loads each module under scripts/ux-rules/<surface>/ that exports",
-    "`rule` and `check`. --surface ui with no modules exits non-zero.",
+    "`rule` and `check`. UI targets are manifest views x rule widths x",
+    "themes x states, against --base-url (live, read-only) or the view's",
+    "manifest fixture server with --fixture. --manifest may repeat; the",
+    `default is ${DEFAULT_UI_MANIFEST}.`,
   ].join("\n");
 }
 
@@ -24,6 +38,9 @@ function parseArgs(argv) {
     out: "",
     orbit: "",
     rule: "",
+    baseUrl: "",
+    fixture: false,
+    manifests: [],
   };
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -40,6 +57,14 @@ function parseArgs(argv) {
     } else if (token === "--rule" && next) {
       args.rule = next;
       index += 1;
+    } else if (token === "--base-url" && next) {
+      args.baseUrl = next;
+      index += 1;
+    } else if (token === "--manifest" && next) {
+      args.manifests.push(next);
+      index += 1;
+    } else if (token === "--fixture") {
+      args.fixture = true;
     } else if (token === "--help" || token === "-h") {
       process.stdout.write(`${usage()}\n`);
       process.exit(0);
@@ -55,6 +80,14 @@ function parseArgs(argv) {
   }
   if (args.surface === "cli" && !args.orbit) {
     throw new Error("--orbit is required for --surface cli");
+  }
+  if (args.surface === "ui") {
+    if (Boolean(args.baseUrl) === args.fixture) {
+      throw new Error("--surface ui needs exactly one of --base-url or --fixture");
+    }
+    if (args.manifests.length === 0) {
+      args.manifests = [DEFAULT_UI_MANIFEST];
+    }
   }
   return args;
 }
@@ -166,6 +199,130 @@ function summarize(results) {
   return summary;
 }
 
+async function runUiModules(modules, args) {
+  const repoRoot = process.cwd();
+  const manifests = [];
+  for (const manifestPath of args.manifests) {
+    manifests.push(await loadManifest(path.resolve(repoRoot, manifestPath)));
+  }
+  // Expand every rule's targets, then group by page target so one
+  // navigation serves every rule that declared it.
+  const byTarget = new Map();
+  for (const loaded of modules) {
+    const targets = expandTargets(loaded.rule, manifests);
+    if (targets.length === 0) {
+      byTarget.set(`no-target:${loaded.rule.id}`, { noTargetRule: loaded });
+      continue;
+    }
+    for (const target of targets) {
+      if (!byTarget.has(target.id)) byTarget.set(target.id, { target, rules: [] });
+      byTarget.get(target.id).rules.push(loaded);
+    }
+  }
+  const ctx = await createUiContext({ outDir: args.out, repoRoot });
+  const servers = new Map();
+  const results = [];
+  const serverFor = async (target) => {
+    if (!args.fixture) return { baseUrl: args.baseUrl, placeholders: {} };
+    const fixture = target.state === "empty" ? `${target.viewDef.fixture}:empty` : target.viewDef.fixture;
+    const key = `${target.app}:${fixture}`;
+    if (!servers.has(key)) {
+      servers.set(key, await startFixtureServer(target.appDef, fixture, repoRoot));
+    }
+    return servers.get(key);
+  };
+  try {
+    for (const entry of byTarget.values()) {
+      if (entry.noTargetRule) {
+        const { rule } = entry.noTargetRule;
+        results.push(
+          uiResultOf(rule, { id: rule.id, view: rule.id, width: 0, theme: "", state: "" }, "error", {
+            measurements: { reason: "rule declared no targets in the loaded manifests" },
+          }),
+        );
+        continue;
+      }
+      const { target, rules } = entry;
+      let server;
+      try {
+        server = await serverFor(target);
+      } catch (error) {
+        for (const loaded of rules) {
+          results.push(
+            uiResultOf(loaded.rule, target, "error", {
+              measurements: { reason: "fixture setup failed", message: error instanceof Error ? error.message : String(error) },
+            }),
+          );
+        }
+        continue;
+      }
+      const { missing } = resolveRoute(target.viewDef.route, server.placeholders);
+      if (missing) {
+        for (const loaded of rules) {
+          results.push(
+            uiResultOf(loaded.rule, target, "skipped", {
+              measurements: { reason: `route placeholder {${missing}} is unresolved in this mode` },
+            }),
+          );
+        }
+        continue;
+      }
+      try {
+        await ctx.openTarget(target, server.baseUrl, server.placeholders);
+      } catch (error) {
+        for (const loaded of rules) {
+          results.push(
+            uiResultOf(loaded.rule, target, "error", {
+              measurements: { reason: "render_timeout", message: error instanceof Error ? error.message : String(error) },
+            }),
+          );
+        }
+        await closeTarget(ctx);
+        continue;
+      }
+      ctx.drainBlocked();
+      for (const loaded of rules) {
+        const { rule, check } = loaded;
+        ctx.currentRule = rule.id;
+        ctx.drainBlocked();
+        let produced;
+        try {
+          produced = await check(ctx);
+        } catch (error) {
+          produced = uiResultOf(rule, target, "error", {
+            measurements: { message: error instanceof Error ? error.message : String(error) },
+          });
+        }
+        ctx.currentRule = "";
+        const blocked = ctx.drainBlocked().filter((entry) => entry.rule === rule.id);
+        let list = normalizeProduced(rule, target, produced);
+        if (blocked.length > 0) {
+          list = [
+            uiResultOf(rule, target, "error", {
+              measurements: { reason: "rule attempted a non-GET request; blocked read-only", blocked },
+            }),
+          ];
+        }
+        for (const result of list) {
+          if (result.status === "fail") {
+            const shot = await ctx.screenshotFor(rule, target).catch(() => "");
+            if (shot && !result.evidence.includes(shot)) result.evidence.push(shot);
+          }
+          results.push(result);
+        }
+      }
+      await closeTarget(ctx);
+    }
+  } finally {
+    for (const server of servers.values()) server.stop();
+    await ctx.close();
+  }
+  const reportTarget = args.fixture
+    ? { mode: "fixture", manifests: args.manifests }
+    : { mode: "live", base_url: args.baseUrl, manifests: args.manifests };
+  return { ctx, results, reportTarget };
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const modules = await loadModules(args.surface, args.rule);
@@ -177,17 +334,27 @@ async function main() {
     process.exitCode = 1;
     return;
   }
-  const ctx =
-    args.surface === "cli"
-      ? await createCliContext({
-          orbit: args.orbit,
-          outDir: args.out,
-          repoRoot: process.cwd(),
-        })
-      : null;
-  const results = [];
-  for (const loaded of modules) {
-    results.push(...(await runModule(loaded, ctx ?? {})));
+  let ctx = null;
+  let results;
+  let reportTarget;
+  let kit;
+  if (args.surface === "cli") {
+    ctx = await createCliContext({
+      orbit: args.orbit,
+      outDir: args.out,
+      repoRoot: process.cwd(),
+    });
+    results = [];
+    for (const loaded of modules) {
+      results.push(...(await runModule(loaded, ctx)));
+    }
+    reportTarget = { mode: "scratch", orbit: path.resolve(args.orbit) };
+  } else {
+    const ui = await runUiModules(modules, args);
+    ctx = ui.ctx;
+    results = ui.results;
+    reportTarget = ui.reportTarget;
+    kit = ui.ctx.kit;
   }
   results.sort((left, right) => left.fingerprint.localeCompare(right.fingerprint));
   const report = {
@@ -195,9 +362,8 @@ async function main() {
     surface: args.surface,
     commit: ctx?.commit ?? "",
     host: ctx?.host ?? "",
-    target: ctx
-      ? { mode: "scratch", orbit: path.resolve(args.orbit) }
-      : { mode: "unconfigured" },
+    ...(kit ? { kit } : {}),
+    target: reportTarget,
     results,
     summary: summarize(results),
   };

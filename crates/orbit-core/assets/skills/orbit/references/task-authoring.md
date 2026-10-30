@@ -116,6 +116,17 @@ On `orbit.task.add`, `model` may be your full model id (`claude-opus-5-5`):
 `model` never sets `orchestrator_model`: that comes from the `orchestrator`
 crew's configuration unless you override it.
 
+Implicit complexity, tag and context-file edits preserve the crew and crew source
+of admitted work, including work awaiting setup, in progress or under review.
+Stopped deliveries and preserved candidates keep that attribution until a fresh
+admission or explicit audited correction replaces it. Those edits still update
+the task's scope under the existing authority rules.
+They do not change a recorded run's crew or model. Before admission, automatic
+assignments can rerate; explicit pins stay pinned. After an authorized recovery
+or requeue, a fresh admission evaluates the current scope and records the crew
+it actually selects. Resuming a candidate retains its admission provenance.
+An explicit authorized crew correction remains an audited assignment.
+
 Task IDs come from the store. Use task tools to change records, never edit their
 filesystem projections. Reuse existing tags. Use `feature`, `bug`, `refactor` or
 `chore` for type. An update may reassess complexity but cannot reset it to

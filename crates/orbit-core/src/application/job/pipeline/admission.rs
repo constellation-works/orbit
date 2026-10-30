@@ -3,6 +3,17 @@ use super::*;
 use crate::application::job::{JobAutoConcurrencyPort, ReviewAdmissionHook, crew_pools, delivery};
 use orbit_common::fs::io::open_read_only_no_follow;
 
+/// Durable insertion outcome before worker setup, which runs outside task locks.
+enum PipelineCrewAdmission {
+    Inserted {
+        run: Box<JobRun>,
+        submitted_at: chrono::DateTime<Utc>,
+        existing_automation_run: bool,
+        seed_after_insert: bool,
+    },
+    Resolved(ChildSubmission),
+}
+
 impl OrbitRuntime {
     /// Record the `pipeline.invoke` audit for a direct-path submission, which
     /// does not route through [`Self::submit_pipeline_run`]. Audit failures
@@ -147,20 +158,6 @@ impl OrbitRuntime {
             admission.map(|admission| admission.parent_run_id.as_str()),
             resume.is_some(),
         )?;
-        // The draw's task writes wait for the durable insert below [ORB-19485].
-        let mut admission_task_writes = self.install_auto_crew_admission(
-            job_name,
-            &mut input,
-            admission.map(|admission| admission.parent_run_id.as_str()),
-            reuse_admission,
-            &mut crew_pools::random_crew_ticket,
-        )?;
-        self.install_resource_class_admission(
-            job_name,
-            &mut input,
-            admission.map(|admission| admission.parent_run_id.as_str()),
-            reuse_admission || replay_source_run_id.is_some(),
-        );
         let result = (|| {
             // Preserve policy refusals for unavailable definitions while every
             // resolved PR leaf was already checked before those policies ran.
@@ -177,108 +174,170 @@ impl OrbitRuntime {
                 self.resolve_ci_sweep_input(&spec, &mut input)?;
             }
 
-            let submitted_at = Utc::now();
-            let mut existing_automation_run = false;
-            let mut seed_after_insert = false;
-            let run = if let Some(admission) = admission {
-                match self
-                    .stores()
-                    .jobs()
-                    .admit_child_job_run(&ChildJobRunAdmissionParams {
-                        parent_run_id: admission.parent_run_id.clone(),
-                        parent_step_id: admission.parent_step_id.clone(),
-                        job_id: job_name.to_string(),
-                        action: admission.action.clone(),
-                        blocking: admission.blocking,
-                        attempt: 1,
-                        scheduled_at: submitted_at,
-                        input: Some(input.clone()),
-                    })? {
-                    ChildJobRunAdmissionOutcome::Admitted(run) => *run,
-                    ChildJobRunAdmissionOutcome::AdmissionsStopped => {
-                        return Ok(ChildSubmission::Skipped("admissions_stopped".to_string()));
-                    }
-                }
-            } else if let Some(key) = action_key {
-                match self.stores().jobs().insert_automation_job_run(
+            // Selection, durable insertion and crew write-back share the same
+            // task lock as scope updates and pilot reassessment. The submitted
+            // selection then reserves the task before setup binds job_run_id.
+            let locked_task = crew_pools::crew_admission_task_id(job_name, &input)
+                .filter(|_| self.worker_invocation().is_none())
+                .map(ToOwned::to_owned);
+            let mut persist = || -> Result<PipelineCrewAdmission, OrbitError> {
+                let mut admission_task_writes = self.install_auto_crew_admission(
                     job_name,
-                    input.clone(),
-                    key,
-                )? {
-                    KeyedJobRunAdmission::Admitted(run) => *run,
-                    KeyedJobRunAdmission::Existing(run) => {
-                        existing_automation_run = true;
-                        *run
+                    &mut input,
+                    admission.map(|admission| admission.parent_run_id.as_str()),
+                    reuse_admission,
+                    &mut crew_pools::random_crew_ticket,
+                )?;
+                self.install_resource_class_admission(
+                    job_name,
+                    &mut input,
+                    admission.map(|admission| admission.parent_run_id.as_str()),
+                    reuse_admission || replay_source_run_id.is_some(),
+                );
+                let submitted_at = Utc::now();
+                let mut existing_automation_run = false;
+                let mut seed_after_insert = false;
+                let run = if let Some(admission) = admission {
+                    match self
+                        .stores()
+                        .jobs()
+                        .admit_child_job_run(&ChildJobRunAdmissionParams {
+                            parent_run_id: admission.parent_run_id.clone(),
+                            parent_step_id: admission.parent_step_id.clone(),
+                            job_id: job_name.to_string(),
+                            action: admission.action.clone(),
+                            blocking: admission.blocking,
+                            attempt: 1,
+                            scheduled_at: submitted_at,
+                            input: Some(input.clone()),
+                        })? {
+                        ChildJobRunAdmissionOutcome::Admitted(run) => *run,
+                        ChildJobRunAdmissionOutcome::AdmissionsStopped => {
+                            return Ok(PipelineCrewAdmission::Resolved(ChildSubmission::Skipped(
+                                "admissions_stopped".to_string(),
+                            )));
+                        }
                     }
-                }
-            } else if let Some(retry_key) = retry_key {
-                // [ORB-13560] The retry-key probe and the insert are one store
-                // transaction, so concurrent submitters of one key — in any
-                // process — admit one run. A resolved retry spawns nothing: the
-                // original admission already delivered its worker.
-                match self
-                    .stores()
-                    .jobs()
-                    .insert_keyed_job_run(&KeyedJobRunParams {
-                        job_id: job_name.to_string(),
-                        retry_key_field: retry_key.field.to_string(),
-                        scan_limit: retry_key.scan_limit,
-                        scheduled_at: submitted_at,
-                        input: input.clone(),
-                    })? {
-                    KeyedJobRunAdmission::Admitted(run) => {
-                        seed_after_insert = true;
-                        *run
-                    }
-                    KeyedJobRunAdmission::Existing(run) => {
-                        let active_runs = self
-                            .stores()
-                            .jobs()
-                            .list_pending_or_running_job_runs(job_name)?;
-                        let queue_position = pipeline_run_queue_position(
-                            &active_runs,
-                            &run.run_id,
-                            spec.max_active_runs,
-                        );
-                        return Ok(ChildSubmission::Resolved(PipelineInvokeResult {
-                            run_id: run.run_id,
-                            job_name: job_name.to_string(),
-                            submitted_at: run.scheduled_at.to_rfc3339(),
-                            queued: queue_position.is_some(),
-                            queue_position,
-                        }));
-                    }
-                }
-            } else {
-                // A resume admits through the lineage-guarded insert: while any
-                // run in the source's retry lineage is live, it is refused with
-                // `ResumeRunInFlight` in the same transaction that would have
-                // inserted, so concurrent resumes from any surface yield one run.
-                let run = match resume {
-                    Some(plan) => self.stores().jobs().insert_resume_job_run(
+                } else if let Some(key) = action_key {
+                    match self.stores().jobs().insert_automation_job_run(
                         job_name,
-                        plan.attempt,
-                        submitted_at,
-                        Some(input.clone()),
-                        &plan.source.run_id,
-                    )?,
-                    None => self.stores().jobs().insert_job_run(
-                        job_name,
-                        1,
-                        submitted_at,
-                        Some(input.clone()),
-                        replay_source_run_id.map(ToOwned::to_owned),
-                    )?,
+                        input.clone(),
+                        key,
+                    )? {
+                        KeyedJobRunAdmission::Admitted(run) => *run,
+                        KeyedJobRunAdmission::Existing(run) => {
+                            existing_automation_run = true;
+                            *run
+                        }
+                    }
+                } else if let Some(retry_key) = retry_key {
+                    // [ORB-13560] The retry-key probe and the insert are one store
+                    // transaction, so concurrent submitters of one key — in any
+                    // process — admit one run. A resolved retry spawns nothing: the
+                    // original admission already delivered its worker.
+                    match self
+                        .stores()
+                        .jobs()
+                        .insert_keyed_job_run(&KeyedJobRunParams {
+                            job_id: job_name.to_string(),
+                            retry_key_field: retry_key.field.to_string(),
+                            scan_limit: retry_key.scan_limit,
+                            scheduled_at: submitted_at,
+                            input: input.clone(),
+                        })? {
+                        KeyedJobRunAdmission::Admitted(run) => {
+                            seed_after_insert = true;
+                            *run
+                        }
+                        KeyedJobRunAdmission::Existing(run) => {
+                            let active_runs = self
+                                .stores()
+                                .jobs()
+                                .list_pending_or_running_job_runs(job_name)?;
+                            let queue_position = pipeline_run_queue_position(
+                                &active_runs,
+                                &run.run_id,
+                                spec.max_active_runs,
+                            );
+                            return Ok(PipelineCrewAdmission::Resolved(ChildSubmission::Resolved(
+                                PipelineInvokeResult {
+                                    run_id: run.run_id,
+                                    job_name: job_name.to_string(),
+                                    submitted_at: run.scheduled_at.to_rfc3339(),
+                                    queued: queue_position.is_some(),
+                                    queue_position,
+                                },
+                            )));
+                        }
+                    }
+                } else {
+                    // A resume admits through the lineage-guarded insert: while any
+                    // run in the source's retry lineage is live, it is refused with
+                    // `ResumeRunInFlight` in the same transaction that would have
+                    // inserted, so concurrent resumes from any surface yield one run.
+                    let run = match resume {
+                        Some(plan) => self.stores().jobs().insert_resume_job_run(
+                            job_name,
+                            plan.attempt,
+                            submitted_at,
+                            Some(input.clone()),
+                            &plan.source.run_id,
+                        )?,
+                        None => self.stores().jobs().insert_job_run(
+                            job_name,
+                            1,
+                            submitted_at,
+                            Some(input.clone()),
+                            replay_source_run_id.map(ToOwned::to_owned),
+                        )?,
+                    };
+                    seed_after_insert = true;
+                    run
                 };
-                seed_after_insert = true;
-                run
+                // [ORB-19485] The run is durably admitted, so the draw's task writes
+                // may land. Refusals and key resolutions never reach this point, and
+                // a resolved automation key keeps the task its first admission left.
+                if !existing_automation_run && let Some(writes) = admission_task_writes.take() {
+                    self.apply_admission_task_writes(writes);
+                }
+
+                Ok(PipelineCrewAdmission::Inserted {
+                    run: Box::new(run),
+                    submitted_at,
+                    existing_automation_run,
+                    seed_after_insert,
+                })
             };
-            // [ORB-19485] The run is durably admitted, so the draw's task writes
-            // may land. Refusals and key resolutions never reach this point, and
-            // a resolved automation key keeps the task its first admission left.
-            if !existing_automation_run && let Some(writes) = admission_task_writes.take() {
-                self.apply_admission_task_writes(writes);
-            }
+            let persisted = if let Some(task_id) = locked_task {
+                let mut persisted = None;
+                self.stores()
+                    .tasks()
+                    .with_task_write_lock(&task_id, &mut || {
+                        persisted = Some(persist()?);
+                        Ok(())
+                    })?;
+                persisted.ok_or_else(|| {
+                    OrbitError::Execution(
+                        "pipeline admission did not run under its task lock".into(),
+                    )
+                })?
+            } else {
+                persist()?
+            };
+            let (run, submitted_at, existing_automation_run, seed_after_insert) = match persisted {
+                PipelineCrewAdmission::Inserted {
+                    run,
+                    submitted_at,
+                    existing_automation_run,
+                    seed_after_insert,
+                } => (
+                    run,
+                    submitted_at,
+                    existing_automation_run,
+                    seed_after_insert,
+                ),
+                PipelineCrewAdmission::Resolved(result) => return Ok(result),
+            };
 
             let trigger = if admission.is_some() {
                 JobRunTrigger::child()

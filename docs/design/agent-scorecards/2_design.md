@@ -221,6 +221,21 @@ Dollar cost, tokens and wall time are never terms. Every role shows them under *
 
 Today's per-8-active-hours rate toggle is dropped: active hours mean something only for orchestrators. Orchestrators show active hours under **Shown, not scored**.
 
+### 4.5a Proposed delivery-quality profile (not a score term)
+
+The [decision-assistance grader proposal](../decision-assistance/specs/delivery-quality.md)
+would add an independently calibrated advisory profile of delivered code:
+scope fit, robustness, structure, standards, verification and maintainability.
+It is design-only, with no grader consumer or dashboard surface implemented.
+It leaves this document's current terms, rates, weights, attribution and
+crew-selection inputs unchanged.
+
+Keep grade evidence/version, coverage, uncertainty and actual contribution
+attribution separate from observed outcomes. A high grade cannot offset a
+regression or override a review. Any future crew comparison must account for
+task mix, ungraded work and judge reliability; any ranked/composite or routing
+use requires its own evaluated proposal and explicit adoption decision.
+
 ### 4.6 Severity
 
 Review findings and `regression_from` links share one severity scale with constant weights: critical 8, high 4, medium 2, low 1, nit 0.25 ([ORB-19304]). A held finding adds its weight to **Findings that held**; a missed regression adds its severity weight to the reviewer term. Escaped regressions retain their severity-weighted count as unscored implementer context (§5.2). Every other problem counts 1. The rubric with examples is in the orbit skill's task-fields reference.
@@ -660,6 +675,7 @@ Each track updates the docs its change makes stale in the same PR. That includes
 
 ## Task References
 
+- ORB-20000 — proposed advisory delivery-quality profile; no current score or routing changes.
 - ORB-16952 — track B: the core scan, one-owner attribution, shared score, role registry with Orchestrators computed, and the `/api/agents` routes and cache.
 - ORB-16953 — track C: the Agents destination, its role tabs, the shared renderer and the orchestrators panel; retired Analytics › Orchestrators and `/api/orchestrators/*`.
 - ORB-16954 — track D: the Implementers role (current) and cost/tier panel (removed by ORB-17736).

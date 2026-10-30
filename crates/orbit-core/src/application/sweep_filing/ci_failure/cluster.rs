@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use orbit_common::OrbitError;
-use orbit_types::task::CiFailureSource;
+use orbit_types::task::{CiFailureSource, HostOs};
 use serde_json::{Value, json};
 
 use super::fields::{truncate_bytes, value_string};
@@ -17,6 +17,7 @@ use super::log_signature::{
     FailedStepExcerpt, compiler_diagnostic_set, relevant_log_query_errors,
     render_failed_step_excerpt, specific_command_from_log, specific_error_anchors,
 };
+use super::runner_os::{RunnerOsEvidence, RunnerOsSource};
 use crate::application::contracts::CI_FAILURE_TAG;
 use crate::application::sweep_filing::duplicate_tasks::{
     CoverageAnchor, CoverageFingerprint, DuplicateCandidate, DuplicateTaskLookup,
@@ -403,7 +404,7 @@ impl FailureCluster {
 
     /// Each run's runner OS evidence, in run order (see
     /// [`super::runner_os::failure_runner_os`]).
-    pub(super) fn runner_os(&self, repo_root: &std::path::Path) -> Vec<Value> {
+    pub(super) fn runner_os(&self, repo_root: &std::path::Path) -> Vec<RunnerOsEvidence> {
         self.runs
             .iter()
             .map(|run| super::runner_os::failure_runner_os(run, repo_root))
@@ -416,7 +417,7 @@ impl FailureCluster {
     /// cannot reach GitHub, so anything absent here is unavailable to it.
     /// `runners` is [`Self::runner_os`], the evidence behind the task's `os:`
     /// tags.
-    pub(super) fn description(&self, evidence: &Value, runners: &[Value]) -> String {
+    pub(super) fn description(&self, evidence: &Value, runners: &[RunnerOsEvidence]) -> String {
         let mut out = String::new();
         out.push_str(
             "This task was filed automatically from a host-side sweep of this repository's \
@@ -689,24 +690,26 @@ impl FailureCluster {
 
 /// The `Runner OS` line: what each distinct runner was, where that came
 /// from, and the `os:` tags it gives the task.
-fn runner_os_line(runners: &[Value]) -> String {
+fn runner_os_line(runners: &[RunnerOsEvidence]) -> String {
     let observed = runners
         .iter()
         .map(|runner| {
-            let os = runner["os"].as_str().unwrap_or("unknown");
-            let labels = runner["labels"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_str)
+            let os = runner.os.map(HostOs::as_str).unwrap_or("unknown");
+            let labels = runner
+                .labels
+                .iter()
                 .map(|label| format!("`{}`", display(label)))
                 .collect::<Vec<_>>();
-            match runner["source"].as_str() {
-                Some("job_labels") => format!("`{os}` (runner labels {})", labels.join(", ")),
-                Some("workflow_runs_on") => {
+            match runner.source {
+                RunnerOsSource::JobLabels => {
+                    format!("`{os}` (runner labels {})", labels.join(", "))
+                }
+                RunnerOsSource::WorkflowRunsOn => {
                     format!("`{os}` (workflow `runs-on` {})", labels.join(", "))
                 }
-                _ => "unknown (no runner labels and no literal workflow `runs-on`)".to_string(),
+                RunnerOsSource::Unknown => {
+                    "unknown (no runner labels and no literal workflow `runs-on`)".to_string()
+                }
             }
         })
         .collect::<BTreeSet<_>>()

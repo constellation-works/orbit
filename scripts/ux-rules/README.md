@@ -1,22 +1,58 @@
 # UX rules
 
-Phase 1 runner for the CLI rule set. UI rules are a later phase and are not in this tree. The runner is a scheduled measurement, not a repository test and not a merge gate.
+Runner for the CLI and UI rule sets. The runner is a scheduled measurement, not a repository test and not a merge gate.
 
 ## Run
 
 ```sh
 node scripts/ux-rules/run.mjs --surface cli --orbit /path/to/orbit --out /path/to/scratch
 node scripts/ux-rules/run.mjs --surface cli --rule cli.help-alignment --orbit /path/to/orbit --out /path/to/scratch
-node scripts/ux-rules/run.mjs --surface ui --out /path/to/scratch
+. "${ORBIT_BROWSER_KIT_ENV:-$HOME/.local/chromium-deps/env.sh}"
+node scripts/ux-rules/run.mjs --surface ui --base-url http://127.0.0.1:7878 --out /path/to/scratch
+node scripts/ux-rules/run.mjs --surface ui --fixture --out /path/to/scratch
+node scripts/ux-rules/run.mjs --surface ui --manifest website/visual/views.toml --base-url http://127.0.0.1:4321 --out /path/to/scratch
 ```
 
 `--surface` is `cli` or `ui`. `--out` is the scratch directory the run may create. `--orbit` is required for `cli` and is the orbit binary under test. `--rule` limits the run to one rule id (the full id or its last segment).
 
 Each CLI run calls `orbit init` in a fresh directory under `--out` and passes `--root` at that scratch root. It sets `HOME` inside that directory and does not point at the live Orbit store.
 
-`--surface ui` loads `scripts/ux-rules/ui/`. With no modules there, the runner writes no report and exits non-zero.
+`--surface ui` needs exactly one of `--base-url` (live, read-only) or `--fixture`, loads `scripts/ux-rules/ui/`, and runs with the browser kit's pinned Playwright (`PLAYWRIGHT_MODULE` from the kit `env.sh`). `--manifest` may repeat; the default is `crates/orbit-web/visual/views.toml`.
 
-The runner exits 0 when it has written `ux-rules.json` for `cli`, including when individual results are `fail` or `error`. It exits non-zero when arguments are wrong, the binary is missing, no rules match, or the report cannot be written.
+The runner exits 0 when it has written `ux-rules.json`, including when individual results are `fail` or `error`. It exits non-zero when arguments are wrong, the binary is missing, no rules match, the manifest is invalid, or the report cannot be written.
+
+## UI targets and the view manifest
+
+A UI rule declares `targets: { views, widths, states }` (`views` is `"*"` or a list of view ids; `states` defaults to `["default"]`). The runner expands it over the manifest views × the rule's widths × each view app's themes × the declared states the view supports, opens one page per expanded target, and runs every rule that declared that target against it. A view with `responsive = false` gets only the first width.
+
+Manifests are TOML in the visual-review §3.1 format: apps with `setup`, `themes`, `color_scheme_invariant`, `design_rules` and `tokens`; views with `id`, `app`, `title`, `route`, `fixture`, `ready`, `responsive`, `states`, `clip` and `mask`. `scripts/ux-rules/lib/manifest.mjs` validates at load: unknown apps or states, duplicate ids, and a view id containing a state word (`default`, `empty`, `loading`, `error`) or a theme word as a dot-separated part are refused, naming the id. A route may carry `{task}`-style placeholders, resolved from the fixture server's `ORBIT_VISUAL_<NAME>=` lines; in live mode an unresolved placeholder target is `skipped`.
+
+Orbit's manifests are `crates/orbit-web/visual/views.toml` (dashboard, dark, `color_scheme_invariant`) and `website/visual/views.toml` (light and dark). Fixture seeds are JSON under `crates/orbit-web/visual/fixtures/`.
+
+`--fixture` runs each app's `setup` per fixture (the `empty` state uses the `<fixture>:empty` seed) and reads `ORBIT_VISUAL_URL=` from its stdout (a plain loopback URL, as `astro preview` prints, is also accepted). `scripts/visual-fixture-server.sh <fixture>` seeds a disposable root and workspace from the fixture JSON, serves the real dashboard on port zero (`ORBIT_VISUAL_ORBIT` picks the binary), and prints `ORBIT_VISUAL_URL` and `ORBIT_VISUAL_TASK`. When `faketime` is on PATH the server runs under it pinned to the fixture instant — a test-only seam of that script, not a shipped environment variable. Without it the browser clock is still frozen and seeded rows are created in one pass, so fingerprints stay stable while server-relative ages drift; the script logs `server_clock=faketime-absent`.
+
+## UI context
+
+`createUiContext` in `scripts/ux-rules/lib/ui-context.mjs` opens each target with the visual-review §4.2 settings: viewport height 900 at 1440, 812 at 375, else `round(width × 10 / 16)`; device scale factor 1; `colorScheme` from the theme; `reducedMotion: reduce`; `UTC` and `en-US`; Playwright's clock fixed at the frozen instant `2026-01-01T12:00:00Z` (advanced one fixed 3s step so timer-deferred renders happen deterministically); animations, transitions and caret off; wait for `document.fonts.ready`, the view's `ready` selector, network idle and two animation frames; `mask` selectors painted flat. Requests are loopback-only — anything else is blocked and recorded — and every non-GET request is blocked: one attempted while a rule runs becomes that rule's `error`; one during page load is recorded for `console-clean`. The `loading` state holds same-origin API responses; `error` answers them 500.
+
+A UI `check(ctx)` reads `ctx.page` and `ctx.target`, and returns results built with `uiResultOf` (or the `verdict` helper: no matched element is `skipped`, never a silent pass). `measureInPage` runs a measurement in the page with shared helpers. Each `fail` gets a viewport screenshot under `evidence/<rule id>/<view>-<theme>-<width>-<state>.png` (the view's `clip` selector when set). The fingerprint is `rule id|view|theme|width|state|selector`, never a measurement, so two fixture runs on an unchanged build produce identical fingerprints.
+
+## UI rules
+
+| Id | Measures |
+|---|---|
+| `ui.no-horizontal-overflow` | Document and active pane `scrollWidth <= clientWidth + 1` at 1440, 1166 and 375px; bounded overflow wrappers exempt. |
+| `ui.panel-body-padding` | Each panel body's content starts with a non-zero inset (body padding, or the first content element's offset and padding — a summary table's first cell counts), and is not far closer than its sibling panels'. Catches the Lifecycle diagnostics card, whose counts sit in a zero-padding body while sibling cards start at 6–12px. |
+| `ui.sibling-spacing` | Siblings of one kind in one container share padding, font size and weight; selected/active items are exempt. |
+| `ui.control-size` | Buttons in one toolbar or row share height (within 2px) and font size. |
+| `ui.aligned-starts` | First content of neighbouring grid/flex-row columns starts within 8px of the same top. |
+| `ui.even-row-panels` | Panels side by side in one row have heights within 4px. |
+| `ui.bounded-length` | Page `scrollHeight` at most 12 viewports; lists over 150 rows need a pagination control. |
+| `ui.nested-card` | No bordered box directly inside a bordered panel without a grouping role or label. |
+| `ui.contrast` | Visible text at least 4.5:1 (3:1 large) against its effective background; gradient-backed text is recorded unmeasurable. |
+| `ui.accessible-name` | Visible buttons, links, inputs, selects, textareas and images have a name (text, `aria-label`/`aria-labelledby`, label, `alt`, or title); decorative images (`alt=""`) pass. |
+| `ui.console-clean` | No page errors, console errors, failed same-origin requests, off-loopback requests, or blocked non-GET requests while rendering. |
+| `ui.forecast-unavailable-reason` | API-shaped fixture rule: when `GET /api/diagnostics/backlog_forecast` (fetched in the page's workspace scope) reports unavailable reasons, the view carries `data-forecast-reason` with a known kind (`regression_history_missing`, `risk_unestimated`, `arrival_conflict_unknown`, …) and visible reason text. |
 
 ## Rule module
 
@@ -125,3 +161,20 @@ orbit tool run orbit.auto_task.update --input-file ux-review-cli-template-patch.
   }
 }
 ```
+
+## Handoff: ux-review-ui auto-task update
+
+This change does not modify `ux-review-ui`. The definition is operator configuration, and this lane is not granted `orbit.auto_task.update`. Apply the generated patch — attached to the delivering task as `ux-review-ui-template-patch.json` — on the owner workspace with a field-scoped patch. Do not send a whole `template`: omitted template fields receive defaults. Do not change `enabled`, the schedule (`every_minutes` 4320), complexity (`hard`), tags, priority, or `required_tools`.
+
+```bash
+orbit tool run orbit.auto_task.update --input-file ux-review-ui-template-patch.json
+```
+
+The patch is `{"name": "ux-review-ui", "workspace": "ws_orbit", "template_patch": {"description": …, "acceptance_criteria": […]}}`, derived from the live definition at delivery time. It:
+
+- adds a "Run the UI rules first" section: run `--surface ui` against the live dashboard (and the website manifest against the preview) before any judgement, read `ux-rules.json`, treat every `fail` as known, and use `--fixture` for the forecast-reason rule when live data has no unavailable forecast;
+- replaces the visual-design measurement list (`getBoundingClientRect()` / `getComputedStyle()` sibling comparisons and `scrollHeight` checks) with the judgement remainder — misplaced affordances and wasted space — and routes a measurement-shaped judgement finding to a `ux-rules` task that adds the rule;
+- deletes the three 2026-10-29 regression sections ("Viewport containment regression check", "Panel body padding regression check", "Backlog-forecast unavailable reasons and qualified baseline") and their three acceptance criteria, now covered by `ui.no-horizontal-overflow`, `ui.panel-body-padding` and `ui.forecast-unavailable-reason`;
+- re-scopes the visual-design acceptance criterion to judgement findings read against `ux-rules.json`, and prepends a criterion requiring the runner-first pass.
+
+To regenerate it after the definition drifts: read the current template with `orbit.auto_task.list`, apply the same four edits, and keep everything else byte-identical.

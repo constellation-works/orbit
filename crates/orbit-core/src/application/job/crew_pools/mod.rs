@@ -32,15 +32,21 @@ mod admission;
 mod candidates;
 mod draw;
 mod purpose;
+#[cfg(feature = "test-support")]
+mod selection_checkpoint;
 mod task_type;
 mod types;
 mod write_back;
 
-pub(crate) use admission::{AdmissionTaskWrites, strip_auto_crew_admission};
+pub(crate) use admission::{
+    AdmissionTaskWrites, crew_admission_task_id, strip_auto_crew_admission,
+};
 pub(crate) use draw::{
     INSPECTION_CREW_UNAVAILABLE, complexity_crews_key, complexity_of_crews_key, random_crew_ticket,
     seeded_crew_ticket,
 };
+#[cfg(feature = "test-support")]
+pub use selection_checkpoint::with_crew_selection_checkpoint;
 pub(crate) use types::CapturedCrewPools;
 #[cfg(feature = "test-support")]
 pub use write_back::with_crew_backfill_checkpoint;

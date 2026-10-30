@@ -182,7 +182,8 @@ pub(in crate::application) trait TaskJobPort {
     fn inspection_pool(&self, tier: TaskComplexity) -> Result<Option<InspectionPool>, OrbitError>;
 
     /// Redraw `task`'s crew for a new `complexity`, returning the history
-    /// entry to commit with the redrawn crew.
+    /// entry to commit with the redrawn crew. Call under the task write lock;
+    /// active or reserved deliveries keep their execution crew and provenance.
     fn rerated_crew(
         &self,
         task: &mut Task,
