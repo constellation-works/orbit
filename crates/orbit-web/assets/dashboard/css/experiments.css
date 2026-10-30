@@ -99,12 +99,15 @@
 .ex-forest-group { display: flex; flex-direction: column; gap: 6px; }
 .ex-forest-metric { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 8px; font: 13px var(--font-sans); }
 .ex-forest-name { color: var(--fg); font-weight: 500; }
-.ex-forest-better { margin-left: auto; color: var(--fg-mute); font: 11px var(--font-sans); }
 .ex-forest-rows { display: flex; flex-direction: column; gap: 4px; }
-.ex-forest-row {
+.ex-forest-row, .ex-forest-axis {
   display: grid; grid-template-columns: minmax(80px, 140px) minmax(120px, 1fr) minmax(140px, auto);
   align-items: center; gap: 10px; min-height: 24px; font: 12px var(--font-sans);
 }
+/* One direction for every row: the axis header names it once. */
+.ex-forest-axis { min-height: 0; margin-bottom: -6px; }
+.ex-forest-axis-plot { display: flex; justify-content: space-between; color: var(--fg-mute); font: 11px var(--font-sans); }
+.ex-forest-axis-better { color: var(--state-success); }
 .ex-forest-arm { display: inline-flex; align-items: center; gap: 6px; min-width: 0; color: #c9d0d9; overflow-wrap: anywhere; }
 .ex-forest-plot { position: relative; height: 20px; border-radius: 4px; background: var(--bg-sunk); }
 .ex-forest-zero { position: absolute; top: 2px; bottom: 2px; width: 1px; background: var(--fg-mute); }
@@ -116,6 +119,9 @@
   position: absolute; top: 50%; width: 10px; height: 10px; border-radius: 50%;
   transform: translate(-50%, -50%); background: var(--mx-c); box-shadow: 0 0 0 2px var(--bg-sunk);
 }
+.ex-forest-better { --mx-c: var(--state-success); }
+.ex-forest-worse { --mx-c: var(--state-failed); }
+.ex-forest-unclear { --mx-c: var(--fg-dim); }
 .ex-forest-value { display: flex; flex-direction: column; align-items: flex-end; font: 12px var(--font-mono); font-variant-numeric: tabular-nums; }
 .ex-forest-est { color: var(--fg); }
 .ex-forest-range { color: var(--fg-mute); font-size: 11px; white-space: nowrap; }
@@ -263,6 +269,8 @@ textarea.exf-control { resize: vertical; min-height: 56px; }
   .ex-arm-progress .ex-progress { grid-column: 1 / -1; grid-row: 2; }
   .ex-forest-row { grid-template-columns: 1fr auto; }
   .ex-forest-row .ex-forest-plot { grid-column: 1 / -1; grid-row: 2; }
+  .ex-forest-axis { grid-template-columns: 1fr; }
+  .ex-forest-axis > span:not(.ex-forest-axis-plot) { display: none; }
   .ex-warning { grid-template-columns: auto 1fr; }
   .ex-warning-text { grid-column: 1 / -1; }
   .ex-event { grid-template-columns: 1fr; }
