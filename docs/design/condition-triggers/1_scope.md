@@ -1,8 +1,8 @@
 ---
 title: "Scope: Condition triggers"
 owner: claude
-last_updated: 2026-10-27
-last_validated: 2026-10-27
+last_updated: 2026-10-29
+last_validated: 2026-10-29
 status: Draft
 stage: designing
 next: "Review this scope; then file phase 1 (CEL schema, load-time checking, automation explain)"
@@ -16,7 +16,9 @@ tags: [condition-triggers, automation-triggers, routines, auto-tasks, scheduling
 # Scope: Condition triggers
 
 Status: proposed. This doc is the design deliverable of [ORB-19288]; no code in this
-change. It reverses one recorded non-goal of
+change. Revised 2026-10-29 with Daniel's answers to four open questions (transitions,
+own-task exclusion with `self` reads, follower-host definitions, re-enable); see
+[Open questions › Resolved](#resolved-2026-10-29). It reverses one recorded non-goal of
 [automation triggers](../automation-triggers/1_overview.md#1-motivation), "user
 expressions/scripts", for predicates only. The other non-goals stay: a generic event
 bus, scripts, arbitrary transition subscriptions, cross-host failover and a second
@@ -212,7 +214,7 @@ variable bound to each subject:
 |---|---|---|---|
 | `task` | Tasks of the owning workspace that pass the prefilter (§4) | `task` | Per task; fires per matching task |
 | `workspace` | The owning workspace, one subject | none (reads `board`) | Once per pass |
-| `host` | The owner host, one subject | none (reads `host`) | Once per pass |
+| `host` | One subject per evaluating host: the owner host, or each host the definition's `hosts` lists (§4) | none (reads `host`) | Once per pass, on that host |
 | `file` | Each regular file under the declared `roots` matching `glob`, or, with `group_by: stem`, each group of same-stem files in one directory | `file` (or `group`) | Per file or group; fires per new one |
 
 Every expression may also read the following. Nothing else is in the schema.
@@ -221,19 +223,30 @@ Every expression may also read the following. Nothing else is in the schema.
 |---|---|---|
 | `task` (task scope) | `id`, `title`, `status`, `tags` (list), `type`, `priority`, `complexity`, `crew` (optional), `parent_id` (optional), `dependencies` (list of IDs), `created_at`, `updated_at`, `status_since` (time of the latest move into the current status) | Task envelope and history |
 | `tasks['<ID>']` | Same shape as `task`, read-only. The index must be a string literal in the same workspace. | Prefetched by ID |
-| `board` | `by_status` (map from status to count). `by_tag['<tag>']` (literal tags only). `eligible`, `backlog`, `in_progress`, `blocked`, `review` and `open_runs`, each with `count` and `empty`. `drain_running` (bool). | Task query; `application/admission/backlog_exclusion/snapshot.rs` for `eligible`; job store for open runs and the live `workspace_auto_pipeline` |
+| `board` | `by_status` (map from status to count). `by_tag['<tag>']` (literal tags only). `eligible`, `backlog`, `in_progress`, `blocked`, `review` and `open_runs`, each with `count` and `empty`. `drain_running` (bool). | Task query; `application/admission/backlog_exclusion/snapshot.rs` for `eligible`; job store for open runs and the live `workspace_auto_pipeline`. Counts leave out tasks this definition minted (below). |
 | `host` | `machine_id`. `cpu_percent`, `cpu_utilization_percent`, `memory_percent` and `io_full_percent` (optional doubles). `disk.repo`, `disk.worktrees` and `disk.global`, each with `used_percent`. | Host resource sampler |
 | `system.path['<root>']` | `files`, `bytes`, `stable_files` (ints) and `newest_mtime` (timestamp), for a declared root only | Root rescan (§4) |
 | `task.origin` (any task read) | `trigger` (`routine:<name>` or `auto-task:<name>`), `fire_id`, `depth`. Absent unless a condition fire created the task; test with `has(task.origin)`. | The minted task's `condition_fired` creation event (§11) |
 | `file` (file scope) | `path`, `root`, `name`, `stem` (name without its final extension), `ext` (lower case, no dot), `size`, `mtime`, `stable` (bool), `fingerprint` | Root rescan |
 | `group` (file scope with `group_by: stem`) | `dir`, `stem`, `files` (list of `file`, at most 16), `stable` | Root rescan |
 | `now` | Timestamp of the pass, UTC. CEL's timezone accessors give local time. | Pass clock |
+| `self` | The definition's own history: `last_fired` (timestamp of the latest fire that admitted an action, optional), `last_minted` (timestamp of the latest acknowledged mint, optional; auto-tasks only), `last_minted_task` (ID, optional), `fires_24h` (int). Test the optional fields with `has()`. | The definition's fire records in its fenced checkpoint (§3) |
 
 Rules:
 
 - **Data an expression can't read.** Task descriptions, criteria, comments,
   artifacts and run output are not readable. Conditions are about state, not
   content matching. Free text is also how injected instructions travel.
+- **Own tasks leave the board.** `board` counts exclude tasks this definition minted,
+  so a mint does not make the board it watches non-empty, and the subject does not
+  re-arm on its own output. The exclusion set is the acknowledged task IDs in the
+  definition's fire records (kept for `fired_retention_days`), not a history scan.
+  `board_includes_own: true` counts them again for a definition that wants that.
+  Other definitions' tasks always count.
+- **`self` survives edits and disables.** `self` is keyed by the consumer identity,
+  not the epoch, so editing a definition or disabling and re-enabling it keeps its
+  `last_fired`. A baseline at enable records no fire, so it does not move
+  `last_fired`. Deleting the definition drops it.
 - **Literal cross-reads.** `tasks[...]`, `by_tag[...]` and `system.path[...]` take a
   literal index, so the loader knows every cross-read before the first pass. This
   fixes prefetch cost, lets explain list them, and lets loop detection see what a
@@ -293,6 +306,11 @@ armed --(when true, held for `for_minutes`)--> fired --(rearm true)--> armed
   ([automation-triggers §10](../automation-triggers/2_design.md#10-compatibility-and-migration)).
   Use case B needs it: enabling a release trigger must not release every old `done`
   task.
+- **Re-enable after disable is an enable.** It starts fresh by default: subjects true
+  at re-enable are baselined, and nothing that went true while disabled fires.
+  `on_enable: fire_existing` fires the subjects that are true at re-enable, under the
+  match cap. Neither replays edges that went true and false while disabled, because
+  nothing observed them.
 
 **Fire identity.** Each edge gets one durable identity:
 
@@ -428,9 +446,17 @@ is the shipped exception:
   refuses to fire one even if it loads the file.
 - A pull follower evaluates only its replica-local cron worktree GC and store GC.
   Its drain otherwise inherits whatever the owner minted.
-- In phase 3, `scope: host` reads the owner host. Follower-host conditions need
-  host-level definitions (Open questions); that restriction is for the proposed
-  condition kind, alongside the existing replica-local cron GC scheduling.
+- **Follower hosts (phase 3).** A `scope: host` definition stays in the workspace's
+  `.orbit/routines/` or `.orbit/auto_tasks/` like every other definition, and may list
+  `hosts:` (machine names or IDs; default: the owner only). A host evaluates it only
+  when the host is listed. On a pull follower this widens the shipped replica-local
+  exception, under the same rule: the follower evaluates such a definition from its
+  replica checkout only when its action is host-local, today `job:worktree_gc_pipeline`
+  or `job:store_gc_pipeline`. A follower-listed definition with any other action, a
+  mint, or a `notify` is a load error naming the host and the action. The follower
+  keeps the definition's fire state in its own store, as it keeps its replica-local
+  cron cursor, and writes no coordination state. One subject per listed host, each
+  with its own edge state and `self`.
 
 **While the owner is down.** Nothing is evaluated and nothing fires. When the owner
 returns, the next pass compares current state with the stored arm states:
@@ -523,7 +549,7 @@ already runs a job.
   independently, so a failed notification never re-mints. Two non-notify actions on
   one edge are two definitions with the same condition, each with its own edge state.
   A shared, named condition is an open question.
-- **Task transitions are deferred.** No phase lets a condition move a task (for
+- **Task transitions stay pipeline-only.** No phase lets a condition move a task (for
   example `blocked` to `backlog`, or `proposed` to approved). The reasons:
   - **Authority.** Re-backlogging a blocked task is "a deliberate human transition"
     (`RETIRED_ROUTINE_JOBS`, `crates/orbit-automation/src/routines/loader.rs`).
@@ -534,8 +560,8 @@ already runs a job.
     A mint or job changes the subject only through a separate run, which the guards
     in §8 can see and bound.
 
-  A later transition action would need an operator grant (§7) and would count as
-  watched-state mutation for loop detection.
+  Decided 2026-10-29: transitions stay pipeline-only, including under a grant.
+  Revisit only with a concrete use case.
 
 ### 7. Authority for high-authority actions
 
@@ -832,7 +858,9 @@ trigger:            # routine; an auto-task uses `schedule:` instead
     max_fires_per_hour: 10
     max_fires_per_day: 50
     max_matches: 20
-    on_enable: baseline         # baseline | fire_existing
+    on_enable: baseline         # baseline | fire_existing; also applies on re-enable
+    board_includes_own: false   # count this definition's own minted tasks in `board`
+    hosts: [dk-server-1]        # host scope only; default: the owner host
     roots: ["inbox/"]           # file scope only (relative = workspace checkout;
                                 #   plugin-seeded: {{config.<key>}} etc.)
     glob: "**/*"                # file scope only
@@ -871,9 +899,10 @@ name: release-prep
 schedule:
   condition:
     scope: workspace
-    when: "board.eligible.empty && board.in_progress.count == 0 && board.open_runs.count == 0"
+    when: >-
+      board.eligible.empty && board.in_progress.count == 0 && board.open_runs.count == 0
+      && (!has(self.last_fired) || now - self.last_fired > duration('72h'))
     for_minutes: 30
-    cooldown_minutes: 1440
 template:
   title: "Prepare release"
   tags: [release]
@@ -889,10 +918,12 @@ dedupe: skip_if_open
   minute or two. `for_minutes: 30` requires 30 observed minutes of an empty board
   with no gap over 5 minutes. The default re-arm (`!when`) re-arms as soon as work
   appears.
-- **Its own task.** The minted `Prepare release` task makes the board non-empty, so
-  the subject re-arms. When that task is done, the board may be empty again.
-  `skip_if_open` doesn't help once the task is closed; the 1-day cooldown is what
-  stops a second release prep that day. Oscillation (§8) bounds anything worse.
+- **Its own task.** The minted `Prepare release` task does not count in `board`
+  (§2), so it neither keeps the board "non-empty" nor re-arms the subject. Other
+  work arriving does re-arm it, as it should. The `self.last_fired` clause says "not
+  in the last 3 days", which replaces a cooldown: a cooldown delays an edge, while
+  this states the rule in the expression, where explain shows it. Oscillation (§8)
+  bounds anything worse.
 - **What's missing.** Nothing beyond phases 1 and 2.
 
 ### B. Release prep done → release and tag
@@ -993,13 +1024,10 @@ What is missing:
   and in the clock log.
 - **Other mounts.** Reading a mount other than the three sampled paths needs a declared
   extra path.
-- **Follower hosts.** Follower hosts already schedule their own replica-local cron
-  worktree GC and store GC today (`runs_in_replica`,
-  `crates/orbit-core/src/application/routines/loader.rs`), which is where
-  dk-server-1's worktrees fill. The proposed `scope: host` condition still needs
-  host-level definitions (Open questions), so in phase 3 this use case covers owner
-  hosts only; that is a design choice for conditions, not a limit of the shipped
-  cron GC.
+- **Follower hosts.** dk-server-1's worktrees are where the disk fills. Adding
+  `hosts: [dk-server-2, dk-server-1]` makes each host evaluate its own disk (§4). On
+  the follower only the GC job may run, so the follower variant drops `notify`
+  until notices can travel from a follower to the owner's decision channel (phase 6).
 
 ### D. File added → job
 
@@ -1151,10 +1179,12 @@ target: job:media_ingest_pipeline    # workspace-defined
 ## Non-goals
 
 - **Scripts, user functions, or regular expressions in v1.** Predicates only (§5).
-- **Task transitions as actions.** Deferred under §6. Approving, re-backlogging or
+- **Task transitions as actions.** Pipeline-only (§6). Approving, re-backlogging or
   completing a task stays a human or typed-pipeline decision.
 - **Cross-workspace and cross-host reads.** Each condition reads its owner's
-  workspace and the owner host only (§2).
+  workspace, and a host condition reads only the host evaluating it (§2, §4).
+- **Host definitions outside workspaces.** Definitions stay in workspace `.orbit/`;
+  a follower is reached through `hosts:`, not a second definitions root (§4).
 - **Replacing typed kinds.** Coverage, fingerprints, slots and receipts stay typed
   (§1).
 - **Exactly-once execution of a job's side effects.** Fires are exactly-once at
@@ -1196,9 +1226,12 @@ target: job:media_ingest_pipeline    # workspace-defined
 - **Chain depth sees tasks, not aggregates.** Depth follows `origin` through tasks. A
   loop that runs only through aggregates (A mints, the board changes, A re-arms) has
   no origin link. Cooldowns, fire caps and oscillation bound it instead (§8).
-- **Host-scope duplication.** Two workspaces on one owner host with similar disk
-  conditions are two definitions. They fire twice and notify twice. Host-level
-  definitions would fix this.
+- **Host-scope duplication.** Two workspaces on one host with similar disk
+  conditions are two definitions. They fire twice and notify twice. Keep one host
+  definition per host, in the workspace that owns host housekeeping (`ws_orbit` here).
+- **Own-task exclusion is bounded by retention.** A minted task older than
+  `fired_retention_days` falls out of the exclusion set and counts in `board` again.
+  A definition whose minted tasks stay open longer than that sets a longer retention.
 - **The doc's size.** This scope doc is near the limit of one sitting. If phase 2
   grows specs (the CEL environment, fire records), the feature graduates to the full
   track (CONVENTIONS.md §1).
@@ -1219,11 +1252,14 @@ target: job:media_ingest_pipeline    # workspace-defined
    - the guardrails in §8, the dry run at enable, `clear-stall`, and recording in
      history, lists and the dashboard;
    - `when:` guards on `cron`, `every_minutes`, `deliveries_landed` and `state`
-     kinds, plus `origin` stamping and chain depth (§11).
+     kinds, plus `origin` stamping and chain depth (§11);
+   - `self` reads, own-task exclusion from `board` with `board_includes_own`, and
+     `on_enable` on re-enable.
 
    Covers use case A.
 3. **Host scope and notifications.** Host facts from the sampler, notice records in
-   the decision channel, and the `notify` action. Covers use case C on owner hosts.
+   the decision channel, the `notify` action, and `hosts:` with follower evaluation of
+   host-local GC actions (§4). Covers use case C on the owner and on followers.
 4. **File scope.** This phase adds:
    - roots, the `watch_roots` allowlist, and the rescan manifest;
    - plugin-seeded templated roots checked against plugin grants;
@@ -1237,37 +1273,41 @@ target: job:media_ingest_pipeline    # workspace-defined
    once a workspace defines its release job.
 6. **Later.** Each of these is filed only when needed:
    - task dirty-ID hints and OS file notifications;
-   - host-level definitions for followers;
+   - notices from a follower-evaluated condition, relayed to the owner;
    - presets for `pilot_warnings_held` and `block_escalated` (§1);
-   - transition actions under a grant.
 
 ## Open questions
 
-1. **Task transitions.** Should a grant ever authorize one (for example re-backlog
-   within the final-recovery requeue bound), or should transitions stay
-   pipeline-only? Leaning: pipeline-only. Revisit only with a concrete use case.
-2. **Identical files at different paths.** Should they fire once (fingerprint
+1. **Identical files at different paths.** Should they fire once (fingerprint
    identity, the default here) or once per path? A `path` identity mode costs little,
    but it doubles what fire identity means.
-3. **Language-tagged siblings.** Should `group_by: stem` also strip a language tag, so
+2. **Language-tagged siblings.** Should `group_by: stem` also strip a language tag, so
    that `talk.en.vtt` groups with `talk.mp4`? Removing only the final extension gives
    `talk.en`. A `stem_strip` pattern list would cover it, at the cost of another
    setting.
-4. **Multiple actions.** Is it enough to have two definitions with the same
+3. **Multiple actions.** Is it enough to have two definitions with the same
    condition, or should a definition be able to reference a named shared condition
    so that the edge state is shared?
-5. **Federated reads.** Could a condition read another owner's workspace through
+4. **Federated reads.** Could a condition read another owner's workspace through
    federated MCP, with that owner's revisions in the fire identity? Leaning: no,
    until a use case needs it.
-6. **Own tasks in aggregates.** Should `board` aggregates leave out a condition's
-   own minted tasks, so that A doesn't re-arm itself? It would remove the
-   cooldown dance, at the cost of a less obvious "board".
-7. **Host-level definitions.** Where should they live? The global root
-   (`~/.orbit/`) is the only other root allowed. Followers would evaluate only
-   host-local actions there: notices, and GC of their own worktrees.
-8. **Re-enable after disable.** Should it baseline (the choice here), or fire subjects
-   that went true while disabled? Baselining means an operator who disabled a
-   condition is never surprised by a backlog of fires.
+
+### Resolved 2026-10-29
+
+Daniel's answers, folded into the sections named:
+
+- **Task transitions:** pipeline-only, including under a grant; revisit only with a
+  concrete use case (§6, Non-goals).
+- **Own tasks in aggregates:** yes, `board` leaves out the definition's own minted
+  tasks, with `board_includes_own` to opt back in. Daniel: likely useful mainly when
+  the board is empty and combined with other conditions, "e.g. when board is empty
+  and it has not triggered in the past n days", so the definition's `last_fired` and
+  `last_minted` are readable as `self` (§2, use case A).
+- **Host-level definitions:** they stay in the workspace's `.orbit/routines/` or
+  `.orbit/auto_tasks/`, with a `hosts:` list; a listed follower evaluates only
+  host-local GC actions (§4, use case C). No second definitions root.
+- **Re-enable after disable:** starts fresh by default, configurable through
+  `on_enable` (§3).
 
 ## Acceptance (feature level)
 
@@ -1292,6 +1332,15 @@ target: job:media_ingest_pipeline    # workspace-defined
   identity or recapture its input.
 - A pull follower and a replica checkout never fire a workspace, task or file
   condition.
+- A host condition listing a follower in `hosts` is evaluated on that follower against
+  its own host facts and runs only a host-local GC job there; with any other action,
+  a mint or a `notify`, it fails to load naming the host and the action.
+- `board` counts leave out tasks the definition itself minted unless
+  `board_includes_own` is true, and `self.last_fired` and `self.last_minted` read the
+  definition's latest fire and mint, surviving edits and disable/re-enable.
+- Re-enabling a disabled condition baselines current matches by default; with
+  `on_enable: fire_existing` it fires those true at re-enable, and in neither case
+  edges that came and went while it was disabled.
 - An operator-authority target doesn't run without a current grant whose digest
   matches the definition and target. With `approval: per_fire`, it doesn't run
   without a human answer, and an agent edit stops both.
