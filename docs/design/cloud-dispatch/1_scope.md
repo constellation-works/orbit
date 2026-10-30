@@ -3,17 +3,24 @@ title: "Scope: Cloud dispatch"
 owner: claude
 status: Draft
 stage: designing
-next: "Run the phase 0 manual cloud-session spike, then file phase 1 (no task yet)"
+next: "Review the Copilot existing-PR recovery companion; the Claude phase 0 spike remains pending"
 feature: cloud-dispatch
 doc_role: scope
 type: design
-summary: "Scope: a cloud delivery mode that ships a task through a Claude Code cloud session, polls GitHub for its PR, and adopts that PR's number and summary onto the task"
-tags: [cloud, dispatch, claude, routines, pr, polling]
-last_updated: 2026-10-28
-last_validated: 2026-10-28
+summary: "Proposed Claude cloud task delivery, with a companion scope for Copilot repair of existing PRs under shared repair ownership, budgets and exact-head evidence."
+tags: [cloud, dispatch, claude, copilot, routines, pr, polling]
+last_updated: 2026-10-29
+last_validated: 2026-10-29
 ---
 
 # Scope: Cloud dispatch
+
+The [Copilot existing-PR recovery companion](specs/copilot-pr-recovery.md)
+extends this design area with a separate, unimplemented repair scope. It reuses
+remote intent/observation principles, but retains the existing PR and Orbit's
+shared repair ledger instead of creating a new Claude delivery. Review and
+phase that scope independently; it does not select the Claude dispatch method
+below, imply that either proposal is built, or authorize a live cloud call.
 
 Status: proposal, not started. Phase 0 is a manual spike with no code, against `orbit` first.
 Open questions resolved 2026-09-23 (see the end of this doc).
