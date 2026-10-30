@@ -1,11 +1,14 @@
 //! `[visual_review]`: the view manifests mock names are validated
-//! against, and the width a mock name without a width part means
-//! (visual-review design §2.2, §2.3).
+//! against, the width a mock name without a width part means
+//! (visual-review design §2.2, §2.3), and the delivery capture's mode,
+//! mock budget and `require_established` hold (§4, §6.1).
 
 use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_home_dir;
+
+use orbit_types::task::{DEFAULT_VISUAL_MAX_MOCKS, VisualReviewMode};
 
 use crate::tag_instructions::repository_path;
 
@@ -21,6 +24,13 @@ pub struct VisualReviewSettings {
     pub manifests: Vec<String>,
     /// `visual_review.default_width` (default 1440).
     pub default_width: u32,
+    /// `visual_review.mode` (default `off`): whether delivery captures.
+    pub mode: VisualReviewMode,
+    /// `visual_review.max_mocks` (default 12): mocks captured per delivery.
+    pub max_mocks: u32,
+    /// `visual_review.require_established` (default false): hold a
+    /// delivery whose capture is not established.
+    pub require_established: bool,
 }
 
 impl Default for VisualReviewSettings {
@@ -28,6 +38,9 @@ impl Default for VisualReviewSettings {
         Self {
             manifests: Vec::new(),
             default_width: DEFAULT_VISUAL_REVIEW_WIDTH,
+            mode: VisualReviewMode::Off,
+            max_mocks: DEFAULT_VISUAL_MAX_MOCKS,
+            require_established: false,
         }
     }
 }
@@ -48,7 +61,8 @@ pub(crate) fn visual_review_from_document(
     };
     let Some(table) = table.as_table() else {
         return Err(invalid(format!(
-            "'{VISUAL_REVIEW_KEY}' must be a table with `manifests` and `default_width`"
+            "'{VISUAL_REVIEW_KEY}' must be a table with `mode`, `manifests`, `default_width`, \
+             `max_mocks` and `require_established`"
         )));
     };
     let mut settings = VisualReviewSettings::default();
@@ -78,6 +92,35 @@ pub(crate) fn visual_review_from_document(
         };
         settings.default_width = u32::try_from(width)
             .map_err(|_| invalid(format!("'{VISUAL_REVIEW_KEY}.default_width' is too large")))?;
+    }
+    if let Some(mode) = table.get("mode") {
+        settings.mode = mode
+            .as_str()
+            .and_then(VisualReviewMode::parse)
+            .ok_or_else(|| {
+                invalid(format!(
+                    "'{VISUAL_REVIEW_KEY}.mode' must be \"off\", \"shadow\" or \"live\""
+                ))
+            })?;
+    }
+    if let Some(max_mocks) = table.get("max_mocks") {
+        let Some(max_mocks) = max_mocks
+            .as_integer()
+            .filter(|max_mocks| (1..=100).contains(max_mocks))
+        else {
+            return Err(invalid(format!(
+                "'{VISUAL_REVIEW_KEY}.max_mocks' must be an integer from 1 to 100"
+            )));
+        };
+        settings.max_mocks = u32::try_from(max_mocks)
+            .map_err(|_| invalid(format!("'{VISUAL_REVIEW_KEY}.max_mocks' is too large")))?;
+    }
+    if let Some(require) = table.get("require_established") {
+        settings.require_established = require.as_bool().ok_or_else(|| {
+            invalid(format!(
+                "'{VISUAL_REVIEW_KEY}.require_established' must be a boolean"
+            ))
+        })?;
     }
     Ok(settings)
 }

@@ -158,6 +158,9 @@ impl OrbitRuntime {
             admission.map(|admission| admission.parent_run_id.as_str()),
             resume.is_some(),
         )?;
+        // A `verify-mock-ui` delivery freezes its mocks' digests when it is
+        // admitted, on every submission path (visual-review §2.4).
+        self.freeze_visual_admission(job_name, &mut input, resume.is_some())?;
         let result = (|| {
             // Preserve policy refusals for unavailable definitions while every
             // resolved PR leaf was already checked before those policies ran.

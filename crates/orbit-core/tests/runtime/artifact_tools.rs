@@ -7,6 +7,7 @@ use orbit_engine::{ReviewLandingRequest, RuntimeHost};
 use orbit_types::task::{
     ArtifactManifestV2, ArtifactWriter, MAX_TASK_ARTIFACT_CONTENT_BYTES,
     TASK_ARTIFACT_MANIFEST_FILE_NAME, TASK_ARTIFACTS_DIR_NAME, TaskArtifact,
+    VISUAL_CAPTURE_ARTIFACT,
 };
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{
@@ -139,6 +140,8 @@ fn local_artifact_writers_cannot_forge_or_pin_review_certificates() {
         REVIEW_BASELINE_ARTIFACT,
         REVIEW_REPORT_HISTORY_ARTIFACT,
         "review-future.json",
+        VISUAL_CAPTURE_ARTIFACT,
+        "visual/checkout/capture.png",
     ] {
         for path in [
             reserved.to_string(),

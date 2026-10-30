@@ -54,6 +54,9 @@ pub fn unknown_config_keys_present(document: &toml::Value) -> Vec<UnknownConfigK
             // Read by runtime admission; recognize the leaves without hiding unknown siblings.
             "visual_review.manifests",
             "visual_review.default_width",
+            "visual_review.mode",
+            "visual_review.max_mocks",
+            "visual_review.require_established",
             // Read by the operation layer; the settings registry has no row for it.
             REVIEW_HOST_EVIDENCE_KEY,
         ])

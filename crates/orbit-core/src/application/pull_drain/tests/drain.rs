@@ -87,6 +87,7 @@ impl PullPeer for Peer {
                 gates: None,
                 tag_instructions: None,
                 explore_brief: None,
+                visual_review: None,
                 experiments: Some(orbit_types::workflow::CapturedExperiments {
                     task_id: "task".into(),
                     assignments: Vec::new(),

@@ -257,6 +257,15 @@ pub(crate) fn run_show_payload(
         header.push('\n');
         header.push_str(&line);
     }
+    // A `verify-mock-ui` delivery's visual review: what was captured and
+    // checked, or why it is not established; never a pass by omission.
+    if let Some(summary) = visual_review_summary(state.as_ref()) {
+        header.push_str(&format!(
+            "\n{} {summary}",
+            crate::output::color::bold("Visual review:")
+        ));
+        doc["visual_review"] = json!({ "summary": summary });
+    }
 
     for attempt in &recovery.attempts {
         header.push_str(&format!(
@@ -526,6 +535,26 @@ fn review_layer_line(layer: &Value) -> Option<String> {
         "{} {timing} ({origin})",
         crate::output::color::bold("Review:")
     ))
+}
+
+/// The settled visual review summary, else the capture's (a run held
+/// before settling still says why its capture is not established).
+fn visual_review_summary(state: Option<&PipelineState>) -> Option<String> {
+    let state = state?;
+    if let Some(summary) = state
+        .pipeline_step_output("visual_settle")
+        .and_then(|output| output["summary"].as_str())
+        .filter(|summary| !summary.is_empty())
+    {
+        return Some(summary.to_string());
+    }
+    let capture = state.pipeline_step_output("visual_capture")?;
+    let summaries = capture["captures"]
+        .as_array()?
+        .iter()
+        .filter_map(|entry| entry["summary"].as_str())
+        .collect::<Vec<_>>();
+    (!summaries.is_empty()).then(|| summaries.join("; "))
 }
 
 /// Where to resume a failed pipeline run whose failure came from a child run.

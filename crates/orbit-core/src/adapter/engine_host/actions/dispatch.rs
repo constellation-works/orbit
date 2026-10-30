@@ -326,6 +326,18 @@ pub(crate) fn run_deterministic(
         CoreDeterministicAction::ReviewGateSettle => {
             crate::application::review::review_gate_settle(runtime, action, input)
         }
+        // Visual review §4, §7: the capture of record of a `verify-mock-ui`
+        // delivery, its deterministic checks, and its settlement against the
+        // candidate head and the frozen mocks.
+        CoreDeterministicAction::VisualCapture => {
+            crate::application::visual_delivery::visual_capture_step(runtime, action, input)
+        }
+        CoreDeterministicAction::VisualChecks => {
+            crate::application::visual_delivery::visual_checks_step(runtime, action, input)
+        }
+        CoreDeterministicAction::VisualSettle => {
+            crate::application::visual_delivery::visual_settle_step(runtime, action, input)
+        }
         // Operator-admitted review reconciliation of an already-merged
         // foreign delivery head: re-observe and pin the head, run required
         // validation at the head (and its base for failures), then settle the

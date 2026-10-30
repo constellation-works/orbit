@@ -109,6 +109,7 @@ mod settlement_review;
 mod single_pass;
 mod unavailable_hold;
 mod usage_pressure;
+mod visual_capture;
 mod waiting;
 mod window_extension;
 #[cfg(unix)]
@@ -1283,6 +1284,7 @@ fn handoff(record: &LocalPullAdmission) -> TaskHandoff {
         footprint_widening: vec![],
         owed_criteria: vec![],
         regression_from: vec![],
+        visual: None,
     }
 }
 

@@ -347,6 +347,15 @@ fn record(runtime: &OrbitRuntime, input: &Map<String, Value>, value: Value) -> C
             let _ = writeln!(out, "  {line}");
         }
     }
+    // A `verify-mock-ui` task's capture of record: what was captured and
+    // checked, or why it is not established.
+    if let Some(summary) = task
+        .get("visual_review")
+        .and_then(|visual| visual.get("summary"))
+        .and_then(Value::as_str)
+    {
+        let _ = writeln!(out, "{} {summary}", bold("Visual Review:"));
+    }
     if pr.is_none()
         && let Some(pr_status) = field("pr_status")
     {

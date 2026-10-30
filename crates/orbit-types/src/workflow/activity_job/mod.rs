@@ -81,6 +81,9 @@ macro_rules! deterministic_action_catalog {
                 StoreGc => "store_gc",
                 TaskPublication => "task_publication",
                 ValidateBundles => "validate_bundles",
+                VisualCapture => "visual_capture",
+                VisualChecks => "visual_checks",
+                VisualSettle => "visual_settle",
             }
             engine {
                 CandidateResume => "candidate_resume",

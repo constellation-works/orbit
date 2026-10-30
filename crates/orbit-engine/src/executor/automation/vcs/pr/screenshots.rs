@@ -6,13 +6,22 @@
 //! commit's sha, so the images keep resolving after the pull request merges
 //! and its branch is deleted. `pr.screenshot_section` and the task's tags
 //! decide whether the section is rendered at all.
+//!
+//! A `verify-mock-ui` task's capture of record (`visual/capture.json`) leads
+//! the section whatever `pr.screenshot_section` says: its one-line visual
+//! review summary (including why it is not established), then each mock's
+//! side-by-side image, ahead of the implementer's `screenshots/`.
 
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_types::task::{MAX_TASK_ARTIFACT_CONTENT_BYTES, Task, TaskArtifact};
+use orbit_types::task::{
+    MAX_TASK_ARTIFACT_CONTENT_BYTES, Task, TaskArtifact, VISUAL_CAPTURE_ARTIFACT,
+    VISUAL_CHECKS_ARTIFACT, VISUAL_SETTLE_ARTIFACT, VisualCaptureRecord, VisualChecksRecord,
+    VisualSettleRecord, has_verify_mock_ui_tag, visual_review_summary,
+};
 use orbit_types::workflow::{EVIDENCE_REF_PREFIX, SCREENSHOT_ARTIFACT_PREFIX};
 use serde_json::{Value, json};
 
@@ -41,7 +50,7 @@ pub(super) enum Screenshots {
 
 /// Publish the task's screenshots when the section applies to this delivery,
 /// and return what the body renders. Only a single-task delivery has the
-/// section; with it off nothing is read or pushed.
+/// section; with it off, and no capture of record, nothing is read or pushed.
 pub(super) fn publish_screenshots<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace_path: &Path,
@@ -51,14 +60,58 @@ pub(super) fn publish_screenshots<H: RuntimeHost + ?Sized>(
     let [task] = tasks else {
         return Ok(Screenshots::Off);
     };
-    if !pr_config.conventions.screenshot_section.applies(&task.tags) {
+    let section = pr_config.conventions.screenshot_section.applies(&task.tags);
+    let visual_applies = has_verify_mock_ui_tag(&task.tags);
+    if !section && !visual_applies {
         return Ok(Screenshots::Off);
     }
-    let shots = collect(&task.id, host.get_task_artifacts(&task.id)?);
-    if shots.is_empty() {
-        return Ok(Screenshots::Missing);
+    let artifacts = host.get_task_artifacts(&task.id)?;
+    let visual = visual_evidence(&task.id, &artifacts);
+    let shots = if section {
+        collect(&task.id, artifacts)
+    } else {
+        Vec::new()
+    };
+    let Some(visual) = visual else {
+        if !section {
+            return Ok(Screenshots::Off);
+        }
+        if shots.is_empty() {
+            return Ok(Screenshots::Missing);
+        }
+        return publish(host, workspace_path, task, &shots, None);
+    };
+    if shots.is_empty() && visual.images.is_empty() {
+        let mut content = visual.line();
+        if section {
+            content.push_str("\n\nNo screenshots attached.");
+        }
+        return Ok(Screenshots::Table(content));
     }
-    let tree_sha = write_tree(workspace_path, &shots)?;
+    publish(host, workspace_path, task, &shots, Some(&visual))
+}
+
+/// Push the evidence tree and render the section around it.
+fn publish<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace_path: &Path,
+    task: &Task,
+    shots: &[Shot],
+    visual: Option<&VisualEvidence>,
+) -> Result<Screenshots, OrbitError> {
+    let mut files: Vec<(String, &[u8])> = Vec::new();
+    if let Some(visual) = visual {
+        for image in &visual.images {
+            files.push((image.path.clone(), &image.content));
+        }
+    }
+    for shot in shots {
+        files.push((
+            format!("{SCREENSHOT_ARTIFACT_PREFIX}{}", shot.file),
+            &shot.content,
+        ));
+    }
+    let tree_sha = write_tree(workspace_path, &files)?;
     let published = host.run_private_vcs_operation(
         operations::EVIDENCE_REF_PUSH,
         json!({
@@ -87,13 +140,121 @@ pub(super) fn publish_screenshots<H: RuntimeHost + ?Sized>(
         commit_sha,
         reused,
         screenshots = shots.len(),
+        visual_images = visual.map_or(0, |visual| visual.images.len()),
         "published pull request screenshots to the task's evidence ref"
     );
-    Ok(Screenshots::Table(render_table(
-        repository_url,
-        commit_sha,
-        &shots,
-    )))
+    let mut content = String::new();
+    if let Some(visual) = visual {
+        content.push_str(&visual.render(repository_url, commit_sha));
+    }
+    if !shots.is_empty() {
+        if !content.is_empty() {
+            content.push_str("\n\n");
+        }
+        content.push_str(&render_table(repository_url, commit_sha, shots));
+    }
+    Ok(Screenshots::Table(content))
+}
+
+/// The capture of record's summary line and its side-by-side images.
+struct VisualEvidence {
+    summary: String,
+    images: Vec<VisualImage>,
+}
+
+/// One mock's side-by-side image, published at its artifact path.
+struct VisualImage {
+    path: String,
+    label: String,
+    width: u32,
+    content: Vec<u8>,
+}
+
+impl VisualEvidence {
+    fn line(&self) -> String {
+        format!("**Visual review** — {}", self.summary)
+    }
+
+    fn render(&self, repository_url: &str, commit_sha: &str) -> String {
+        let mut content = self.line();
+        if self.images.is_empty() {
+            return content;
+        }
+        content.push_str("\n\n| Mock | Mock · Capture |\n|---|---|");
+        for image in &self.images {
+            content.push_str(&format!(
+                "\n| {} | <img src=\"{repository_url}/blob/{commit_sha}/{}?raw=true\" width=\"{}\" \
+                 alt=\"{}\"> |",
+                image.label,
+                image.path,
+                if image.width <= NARROW_VIEWPORT_MAX {
+                    NARROW_IMAGE_WIDTH * 2
+                } else {
+                    WIDE_IMAGE_WIDTH * 2
+                },
+                image.path
+            ));
+        }
+        content
+    }
+}
+
+/// The task's capture of record, when it has a readable one: never a pass
+/// when it is not established, and only side-by-sides the record names at
+/// the digest it recorded.
+fn visual_evidence(task_id: &str, artifacts: &[TaskArtifact]) -> Option<VisualEvidence> {
+    let find = |path: &str| artifacts.iter().find(|artifact| artifact.path == path);
+    let capture = find(VISUAL_CAPTURE_ARTIFACT)?;
+    let record = match VisualCaptureRecord::parse(&capture.content) {
+        Ok(record) => record,
+        Err(error) => {
+            tracing::warn!(task_id, %error, "pr_open skipped an unreadable visual capture record");
+            return None;
+        }
+    };
+    let checks = find(VISUAL_CHECKS_ARTIFACT)
+        .and_then(|artifact| serde_json::from_slice::<VisualChecksRecord>(&artifact.content).ok())
+        .filter(|checks| checks.candidate_sha == record.candidate_sha);
+    let settle = find(VISUAL_SETTLE_ARTIFACT)
+        .and_then(|artifact| serde_json::from_slice::<VisualSettleRecord>(&artifact.content).ok());
+    let mut images = Vec::new();
+    for mock in &record.mocks {
+        let Some(capture) = &mock.capture else {
+            continue;
+        };
+        let Some(artifact) = find(&capture.side_by_side) else {
+            continue;
+        };
+        let digest = orbit_common::security::release::sha256_hex(&artifact.content);
+        let name_ok = capture.side_by_side.split('/').all(|segment| {
+            !segment.is_empty()
+                && !segment.starts_with('.')
+                && segment
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        });
+        if digest != capture.side_by_side_sha256 || !name_ok {
+            tracing::warn!(
+                task_id,
+                artifact = capture.side_by_side,
+                "pr_open skipped a side-by-side whose bytes or name the capture record does not pin"
+            );
+            continue;
+        }
+        images.push(VisualImage {
+            path: capture.side_by_side.clone(),
+            label: format!(
+                "{}, {}, {}, {}",
+                mock.view, mock.state, mock.theme, mock.width
+            ),
+            width: mock.width,
+            content: artifact.content.clone(),
+        });
+    }
+    Some(VisualEvidence {
+        summary: visual_review_summary(&record, checks.as_ref(), settle.as_ref()),
+        images,
+    })
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -205,25 +366,28 @@ fn parse_name(file: &str) -> Option<(&str, &str, u32, Phase)> {
     (!view.is_empty() && !theme.is_empty()).then_some((view, theme, width, phase))
 }
 
-/// Write the shots as blobs and return the tree holding exactly
-/// `screenshots/<file>` for each.
-fn write_tree(workspace_path: &Path, shots: &[Shot]) -> Result<String, OrbitError> {
-    let mut entries = String::new();
-    for shot in shots {
-        let blob = git_stdin(
-            workspace_path,
-            &["hash-object", "-w", "--stdin"],
-            &shot.content,
-        )?;
-        entries.push_str(&format!("100644 blob {blob}\t{}\n", shot.file));
+/// Write `files` as blobs and return the tree holding exactly each at its
+/// relative path (`screenshots/<file>`, `visual/<mock-name>/<file>`).
+fn write_tree(workspace_path: &Path, files: &[(String, &[u8])]) -> Result<String, OrbitError> {
+    let mut entries: BTreeMap<String, Vec<(String, &[u8])>> = BTreeMap::new();
+    let mut blobs = String::new();
+    for (path, content) in files {
+        match path.split_once('/') {
+            Some((directory, rest)) => entries
+                .entry(directory.to_string())
+                .or_default()
+                .push((rest.to_string(), content)),
+            None => {
+                let blob = git_stdin(workspace_path, &["hash-object", "-w", "--stdin"], content)?;
+                blobs.push_str(&format!("100644 blob {blob}\t{path}\n"));
+            }
+        }
     }
-    let screenshots = git_stdin(workspace_path, &["mktree"], entries.as_bytes())?;
-    let directory = SCREENSHOT_ARTIFACT_PREFIX.trim_end_matches('/');
-    git_stdin(
-        workspace_path,
-        &["mktree"],
-        format!("040000 tree {screenshots}\t{directory}\n").as_bytes(),
-    )
+    for (directory, children) in entries {
+        let tree = write_tree(workspace_path, &children)?;
+        blobs.push_str(&format!("040000 tree {tree}\t{directory}\n"));
+    }
+    git_stdin(workspace_path, &["mktree"], blobs.as_bytes())
 }
 
 /// Run a local object-writing Git command over `stdin`; its trimmed output.

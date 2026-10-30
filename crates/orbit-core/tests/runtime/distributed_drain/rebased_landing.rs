@@ -1332,6 +1332,7 @@ fn light_base_update(tag: LightTag, outside: bool) {
         footprint_widening: vec![],
         owed_criteria: vec![],
         regression_from: vec![],
+        visual: None,
     };
     let observation = HandoffObservation {
         footprint_widening: vec![],
