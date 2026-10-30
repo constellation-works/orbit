@@ -203,3 +203,114 @@ fn supported_negation_still_checks_and_evaluates() {
         }
     }
 }
+
+/// A task condition that would match its own template's output is a load
+/// error naming the definition and `schedule.condition.when` (§8). The
+/// template below mints a `backlog` task tagged `release`, which its own
+/// condition matches under both origin shapes.
+#[test]
+fn self_matching_task_condition_is_a_load_error() {
+    let root = tempfile::tempdir().unwrap();
+    write_condition_definition(
+        root.path(),
+        "selfmatch",
+        "task.status == 'backlog' && 'release' in task.tags",
+        &["release"],
+    );
+
+    let collection = orbit_automation::auto_tasks::loader::collect_auto_tasks(root.path());
+    assert!(
+        collection.definitions.is_empty(),
+        "a self-matching definition loaded: {:?}",
+        collection.definitions
+    );
+    assert_eq!(collection.errors.len(), 1, "{:?}", collection.errors);
+    let message = &collection.errors[0].message;
+    assert!(
+        message.contains("selfmatch"),
+        "load error names no definition: {message}"
+    );
+    assert!(
+        message.contains("schedule.condition.when"),
+        "load error names no clause: {message}"
+    );
+}
+
+/// A task condition its own template cannot satisfy still loads unchanged.
+#[test]
+fn non_matching_task_condition_still_loads() {
+    let root = tempfile::tempdir().unwrap();
+    write_condition_definition(
+        root.path(),
+        "calm",
+        "task.status == 'backlog' && 'release' in task.tags",
+        &[],
+    );
+
+    let collection = orbit_automation::auto_tasks::loader::collect_auto_tasks(root.path());
+    assert!(collection.errors.is_empty(), "{:?}", collection.errors);
+    assert_eq!(collection.definitions.len(), 1);
+    assert_eq!(collection.definitions[0].definition.name, "calm");
+}
+
+/// A board read is unknown at load, so a task condition that needs the board
+/// cannot match its own template output and still loads.
+#[test]
+fn board_read_self_match_evaluates_unknown_and_loads() {
+    let root = tempfile::tempdir().unwrap();
+    write_condition_definition(
+        root.path(),
+        "boarded",
+        "task.status == 'backlog' && board.eligible.empty",
+        &[],
+    );
+
+    let collection = orbit_automation::auto_tasks::loader::collect_auto_tasks(root.path());
+    assert!(collection.errors.is_empty(), "{:?}", collection.errors);
+    assert_eq!(collection.definitions.len(), 1);
+    assert_eq!(collection.definitions[0].definition.name, "boarded");
+}
+
+/// An origin-dependent condition is true under only one mint shape, so the
+/// both-shapes rule keeps it loading.
+#[test]
+fn origin_dependent_task_condition_still_loads() {
+    let root = tempfile::tempdir().unwrap();
+    write_condition_definition(
+        root.path(),
+        "originbound",
+        "task.status == 'backlog' && !has(task.origin)",
+        &[],
+    );
+
+    let collection = orbit_automation::auto_tasks::loader::collect_auto_tasks(root.path());
+    assert!(collection.errors.is_empty(), "{:?}", collection.errors);
+    assert_eq!(collection.definitions.len(), 1);
+    assert_eq!(collection.definitions[0].definition.name, "originbound");
+}
+
+fn write_condition_definition(root: &std::path::Path, name: &str, when: &str, tags: &[&str]) {
+    use std::fmt::Write as _;
+
+    let dir = orbit_automation::auto_tasks::loader::auto_tasks_dir(root);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut tag_list = String::new();
+    for (index, tag) in tags.iter().enumerate() {
+        if index > 0 {
+            tag_list.push_str(", ");
+        }
+        let _ = write!(tag_list, "'{tag}'");
+    }
+    let tags_yaml = if tags.is_empty() {
+        "  tags: []".to_string()
+    } else {
+        format!("  tags: [{tag_list}]")
+    };
+    std::fs::write(
+        dir.join(format!("{name}.yaml")),
+        format!(
+            "schemaVersion: 1\nname: {name}\nschedule:\n  condition:\n    scope: task\n    when: \"{when}\"\ntemplate:\n  title: Fixture {name}\n{tags_yaml}\n"
+        ),
+    )
+    .unwrap();
+}

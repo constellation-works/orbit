@@ -10,12 +10,19 @@
 use std::path::{Path, PathBuf};
 use std::{fmt, fs};
 
+use std::collections::BTreeMap;
+
+use chrono::Utc;
 use orbit_common::protocol::yaml::parse_auto_task_yaml;
-use orbit_types::workflow::{AutoTaskDefinition, AutoTaskSchedule};
+use orbit_types::workflow::automation::ConditionScope;
+use orbit_types::workflow::{AutoTaskDefinition, AutoTaskSchedule, auto_task_tag};
 
 use super::schedule::validate_schedule;
 use super::settings::{AutoTaskSettingsTable, load_settings_table};
-use crate::condition::{ConditionCarrier, check_condition, check_guard};
+use crate::condition::{
+    BoardFacts, CheckedCondition, ConditionCarrier, ConditionEvaluator, ConditionFacts,
+    OriginFacts, SelfFacts, TaskFacts, Truth, check_condition, check_guard,
+};
 
 /// Directory under a workspace's `.orbit/` holding auto-task YAML files.
 pub const AUTO_TASKS_DIR: &str = "auto_tasks";
@@ -227,7 +234,7 @@ fn load_definition_with_settings(
             .map_err(|error| format!("auto-task settings for '{}': {error}", definition.name))?;
     }
     validate_schedule(&definition.schedule).map_err(|error| error.to_string())?;
-    check_auto_task_conditions(&definition.schedule)?;
+    check_auto_task_conditions(&definition)?;
 
     // The file stem is the definition identity: reject a mismatch so CRUD (which
     // writes `<name>.yaml`) and the provenance tag stay consistent.
@@ -248,16 +255,104 @@ fn load_definition_with_settings(
     })
 }
 
-/// Type-check a schedule's condition or `when:` guard against its schema; a
-/// refused expression names its clause and position.
-pub fn check_auto_task_conditions(schedule: &AutoTaskSchedule) -> Result<(), String> {
-    if let AutoTaskSchedule::Condition { condition } = schedule {
-        check_condition(condition, ConditionCarrier::AutoTask)
-            .map_err(|error| error.to_string())?;
-    }
+/// Type-check a definition's condition or `when:` guard against its schema,
+/// and refuse a `task` condition that would match its own template's output
+/// (`docs/design/condition-triggers/1_scope.md` §8). A refused expression
+/// names its clause and position; a self-match names the definition and
+/// `schedule.condition.when`.
+pub fn check_auto_task_conditions(definition: &AutoTaskDefinition) -> Result<(), String> {
+    let schedule = &definition.schedule;
+    let checked = if let AutoTaskSchedule::Condition { condition } = schedule {
+        Some(
+            check_condition(condition, ConditionCarrier::AutoTask)
+                .map_err(|error| error.to_string())?,
+        )
+    } else {
+        None
+    };
     if let Some(when) = schedule.guard().and_then(|guard| guard.when.as_ref()) {
         check_guard(when, "schedule.when", ConditionCarrier::AutoTask)
             .map_err(|error| error.to_string())?;
     }
+    if let Some(checked) = checked.as_ref() {
+        reject_self_match(definition, checked)?;
+    }
     Ok(())
+}
+
+/// A `task` condition evaluated against the task its own template would mint.
+/// The subject carries the template's status, tags (plus the definition's
+/// provenance tag), title, type, priority, complexity and crew; the id and
+/// timestamps are load-time placeholders, dependencies are empty and the
+/// parent is absent. Board and self use default facts, so a board read is
+/// unknown and only a definite true is an error. Origin is evaluated both
+/// absent and with a placeholder mint origin, and only a true under both
+/// shapes is a self-match, so origin-dependent definitions keep loading.
+fn reject_self_match(
+    definition: &AutoTaskDefinition,
+    checked: &CheckedCondition,
+) -> Result<(), String> {
+    if checked.scope != ConditionScope::Task {
+        return Ok(());
+    }
+    let now = Utc::now();
+    let template = &definition.template;
+    let mut tags = template.tags.clone();
+    let provenance = auto_task_tag(&definition.name);
+    if !tags.contains(&provenance) {
+        tags.push(provenance);
+    }
+    let base = TaskFacts {
+        id: format!("__auto_task_template__:{}", definition.name),
+        title: template.title.clone(),
+        status: persisted_name(&template.status),
+        tags,
+        task_type: persisted_name(&template.task_type),
+        priority: persisted_name(&template.priority),
+        complexity: template
+            .complexity
+            .as_ref()
+            .map(persisted_name)
+            .unwrap_or_else(|| "unassessed".to_string()),
+        crew: template.crew.clone(),
+        parent_id: None,
+        dependencies: Vec::new(),
+        created_at: now,
+        updated_at: now,
+        status_since: now,
+        origin: None,
+    };
+    let facts = ConditionFacts {
+        now,
+        board: BoardFacts::default(),
+        tasks: BTreeMap::new(),
+        self_facts: SelfFacts::default(),
+    };
+    let evaluator = ConditionEvaluator::new(&facts);
+    if evaluator.truth(&checked.when, Some(&base)) != Truth::True {
+        return Ok(());
+    }
+    let with_origin = TaskFacts {
+        origin: Some(OriginFacts {
+            trigger: format!("auto-task:{}", definition.name),
+            fire_id: "__self_match__".to_string(),
+            depth: 1,
+        }),
+        ..base
+    };
+    if evaluator.truth(&checked.when, Some(&with_origin)) != Truth::True {
+        return Ok(());
+    }
+    Err(format!(
+        "auto-task '{}': schedule.condition.when would match its own template output",
+        definition.name
+    ))
+}
+
+/// A value's persisted spelling, as the condition schema reads it.
+fn persisted_name<T: serde::Serialize>(value: &T) -> String {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_default()
 }
