@@ -1,6 +1,6 @@
 ---
 title: Activity and job YAML
-description: "Reference shapes for schemaVersion 2 activity and job assets."
+description: "Reference shapes for schemaVersion 2 activity and job assets, and schemaVersion 3 jobs with auto-task steps."
 sidebar:
   order: 3
 ---
@@ -663,7 +663,20 @@ explains these steps, but cannot run them yet: a job with one must keep
 `state: disabled`, `enabled` fails to load, and submitting it is refused
 before any run is recorded or task minted.
 
+A job that uses an `auto-task:` target, a wait key or `spec.expire_when`,
+at any nesting, declares `schemaVersion: 3`. Under `schemaVersion: 2` any
+of those keys fails to load, even with a null value or in a nested step. A
+`schemaVersion: 3` job keeps that version and the same restrictions even
+after its last auto-task field is removed: it must stay disabled and cannot
+be submitted until you declare `schemaVersion: 2` again. An Orbit release
+older than this support refuses a `schemaVersion: 3` job as an unsupported
+version, rather than loading it without its waits.
+
 ```yaml
+schemaVersion: 3
+kind: Job
+metadata:
+  name: release-readiness
 spec:
   state: disabled
   expire_when: "now >= job.started_at + duration('24h')"
@@ -729,6 +742,11 @@ line:column.
 bound, whether the revision is pinned, and per step its target auto-task,
 resolved now with its file digest, enabled state and own condition guard
 (or reported `missing`), its guards, waits and the earlier steps it reads.
-It writes nothing. An older Orbit binary shows such a job without the wait
-fields and will not run it while it is disabled. An enabled copy fails
-target resolution in the worker before its first step.
+It writes nothing. `orbit job show` and the explain report both include
+the job's `schema_version`.
+
+Opening a workspace with this release moves it to workspace layout
+version 5. Earlier Orbit releases then refuse to open the workspace until
+they are upgraded, and while an earlier release still holds it, for example
+as a running MCP server, this release waits for that client to exit rather
+than proceeding alongside it.

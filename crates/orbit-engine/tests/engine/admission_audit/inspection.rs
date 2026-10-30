@@ -43,6 +43,7 @@ fn short_inspection_revision_fails_a_retried_task_pilot_once() {
     assert_eq!(asset.spec.fs_profile.as_deref(), Some("reviewer"));
 
     let job = JobV2 {
+        schema_version: 2,
         state: JobScheduleState::Enabled,
         owns_task_worktree: false,
         task_delivery: None,

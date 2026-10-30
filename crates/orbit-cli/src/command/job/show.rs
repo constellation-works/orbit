@@ -20,6 +20,12 @@ impl Execute for JobShowArgs {
         let mut out = String::new();
         use crate::output::color::{Domain, bold, text};
         let _ = writeln!(out, "{} {}", bold("Job ID:"), job.job_id.as_str());
+        let _ = writeln!(
+            out,
+            "{} {}",
+            bold("Schema Version:"),
+            job.spec.schema_version
+        );
         let _ = writeln!(out, "{} {}", bold("Kind:"), job.kind());
         let _ = writeln!(
             out,

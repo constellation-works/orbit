@@ -87,21 +87,23 @@ pub fn check_job_waits(
     now: DateTime<Utc>,
 ) -> Result<CheckedJobWaits, ConditionCheckError> {
     let auto_task_steps = job.auto_task_steps();
-    if auto_task_steps.is_empty() {
-        if job.expire_when.is_some() {
-            return Err(refusal(
-                JOB_EXPIRY_CLAUSE,
-                "is admitted only on a job with a `target: auto-task:<name>` step",
-            ));
-        }
-        return Ok(CheckedJobWaits::default());
+    if auto_task_steps.is_empty() && job.expire_when.is_some() {
+        return Err(refusal(
+            JOB_EXPIRY_CLAUSE,
+            "is admitted only on a job with a `target: auto-task:<name>` step",
+        ));
     }
-    if job.state == JobScheduleState::Enabled {
+    // A schemaVersion 3 job stays disabled even when none of the extension's
+    // fields remain [ORB-20237].
+    if job.is_auto_task_job() && job.state == JobScheduleState::Enabled {
         return Err(refusal(
             "spec.state",
-            "a job with auto-task steps must stay `disabled`: this Orbit defines and explains \
+            "a schemaVersion 3 job must stay `disabled`: this Orbit defines and explains \
              auto-task steps but cannot run them yet",
         ));
+    }
+    if auto_task_steps.is_empty() {
+        return Ok(CheckedJobWaits::default());
     }
     if auto_task_steps.len() > MAX_AUTO_TASK_STEPS {
         return Err(refusal(

@@ -139,12 +139,13 @@ impl OrbitRuntime {
         };
         let mut input = input;
         if let Ok(spec) = &spec {
-            // Auto-task steps are defined and explained only: refuse before
-            // reclamation, admission capture or a run record exists.
-            if spec.declares_auto_task_steps() {
+            // Auto-task steps are defined and explained only: refuse every
+            // schemaVersion 3 job before reclamation, admission capture or a
+            // run record exists, even one with no auto-task step left.
+            if spec.is_auto_task_job() {
                 return Err(OrbitError::InvalidInput(format!(
-                    "job '{job_name}' has auto-task steps, which this Orbit can define and \
-                     explain but cannot run yet; nothing was submitted"
+                    "job '{job_name}' is a schemaVersion 3 auto-task job, which this Orbit can \
+                     define and explain but cannot run yet; nothing was submitted"
                 )));
             }
             delivery::normalize_delivery_input(spec, &mut input)?;

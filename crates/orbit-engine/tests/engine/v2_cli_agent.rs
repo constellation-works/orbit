@@ -1416,6 +1416,7 @@ fn synthetic_loop_session_job() -> JobV2 {
         },
     };
     JobV2 {
+        schema_version: 2,
         state: JobScheduleState::Enabled,
         owns_task_worktree: false,
         task_delivery: None,

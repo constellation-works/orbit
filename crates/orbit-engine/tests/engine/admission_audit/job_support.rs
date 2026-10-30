@@ -121,6 +121,7 @@ pub(super) fn target_step(id: &str, action: &str) -> JobV2Step {
 
 pub(super) fn job_with_steps(steps: Vec<JobV2Step>) -> JobV2 {
     JobV2 {
+        schema_version: 2,
         state: JobScheduleState::Enabled,
         owns_task_worktree: false,
         task_delivery: None,

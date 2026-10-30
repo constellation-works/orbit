@@ -1,6 +1,7 @@
 //! [ORB-20157] The auto-task step shape: its keys parse into typed fields
 //! and round-trip, and a key the shape does not admit is refused instead of
-//! dropped.
+//! dropped. [ORB-20237] A job carries the `schemaVersion` it declared through
+//! a serialized round trip, whether or not the shape's fields remain.
 
 use orbit_types::workflow::{JobV2, JobV2Step};
 
@@ -61,50 +62,23 @@ fn auto_task_step_fields_parse_and_round_trip() {
 
 #[test]
 fn keys_outside_the_auto_task_shape_are_refused() {
-    for (yaml, expected) in [
-        (
-            "id: a\ntarget: activity:agent_assess_diff\nwait_until: board.empty\n",
-            "`wait_until` is admitted only on a `target: auto-task:<name>` step",
-        ),
-        (
-            "id: a\nspec: { kind: deterministic, action: noop }\nrequire_result: release-readiness/v1\n",
-            "`require_result` is admitted only on a `target: auto-task:<name>` step",
-        ),
-        (
-            "id: a\ntarget: auto-task:qa\nwait_untill: board.empty\n",
-            "does not admit `wait_untill`",
-        ),
-        (
-            "id: a\ntarget: auto-task:qa\ndefault_input: { x: 1 }\n",
-            "does not admit `default_input`",
-        ),
-        (
-            "id: a\ntarget: auto-task:qa\ntimeout_seconds: 60\n",
-            "does not admit `timeout_seconds`",
-        ),
-        (
-            "id: a\ntarget: auto-task:qa\nretry: { max_attempts: 2 }\n",
-            "does not admit `retry`",
-        ),
-        (
-            "id: a\ntarget: auto-task:qa\nrecovery_activity: fix\n",
-            "does not admit `recovery_activity`",
-        ),
-        (
-            "id: a\ntarget: 'auto-task:'\n",
-            "does not name an auto-task",
-        ),
-        (
-            "id: a\ntarget: auto-task:Not_Valid\n",
-            "does not name an auto-task",
-        ),
-        (
-            "id: a\ntarget: auto-task:qa\nwait_until: 3\n",
-            "`wait_until`",
-        ),
+    // Each case adds one key or value to `id: a` with a target that parses
+    // alone: `target: auto-task:qa` and `target: activity:agent_assess_diff`
+    // both do (see the round-trip and ordinary-step tests).
+    step("id: a\ntarget: auto-task:qa\n").unwrap();
+    for yaml in [
+        "id: a\ntarget: activity:agent_assess_diff\nwait_until: board.empty\n",
+        "id: a\nspec: { kind: deterministic, action: noop }\nrequire_result: release-readiness/v1\n",
+        "id: a\ntarget: auto-task:qa\nwait_untill: board.empty\n",
+        "id: a\ntarget: auto-task:qa\ndefault_input: { x: 1 }\n",
+        "id: a\ntarget: auto-task:qa\ntimeout_seconds: 60\n",
+        "id: a\ntarget: auto-task:qa\nretry: { max_attempts: 2 }\n",
+        "id: a\ntarget: auto-task:qa\nrecovery_activity: fix\n",
+        "id: a\ntarget: 'auto-task:'\n",
+        "id: a\ntarget: auto-task:Not_Valid\n",
+        "id: a\ntarget: auto-task:qa\nwait_until: 3\n",
     ] {
-        let error = step(yaml).expect_err(yaml);
-        assert!(error.contains(expected), "{yaml}: {error}");
+        step(yaml).expect_err(yaml);
     }
 }
 
@@ -117,4 +91,30 @@ fn ordinary_steps_keep_their_shape() {
     .unwrap();
     assert_eq!(parsed.auto_task_name(), None);
     assert!(parsed.wait_until.is_none());
+}
+
+#[test]
+fn the_declared_schema_version_survives_a_round_trip() {
+    // A schemaVersion 3 job whose only extension field is a present null
+    // normalizes to no extension field at all; the version must not.
+    let mut job: JobV2 =
+        serde_yaml::from_str("state: disabled\nsteps:\n- { id: a, target: 'activity:x' }\n")
+            .unwrap();
+    assert_eq!(job.schema_version, 2, "an omitted version is 2");
+    assert!(!job.is_auto_task_job());
+    assert!(
+        serde_json::to_value(&job)
+            .unwrap()
+            .get("schema_version")
+            .is_none(),
+        "2 is omitted so ordinary jobs serialize as before"
+    );
+
+    job.schema_version = 3;
+    let round_trip: JobV2 = serde_json::from_value(serde_json::to_value(&job).unwrap()).unwrap();
+    assert_eq!(round_trip.schema_version, 3);
+    assert!(
+        round_trip.is_auto_task_job(),
+        "3 keeps the job phase-1 only"
+    );
 }

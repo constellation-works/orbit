@@ -27,6 +27,16 @@ impl std::fmt::Display for JobKind {
 /// v2 Job definition. Phase 3 adds first-class DAG constructs on each step.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct JobV2 {
+    /// The `schemaVersion` the job's envelope declares: 2, or 3 for the
+    /// auto-task step extension [ORB-20237]. The loader carries it from the
+    /// header rather than inferring it from the fields, so it survives
+    /// normalization and a serialized round trip; 2 is omitted when
+    /// serialized.
+    #[serde(
+        default = "default_job_schema_version",
+        skip_serializing_if = "is_default_job_schema_version"
+    )]
+    pub schema_version: u32,
     pub state: JobScheduleState,
     /// This job creates a task-scoped worktree and may collect it after a
     /// successful delivery. The collector still checks task and Git safety.
@@ -85,6 +95,14 @@ pub struct JobV2 {
 
 fn is_false(value: &bool) -> bool {
     !value
+}
+
+fn default_job_schema_version() -> u32 {
+    super::ASSET_SCHEMA_VERSION
+}
+
+fn is_default_job_schema_version(version: &u32) -> bool {
+    *version == super::ASSET_SCHEMA_VERSION
 }
 
 /// A job's `spec.steering_gate` declaration
@@ -188,9 +206,33 @@ impl JobV2 {
     }
 
     /// Whether this job uses the auto-task step extension: an `auto-task:`
-    /// step or a job `expire_when`. No binary runs such a job yet.
+    /// step, a job `expire_when`, or a step wait field, nested steps
+    /// included. No binary runs such a job yet.
     pub fn declares_auto_task_steps(&self) -> bool {
-        self.expire_when.is_some() || !self.auto_task_steps().is_empty()
+        fn any_step(steps: &[JobV2Step]) -> bool {
+            steps.iter().any(|step| {
+                step.auto_task_name().is_some()
+                    || step.declares_auto_task_wait_fields()
+                    || match &step.body {
+                        JobV2StepBody::Parallel { parallel } => any_step(&parallel.branches),
+                        JobV2StepBody::FanOut { fan_out, .. } => {
+                            any_step(std::slice::from_ref(&*fan_out.worker))
+                        }
+                        JobV2StepBody::Loop { loop_ } => any_step(&loop_.steps),
+                        JobV2StepBody::TargetRef(_) | JobV2StepBody::Target(_) => false,
+                    }
+            })
+        }
+        self.expire_when.is_some() || any_step(&self.steps)
+    }
+
+    /// Whether this job is under the auto-task step extension: it declares
+    /// schemaVersion 3, or uses one of the extension's fields. Phase 1 keeps
+    /// every such job disabled and refuses to submit or run it, even when
+    /// none of its fields remain.
+    pub fn is_auto_task_job(&self) -> bool {
+        self.schema_version == super::AUTO_TASK_JOB_SCHEMA_VERSION
+            || self.declares_auto_task_steps()
     }
 
     /// The stages this job declares, in first-appearance order. A stage id
@@ -341,6 +383,15 @@ pub struct JobV2Step {
 }
 
 impl JobV2Step {
+    /// Whether this step sets `wait_until`, `expire_when`, `reuse_when` or
+    /// `require_result`.
+    pub fn declares_auto_task_wait_fields(&self) -> bool {
+        self.wait_until.is_some()
+            || self.expire_when.is_some()
+            || self.reuse_when.is_some()
+            || self.require_result.is_some()
+    }
+
     /// The auto-task this step names with `target: auto-task:<name>`.
     pub fn auto_task_name(&self) -> Option<&str> {
         match &self.body {
@@ -353,7 +404,7 @@ impl JobV2Step {
 }
 
 /// Step keys only an `auto-task:` step admits.
-const AUTO_TASK_WAIT_KEYS: [&str; 4] =
+pub const AUTO_TASK_WAIT_KEYS: [&str; 4] =
     ["wait_until", "expire_when", "reuse_when", "require_result"];
 
 /// One-of body for a v2 step. Picked by exactly one of the `target`, `spec`,

@@ -20,6 +20,8 @@ use crate::OrbitRuntime;
 pub struct JobStepsExplain {
     pub definition: ExplainedDefinition,
     pub state: String,
+    /// The file's `schemaVersion`: always 3 for a job with auto-task steps.
+    pub schema_version: u32,
     pub expire_when: ExplainedJobExpiry,
     pub pinned_revision: ExplainedPinnedRevision,
     pub steps: Vec<ExplainedAutoTaskStep>,
@@ -156,6 +158,7 @@ impl OrbitRuntime {
                 enabled: false,
             },
             state: entry.state().to_string(),
+            schema_version: entry.spec.schema_version,
             expire_when: ExplainedJobExpiry {
                 source: expiry.expression.source,
                 bound,

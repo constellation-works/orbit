@@ -15,8 +15,9 @@ tags: [activity-job, condition-triggers, auto-tasks]
 This is an extension to existing jobs. Phase 1 (§7) has shipped:
 `target: auto-task:<name>`, `wait_until`, `expire_when`, `reuse_when`,
 `require_result` and the CEL facts below load, are checked and are explained,
-but no binary runs such a job yet. It must stay disabled, and submission is
-refused before any run or task exists. It replaces the unmerged proposal for
+but no binary runs such a job yet. Such a job declares `schemaVersion: 3`
+([ORB-20237]), must stay disabled, and submission is refused before any run
+or task exists. It replaces the unmerged proposal for
 a separate auto-sequence definition type.
 **Auto-sequence** may be an informal name for a job composing auto-tasks; it has
 no separate directory, loader, trigger carrier, commands or lifecycle.
@@ -283,7 +284,7 @@ policy:
 
 ```yaml
 # .orbit/jobs/release-readiness.yaml
-schemaVersion: 2
+schemaVersion: 3
 kind: Job
 metadata:
   name: release-readiness
@@ -388,6 +389,16 @@ enablement, provider work and release timing remain operator decisions.
 
 ### Phase 1 as built
 
+- **Version.** A job using any of the new keys or an `auto-task:` target, at
+  any nesting, declares `schemaVersion: 3`. Under `schemaVersion: 2` the
+  loader refuses any of the keys by presence, a null value or a nested step
+  included. `JobV2.schema_version` carries the declared version from the
+  header, omitted when 2, and is never inferred from the remaining fields, so
+  a 3 survives normalization and a serialized round trip
+  ([Auto-task jobs declare schemaVersion 3](../4_decisions.md#auto-task-jobs-declare-schemaversion-3)).
+  Every `schemaVersion: 3` job is phase-1 only, even with no extension field
+  left: it must stay disabled and cannot be submitted or run until its author
+  removes the keys and declares 2 again. Activities stay `schemaVersion: 2`.
 - **Shape.** `orbit-types` parses the new keys. An auto-task step admits only
   `id`, `stage`, `when`, `target` and the four wait keys, so a key this binary
   does not know is refused, not dropped. `timeout_seconds: 0`, a serialized
@@ -415,13 +426,17 @@ enablement, provider work and release timing remain operator decisions.
   each step's target, resolved now with its file digest, enabled state and
   own condition guard, or reported `missing`. It also shows each step's
   guards, waits and step reads. It writes nothing, and nothing is evaluated.
-  `orbit job show` lists the new fields.
-- **Older binaries.** An older Orbit cannot be changed, and no schemaVersion
-  bump is made ([4_decisions.md](../4_decisions.md) keeps schemaVersion 2 the
-  only family). Such a binary loads the file, shows the steps without the wait
-  fields, and refuses to submit it because it is disabled. An enabled copy
-  submitted there fails `auto-task:` target resolution in the worker before
-  its first step.
+  `orbit job show` lists the new fields. Both report `schema_version`.
+- **Older binaries.** Every older loader admits only `schemaVersion: 2`, so it
+  refuses a `schemaVersion: 3` file before any effect. Its catalog skips the
+  file with a per-file diagnostic, and `orbit job run <path>` fails with
+  `unsupported schemaVersion: 3`. Orbit 0.39.0 does this for disabled,
+  enabled and nested specimens, recording no run and no task. A workspace
+  this binary opens is also at layout version 5 (`auto-task-job-schema`, a
+  breaking migration). Older binaries refuse to open it, and the generation
+  guard keeps a newer binary from bootstrapping while an older live client
+  holds the workspace. That covers binaries built between [ORB-20157] and
+  [ORB-20237], which would accept the `schemaVersion: 2` form.
 
 ## 8. Acceptance and honest limitations
 
@@ -456,5 +471,8 @@ to enable until those contracts are implemented and validated.
 - ORB-19973 — records Daniel's decision to reuse jobs with an auto-task step.
 - ORB-19990 — covers condition-language schema/explain only; this proposal does
   not change that task or authorize job extension implementation.
+- [ORB-20157] — phase 1: define, check and explain disabled auto-task steps.
+- [ORB-20237] — require `schemaVersion: 3` for auto-task jobs and fence older
+  clients with layout migration 5.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -89,6 +89,7 @@ fn single_step_job(activity: &str) -> JobV2 {
     let mut spec = cli_agent_loop_spec(None);
     spec.wall_clock_timeout_seconds = ACTIVITY_WALL_CLOCK_SECONDS;
     JobV2 {
+        schema_version: 2,
         state: JobScheduleState::Enabled,
         owns_task_worktree: false,
         task_delivery: None,

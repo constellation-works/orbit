@@ -11,7 +11,7 @@ use crate::contracts::MigrationCompatibility;
 
 /// Highest workspace-layout version this binary knows how to produce.
 /// Bump together with a new `LAYOUT_MIGRATIONS` entry — never without one.
-pub const SUPPORTED_LAYOUT_VERSION: u32 = 4;
+pub const SUPPORTED_LAYOUT_VERSION: u32 = 5;
 
 /// One entry in the layout-migration registry.
 pub(crate) struct LayoutMigration {
@@ -69,6 +69,19 @@ pub(crate) const LAYOUT_MIGRATIONS: &[LayoutMigration] = &[
         description: "fence clients that cannot enforce captured selective before-landing review contracts; preserve existing records unchanged",
         // Additive JSON fields change delivery authority. Older readers
         // silently discard them, so they must not read or write this state.
+        compat: MigrationCompatibility::Breaking,
+        apply: apply_baseline_layout,
+    },
+    LayoutMigration {
+        version: 5,
+        name: "auto-task-job-schema",
+        description: "fence clients that accept auto-task job fields under schemaVersion 2 or drop them; preserve existing records unchanged",
+        // ORB-20237: auto-task jobs now declare schemaVersion 3. Binaries
+        // before ORB-20157 drop the fields of such a job written as
+        // schemaVersion 2, and binaries after it accept that form, which this
+        // one refuses. Neither may read or write this workspace's jobs and
+        // run snapshots, so they are fenced; a standalone schemaVersion 3
+        // file is refused by every older loader on its own.
         compat: MigrationCompatibility::Breaking,
         apply: apply_baseline_layout,
     },

@@ -3,7 +3,7 @@ summary: "Activity / Job — Decisions"
 type: design
 title: "Activity / Job — Decisions"
 owner: codex
-last_updated: 2026-10-29
+last_updated: 2026-10-30
 last_validated: 2026-10-14
 status: Draft
 feature: activity-job
@@ -33,6 +33,8 @@ Activity/job correctness depends on making authoring conveniences disappear befo
 
 ### Decision
 Treat `schemaVersion: 2` as the only activity/job asset family, load seeded and workspace catalogs with explicit layer precedence, resolve authoring sugar (`target: activity:<name>`, object-valued defaults, and workflow admission) before dispatch, and keep seeded activities/jobs as executable reference contracts for that normalized surface.
+
+**Superseded in part by [Auto-task jobs declare schemaVersion 3](#auto-task-jobs-declare-schemaversion-3) ([ORB-20237]).** A job using the auto-task step extension declares `schemaVersion: 3`; every activity and every other job stays `schemaVersion: 2`.
 
 **Amended by [ORB-10801].** `backend: auto` is no longer resolved — agent backend selection was retired. The load-time normalization pass now *rejects* the retired declarations (`backend: http | auto`, any `session:` binding) instead of concretizing them, so nothing is silently reinterpreted. See [specs/backend-resolution.md](./specs/backend-resolution.md). Direct task-workflow admission remains a workflow-specific normalization path rather than a generic task-update rule.
 
@@ -1752,6 +1754,36 @@ ORB-00374 removed the v2 `shell` activity because it spawned workspace-named pro
 - `Cost:` loopback services on the host (a dashboard on `127.0.0.1`) are unreachable from a `network: none` script, because its network namespace holds only its own loopback.
 - `Cost:` on a host where systemd cannot create the per-script scope, `warn` and `off` containment run the script in the worker's cgroup with no limits of its own.
 
+## Auto-task jobs declare schemaVersion 3
+
+**Recorded:** 2026-10-30 · [ORB-20237], [ORB-20157], [ORB-20132]
+**Supersedes:** the "`schemaVersion: 2` is the only activity/job asset family" clause of [Canonical v2 assets normalize into one execution contract](#canonical-v2-assets-normalize-into-one-execution-contract), for jobs using the auto-task step extension only
+**Paths:** `crates/orbit-engine/src/activity_job/asset_loader.rs`, `crates/orbit-types/src/workflow/activity_job/job_v2.rs`, `crates/orbit-store/src/workflow/layout/registry.rs`
+
+### Context
+
+Phase 1 of [auto-task steps](./specs/auto-task-step.md) ([ORB-20157]) added `target: auto-task:<name>`, the step keys `wait_until`, `expire_when`, `reuse_when` and `require_result`, and a job `expire_when`, all under `schemaVersion: 2`. A binary that predates them reads such a file without error: its step parser ignores keys it does not know, so it shows the steps without their waits, accepts an enabled copy, and fails only in the worker at target resolution. The delivery review rejected that as a silent drop. The only load-time refusal every older loader already has is its schemaVersion check, which refuses any version other than 2. Daniel approved the breaking change in [ORB-20132].
+
+### Decision
+
+1. A job that uses the extension, in any step and at any nesting (`parallel` branches, `fan_out` workers, `loop` bodies), declares `schemaVersion: 3`. Under `schemaVersion: 2` the loader refuses the mere presence of any of those keys, a null value or a nested step included, because an older binary drops it either way. Omitting `schemaVersion` is not an option the envelope has; an omitted `JobV2.schema_version` is 2. Activities stay 2-only.
+2. The declared version is an explicit carrier, `JobV2.schema_version`, set from the header and never inferred from the remaining fields: a present null normalizes to no field at all, so inference would quietly downgrade a job its author marked 3. The carrier is serialized when it is 3 and omitted when it is 2, so ordinary jobs serialize as before. Catalog load, `orbit job show`, `orbit automation explain` and their JSON report it as `schema_version`, and a run snapshot keeps the submitted YAML verbatim and is re-read through the same loader on resume.
+3. Breaking workspace layout migration 5, `auto-task-job-schema`, fences every binary without it, and through the generation guard every live client without it. That covers binaries before [ORB-20157], which drop the fields, and binaries after it, which accept the `schemaVersion: 2` form this one refuses. It rewrites nothing.
+4. Phase 1 stays disabled for every `schemaVersion: 3` job, including one with no extension field left. Load refuses `state: enabled`, submission refuses before a run record exists, and `validate_job` refuses before the first step. Only an explicit downgrade to `schemaVersion: 2`, after removing every extension key, makes the job ordinary again.
+
+### Rejected alternatives
+
+- *Record the older-binary gap as an acceptance exception.* An enabled copy would still load as an ordinary job on every binary in service.
+- *A new `JobKind` value as the older-reader sentinel.* An older binary refuses an unknown kind, but every workflow and subroutine classification would have to carry a kind that means "auto-task job".
+- *Infer the version from the fields.* It loses the author's 3 whenever normalization erases a field, such as a present null, and a job would silently become runnable.
+- *The layout fence alone.* It protects a workspace's own state, not a job file copied into another workspace or passed to `orbit job run <path>`. The schemaVersion protects the file wherever it goes.
+
+### Consequences
+
+- Orbit 0.39.0 (`sha256 2151dbf2…e926f2`) skips each `schemaVersion: 3` specimen in its catalog and refuses `orbit job run <path>` with `unsupported schemaVersion: 3`. Disabled, enabled and nested specimens all leave no run and no task.
+- A workspace opened by this binary refuses older binaries until they upgrade, even if it holds no auto-task job.
+- `Cost:` an author must change the header to 3 with the first auto-task field, and back to 2 by hand to run the job once the last one is gone; the load error names the key that needs 3.
+
 ## Task References
 
 - [T20260418-2018] — add `JobV2` DAG constructs (`parallel`, `fan_out`, `loop`, `retry`, `when`).
@@ -1853,6 +1885,9 @@ ORB-00374 removed the v2 `shell` activity because it spawned workspace-named pro
 - [ORB-13897] — final recovery: the `final_recovery` activity, its typed decision contract and deterministic applier, the `workflow.final_recovery_crews` pool, and the `step_failure_recovery` resume fix.
 - [ORB-13898] — final-recovery backstop: `blocked_task_recovery_pipeline` and the owner's sweep trigger for tasks blocked outside delivery pipelines.
 - [ORB-19985] — run granted script steps on Linux under `linux-bwrap-script-v1`, record each attempt as `script.execution`, and supersede ORB-00374's removal for script steps.
+- [ORB-20132] — operator approval of the breaking schemaVersion 3 change for auto-task jobs.
+- [ORB-20157] — define and explain disabled auto-task job steps (phase 1).
+- [ORB-20237] — require `schemaVersion: 3` for auto-task jobs and fence older clients with layout migration 5.
 - [ORB-14685] — backstop lane contract: offer only the decisions the backstop applies and name the failed run's retained candidate.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
