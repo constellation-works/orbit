@@ -336,14 +336,13 @@ fn selective_receipt_survives_a_light_skip_beside_a_stronger_landing_layer() {
         let mut fixture = Fixture::selective_landing(mode, &paths);
         fixture
             .runtime
-            .update_task_with_identity(
+            .update_task_as_human(
                 &fixture.task_id,
                 TaskUpdateParams {
                     tags: Some(vec!["skip-review".into()]),
                     ..Default::default()
                 },
-                Some("codex".into()),
-                None,
+                "Fixture operator".into(),
             )
             .unwrap();
         fixture.input["before_landing"] = json!(true);

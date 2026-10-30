@@ -195,6 +195,12 @@ impl OrbitRuntime {
                 "selection_stale: receipt does not pin the original candidate or carry review evidence for its continuation",
             ));
         }
+        // Generic candidate/Git/footprint proof already succeeded above.
+        // Observe-mode predicate gaps and disagreements are telemetry only;
+        // they cannot add a delivery gate. Identity/certificate checks remain.
+        if policy.mode == orbit_types::workflow::SelectiveBeforeLandingMode::Observe {
+            return Ok(());
+        }
         let pairs = orbit_engine::review_gate::changed_path_pairs(
             &self.paths().repo_root,
             &selected.base.commit,

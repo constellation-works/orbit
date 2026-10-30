@@ -486,6 +486,16 @@ fn selective_observation_and_nonmatch_follow_a_certified_claimed_repair() {
         let selection: orbit_types::workflow::SelectiveReviewReceipt =
             serde_json::from_value(admitted["selective_receipt"].clone()).unwrap();
         assert!(!selection.requires_review());
+        assert_eq!(
+            selection.workspace_id,
+            leaf.pair
+                .admission(&leaf.leaf)
+                .destination
+                .owner_workspace_id,
+            "selection uses owning workspace identity, not follower ledger partition"
+        );
+        assert_eq!(selection.run_id, leaf.leaf);
+        assert_eq!(selection.task_ids, vec![leaf.task.clone()]);
         leaf.reviewer_reports(
             admitted["attempt_id"].as_str().unwrap(),
             ReviewVerdict::AcceptWithFixes,
@@ -528,14 +538,13 @@ fn a_claimed_observed_light_skip_keeps_its_receipt_through_owner_acceptance() {
         |pair, drain| {
             pair.wire
                 .owner
-                .update_task_with_identity(
+                .update_task_as_human(
                     &pair.tasks[0],
                     orbit_core::application::task::TaskUpdateParams {
                         tags: Some(vec!["skip-review".into()]),
                         ..Default::default()
                     },
-                    Some("codex".into()),
-                    None,
+                    "Fixture operator".into(),
                 )
                 .unwrap();
             pair.launched_leaf(drain, 1, std::process::id())
@@ -569,6 +578,43 @@ fn a_claimed_observed_light_skip_keeps_its_receipt_through_owner_acceptance() {
     assert_eq!(leaf.pair.owner_status(&leaf.task), "review");
 }
 
+/// A legal Git path outside the selector's vocabulary creates an observed
+/// gap, not review authority. Generic candidate safety still runs first.
+fn a_claimed_observation_gap_keeps_delivery_non_enforcing() {
+    let mut leaf = ReviewedLeaf::admit_from(
+        "[review]\ntiming = \"off\"\nselective_before_landing.mode = \"observe\"\nselective_before_landing.paths = [\"**\"]\n",
+        "",
+    );
+    std::fs::write(leaf.pair.follower_repo.join("~"), "legal Git filename\n").unwrap();
+    git(&leaf.pair.follower_repo, &["add", "--", "~"]);
+    git(
+        &leaf.pair.follower_repo,
+        &["commit", "-q", "-m", "Legal path"],
+    );
+    let candidate = revision(&leaf.pair.follower_repo, "HEAD");
+    orbit_engine::validate_claim_new_paths(
+        &leaf.pair.follower_repo,
+        &["file:src/f0.rs".into()],
+        &leaf.base.commit,
+        &candidate.commit,
+    )
+    .expect("existing generic candidate footprint validation accepts the regular Git path");
+    leaf.gate_input["before_landing"] = json!(true);
+    let admitted = leaf.admit_review();
+    assert_eq!(admitted["applies"], false, "{admitted}");
+    assert_eq!(
+        admitted["selective_receipt"]["result"], "unavailable",
+        "{admitted}"
+    );
+    let settled = leaf.settle().unwrap();
+    assert!(settled["handoff_evidence"].is_null());
+    let mut review = HandoffReview::not_required();
+    review.selective_receipt =
+        Some(serde_json::from_value(settled["selective_receipt"].clone()).unwrap());
+    leaf.owner_accepts_review(review, &candidate)
+        .expect("observed predicate gap supplies no review obligation");
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     a_claimed_before_landing_review_reads_the_current_implementers_summary_scenarios,
@@ -579,5 +625,6 @@ crate::scenario_table!(
     a_review_pool_owner_captures_one_reviewer_crew_per_claim,
     a_claimed_before_landing_review_confirms_baselines_against_the_owners_commands,
     selective_observation_and_nonmatch_follow_a_certified_claimed_repair,
-    a_claimed_observed_light_skip_keeps_its_receipt_through_owner_acceptance
+    a_claimed_observed_light_skip_keeps_its_receipt_through_owner_acceptance,
+    a_claimed_observation_gap_keeps_delivery_non_enforcing
 );

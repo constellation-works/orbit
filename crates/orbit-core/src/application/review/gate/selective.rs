@@ -58,9 +58,13 @@ fn evaluate_and_persist(
     policy: &SelectiveBeforeLandingPolicy,
 ) -> Result<SelectiveReviewReceipt, OrbitError> {
     let candidate = candidate_identity(&context.workspace_path, &context.base_sha()?)?;
+    let receipt_workspace_id = runtime
+        .worker_invocation()
+        .map(|binding| binding.owner_workspace_id.clone())
+        .unwrap_or_else(|| context.workspace_id.clone());
     let prior = prior_receipt(runtime, context)?;
     if let Some(prior) = &prior
-        && prior.workspace_id == context.workspace_id
+        && prior.workspace_id == receipt_workspace_id
         && prior.run_id == context.run_id
         && prior.evaluator_version == orbit_types::workflow::SELECTIVE_REVIEW_RECEIPT_VERSION
         && prior.risk_model_identity == policy.risk_model_identity
@@ -74,7 +78,8 @@ fn evaluate_and_persist(
         return Ok(prior.clone());
     }
     let previously_selected = prior.as_ref().is_some_and(|prior| {
-        prior.task_ids == context.task_ids
+        prior.workspace_id == receipt_workspace_id
+            && prior.task_ids == context.task_ids
             && prior.mode == SelectiveBeforeLandingMode::Enforce
             && prior.result == SelectiveReviewResult::Required
     });
@@ -174,7 +179,7 @@ fn evaluate_and_persist(
 
     let receipt = evaluate_selective_review(
         policy,
-        &context.workspace_id,
+        &receipt_workspace_id,
         &context.run_id,
         &context.task_ids,
         (&candidate.base.commit, &candidate.base.tree),
