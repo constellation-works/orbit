@@ -105,10 +105,9 @@ main.tasks-layout.task-page-mode .pinned-external { display: none; }
 #tasks-panel > .body {
   max-height: none;
   flex: 1 1 auto;
-  /* ORB-10874: floor so the task inventory stays usable (a few visible
-     rows) even on a short viewport or with the log panel expanded — it
-     never gets squeezed toward zero by the surrounding chrome. */
-  min-height: 240px;
+  /* Shrink inside the bounded Tasks grid on short viewports; a fixed floor
+     would put the list's bottom rows behind the shell's bottom bar. */
+  min-height: 0;
   padding: 0 0 16px;
   overflow-y: auto;
   overflow-x: auto;
@@ -963,7 +962,11 @@ main.tasks-layout.task-pane-open #tasks-notices > * { pointer-events: auto; box-
    Drain tab's cards; the tab names it, so its own title is read by screen
    readers only. */
 .tasks-dock #side-dock[data-card="drain"] #locks-panel,
-.tasks-dock #side-dock[data-card="locks"] :is(#auto-drain-panel, #auto-drain-quick-start) { display: none !important; }
+.tasks-dock #side-dock[data-card="locks"] :is(#auto-drain-panel, #auto-drain-quick-start, #auto-drain-operation-feedback) { display: none !important; }
+/* Drain notices stay in Drain, and the empty main column leaves no space
+   above Locks. Every tab's first card then has the same depth below the
+   shared tabs, so first-card alignment moves neither tabs nor viewport. */
+.tasks-dock #side-dock[data-card="locks"] .drain-col-side { margin-top: 0; }
 .tasks-dock #side-dock[data-card="locks"] #locks-title {
   position: absolute;
   width: 1px;

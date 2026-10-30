@@ -341,6 +341,13 @@ first card (Auto-drain on Drain, Locks held, or the log) starts level with the
 first task block, with the tab bar above that line. The outer dock ends with
 the list; this bottom alignment applies to the dock, not every card. Auto-drain
 and Locks held keep their natural heights, while the Log panel fills its pane.
+All three first cards share the same depth below the tabs, so switching views
+keeps the shared tab strip and content viewport fixed. Drain action and state
+feedback belongs only to Drain: it remains in that scrollable pane when
+switching away and is available again on return, without leaving a banner or
+spacing above Locks held.
+On short viewports the task list shrinks within the grid and scrolls internally,
+keeping its bottom edge level with the dock and clear of the shell's bottom bar.
 `alignTasksDock` in
 `log-tail.js` measures the list's top and the card's depth inside the dock,
 sets `--tasks-dock-lead` on `#tasks-dock`, and re-levels on a tab switch or
