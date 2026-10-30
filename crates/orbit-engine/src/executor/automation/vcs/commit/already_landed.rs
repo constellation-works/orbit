@@ -187,6 +187,16 @@ fn shape_hints(diagnostic: &str, content: &[u8]) -> String {
     if unknown_role {
         hints.push_str("; validation[] role must be one of required, expected_failure, excluded, superseded, diagnostic (use required, with outcome passed, for each required command)");
     }
+    let unknown_outcome = report["validation"].as_array().is_some_and(|checks| {
+        checks.iter().any(|check| {
+            check.get("outcome").is_some_and(|outcome| {
+                serde_json::from_value::<ValidationOutcome>(outcome.clone()).is_err()
+            })
+        })
+    });
+    if unknown_outcome {
+        hints.push_str("; validation[] outcome must be one of passed, failed, denied, not_run (use failed, with role expected_failure, for a negative control)");
+    }
     hints
 }
 
