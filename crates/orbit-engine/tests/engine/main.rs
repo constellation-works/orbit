@@ -48,6 +48,7 @@ mod recovery_evidence;
 mod review_fixes;
 #[cfg(unix)]
 mod reviewer_wall_clock;
+mod script_steps;
 #[cfg(unix)]
 mod source_inspection;
 mod task_complete_batch;

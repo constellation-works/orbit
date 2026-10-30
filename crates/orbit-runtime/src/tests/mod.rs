@@ -3,6 +3,7 @@ mod config_path;
 mod git_sandbox;
 mod host_signal;
 mod run_input;
+mod scripts;
 mod tool_exec;
 
 /// Re-execute one mutable fixture in a child with disposable user state.

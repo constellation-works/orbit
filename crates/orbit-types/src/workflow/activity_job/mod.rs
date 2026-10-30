@@ -3,6 +3,9 @@
 /// `activity:<name>` prefix for the `target:` field on a TargetRef.
 pub const ACTIVITY_REF_PREFIX: &str = "activity:";
 
+/// `script:<name>` prefix for the `target:` field on a TargetRef.
+pub const SCRIPT_REF_PREFIX: &str = script::SCRIPT_REF_PREFIX;
+
 pub mod activity_roles;
 pub mod activity_v2;
 pub mod audit_envelope;
@@ -11,6 +14,7 @@ pub mod job_v2;
 pub mod provider_sandbox;
 pub mod retired;
 pub mod schema_header;
+pub mod script;
 pub mod tool_allowlist;
 pub mod trusted_host;
 
@@ -184,6 +188,13 @@ pub use job_v2::{
 };
 pub use retired::{RetiredFeatureError, validate_job_retired_sessions};
 pub use schema_header::SchemaHeader;
+pub use script::{
+    SCRIPT_GRANT_DIGEST_DOMAIN, SCRIPT_MANIFEST_SCHEMA_VERSION, ScriptFileInput, ScriptFileOutputs,
+    ScriptFiles, ScriptGrant, ScriptGrantLimits, ScriptHostRole, ScriptNetwork, ScriptRequests,
+    ScriptSpec, ScriptValidationError, is_valid_script_name, script_content_digest,
+    script_grant_id, script_interpreter_from_shebang, script_sha256_hex,
+    validate_script_arg_template, validate_script_interpreter, validate_script_spec,
+};
 pub use tool_allowlist::{
     ActivityToolDenyPolicy, ActivityToolPolicyMode, ToolAllowlistError,
     V2_INTENTIONALLY_EMPTY_TOOL_WILDCARD_ROOTS, V2_TOOL_WILDCARD_ROOTS,

@@ -5,7 +5,7 @@ last_updated: 2026-10-27
 last_validated: 2026-10-27
 status: Draft
 stage: designing
-next: "Review this scope; then file phase 1 (script manifests, `target: script:` parsing, the grant store and `orbit script grant`, with nothing executing yet)"
+next: "Phase 1 landed (script manifests, `target: script:` parsing, the grant store and `orbit script grant`, with nothing executing yet); next is phase 2, Linux execution"
 feature: script-steps
 doc_role: scope
 type: design
@@ -15,8 +15,11 @@ tags: [script-steps, activity-job, routines, sandbox, grants, policy-sandbox]
 
 # Scope: Script steps
 
-Status: proposed. This doc is the design deliverable of [ORB-19294]; no code in this
-change. It reverses the removal recorded in
+Status: proposed; phase 1 (Phasing) has landed — the `Script` manifest and its
+loader, `target: script:` parsing with the `script_steps_unavailable` dispatch
+refusal, the `script_grant` table and witness, `orbit script
+grant|revoke|list|show`, the governed rows and doctor findings. Nothing
+executes yet. This doc is the design deliverable of [ORB-19294]. It reverses the removal recorded in
 [The v2 shell activity surface is removed, not sandboxed](../activity-job/4_decisions.md#the-v2-shell-activity-surface-is-removed-not-sandboxed)
 ([ORB-00374]) by taking the alternative that decision recorded and set aside:
 "retrofit the sandbox/policy/cwd pipeline". It also narrows the reach of

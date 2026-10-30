@@ -64,6 +64,7 @@ pub mod recovery_authority;
 pub mod recovery_decision;
 mod resolve;
 pub mod run_input;
+pub mod scripts;
 pub mod task;
 // Preserve the public forge path without exposing task runtime internals.
 pub use task::pr_forge as task_pr_forge;

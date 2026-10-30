@@ -18,6 +18,7 @@ pub(crate) mod reliability_store;
 pub(crate) mod resource_usage_store;
 pub(crate) mod retention;
 pub(crate) mod routine_store;
+pub(crate) mod script_grant_store;
 pub(crate) mod task_commit_journal;
 pub mod task_registry;
 pub(crate) mod task_reservation_store;

@@ -794,6 +794,37 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         allowed: &[McpCapability::Operator],
         rationale: "abandoning an experiment ends it without a decision, so only an operator may do it",
     },
+    // Script grants (script steps phase 1): the operator's host-local
+    // consent to run one workspace script at one content digest. No Agent
+    // capability, so `classify_agent_tool_grant` makes both tools
+    // operator-only and an agent session or plugin callback is refused at
+    // the chokepoint; the witness under the global root is likewise only
+    // written by the granting command. List and show stay ungoverned
+    // reads, grantable to agents.
+    GovernedOperation {
+        id: "orbit.script.grant",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "granting a script authorizes running its exact bytes unattended on this host, so only an operator may grant one; an agent session never grants the code it can edit",
+    },
+    GovernedOperation {
+        id: "orbit.script.revoke",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "revoking a script grant withdraws an operator's consent to run it, so only an operator may revoke one",
+    },
+    GovernedOperation {
+        id: "script grant",
+        surface: OperationSurface::CliCommand,
+        allowed: &[McpCapability::Operator],
+        rationale: "granting a script authorizes running its exact bytes unattended on this host, so only an operator may grant one; an agent session never grants the code it can edit",
+    },
+    GovernedOperation {
+        id: "script revoke",
+        surface: OperationSurface::CliCommand,
+        allowed: &[McpCapability::Operator],
+        rationale: "revoking a script grant withdraws an operator's consent to run it, so only an operator may revoke one",
+    },
     GovernedOperation {
         id: "decision answer",
         surface: OperationSurface::CliCommand,

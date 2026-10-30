@@ -331,6 +331,42 @@ impl Commands {
                     dispatch_routine,
                 )
             }
+            Commands::Script(command) => {
+                use super::super::script::ScriptSubcommand;
+                let (subcommand, target_id, runtime_need, governed) = match &command.command {
+                    ScriptSubcommand::List(_) => ("list", None, RuntimeNeed::ReadOnly, false),
+                    ScriptSubcommand::Show(args) => (
+                        "show",
+                        Some(args.name.as_str()),
+                        RuntimeNeed::ReadOnly,
+                        false,
+                    ),
+                    ScriptSubcommand::Grant(args) => (
+                        "grant",
+                        Some(args.name.as_str()),
+                        RuntimeNeed::Required,
+                        true,
+                    ),
+                    ScriptSubcommand::Revoke(args) => (
+                        "revoke",
+                        Some(args.name.as_str()),
+                        RuntimeNeed::Required,
+                        true,
+                    ),
+                };
+                CommandOperation::new(
+                    runtime_need,
+                    Some(admin_meta(
+                        "script",
+                        Some(subcommand),
+                        Some("script"),
+                        target_id,
+                    )),
+                    None,
+                    runtime_dispatch!(Script),
+                )
+                .governed_when(governed, "script", subcommand)
+            }
             Commands::Task(command) => {
                 use super::super::task::TaskInvocation;
                 use super::super::task::TaskPublicationSubcommand;

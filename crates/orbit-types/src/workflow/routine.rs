@@ -21,6 +21,10 @@ pub const ROUTINE_JOB_TARGET_PREFIX: &str = "job:";
 /// so activities are fired by wrapping them in a one-step job in the same
 /// source workspace.
 pub const ROUTINE_ACTIVITY_TARGET_PREFIX: &str = "activity:";
+/// Prefix reserved for script references. A routine never names a script
+/// directly: the script runs as a step of a job the routine targets, so
+/// the scheduler gains no execution surface of its own.
+pub const ROUTINE_SCRIPT_TARGET_PREFIX: &str = "script:";
 
 /// A parsed, validated routine definition.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -122,6 +126,14 @@ impl RoutineTarget {
             return Err(format!(
                 "target 'activity:{}' is not dispatchable in routines v1; wrap the \
                  activity in a one-step job in the same workspace and reference it \
+                 as 'job:<name>'",
+                name.trim()
+            ));
+        }
+        if let Some(name) = value.strip_prefix(ROUTINE_SCRIPT_TARGET_PREFIX) {
+            return Err(format!(
+                "target 'script:{}' is not dispatchable in routines; wrap the \
+                 script in a one-step job in the same workspace and reference it \
                  as 'job:<name>'",
                 name.trim()
             ));

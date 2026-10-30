@@ -108,6 +108,32 @@
   },
   {
     "surface": "cli_command",
+    "operation": "script grant",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "cli_command",
+    "operation": "script revoke",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "cli_command",
     "operation": "workspace remove",
     "required_any": [
       "operator"
@@ -1374,6 +1400,32 @@
   {
     "surface": "tool",
     "operation": "orbit.routine.control",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.script.grant",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.script.revoke",
     "required_any": [
       "operator"
     ],

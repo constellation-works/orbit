@@ -25,6 +25,18 @@ pub fn resolve_job_catalog_refs_for_execution(
         .map_err(|err| DispatchError::JobValidation(err.to_string()))
 }
 
+/// [`resolve_job_catalog_refs_for_execution`] for a caller that loaded the
+/// workspace's script catalog, so `target: script:<name>` steps resolve
+/// (and then refuse at dispatch) instead of failing to load.
+pub fn resolve_job_catalog_refs_with_scripts_for_execution(
+    job: &mut JobV2,
+    catalog: &V2ActivityCatalog,
+    scripts: &crate::activity_job::V2ScriptCatalog,
+) -> Result<(), DispatchError> {
+    crate::activity_job::resolve_job_target_refs_with_scripts(job, catalog, scripts)
+        .map_err(|err| DispatchError::JobValidation(err.to_string()))
+}
+
 /// [ORB-10002] Execute a v2 Job, optionally resuming from a persisted
 /// checkpoint state.
 ///

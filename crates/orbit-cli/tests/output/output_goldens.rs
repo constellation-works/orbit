@@ -643,6 +643,11 @@ const GOVERNED_TOOL_PLACEMENT: &[(&str, Placement)] = &[
     ("orbit.lease.show", Placement::Advertised),
     ("orbit.pipeline.invoke", Placement::Advertised),
     ("orbit.routine.control", Placement::Advertised),
+    // Script grants are reached via `orbit script grant|revoke`; phase 1
+    // registers no MCP tool for them, so the governed rows exist to make
+    // the names operator-only before any tool can be called.
+    ("orbit.script.grant", Placement::Unadvertised),
+    ("orbit.script.revoke", Placement::Unadvertised),
     ("orbit.task.delete", Placement::Unadvertised),
     // Field-level: `orbit.task.add`/`update` with `granted_tools` check it.
     ("orbit.task.grant_tools", Placement::Unadvertised),

@@ -260,6 +260,15 @@ channel registration binding and the per-request token, as specified in
 channel-administration operations stay unadvertised operator CLI verbs with
 no MCP scope, like `orbit.decision.answer`.
 
+Current surface addition (2026-10-29): `orbit.script.grant` and
+`orbit.script.revoke` are governed `operator` and unadvertised. Script steps
+phase 1 registers no MCP tool for them — the operator surface is `orbit
+script grant|revoke` — so the rows exist to make both names operator-only in
+`classify_agent_tool_grant` and at the chokepoint before any tool can be
+called: an agent session or plugin callback naming either is refused rather
+than defaulting to a grantable mutation. `GOVERNED_TOOL_PLACEMENT` records
+both as unadvertised.
+
 ### Rejected alternatives
 
 - **Give the exposure declaration a second axis — "which surface advertises" versus "which capability may perform" — and derive chokepoint enforcement from the second** (ORB-10478 option 1). Rejected: there is no longer a second advertisement axis to split. `McpExposure` is gone and `mcp_scope` is a plain placement decision, so this would mean *introducing* a policy framework to unify two declarations that already have one enforcement point between them — speculative v2 machinery for a drift that a ten-line table catches.
