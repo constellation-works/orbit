@@ -1,0 +1,38 @@
+schemaVersion: 2
+kind: Job
+metadata:
+  name: ux_rules_pipeline
+spec:
+  state: enabled
+  kind: workflow
+  max_active_runs: 1
+  # The first step is a granted workspace script named `ux_rules_runner`:
+  # a Script manifest at `.orbit/resources/scripts/ux_rules_runner.yaml`
+  # whose entry runs the rule runner (ux_rules.runner) once per configured
+  # surface and prints ONE merged results document as its stdout JSON.
+  # An operator creates that manifest and grants it (`orbit script grant
+  # ux_rules_runner`); without the grant the step refuses before spawn and
+  # nothing is filed. There is deliberately no local_shell fallback.
+  # Note: a network-none script step cannot reach a dashboard listening on
+  # the host's loopback (it gets its own network namespace), so a live UI
+  # surface needs the runner's fixture mode or a later network phase; the
+  # CLI surface and fixture-served UI targets run as-is.
+  default_input:
+    surfaces: []
+    ui_base_url: "http://127.0.0.1:7878"
+    runner: "scripts/ux-rules/run.mjs"
+  steps:
+    - id: run
+      target: script:ux_rules_runner
+      default_input:
+        surfaces: "{{ input.surfaces }}"
+        ui_base_url: "{{ input.ui_base_url }}"
+        runner: "{{ input.runner }}"
+    - id: file
+      target: activity:file_rule_findings
+      default_input:
+        results: "{{ steps.run.output }}"
+        # Optional run overrides; otherwise filing resolves ux_rules.* config.
+        max_new_tasks: "{{ input.max_new_tasks }}"
+        file_at: "{{ input.file_at }}"
+        runner: "{{ input.runner }}"

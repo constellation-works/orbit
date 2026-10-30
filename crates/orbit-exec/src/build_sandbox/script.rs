@@ -117,7 +117,30 @@ pub fn compile_linux_script_argv(
     spec: &ScriptSandboxSpec<'_>,
     env: &[(String, String)],
     argv: &[String],
-) -> Vec<String> {
+) -> Result<Vec<String>, OrbitError> {
+    // An enclosing mask cannot be mounted without hiding the cwd. Reject a
+    // grant that would expose that otherwise-unmounted tree, including aliases.
+    let mut writable = Vec::with_capacity(spec.writable.len());
+    for root in spec.writable {
+        let root = root.canonicalize().map_err(|error| {
+            OrbitError::InvalidInput(format!(
+                "cannot resolve script write root {}: {error}",
+                root.display()
+            ))
+        })?;
+        for masked in spec.masked {
+            if let Ok(masked) = masked.canonicalize()
+                && spec.cwd.starts_with(&masked)
+                && (root.starts_with(&masked) || masked.starts_with(&root))
+            {
+                return Err(OrbitError::PolicyDenied(format!(
+                    "script write root {} overlaps protected state",
+                    root.display()
+                )));
+            }
+        }
+        writable.push(root);
+    }
     // `--unshare-all` includes the network namespace: with no
     // `--share-net`, the only interface is the namespace's own loopback.
     let mut args: Vec<String> = vec![
@@ -136,26 +159,9 @@ pub fn compile_linux_script_argv(
         "--ro-bind"
     };
     args.extend([cwd_bind.into(), display(spec.cwd), display(spec.cwd)]);
-    // Git metadata is readable so `git describe` and `git archive` work,
-    // and never writable, even inside a writable worktree.
-    for git_dir in cwd_git_dirs(spec.cwd) {
-        push_ro_bind(&mut args, &git_dir);
-    }
-    for masked in spec.masked {
-        if spec.cwd.starts_with(masked) || !masked.is_dir() {
-            continue;
-        }
-        args.extend([
-            "--tmpfs".into(),
-            display(masked),
-            "--remount-ro".into(),
-            display(masked),
-        ]);
-    }
-    for root in spec.writable {
+    for root in &writable {
         args.extend(["--bind".into(), display(root), display(root)]);
     }
-    push_credential_denies(&mut args, spec.home);
     let mount = Path::new(SCRIPT_SANDBOX_MOUNT);
     args.extend([
         "--bind".into(),
@@ -169,6 +175,26 @@ pub fn compile_linux_script_argv(
             display(&mount.join(read_only)),
         ]);
     }
+    // Git metadata is readable so `git describe` and `git archive` work,
+    // and never writable, even inside a writable worktree.
+    for git_dir in cwd_git_dirs(spec.cwd) {
+        push_ro_bind(&mut args, &git_dir);
+    }
+    for masked in spec.masked {
+        let Ok(masked) = masked.canonicalize() else {
+            continue;
+        };
+        if spec.cwd.starts_with(&masked) || !masked.is_dir() {
+            continue;
+        }
+        args.extend([
+            "--tmpfs".into(),
+            display(&masked),
+            "--remount-ro".into(),
+            display(&masked),
+        ]);
+    }
+    push_credential_denies(&mut args, spec.home);
     args.extend([
         "--remount-ro".into(),
         "/".into(),
@@ -181,7 +207,7 @@ pub fn compile_linux_script_argv(
     }
     args.push("--".into());
     args.extend(argv.iter().cloned());
-    args
+    Ok(args)
 }
 
 /// The Git directories a cwd tree reads: its `.git` directory, or for a
@@ -211,12 +237,11 @@ fn cwd_git_dirs(cwd: &Path) -> Vec<PathBuf> {
     let common = std::fs::read_to_string(git_dir.join("commondir"))
         .ok()
         .and_then(|relative| git_dir.join(relative.trim()).canonicalize().ok());
-    let mut dirs = vec![git_dir];
-    if let Some(common) = common
-        && !dirs.iter().any(|dir| dir.starts_with(&common))
-    {
-        dirs.insert(0, common);
+    let mut dirs = vec![dot_git];
+    if let Some(common) = common {
+        dirs.push(common);
     }
+    dirs.push(git_dir);
     dirs
 }
 
@@ -311,7 +336,7 @@ pub fn run_script_sandboxed(
                 crate::bwrap_program_for_audit()
             ))
         })?;
-        let wrapper_args = compile_linux_script_argv(spec, request.env, request.argv);
+        let wrapper_args = compile_linux_script_argv(spec, request.env, request.argv)?;
         let mut command = match request.launcher.split_first() {
             Some((launcher, launcher_args)) => {
                 let mut command = std::process::Command::new(launcher);

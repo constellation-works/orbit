@@ -1,6 +1,6 @@
 ---
 title: Executor YAML
-description: "Overriding a shipped executor: file location, envelope, sandbox, host_os, inspection and auth probes."
+description: "Overriding a shipped executor: file location, envelope, sandbox, host_os, inspection, image input and auth probes."
 sidebar:
   order: 6
 ---
@@ -16,7 +16,8 @@ Use this page when you need to:
 - change its sandbox backend or its fallback behaviour;
 - adjust the static `command` or `args` for a locally wrapped CLI;
 - declare the arguments a pinned-source inspection run needs
-  (`inspection_args`); or
+  (`inspection_args`);
+- declare how image files reach the model (`image_input`); or
 - declare an authentication recovery probe (`auth_probe`).
 
 For choosing a provider and writing a crew, see
@@ -91,6 +92,7 @@ only the `spec` entries you mean to change.
 | `command` | string | Program to spawn, resolved on `PATH` (for example `codex`). Omit it for `local_shell` steps that name their own program. |
 | `args` | list of strings | Static arguments on every run. Keep the execution envelope and prompt out of these; Orbit supplies them off `argv`. |
 | `inspection_args` | list of strings, or omitted | Arguments appended only for pinned-source inspection runs. An empty list and an omitted field mean different things; see below. |
+| `image_input` | object, or omitted | How image files reach the model (`native_read` or `attach_args`). Omitted means the executor cannot take images; see below. |
 | `stdout_format` | `envelope`, `json` or `text` | How Orbit reads the subprocess output. Leave the shipped value unless the CLI's output shape changes with your `args`. |
 | `model_pair_override` | `{ strong, weak }` | Legacy audit and attribution override for older definitions. It does not choose the model the subprocess runs; new definitions leave it out and use crew-selected models. |
 | `model_flag` | string | Flag Orbit appends with the step's model for a `direct_agent` (for example `"--model"`). Only the flag name; the model value comes from the crew or step. |
@@ -279,6 +281,82 @@ spec:
 Copy this shape only for an executor whose minimal model call and success
 signal you have verified. Declaring a probe with an unverified success check
 can re-admit a provider that still cannot authenticate.
+
+## Image input
+
+`spec.image_input` declares how image files reach the model. Images never
+travel in prompt text. Orbit stages them as files in the run's scratch
+directory, and the declaration says how the lane delivers them.
+
+```yaml
+spec:
+  image_input:
+    mode: attach_args          # or native_read
+    formats: [png, jpeg, webp] # png is required: it is the canary's format
+    max_images: 40             # canary included; at least 2
+    attach_args: ["--image", "{path}"] # attach_args only: argv per image
+```
+
+- `native_read`: the CLI's own file-read tool presents image files to the
+  model. The prompt lists the staged paths and tells the agent to read each
+  one.
+- `attach_args`: the images are attached at launch, `attach_args` appended
+  once per image with `{path}` replaced by the staged file. Only scratch
+  paths reach `argv`, never content.
+
+Rules:
+
+- `formats` lists at least one of `png`, `jpeg`, `webp` and `gif`. It must
+  include `png`, the format of the canary every image-input run receives,
+  and must not repeat a format.
+- `max_images` is the most images one invocation may receive, canary
+  included. It is at least 2: the canary plus one image.
+- `attach_args` applies only to `attach_args` mode. That mode requires it,
+  `native_read` refuses it, no entry may be empty, and one entry must contain
+  `{path}`.
+- A definition with an invalid declaration fails to load with
+  `invalid spec.image_input: …`: an unknown key, no `png` in `formats`, a
+  repeated format, `max_images` below 2, `attach_args` with `native_read`,
+  `attach_args` mode without `attach_args`, an empty entry in `attach_args`,
+  or a template without `{path}`.
+- Omitting the field means the executor cannot take images. An activity whose
+  input asks for images on such a crew fails before launch with the
+  non-retryable `image_input_unavailable` error, which names the executor and
+  `spec.image_input`. No capability is claimed for executors that omit the
+  field.
+- An installed definition that omits the field takes the shipped default
+  executor's declaration of the same name, as `inspection_args` does. A value
+  you set wins over that default.
+
+Shipped declarations are declared only because their lane passed the canary
+probe below: `claude` uses `native_read` (`png`, `jpeg`, `webp`, `gif`),
+`codex` uses `attach_args` with `--image {path}`
+(`png`, `jpeg`, `webp`), and `muse` uses `attach_args` with
+`--image {path}` (`png`). The other shipped executors declare none, so their
+crews cannot take images.
+
+A crew can also opt out on an image-capable lane. A crew that sets
+`vision = false` in `config.toml` is never given images, even when its
+executor declares `image_input`. The default is `true`. Set it to `false` for
+a text-only model on a lane that passes for other models. See
+[Configuration](../config/).
+
+Every image-input invocation is first given a canary: a generated PNG of a
+random six-character code, created per invocation in scratch and never written
+to a task. The agent must return the code as `result.canary`. A result
+without it, or with another code, is refused as `[image_not_seen]`, a
+retryable step failure. Each check emits an `activity.image_canary_checked`
+audit event with the crew, mode and whether it was seen. The canary proves
+delivery, not judgement.
+
+A crew whose newest two or more canary checks all missed is held for visual
+purposes until 30 minutes after its last miss, doubling with each further
+consecutive miss up to 24 hours, like a provider failure hold. Its next
+passing check clears it. The hold is read from the audit events, so it covers
+probes and deliveries alike.
+
+Probe a lane with `orbit agents vision-probe` before you declare `image_input`
+for it. See `orbit agents vision-probe` in [CLI commands](../cli/#observe).
 
 ## What this is not
 

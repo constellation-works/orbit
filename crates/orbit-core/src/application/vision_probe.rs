@@ -141,6 +141,22 @@ impl OrbitRuntime {
             registry.values().filter(|crew| crew.enabled).collect()
         };
 
+        // Named crews are judged before any run is submitted, so an
+        // incapable crew refuses the probe even when an able crew is named
+        // ahead of it. Unnamed probes keep the per-crew loop below: an
+        // incapable crew is a row, and a capability error still stops after
+        // the crews already launched.
+        if explicit {
+            for crew in &selected {
+                if let VisionCapability::Unable(_, _, reason) = self.vision_capability(crew)? {
+                    return Err(OrbitError::InvalidInput(format!(
+                        "image_input_unavailable: executor `{}`: {reason}",
+                        crew.assignment.provider
+                    )));
+                }
+            }
+        }
+
         let mut rows = Vec::with_capacity(selected.len());
         let mut launched = BTreeMap::new();
         for crew in selected {

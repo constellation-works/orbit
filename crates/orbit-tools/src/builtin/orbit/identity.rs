@@ -45,23 +45,15 @@ pub(super) fn resolve_identity(
     let (agent, model) = if context_has_identity {
         let agent =
             normalize_agent_family_for_model(context_agent.as_deref(), context_model.as_deref())?;
-        // Runtime-provided identity is authoritative at the tool boundary. If
-        // an agent self-reports a `model` argument, Orbit overwrites it with
-        // the canonical family string so downstream persistence compares
-        // family identity, not unstable model aliases.
-        let model = agent.clone();
-        (agent, model)
+        // Runtime identity takes precedence over any self-reported input.
+        (agent, context_model)
     } else if input_has_identity {
         (trimmed_optional(input_agent), trimmed_optional(input_model))
     } else {
         (None, None)
     };
     let family = require_canonical_agent_family(agent.as_deref(), model.as_deref())?;
-    let model = if context_has_identity {
-        family.clone()
-    } else {
-        model.or_else(|| family.clone())
-    };
+    let model = model.or_else(|| family.clone());
     Ok(OrbitIdentity {
         agent: family.clone(),
         model,

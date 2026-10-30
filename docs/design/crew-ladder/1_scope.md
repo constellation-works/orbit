@@ -4,8 +4,8 @@ owner: claude
 last_updated: 2026-10-30
 last_validated: 2026-10-30
 status: Draft
-stage: designing
-next: "Daniel reviews this scope; then file phase 1 (ladder config, shadow trials and the ladder report)"
+stage: building
+next: "Phase 1 shipped (config, shadow, report); Daniel reviews, then file phase 2 (live propose trials)"
 feature: crew-ladder
 doc_role: scope
 type: design
@@ -15,8 +15,10 @@ tags: [crew-ladder, crew-pools, experiments, crew-performance, agent-scorecards,
 
 # Scope: crew ladder
 
-Status: design only, nothing built. The whole feature is opt-in: nothing runs until an
-operator sets a mode and names the tiers, and the code-quality guardrail is a second,
+Status: phase 1 implements off/shadow ladder configuration, trials and reporting.
+Promotion/demotion and delivery-quality integration below remain proposed; the offline
+grader contract does not implement them. The whole feature is opt-in: nothing runs until
+an operator sets a mode and names the tiers, and the code-quality guardrail is a second,
 separate opt-in. Daniel, 2026-10-30: "crew complexity assignment is based
 on a feel. we have experiment feature, but that's manual. I think it should be auto-adjusted",
 with a "randomness" rate at which a crew is tried above its level, its level moving up when
@@ -94,11 +96,11 @@ today. A workspace without a ladder behaves exactly as now.
 
 ```toml
 [workflow.crew_ladder]
-mode = "shadow"             # off | shadow | propose | auto
+mode = "shadow"             # implemented: off | shadow; proposed: propose | auto
 rungs = ["haiku", "luna", "sol-medium", "sol", "opus-high", "opus"]   # cheapest first
 tiers = ["low", "medium", "hard"]   # default: none
 explore_rate = 0.10
-delivery_quality = "off"   # off | shadow | guardrail
+delivery_quality = "off"   # only off is currently admitted; shadow/guardrail are proposed
 ```
 
 - **A rung is a crew.** Effort rungs are crews that differ only in `effort`, for example
@@ -178,23 +180,37 @@ their tasks, as a **guardrail**, never as a score term:
   received different work. A trial's arms are randomised from one tier's population, so task
   mix is comparable by construction, and the comparison is arm against arm over the same
   period, not a crew's all-time distribution.
-- **Coverage counts.** Every eligible trial task counts, graded or not. Units with
-  `insufficient_evidence`, abstention, unavailable attribution, outage or budget gaps are
-  shown per arm. The guardrail is `inconclusive` when either arm's graded coverage is under
-  `min_grade_coverage` (default 80%) or the arms' coverage differs by more than 10 points, so
-  selective grading cannot make a candidate look better. An inconclusive guardrail blocks
-  promotion; the trial keeps collecting and stops at `max_sample` without promotion.
+- **Coverage counts.** Show full enrollment, eligibility, frozen preselection and unsampled
+  counts per arm. `min_grade_coverage` (default 80%) and the inter-arm gap (10 percentage
+  points) use the **preselected grading frame per applicable dimension**, not full control
+  enrollment. The denominator is selected eligible tasks minus host-approved N/A with
+  available attribution and admission capture; unknown applicability, selected missing,
+  partial/unattributed results, insufficient evidence, abstention, outage and budget gaps
+  remain coverage gaps. Forced/excluded/hypothetical and non-code cohorts stay separate.
+  Ten candidates and 90 controls with all candidates plus 10 seeded controls selected and
+  valid have 100% sample coverage in both arms, with 80 controls visibly unsampled; this
+  is not 11% failed coverage. One missing selected control gives 90% control coverage.
+  An arm below the threshold or a gap over 10 points makes an adopted guardrail
+  inconclusive, blocks promotion and stops at `max_sample` without promotion. The
+  [offline evaluator protocol](../decision-assistance/2_evaluation.md#frozen-sampling-and-ladder-joins)
+  defines exact denominators and join/capture identities; it authorizes no routing action.
 - **Attribution.** Grades follow the implementation attempt the grader attributes, not the
   task's later crew. A task the reviewer repaired is graded on the implementer's attempt; a
   unit whose attribution is unavailable is excluded from the comparison and counted in
   coverage.
-- **Bounded spend.** Grades are requested only for trial tasks: every candidate task and a
-  seeded sample of control tasks of the same size, so paid requests are about twice the
-  candidate count, under the grader service's host grant and budget.
+- **Bounded spend.** Preselect every eligible candidate and a seeded control sample of
+  the intended same size before answers, retaining seed/algorithm, cohort/eligibility
+  watermark, epoch, sampling probabilities and selected task IDs. Retries/restarts reuse
+  that frame and never redraw favorable controls. Unsampled controls are visible population
+  records, not failed grading calls. Requested calls are about twice the candidate count
+  under a separately granted service budget; selected budget/outage gaps reduce sample
+  coverage. No paid requests are authorized by the offline contract.
 - **Gate.** `delivery_quality = "guardrail"` is refused at load until the grader consumer is
   enabled and its adoption for this use is recorded (the grader proposal's phase 5 and the
-  separate decision it requires). Until then `shadow` records grades for trial tasks when the
-  grader runs, shows them in the trial readout, and affects nothing.
+  separate decision it requires). The later proposed `shadow` integration would record grades for trial tasks when the
+  grader runs and affect nothing. The landed phase-1 implementation currently refuses
+  both `delivery_quality = "shadow"` and `"guardrail"`; only `"off"` is admitted.
+  The versioned offline export does not implement that consumer integration.
 - **What grades never do.** They do not change learned-member weights, crew performance,
   scorecard rankings or review authority. A demotion check (below) may read the same
   guardrail for learned members once it is adopted, and only for them.
@@ -255,9 +271,9 @@ earlier model never carries over, as in crew performance.
 | `workflow.crew_ladder.exclude_types` | `[]` | Task types never trialled, for example `["security", "ui"]`. |
 | `workflow.crew_ladder.watch_window` | `30` | Settled tasks per learned member for the demotion check. |
 | `workflow.crew_ladder.retry_after_days` | `30` | Days before a failed rung is trialled again. |
-| `workflow.crew_ladder.delivery_quality` | `"off"` | `off`; `shadow` (record trial tasks' grades when the grader runs; no effect); `guardrail` (gate promotion on them; refused until the grader is adopted for this use). |
+| `workflow.crew_ladder.delivery_quality` | `"off"` | Current code admits only `off`. Proposed: `shadow` records trial grades without effect; `guardrail` gates promotion after separate adoption. Both later values are currently refused. |
 | `workflow.crew_ladder.quality_grade_margin` | `10` | Points by which the candidate's `weak`/`deficient` share may exceed control's on any dimension. |
-| `workflow.crew_ladder.min_grade_coverage` | `0.8` | Graded share of eligible tasks each arm needs for the guardrail to decide. |
+| `workflow.crew_ladder.min_grade_coverage` | `0.8` | Per-dimension graded share of the frozen preselected applicable grading frame each arm needs; unsampled controls remain separate enrollment counts. |
 
 Ladder trials count toward `experiments.max_running`, and need `experiments.enabled`.
 
@@ -375,8 +391,10 @@ Ladder trials count toward `experiments.max_running`, and need `experiments.enab
   changes.
 - `delivery_quality = "guardrail"` is refused at load until the grader is adopted for this
   use. Once on, a candidate whose `weak`/`deficient` share exceeds control's by more than the
-  margin on any dimension is not promoted, and an arm under `min_grade_coverage` or with
-  unequal coverage makes the guardrail inconclusive, never a pass. Grades never change
+  margin on any dimension is not promoted, and an arm under `min_grade_coverage` on its frozen preselected applicable dimension
+  frame, or an inter-arm sample-coverage gap over 10 percentage points, makes the guardrail
+  inconclusive, never a pass. Full enrollment, selection and unsampled counts stay visible;
+  unsampled controls do not count as grading failures. Grades never change
   weights, rankings or review outcomes.
 
 ## Task References

@@ -594,7 +594,9 @@ The manifest names code in a file, never inline code:
   beneath the workspace root, outside `.git/` and `.orbit/state/`. A
   manifest that is missing, whose entry escapes, or whose interpreter
   carries an inline-code flag (`-c` for `sh`, `bash`, `zsh`, `dash` and
-  `python*`; `-e` for `perl`, `ruby` and `node`) fails to load, with the
+  `python*`; `-e` for `perl`, `ruby` and `node`; `-E` for `perl`; `-p`,
+  `--eval` and `--print` for `node`), including bundled spellings such as
+  `bash -ec`, fails to load, with the
   manifest file named. Unknown fields are refused, so a `command:` or
   `script:` text field cannot be added.
 - `interpreter:` is a launcher argv (`[bash]`, `[uv, run, --offline,

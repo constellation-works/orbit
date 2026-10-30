@@ -232,7 +232,7 @@ Everything the dashboard offers is reachable and operable from the keyboard, and
 
 ## 7. Task Write Actions
 
-The Tasks head names the view and how many tasks show, then a search box with its icon and the primary **New task** button. **New task** opens a labeled, keyboard-accessible composer above the list. Title, description, assessed complexity (`low`, `medium`, `hard`, `xhard`) and acceptance criteria (one per line) capture a proposed task. Title must contain non-whitespace text and at least one nonblank criterion is required. New tasks await explicit approval; creation never dispatches them. Cancel before submission writes nothing. Validation errors retain the draft. The All-workspaces view requires selecting an active target. The success link names the saved task, workspace and host. Text is assigned through DOM text/value properties.
+The Tasks head names the view and how many tasks show, then a search box with its icon and the primary **New task** button. **New task** opens a labeled modal dialog over the page (a native `<dialog>`: initial focus in Title, Tab wrapped inside it, an inert background, Escape or Cancel to dismiss and focus back on **New task**). The dialog paints in the top layer, so opening, validating, succeeding or closing it adds no height to the board and never moves the right-hand dock; on a short or 375px viewport it fits the screen and scrolls internally with its actions kept in reach. Escape keeps an unsent draft, Cancel discards it, and neither cancels or resends a request already in flight: reopening shows the frozen submission's state. Following the success link, or leaving Tasks, closes it. Title, description, assessed complexity (`low`, `medium`, `hard`, `xhard`) and acceptance criteria (one per line) capture a proposed task. Title must contain non-whitespace text and at least one nonblank criterion is required. New tasks await explicit approval; creation never dispatches them. Cancel before submission writes nothing. Validation errors retain the draft. The All-workspaces view requires selecting an active target. The success link names the saved task, workspace and host. Text is assigned through DOM text/value properties.
 
 The composer calls **`POST /api/tasks/create?workspace=<registered-id>`**, a strict action alongside the compatible existing `POST /api/tasks`. Its JSON body is `{request_id, binding, title, description, complexity, acceptance_criteria}` with optional typed `priority` (default `medium`) and `task_type` (default `chore`). Unknown fields are rejected, including status, force, system flags, actor/model, crew and authority. `request_id` is 1–128 ASCII letters, digits, dots, underscores or hyphens. Text fields are bounded to 32768 bytes, criteria to 1–100 nonblank entries and canonical payload to 256 KiB. `binding` is the opaque `creation_binding` from `GET /api/workspaces`: a content identity for the exact registered checkout, owner, role, partition and routing settings, stable across server restarts. Clients retain it with the payload; they must never refresh it automatically on an uncertain submission.
 
@@ -341,6 +341,13 @@ first card (Auto-drain on Drain, Locks held, or the log) starts level with the
 first task block, with the tab bar above that line. The outer dock ends with
 the list; this bottom alignment applies to the dock, not every card. Auto-drain
 and Locks held keep their natural heights, while the Log panel fills its pane.
+All three first cards share the same depth below the tabs, so switching views
+keeps the shared tab strip and content viewport fixed. Drain action and state
+feedback belongs only to Drain: it remains in that scrollable pane when
+switching away and is available again on return, without leaving a banner or
+spacing above Locks held.
+On short viewports the task list shrinks within the grid and scrolls internally,
+keeping its bottom edge level with the dock and clear of the shell's bottom bar.
 `alignTasksDock` in
 `log-tail.js` measures the list's top and the card's depth inside the dock,
 sets `--tasks-dock-lead` on `#tasks-dock`, and re-levels on a tab switch or

@@ -322,6 +322,17 @@ pub enum V2AuditEventKind {
     /// time this event fires.
     CliInvocationStarted {
         provider: String,
+        /// Resolved dispatch effort, never reconstructed from a later crew.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reasoning_effort: Option<String>,
+        /// SHA-256 of the resolved dispatch specification (no credential values).
+        /// Absent on historical events; not the experiment overlay digest.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        configuration_fingerprint: Option<String>,
+        /// Bounded, redacted task scope as delivered at dispatch, not a later
+        /// mutable task projection. Missing for old or oversized envelopes.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task_scope_blob_ref: Option<String>,
         argv_redacted: Vec<String>,
         stdin_blob_ref: Option<String>,
         model: Option<String>,

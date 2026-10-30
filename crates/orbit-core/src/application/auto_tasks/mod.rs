@@ -159,6 +159,10 @@ pub(crate) const DEFAULT_AUTO_TASK_FILES: &[(&str, &str)] = &[
         "suppression-ratchet",
         include_str!("../../../assets/auto_tasks/suppression-ratchet.yaml"),
     ),
+    (
+        "workflow-health-audit",
+        include_str!("../../../assets/auto_tasks/workflow-health-audit.yaml"),
+    ),
 ];
 
 /// Placeholder the shipped delivery definitions carry for the workspace's

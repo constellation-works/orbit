@@ -58,7 +58,7 @@ complexity, type, pr_status, external_refs, relations,
 source_task_id, job_run_id, job_run_machine, crew, resolved_crew,
 crew_model, crew_unresolved, os_requirement, placement_wait, experiments,
 readiness, pilot_warnings, open_decisions, orchestrator, orchestrator_model,
-orchestrator_model_source, origin, created_at, updated_at, comments,
+orchestrator_model_source, origin, rule_fingerprint, created_at, updated_at, comments,
 history, artifacts
 ```
 
@@ -273,6 +273,11 @@ on the operator-only `orbit.workflow.run.show`.
   value. `orbit.task.update` can correct an origin but not clear it, an unknown
   value is refused with the allowed list, and `orbit task list --origin`
   (`origin` on `orbit.task.list`) filters by it.
+- `rule_fingerprint` is the stable rule-result fingerprint the
+  `file_rule_findings` filer stamps at filing, so one open task owns one
+  failing rule result however it is retitled. It is absent on every task
+  the filer did not create, is not settable through task create or update,
+  and is readable through the `rule_fingerprint` show projection.
 - `covered_by` names a task or GitHub PR covering an archived/rejected CI
   sweep finding. Its target is a task ID or an external key such as
   `github-pr:NUMBER` (this checkout's repository) or

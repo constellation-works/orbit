@@ -25,7 +25,7 @@ use crate::task::{
 #[macro_export]
 macro_rules! task_show_projection_fields_csv {
     () => {
-        "id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, granted_tools, requires_labels, not_before, started_at, scheduled_hold, plan, execution_summary, context_files, created_by, created_by_model, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, os_requirement, placement_wait, experiments, readiness, pilot_warnings, open_decisions, orchestrator, orchestrator_model, orchestrator_model_source, origin, created_at, updated_at, comments, history, artifacts"
+        "id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, granted_tools, requires_labels, not_before, started_at, scheduled_hold, plan, execution_summary, context_files, created_by, created_by_model, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, os_requirement, placement_wait, experiments, readiness, pilot_warnings, open_decisions, orchestrator, orchestrator_model, orchestrator_model_source, origin, rule_fingerprint, created_at, updated_at, comments, history, artifacts"
     };
 }
 
@@ -77,6 +77,7 @@ pub const TASK_SHOW_PROJECTION_FIELDS: &[&str] = &[
     "orchestrator_model",
     "orchestrator_model_source",
     "origin",
+    "rule_fingerprint",
     "created_at",
     "updated_at",
     "comments",
@@ -218,6 +219,7 @@ pub fn task_show_record_field_json(task: &Task, field: &str) -> Option<Value> {
             task.orchestrator_model_source.map(|source| source.as_str())
         )),
         "origin" => Some(json!(task.origin.map(|value| value.as_str()))),
+        "rule_fingerprint" => Some(json!(task.rule_fingerprint)),
         "created_at" => Some(json!(task.created_at.to_rfc3339())),
         "updated_at" => Some(json!(task.updated_at.to_rfc3339())),
         _ => None,
@@ -280,6 +282,9 @@ pub fn task_base_json(
     }
     if !task.requires_labels.is_empty() {
         object.insert("requires_labels".to_string(), json!(task.requires_labels));
+    }
+    if let Some(rule_fingerprint) = &task.rule_fingerprint {
+        object.insert("rule_fingerprint".to_string(), json!(rule_fingerprint));
     }
     if let Some(not_before) = task.not_before {
         object.insert(

@@ -1537,6 +1537,12 @@ fn before_pr_ship() -> AdmissionShipContract {
     });
     ship
 }
+fn before_landing_ship() -> AdmissionShipContract {
+    let mut ship = before_pr_ship();
+    ship.before_pr = false;
+    ship.before_landing = true;
+    ship
+}
 /// The certificate a leaf's gate would issue for `handoff` (reviewed, with findings fixed in the last commit).
 fn certificate(handoff: &TaskHandoff, verdict: ReviewVerdict) -> ReviewCertificate {
     let commit = |revision: &SourceRevision, subject: &str| {
@@ -1610,6 +1616,73 @@ allocation_test!(
         );
     }
 );
+// Before-landing review also requires a PR leaf that declares its review gate.
+allocation_test!(a_before_landing_owner_refuses_an_ungated_pull, {
+    let owner = Coordinated::fixture();
+    owner.create_task("reviewed work");
+    let mut request = owner_request("ungated-before-landing");
+    request.ship = before_landing_ship();
+    let refused = owner
+        .try_pull(&request)
+        .expect_err("a leaf that runs no gate is refused");
+    assert!(
+        refused.to_string().contains("before_pr_unsupported"),
+        "{refused}"
+    );
+    assert!(owner.claims().is_empty(), "nothing was admitted");
+});
+// Review timing never admits a local leaf, even if that leaf declares a gate.
+allocation_test!(a_local_ship_mode_is_refused_with_owner_review_timing, {
+    let owner = Coordinated::fixture();
+    owner.create_task("reviewed work");
+    for (request_id, mut ship) in [
+        ("local-before-pr", before_pr_ship()),
+        ("local-before-landing", before_landing_ship()),
+    ] {
+        ship.mode = "local".into();
+        let mut request = owner_request(request_id);
+        request.ship = ship;
+        request.review_gate = true;
+        let refused = owner
+            .try_pull(&request)
+            .expect_err("a remote local-mode leaf is refused");
+        assert!(
+            refused.to_string().contains("ship_mode_unsupported"),
+            "{request_id}: {refused}"
+        );
+    }
+    assert!(owner.claims().is_empty(), "nothing was admitted");
+});
+// Version skew remains an owner-side refusal before a task can be claimed.
+allocation_test!(a_pull_with_a_mismatched_caller_version_is_refused, {
+    let owner = Coordinated::fixture();
+    owner.create_task("versioned work");
+    let mut request = owner_request("version-mismatch");
+    request.caller_version = "older-version".into();
+    let refused = owner
+        .try_pull(&request)
+        .expect_err("a mismatched caller version is refused");
+    assert!(
+        refused.to_string().contains("version_mismatch"),
+        "{refused}"
+    );
+    assert!(owner.claims().is_empty(), "nothing was admitted");
+});
+// Unknown ship routes remain closed at owner admission.
+allocation_test!(a_pull_with_an_unsupported_ship_mode_is_refused, {
+    let owner = Coordinated::fixture();
+    owner.create_task("unsupported route work");
+    let mut request = owner_request("unsupported-ship-mode");
+    request.ship.mode = "unsupported".into();
+    let refused = owner
+        .try_pull(&request)
+        .expect_err("an unsupported ship mode is refused");
+    assert!(
+        refused.to_string().contains("ship_mode_unsupported"),
+        "{refused}"
+    );
+    assert!(owner.claims().is_empty(), "nothing was admitted");
+});
 // Before-PR handoffs need passing evidence for the handed-off head on an owner-held base, by the captured crew/contract, bound by the held certificate; other dispositions are typed refusals.
 allocation_test!(
     before_pr_handoffs_are_accepted_only_with_matching_passing_evidence,

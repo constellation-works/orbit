@@ -545,3 +545,15 @@ impl OrbitRuntime {
         ))
     }
 }
+
+impl OrbitRuntime {
+    /// Join the private delivery consumer to host-only policy and bounded assistance.
+    pub(crate) fn delivery_quality_service(
+        &self,
+    ) -> Result<crate::application::assistance::AssistanceService, OrbitError> {
+        Ok(host_assistance_service(
+            &self.global_root(),
+            orbit_store::compose::assistance_store_from_store(self.sqlite_store()?),
+        ))
+    }
+}

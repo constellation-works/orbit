@@ -105,10 +105,9 @@ main.tasks-layout.task-page-mode .pinned-external { display: none; }
 #tasks-panel > .body {
   max-height: none;
   flex: 1 1 auto;
-  /* ORB-10874: floor so the task inventory stays usable (a few visible
-     rows) even on a short viewport or with the log panel expanded — it
-     never gets squeezed toward zero by the surrounding chrome. */
-  min-height: 240px;
+  /* Shrink inside the bounded Tasks grid on short viewports; a fixed floor
+     would put the list's bottom rows behind the shell's bottom bar. */
+  min-height: 0;
   padding: 0 0 16px;
   overflow-y: auto;
   overflow-x: auto;
@@ -963,7 +962,11 @@ main.tasks-layout.task-pane-open #tasks-notices > * { pointer-events: auto; box-
    Drain tab's cards; the tab names it, so its own title is read by screen
    readers only. */
 .tasks-dock #side-dock[data-card="drain"] #locks-panel,
-.tasks-dock #side-dock[data-card="locks"] :is(#auto-drain-panel, #auto-drain-quick-start) { display: none !important; }
+.tasks-dock #side-dock[data-card="locks"] :is(#auto-drain-panel, #auto-drain-quick-start, #auto-drain-operation-feedback) { display: none !important; }
+/* Drain notices stay in Drain, and the empty main column leaves no space
+   above Locks. Every tab's first card then has the same depth below the
+   shared tabs, so first-card alignment moves neither tabs nor viewport. */
+.tasks-dock #side-dock[data-card="locks"] .drain-col-side { margin-top: 0; }
 .tasks-dock #side-dock[data-card="locks"] #locks-title {
   position: absolute;
   width: 1px;
@@ -1116,13 +1119,30 @@ main.tasks-layout.task-page-mode .task-pane-back { display: inline-flex; }
   .task-pane-full { display: none; }
 }
 
-/* The composer stays outside list repainting so errors never discard a draft. */
-.task-create { padding: 16px; margin-bottom: 16px; border: 1px solid var(--border); border-radius: var(--radius); overflow: auto; flex: 0 1 auto; }
-.task-create[hidden] { display: none; }
+/* Task creation is a modal <dialog>: the top layer takes it out of the board's
+   and dock's layout, so opening, validating and dismissing it moves neither.
+   It scrolls internally when the viewport is short; closed it stays display:none. */
+.task-create {
+  box-sizing: border-box;
+  width: min(560px, calc(100vw - 32px));
+  max-width: none;
+  max-height: calc(100vh - 32px);
+  max-height: calc(100dvh - 32px);
+  margin: auto;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elev);
+  color: var(--fg);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.task-create::backdrop { background: rgb(0 0 0 / 0.6); }
 .task-create h3 { margin: 0; }
 .task-create fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 6px; min-width: 0; }
 .task-create label { margin-top: 8px; }
-.task-create input, .task-create textarea, .task-create select { width: 100%; min-width: 0; box-sizing: border-box; padding: 8px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-elev); color: var(--fg); font: inherit; }
+.task-create input, .task-create textarea, .task-create select { width: 100%; min-width: 0; box-sizing: border-box; padding: 8px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); color: var(--fg); font: inherit; }
 .task-create :disabled { opacity: 0.7; }
 .task-create .action { min-height: 36px; }
 /* The head's primary action: New task, in the accent. */
@@ -1143,7 +1163,8 @@ main.tasks-layout.task-page-mode .task-pane-back { display: inline-flex; }
 #task-create-open:hover:not(:disabled) { background: var(--accent-hover); }
 #task-create-open[aria-expanded="true"] { background: var(--accent-hover); }
 .task-create textarea { resize: vertical; }
-.task-create-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+/* The actions stay in reach while a short viewport scrolls the fields. */
+.task-create-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; padding: 8px 0 0; position: sticky; bottom: -16px; background: var(--bg-elev); }
 .task-create [aria-invalid="true"] { border-color: var(--state-error); }
 #task-create-feedback { overflow-wrap: anywhere; }
 

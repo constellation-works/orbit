@@ -126,6 +126,10 @@ pub struct TaskEnvelopeV2 {
     /// Why the task was filed; absent on legacy and unstated filings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<crate::task::TaskOrigin>,
+    /// Stable rule-result fingerprint this task owns, written by the
+    /// rule-findings filer at filing; absent on every other task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule_fingerprint: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub relations: Vec<TaskRelation>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

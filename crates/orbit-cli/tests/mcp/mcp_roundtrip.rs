@@ -3868,9 +3868,37 @@ fn managed_codex_mcp_env_enforces_activity_tools_and_agent_actor_kind() {
             ("ORBIT_AGENT_NAME", "codex"),
             ("ORBIT_AGENT_MODEL", "gpt-6-sol"),
             ("ORBIT_TASK_ACTOR_KIND", "agent"),
-            ("ORBIT_ACTIVITY_TOOLS", "orbit.task.show,orbit.task.update"),
+            (
+                "ORBIT_ACTIVITY_TOOLS",
+                "orbit.task.show,orbit.task.update,orbit.task.add",
+            ),
         ],
     );
+
+    let added = client.call_tool_ok(
+        "orbit_task_add",
+        json!({"title": "Managed MCP creator", "description": "Managed attribution", "complexity": "low", "model": "claude-opus-5-5"}),
+    );
+    assert_eq!(added["created_by"], "codex");
+    assert_eq!(added["created_by_model"], "gpt-6-sol");
+
+    let input = json!({"title": "Managed tool creator", "description": "Managed attribution", "complexity": "low", "model": "claude-opus-5-5"}).to_string();
+    let output = workspace
+        .cmd()
+        .env("ORBIT_MANAGED_RUN_CONTEXT", "1")
+        .env("ORBIT_AGENT_NAME", "codex")
+        .env("ORBIT_AGENT_MODEL", "gpt-6-sol")
+        .args(["tool", "run", "orbit.task.add", "--input", &input])
+        .output()
+        .expect("run managed tool");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let added: Value = serde_json::from_slice(&output.stdout).expect("task JSON");
+    assert_eq!(added["created_by"], "codex");
+    assert_eq!(added["created_by_model"], "gpt-6-sol");
 
     let shown = client.show_task(&task_id);
     assert_eq!(shown["id"], task_id);

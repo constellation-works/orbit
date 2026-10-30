@@ -171,6 +171,15 @@ fn inline_code_interpreter_flags_fail_to_load_naming_the_manifest() {
         ("inline_bash", "[bash, -c]"),
         ("inline_python", "[python3, -c]"),
         ("inline_node", "[node, -e]"),
+        ("inline_bash_bundled", "[bash, -ec, \"echo hi\"]"),
+        ("inline_bash_bundled_x", "[bash, -xc, \"echo hi\"]"),
+        ("inline_python_bundled", "[python3, -Ic, \"print(1)\"]"),
+        ("inline_node_long_eval", "[node, --eval, \"1\"]"),
+        ("inline_node_long_eval_glued", "[node, \"--eval=1\"]"),
+        ("inline_node_bundled_print", "[node, -pe, \"1\"]"),
+        ("inline_node_long_print", "[node, --print, \"1\"]"),
+        ("inline_perl_capital", "[perl, -E, \"print 1\"]"),
+        ("inline_bash_glued", "[bash, -cecho]"),
     ] {
         let manifest = fixture.write_manifest(
             name,
@@ -188,6 +197,39 @@ fn inline_code_interpreter_flags_fail_to_load_naming_the_manifest() {
             error.to_string().contains("inline code"),
             "error names the inline-code refusal: {error}"
         );
+    }
+    // A bundled flag on the entry's `#!` line refuses the same way.
+    fixture.write_entry("tools/bundled.sh", "#!/bin/bash -ec\necho hi\n");
+    let manifest = fixture.write_manifest(
+        "inline_shebang",
+        "  description: Inline shebang.\n  entry: tools/bundled.sh\n",
+    );
+    let error =
+        load_script_asset(&manifest, fixture.workspace()).expect_err("bundled shebang refuses");
+    assert!(
+        error.to_string().contains(&manifest.display().to_string()),
+        "error names the manifest file: {error}"
+    );
+    assert!(
+        error.to_string().contains("inline code"),
+        "error names the inline-code refusal: {error}"
+    );
+    // Valid interpreters still load: the `c`/`e` inside an argument-taking
+    // option's glued value (`-X…`, `-M…`) is argument text, not a flag.
+    for (name, interpreter) in [
+        ("valid_bash", "[bash]"),
+        ("valid_uv", "[uv, run, --offline, --script]"),
+        ("valid_python_x", "[python3, -Xpycache_prefix=x]"),
+        ("valid_perl_m", "[perl, -MExporter]"),
+    ] {
+        let manifest = fixture.write_manifest(
+            name,
+            &format!(
+                "  description: Valid.\n  entry: tools/run.sh\n  interpreter: {interpreter}\n"
+            ),
+        );
+        load_script_asset(&manifest, fixture.workspace())
+            .unwrap_or_else(|error| panic!("{interpreter} loads: {error}"));
     }
 }
 

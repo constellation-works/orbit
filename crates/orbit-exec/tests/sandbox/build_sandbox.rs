@@ -278,3 +278,128 @@ fn build_directory_size_does_not_follow_symlinks() {
         "an outside file reachable only through a symlink is not part of the build directory"
     );
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn script_grants_cannot_override_state_or_git_protections() {
+    use orbit_exec::{ScriptSandboxSpec, compile_linux_script_argv};
+    use std::fs;
+
+    let dir = tempfile::tempdir().expect("fixture");
+    let cwd = dir.path().join("work");
+    let state = cwd.join(".orbit");
+    let global = dir.path().join("global");
+    let output = dir.path().join("output");
+    let scratch = dir.path().join("scratch");
+    for path in [&cwd, &state, &global, &output, &scratch, &cwd.join(".git")] {
+        fs::create_dir_all(path).expect("fixture directory");
+    }
+    let masked = vec![state.clone(), global.clone()];
+    let writable = vec![dir.path().to_path_buf(), cwd.clone(), output.clone()];
+    let spec = ScriptSandboxSpec {
+        cwd: &cwd,
+        cwd_writable: true,
+        scratch: &scratch,
+        readable: &[],
+        writable: &writable,
+        masked: &masked,
+        home: None,
+    };
+    let args =
+        compile_linux_script_argv(&spec, &[], &["/bin/true".into()]).expect("compile profile");
+    let bind = |flag: &str, path: &std::path::Path| {
+        let path = path.to_str().expect("path");
+        args.windows(2)
+            .rposition(|pair| pair[0] == flag && pair[1] == path)
+            .expect("mount")
+    };
+    let last_grant = bind("--bind", &output)
+        .max(bind("--bind", &cwd))
+        .max(bind("--bind", dir.path()));
+    for path in [&state, &global] {
+        assert!(
+            bind("--tmpfs", path) > last_grant,
+            "state mask must win over every grant"
+        );
+    }
+    assert!(
+        bind("--ro-bind", &cwd.join(".git")) > last_grant,
+        "Git metadata must stay read-only"
+    );
+
+    let enclosing_mask = vec![dir.path().to_path_buf()];
+    let spec = ScriptSandboxSpec {
+        masked: &enclosing_mask,
+        ..spec
+    };
+    assert!(
+        compile_linux_script_argv(&spec, &[], &["/bin/true".into()]).is_err(),
+        "a grant must not expose an enclosing state tree"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn script_profile_preserves_masks_with_overlapping_grant() {
+    use orbit_exec::{ScriptRunEnd, ScriptSandboxRequest, ScriptSandboxSpec, run_script_sandboxed};
+    use std::fs;
+
+    if !build_sandbox_available("script_profile_preserves_masks_with_overlapping_grant") {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("fixture");
+    let cwd = dir.path().join("work");
+    let state = cwd.join(".orbit");
+    let git = cwd.join(".git");
+    let global = dir.path().join("global");
+    let output = dir.path().join("output");
+    let scratch = dir.path().join("scratch");
+    for path in [&state, &git, &global, &output, &scratch] {
+        fs::create_dir_all(path).expect("fixture directory");
+    }
+    for name in orbit_exec::SCRIPT_SCRATCH_DIRS {
+        fs::create_dir_all(scratch.join(name)).expect("scratch directory");
+    }
+    fs::write(state.join("secret"), "secret").expect("state");
+    fs::write(global.join("secret"), "secret").expect("global");
+    let masked = vec![state.clone(), global.clone()];
+    let writable = vec![dir.path().to_path_buf(), cwd.clone(), output.clone()];
+    let script = format!(
+        "test ! -e '{}/secret' && test ! -e '{}/secret' && ! touch '{}/new' && echo ok > '{}/result'",
+        state.display(),
+        global.display(),
+        git.display(),
+        output.display()
+    );
+    let argv = vec!["/bin/sh".into(), "-c".into(), script];
+    let run = run_script_sandboxed(ScriptSandboxRequest {
+        sandbox: ScriptSandboxSpec {
+            cwd: &cwd,
+            cwd_writable: true,
+            scratch: &scratch,
+            readable: &[],
+            writable: &writable,
+            masked: &masked,
+            home: None,
+        },
+        argv: &argv,
+        env: &[],
+        launcher: &[],
+        launcher_env: &[],
+        stdin: vec![],
+        timeout: Duration::from_secs(20),
+        scratch_cap_bytes: u64::MAX,
+    })
+    .expect("run script");
+    assert_eq!(
+        run.end,
+        ScriptRunEnd::Exited(0),
+        "{}",
+        String::from_utf8_lossy(&run.log)
+    );
+    assert_eq!(
+        fs::read_to_string(output.join("result")).expect("output"),
+        "ok\n"
+    );
+    assert!(!git.join("new").exists());
+}

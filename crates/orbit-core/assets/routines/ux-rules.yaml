@@ -1,0 +1,25 @@
+# Disabled-by-default daily UX-rules routine. Seeded into
+# `.orbit/routines/` on `orbit init` with the routine name resolved at seed
+# time (see `seed_default_routines`). Enabling it is an explicit workspace
+# decision, and it only does work once an operator has created and granted
+# the `ux_rules_runner` script the target job's first step names and set
+# `ux_rules.surfaces` to the surfaces it should measure: with no grant the
+# script step refuses before spawn, and with no surfaces the runner has
+# nothing to run. The 06:40 UTC slot stacks with none of the other shipped
+# defaults. `overlap: forbid` plus the job's `max_active_runs: 1` keep it
+# single-flight; fingerprint dedupe makes a repeat pass idempotent anyway.
+schemaVersion: 1
+name: __ORBIT_ROUTINE_NAME__
+description: >
+  Daily run of the workspace's named UX rules through a granted script
+  step, filing one proposed task per new failing fingerprint and
+  commenting owners whose measurements changed or whose rule passes
+  again. Result counts and the tasks filed or commented are on the run.
+enabled: false
+trigger:
+  cron: "40 6 * * *"
+  missed_run: skip
+target: job:ux_rules_pipeline
+policy:
+  timeout_minutes: 60
+  overlap: forbid

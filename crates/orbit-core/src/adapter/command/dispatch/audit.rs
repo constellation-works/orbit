@@ -150,11 +150,9 @@ fn resolve_agent_identity(
         (env_agent_name, env_model_name)
     };
     let agent = normalize_agent_family_for_model(agent.as_deref(), model.as_deref())?;
-    // Tool-call identity crosses a trust boundary: agent-supplied `model`
-    // strings are telemetry at best and may be aliases. Persist the canonical
-    // family in the model slot for tool dispatch so comparisons never depend
-    // on self-reported model text.
-    Ok((agent.clone(), agent))
+    // Preserve the dispatch-provided model separately from its normalized family.
+    // Tool input is resolved later and cannot override this identity.
+    Ok((agent, model))
 }
 
 pub(super) fn resolve_agent_identity_for_entry_point(

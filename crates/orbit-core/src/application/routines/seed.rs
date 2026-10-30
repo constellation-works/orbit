@@ -92,6 +92,10 @@ pub(crate) const DEFAULT_ROUTINE_FILES: &[(&str, &str)] = &[
         "crew_performance_refresh",
         include_str!("../../../assets/routines/crew_performance_refresh.yaml"),
     ),
+    (
+        "ux-rules",
+        include_str!("../../../assets/routines/ux-rules.yaml"),
+    ),
 ];
 
 /// Default routines a prior release seeded that this Orbit no longer ships,

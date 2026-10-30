@@ -7,7 +7,8 @@
 //! two in step.
 
 /// Strategy describing how workspace and global layers compose for a given
-/// asset type. See `CLAUDE.md` for the canonical mapping.
+/// asset type. See the table under `## Scoping rules` in `ARCHITECTURE.md`
+/// for the canonical mapping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScopeStrategy {
     /// Workspace layer only; global is ignored. Used for tasks and job runs.

@@ -38,6 +38,7 @@ pub const SHIPPED_DEFAULT_ROUTINES: &[&str] = &[
     "task_publication",
     "store_gc",
     "crew_performance_refresh",
+    "ux-rules",
 ];
 
 /// Default routines a prior release shipped and this one no longer seeds.
@@ -68,6 +69,7 @@ pub const SHIPPED_DEFAULT_AUTO_TASKS: &[&str] = &[
     "security-review",
     "structure-sweep",
     "suppression-ratchet",
+    "workflow-health-audit",
 ];
 
 /// Default auto-tasks a prior release shipped and this one no longer seeds.

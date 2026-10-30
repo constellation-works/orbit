@@ -1614,12 +1614,12 @@ A local run can fail because of its provider rather than the work. The step erro
 
 | Marker | Meaning | Excluded crews | Base backoff |
 |---|---|---|---|
-| `[provider_capacity]` | The selected model was at capacity. | The run's crew, or every crew of the failing step's provider when that step ran on another provider (a reviewer, say). | 15 min |
+| `[provider_capacity]` | The selected model was at capacity. | The run's crew when the failing step has the same provider and account. If either differs, crews of the failing provider that use the failing account: the named crew for `account=<crew>`, or provider crews without `env` for the default login. If none match, the run's crew. | 15 min |
 | `[provider_unavailable]` | Unusable on this host, such as failed authentication. | As for capacity. | 30 min |
 | `[provider_refusal]` | Content policy refused the task: a Codex content-filter `error` or `turn.failed` frame (`This content was flagged for possible …`), or a Claude `result` with `stop_reason: "refusal"`. | Every crew of the provider, which would refuse the same content again. | 24 h |
 | `[provider_limit]` | The account hit a usage limit (texts below). | The failing account's crews on that provider. If the limit names a model and at least one of them runs a model containing it (case-insensitive), only those crews; otherwise all of them. | Until the reported reset (below) |
 
-**Accounts.** When the failing crew sets [`env`](#per-crew-credentials-env), the marker is followed by `account=<crew>` after the provider (`[provider_limit] provider=claude account=opus-credits …`): that crew is its own account, so a limit, or a capacity or unavailability failure of a step on another provider than the run's crew, excludes that crew alone. A failure without it, every one written before accounts were named included, is the provider's default login's and excludes only the provider's crews without `env`. A refusal is the provider's content policy and still excludes every crew of the provider. A stored hold keeps the crews it named; its note carries `account` when it is a crew account's.
+**Accounts.** When the failing crew sets [`env`](#per-crew-credentials-env), the marker is followed by `account=<crew>` after the provider (`[provider_limit] provider=claude account=opus-credits …`): that crew is its own account. For capacity and unavailability, the table uses the failing account when the failing step's provider or account differs from the run crew's: a named account selects that crew, while the default login selects only the provider's crews without `env`. If the provider and account both match the run crew, only the run crew is excluded; if no crews match the failing account, the run crew is the fallback. A usage limit independently excludes the failing account's crews on that provider, narrowed further by a reported model as described above. A capacity, unavailability, or limit failure without `account`, including older markers, is for the provider's default login. A refusal is the provider's content policy and still excludes every crew of the provider. A stored hold keeps the crews it named; its note carries `account` when it is a crew account's.
 
 Capacity, unavailability and refusal backoff doubles for each other hold the task got in the last 24 hours, up to 24 hours. A usage limit holds until the provider's reset, clamped to 5 minutes – 7 days after the failure; with no readable reset it starts at 30 minutes and doubles per earlier usage-limit hold on that provider account in the last 24 hours, up to 6 hours. Provider labels are parsed first, so an alias is the same provider. Crews an earlier, still-standing hold excluded stay excluded, each on the machines it was excluded on.
 
@@ -2509,6 +2509,12 @@ After creating or reusing a PR, Orbit unions the allowlisted tags present on eve
 | `seeding.auto_tasks` | `all` | Which shipped default auto-tasks this workspace seeds: `"all"`, `"none"` or a list of names. See [below](#seeding--which-shipped-defaults-a-workspace-carries). |
 | `decision_channel.enabled` | `false` | Raise decision requests for work held on a human decision. |
 | `security_alert_sweep.min_severity` | `moderate` | **Advanced.** Lowest Dependabot and Code scanning severity the security alert sweep files. See [below](#security_alert_sweep--security-finding-severity). |
+| `ux_rules.surfaces` | `[]` | **Advanced.** Surfaces the ux-rules routine runs (for example `ui` and `cli`); empty disables it. See [below](#ux_rules--scheduled-rule-checks). |
+| `ux_rules.runner` | `"scripts/ux-rules/run.mjs"` | **Advanced.** Workspace-relative rule runner the ux-rules script step runs and filed tasks name in their reproduce command. |
+| `ux_rules.ui_base_url` | `"http://127.0.0.1:7878"` | **Advanced.** Live dashboard URL the ux-rules runner measures for UI surfaces. |
+| `ux_rules.max_new_tasks` | `10` | **Advanced.** Most new tasks one rule-findings filing run creates, highest severity first. |
+| `ux_rules.file_at` | `"low"` | **Advanced.** Lowest rule-result severity the rule-findings filer files: `critical`, `high`, `medium`, `low` or `nit`; lower results are recorded only. |
+| `ux_rules.disabled` | `[]` | **Advanced.** Rule ids the ux-rules runner does not run. |
 
 Agent relay output goes to `orbit-agent.jsonl` with its own 200 MiB archive budget and 50 MiB active-file limit, so it cannot consume the operational budget; each feed is pruned by its own size and age limits. A full agent queue blocks the relay instead of dropping lines. The operational feed can still drop a line when its queue is full. The dashboard and `orbit log tail` merge both active feeds. Full rotation runs in long-lived processes (`orbit mcp serve`, `orbit clock tick`/`orbit sweep`, `orbit web serve`); short-lived commands only roll an oversized active file.
 
@@ -2522,6 +2528,16 @@ min_severity = "high"
 ```
 
 Precedence: run/job `min_severity` input, then workspace, then global, then `moderate`; `orbit run job dependabot_alert_sweep_pipeline --input min_severity=critical` overrides one run. Scheduled routines use the configured floor without shadowing the job. An invalid value fails validation naming the key. The file step records `min_severity`, `min_severity_source` (`input`, `workspace`, `global` or `built-in`) and `excluded_below_min_severity`; `orbit run show <RUN_ID>` summarizes the filed count, floor and source, and excluded alert count and numbers, even when the sweep succeeded.
+
+### `[ux_rules]` — scheduled rule checks
+
+The seeded `ux-rules` routine (disabled by default) runs `ux_rules_pipeline` daily: a granted script step (`ux_rules_runner`, a workspace Script manifest an operator creates and grants with `orbit script grant ux_rules_runner`) runs `ux_rules.runner` once per surface in `ux_rules.surfaces` and prints one merged results document, and the deterministic `file_rule_findings` activity keeps one task per result fingerprint (stored in the task's `rule_fingerprint` field). A new failure files one proposed bug task with the measurements, evidence and a reproduce command; an open owner is commented when measurements change and once when the rule passes again (never transitioned); rule errors file one task per rule tagged `ux-rules-error`. `ux_rules.max_new_tasks` caps new tasks per run, highest severity first, and results below `ux_rules.file_at` or for rules in `ux_rules.disabled` are recorded in the run output only. `orbit run show` for the run carries the pass/fail/error/skipped counts and the tasks filed or commented in the filing step's output. A network-`none` script step cannot reach a dashboard on the host's loopback, so a live UI surface at `ux_rules.ui_base_url` needs the runner's fixture mode until script steps gain a network phase.
+
+```toml
+[ux_rules]
+surfaces = ["cli"]
+file_at = "medium"
+```
 
 ### `[lease]` — path leases
 

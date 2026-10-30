@@ -100,6 +100,7 @@ pub(in crate::application::agents) fn scan(
             let runs = pilot_runs.get_or_insert_with(|| PilotRuns::load(runtime));
             assessment.run = runs.attribute(
                 runtime,
+                &task.id,
                 assessment.run_id.as_deref(),
                 assessment.at,
                 &assessment.operation_id,
