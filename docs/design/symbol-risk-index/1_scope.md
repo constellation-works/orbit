@@ -1,8 +1,8 @@
 ---
 title: "Scope: symbol risk index"
 owner: claude
-last_updated: 2026-10-28
-last_validated: 2026-10-27
+last_updated: 2026-10-30
+last_validated: 2026-10-30
 status: Draft
 stage: designing
 next: "Daniel reviews this scope and 2_design.md; implementation tasks are filed after acceptance"
@@ -22,10 +22,12 @@ outputs and their ship gates; [2_design.md](./2_design.md) specifies the record,
 boundary, storage, the routine, staleness and renames.
 
 Bearing: per-task riskiness is `crates/orbit-core/src/application/codebase/riskiness.rs`,
-shipped as estimator version 1 by [ORB-18690] and consumed unchanged by the backlog forecast
+initially shipped as estimator version 1 by [ORB-18690] and consumed by the backlog forecast
 ([ORB-18691], [backlog-forecast scope](../backlog-forecast/1_scope.md#per-task-riskiness-estimator)).
-[ORB-19361] is replacing its per-file maximum with a size-based fit: declared path count
-before a diff exists, lines changed once one does. Lines changed per landed delivery are
+[ORB-19361] replaced its per-file maximum with a size-based fit: declared path count
+before a diff exists, lines changed once one does. [ORB-19376] subsequently stabilized finite
+fits and advanced the estimator to version 3 without changing those bases. Lines changed per
+landed delivery are
 already recorded by `codebase/diff_stats.rs` ([ORB-18383]). A `regression_from` link can carry
 `regression.sites`, the `symbol:`/`file:` selectors of the code that was wrong (`dir:` when no
 narrower site can be named)
@@ -39,8 +41,9 @@ symbols and candidate tests. Routines run catalog jobs from the sweep clock
 ## Problem
 
 Daniel (2026-10-27): rate each symbol upfront, as a routine, and track how many tests cover
-it, so tests can be focused on high-risk symbols. Today risk exists only per task, computed
-from per-file history at read time. Admission scoring and test planning have no shared,
+it, so tests can be focused on high-risk symbols. Risk exists only per task, fitted from
+historical task sizes and regression outcomes at read time. Admission scoring and test
+planning have no shared,
 standing per-symbol record.
 
 Two backtests on ws_orbit history set what such a record should hold. Each used 11 weekly
@@ -53,7 +56,7 @@ does not re-run them.
 | Lines changed (diff) | AUC **0.737**, the best single feature |
 | Files changed (diff) | AUC 0.714 |
 | Declared files, `1-(1-p)^k` (from [ORB-19361]) | AUC 0.704 |
-| Production estimator v1: max of shrunk per-file rates, crew × complexity shift | AUC 0.64; Brier score worse than predicting the constant base rate |
+| Then-production estimator v1: max of shrunk per-file rates, crew × complexity shift | AUC 0.64; Brier score worse than predicting the constant base rate |
 | Behaviors per changed function (1 + branch count) | AUC 0.675 alone; nothing over size |
 | Caller fan-in with depth decay | coefficient turns negative once size is in the model |
 | Number of domains touched | coefficient turns negative once size is in the model |
@@ -253,6 +256,10 @@ coverage priorities, retirement evidence and timing.
 6. **G2/G3 backtests and the view**, once about 100 site-bearing links exist: run the gates,
    then ship only what passed.
 
+No implementation task for these phases was found. [ORB-19370] reconciled the design's test
+guidance with the workspace guide, and [ORB-19371] specified publication fencing; both are
+completed design repairs, not index implementation.
+
 ## Open questions
 
 1. **Coverage on `agent-main`?** Dispatching the Coverage workflow on the integration branch
@@ -262,8 +269,10 @@ coverage priorities, retirement evidence and timing.
    cannot answer that. Per-test profiles can, at a cost to measure first. Should the count wait
    until G3b shows coverage is predictive?
 3. **Indexer without a plugin?** A configured command needs a sandboxed, granted execution
-   path. [Script steps](../script-steps/1_scope.md) ([ORB-19294]) would provide one once
-   shipped; until then the indexer is a plugin tool.
+   path. [Script steps](../script-steps/1_scope.md), designed by [ORB-19294], now have
+   manifests and grants ([ORB-19983]) and granted Linux execution ([ORB-19985]), while
+   declared file inputs and macOS execution remain later work. Until the indexer's file
+   contract can use that path, it stays a plugin tool.
 4. **Generation per base commit, or per N deliveries?** Rebuilding on every advance is
    cheapest to reason about. If a build costs minutes, a coarser cadence trades staleness for
    load.
@@ -278,7 +287,8 @@ coverage priorities, retirement evidence and timing.
   lag.
 - Given a renamed symbol with an unchanged body, its site history follows it to the new
   selector.
-- Given G1 has not passed, riskiness output is identical to [ORB-19361]'s. Given it passed, a
+- Given G1 has not passed, riskiness keeps the size estimator from [ORB-19361], including
+  [ORB-19376]'s finite-fit repair. Given it passed, a
   footprint fully resolved by a fresh index is scored on `declared_lines`; any other footprint
   is scored on `declared_files` and names the reason.
 - Until a view gate passes, Orbit exposes no list for it, and nothing ranks symbols.
@@ -287,12 +297,17 @@ coverage priorities, retirement evidence and timing.
 ## Task References
 
 - [ORB-19358] — wrote this scope and design
-- [ORB-19361] — replaces the per-file maximum with a size-based riskiness fit (declared files, diff lines)
+- [ORB-19361] — replaced the per-file maximum with a size-based riskiness fit (declared files, diff lines)
+- [ORB-19376] — stabilized finite fits and advanced the size estimator to version 3
+- [ORB-19370] — reconciled the proposed view with the workspace's test rules
+- [ORB-19371] — specified publication fencing for overlapping index builds
 - [ORB-19276] — made Orbit always record `regression.sites`
 - [ORB-19442] — attributed the Regressions ranking (the G3a baseline) to `regression.sites` and admitted `dir:` sites
 - [ORB-18690] — shipped per-task riskiness estimator version 1
 - [ORB-18691] — made the backlog forecast consume riskiness for regression rework
 - [ORB-18383] — recorded lines added and deleted per landed delivery
 - [ORB-19294] — designed script steps, a granted execution path for workspace scripts
+- [ORB-19983] — added script manifests, parsing and digest-bound grants
+- [ORB-19985] — executed granted script steps on Linux under the script sandbox profile
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

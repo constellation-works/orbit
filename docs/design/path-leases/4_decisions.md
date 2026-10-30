@@ -1,8 +1,8 @@
 ---
 title: Path Leases — Decisions
 owner: claude
-last_updated: 2026-10-26
-last_validated: 2026-10-26
+last_updated: 2026-10-30
+last_validated: 2026-10-30
 status: Draft
 feature: path-leases
 doc_role: decisions
@@ -199,11 +199,12 @@ is not a sufficient deployment.
 
 ## Task References
 
-- ORB-18404 — lease rows alongside reservations in the owner lock store.
-- ORB-18405 — advisory/hard runtime operations and principal policy.
-- ORB-18406 — owner control-plane tools, CLI and task-lock lease listing.
-- ORB-18410 — `orbit-auth` and lease tokens for the listener user.
-- ORB-18430 — the intake socket.
-- ORB-18412 — the listener as its own OS user.
+- [ORB-18404] — stored lease rows alongside reservations in the owner lock store.
+- [ORB-18405] — added advisory/hard runtime operations and principal policy.
+- [ORB-18406] — exposed owner tools, CLI and task-lock lease listing.
+- [ORB-18410] — added `orbit-auth` and listener-user lease tokens.
+- [ORB-18430] — added the intake socket.
+- [ORB-18412] — ran the listener as its own OS user.
+- [ORB-18432] — documented the listener-user boundary for cached sudo credentials.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

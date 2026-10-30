@@ -1,11 +1,11 @@
 ---
 title: Path Leases — Overview
 owner: claude
-last_updated: 2026-10-29
-last_validated: 2026-10-26
+last_updated: 2026-10-30
+last_validated: 2026-10-30
 status: Draft
-stage: building
-next: "Preemption and signed webhooks remain later work"
+stage: shipped
+next: "—"
 feature: path-leases
 doc_role: overview
 type: design
@@ -18,7 +18,7 @@ related_artifacts: []
 
 # Path Leases — Overview
 
-> **Status: Partially implemented.** Lease storage and request, renew, release, show, list and
+> **Status: Committed scope shipped.** Lease storage and request, renew, release, show, list and
 > check operations are shipped through MCP and CLI, with a loopback REST surface and Orbit Web
 > notices/SSE. Lease-token administration, the `orbit-auth` credential crate and the authenticated
 > Unix intake socket are also implemented, as is the lease listener (`orbit lease listen`, run as the
@@ -91,14 +91,16 @@ Full definitions: [references/glossary.md](./references/glossary.md).
 |---------|------|------|
 | Reserve and release path selectors with a TTL (exists) | [crates/orbit-runtime/src/task/locks/commands.rs](../../../crates/orbit-runtime/src/task/locks/commands.rs) | — |
 | Which tasks hold their context (exists) | [crates/orbit-runtime/src/task/locks/index.rs](../../../crates/orbit-runtime/src/task/locks/index.rs) | — |
-| Reservation rows (exists; gains lease columns) | [crates/orbit-store/src/driver/sqlite/task_reservation_store/](../../../crates/orbit-store/src/driver/sqlite/task_reservation_store/) | — |
+| Reservation rows and lease columns | [crates/orbit-store/src/driver/sqlite/task_reservation_store/](../../../crates/orbit-store/src/driver/sqlite/task_reservation_store/) | [ORB-18404] |
 | Landed paths per task (exists; feeds landing notices) | [crates/orbit-core/src/application/codebase/facts/scan.rs](../../../crates/orbit-core/src/application/codebase/facts/scan.rs) | — |
 | SSE streaming pattern (exists, for logs) | [crates/orbit-web/src/api/log.rs](../../../crates/orbit-web/src/api/log.rs) | — |
-| Hard/advisory modes, lease lifetime and notices | implemented, [2_design.md §2–§6](./2_design.md#2-the-lease-record) | — |
-| Lease queue, expansion and `--no-wait` behavior | proposed, [2_design.md §6](./2_design.md#6-surfaces) | — |
-| MCP, CLI, loopback REST and Orbit Web notices/SSE | request, renew, release, show, list and check implemented; Orbit Web also serves notices/SSE, [2_design.md §6](./2_design.md#6-surfaces) | — |
+| Hard/advisory modes, lease lifetime and notices | implemented by [ORB-18405], [ORB-18551] and [ORB-18554], [2_design.md §2–§6](./2_design.md#2-the-lease-record) | — |
+| Lease queue, expansion and `--no-wait` behavior | implemented by [ORB-18553], [2_design.md §6](./2_design.md#6-surfaces) | — |
+| MCP, CLI, loopback REST and notices/SSE | implemented by [ORB-18406], [ORB-18411], [ORB-18551] and [ORB-18552]; [2_design.md §6](./2_design.md#6-surfaces) | — |
 | Principals, lease tokens and the lease listener | token administration (`orbit lease token create\|list\|revoke`), the intake socket, native TLS and configured listener limits are implemented; preemption and signed webhooks remain later work, [2_design.md §7](./2_design.md#7-authority-and-authentication) | ORB-18410, ORB-18412, ORB-18413, ORB-18421 |
 | Listener user and intake socket | intake socket and the listener's startup checks implemented ([crates/orbit-web/src/lease/intake/mod.rs](../../../crates/orbit-web/src/lease/intake/mod.rs)); creating the user is the host's, [2_design.md §7.1–§7.2](./2_design.md#71-the-listener-user) | ORB-18410, ORB-18430 |
+| Security review and repairs | [ORB-18414] reviewed the listener; [ORB-18774], [ORB-18775] and [ORB-18776] delivered renewal ceilings, secret redaction and token resource bounds | [ORB-18414], [ORB-18774], [ORB-18775], [ORB-18776] |
+| Dashboard Leases view | implemented by [ORB-18555] | [ORB-18555] |
 | Credential code (`orbit-auth`) | implemented, [2_design.md §7.4](./2_design.md#74-the-orbit-auth-crate) | ORB-18410, ORB-18421 |
 
 Decisions: [4_decisions.md](./4_decisions.md). Open questions and prior work:
@@ -106,7 +108,23 @@ Decisions: [4_decisions.md](./4_decisions.md). Open questions and prior work:
 
 ## Task References
 
-- ORB-18404, ORB-18405, ORB-18406 — phase 1: lease rows, operations and SSH surfaces.
-- ORB-18410, ORB-18411, ORB-18430, ORB-18412, ORB-18413, ORB-18421, ORB-18414 — phase 2: the lease listener.
+- [ORB-18404] — stored lease rows alongside task reservations.
+- [ORB-18405] — added lease operations and principal policy.
+- [ORB-18406] — exposed MCP tools and the CLI.
+- [ORB-18410] — added the credential crate and listener tokens.
+- [ORB-18411] — served lease REST routes on Orbit Web.
+- [ORB-18430] — added the authenticated intake socket.
+- [ORB-18412] — ran the listener as its own OS user.
+- [ORB-18413] — added native listener TLS.
+- [ORB-18421] — bounded listener requests and rates.
+- [ORB-18414] — reviewed listener and token security and filed repairs.
+- [ORB-18774] — enforced token and workspace ceilings on renewal.
+- [ORB-18775] — redacted owner audit payloads and errors.
+- [ORB-18776] — bounded token lease accumulation and answer construction.
+- [ORB-18551] — delivered durable notices and Orbit Web polling and SSE.
+- [ORB-18552] — delivered notice polling and SSE on the listener.
+- [ORB-18553] — delivered the hard-lease queue and expansion.
+- [ORB-18554] — delivered landing release and expiry notices.
+- [ORB-18555] — delivered the dashboard Leases view.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
