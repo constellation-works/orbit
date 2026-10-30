@@ -76,6 +76,7 @@ pub(crate) fn declare_muse_macos(runtime: &OrbitRuntime) {
             command: Some("muse".to_string()),
             args: Vec::new(),
             inspection_args: None,
+            image_input: None,
             stdout_format: None,
             model_pair_override: None,
             model_flag: None,

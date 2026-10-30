@@ -126,6 +126,11 @@ fn crew_field_values(crew: &Crew) -> Vec<(&'static str, serde_json::Value)> {
     if !crew.env.is_empty() {
         fields.push(("env", serde_json::json!(crew.env)));
     }
+    // Only the opt-out: a crew without the key may see images when its
+    // executor declares `image_input`.
+    if !crew.vision {
+        fields.push(("vision", serde_json::json!(false)));
+    }
     fields
 }
 

@@ -1,6 +1,7 @@
 mod argv;
 mod auth_probe;
 mod envelope;
+mod image_input;
 mod inspection;
 mod launcher;
 mod orchestrator;

@@ -43,6 +43,14 @@ spec:
     # repository content Orbit does not vouch for, so its Muse skills and rules
     # stay unloaded and agent delegation stays off. The envelope directs the
     # agent to read the workspace's AGENTS.md itself.
+  # `muse exec --image <PATH>` attaches each staged image. Declared because
+  # the canary probe (`orbit agents vision-probe`) passed on this lane. Only
+  # PNG, the canary's format, has passing evidence.
+  image_input:
+    mode: attach_args
+    formats: [png]
+    max_images: 40
+    attach_args: ["--image", "{path}"]
   stdout_format: envelope
   sandbox: macos-sandbox-exec
   # Muse runs on macOS and Linux, so it carries no OS restriction: the

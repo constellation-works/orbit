@@ -49,6 +49,7 @@ pub(super) fn dispatch_prepared_provider(
         trusted_host,
         mut cli_executor,
         inspection_tools,
+        image_input,
         timeout_seconds,
         wall_clock_timeout,
         stall_window,
@@ -91,6 +92,32 @@ pub(super) fn dispatch_prepared_provider(
     if let Some(tools) = &inspection_tools {
         envelope_spec.instruction.push_str("\n\n");
         envelope_spec.instruction.push_str(tools.instruction);
+    }
+    // The canary and the requested images are staged under the run's own
+    // scratch directory, which the agent's filesystem profile can read; the
+    // prompt names their paths and the canary's code never leaves this host.
+    let staged_images = image_input
+        .as_ref()
+        .map(|plan| {
+            let root = subprocess_cwd
+                .clone()
+                .or_else(|| std::env::current_dir().ok())
+                .ok_or_else(|| {
+                    DispatchError::CliInvocationPermanent(
+                        "cannot locate the image staging root".into(),
+                    )
+                })?;
+            let scratch = orbit_common::fs::path::ensure_orbit_scratch_dir(&root)
+                .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?;
+            plan.stage(
+                &scratch,
+                source_cwd.as_deref().or(subprocess_cwd.as_deref()),
+            )
+        })
+        .transpose()?;
+    if let Some(staged) = &staged_images {
+        envelope_spec.instruction.push_str("\n\n");
+        envelope_spec.instruction.push_str(&staged.instruction);
     }
     if let Some(instruction) = regression_risk_instruction {
         envelope_spec.instruction.push_str("\n\n");
@@ -328,6 +355,9 @@ pub(super) fn dispatch_prepared_provider(
     }
     if let Some(tools) = inspection_tools {
         subprocess_args.extend(tools.args);
+    }
+    if let Some(staged) = &staged_images {
+        subprocess_args.extend(staged.args.iter().cloned());
     }
 
     // The audit argv reflects what actually runs. Under sandbox-exec the
@@ -627,6 +657,7 @@ pub(super) fn dispatch_prepared_provider(
         print_timeout,
         stall_window,
         inspection: inspection.as_ref(),
+        staged_images: staged_images.as_ref(),
         scratch_dir: scratch_dir.as_deref(),
         build_wait_directory: &build_wait_directory,
         process_exit,

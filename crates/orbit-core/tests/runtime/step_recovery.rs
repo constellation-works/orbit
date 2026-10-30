@@ -291,6 +291,7 @@ impl orbit_engine::test_support::NullRuntimeHost for RecoveryHost<'_> {
             command: self.provider.display().to_string(),
             args: Vec::new(),
             inspection_args: None,
+            image_input: None,
         })
     }
 
@@ -345,6 +346,7 @@ impl orbit_engine::test_support::NullRuntimeHost for RecoveryHost<'_> {
             reasoning_effort: None,
             env: Vec::new(),
             account: None,
+            vision_disabled: false,
         }))
     }
 

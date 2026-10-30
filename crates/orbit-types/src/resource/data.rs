@@ -180,6 +180,9 @@ pub struct ExecutorResourceSpec {
     /// See [`crate::workflow::ExecutorDef::inspection_args`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inspection_args: Option<Vec<String>>,
+    /// See [`crate::workflow::ExecutorDef::image_input`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_input: Option<crate::workflow::ExecutorImageInput>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stdout_format: Option<StdoutFormat>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -180,6 +180,7 @@ fn dispatch_codex(
         trusted_host_execution: false,
         crew_env: Vec::new(),
         crew_account: None,
+        crew_vision_disabled: false,
     });
     let outcome = dispatch_v2_activity(V2DispatchInput {
         activity_name: "explicit_sandbox_off",

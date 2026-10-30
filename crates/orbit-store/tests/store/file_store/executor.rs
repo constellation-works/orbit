@@ -15,6 +15,7 @@ fn baseline_def(name: &str) -> ExecutorDef {
         command: Some(name.to_string()),
         args: vec!["--flag".to_string()],
         inspection_args: None,
+        image_input: None,
         stdout_format: None,
         model_pair_override: None,
         model_flag: None,
@@ -87,10 +88,7 @@ fn omitted_host_os_is_not_serialized_and_a_declared_set_round_trips() {
         .upsert_executor_def(&baseline_def("codex"))
         .expect("unrestricted executor");
     let yaml = std::fs::read_to_string(dir.path().join("executors/codex.yaml")).expect("yaml");
-    assert!(
-        !yaml.contains("host_os"),
-        "omission stays omitted: {yaml}"
-    );
+    assert!(!yaml.contains("host_os"), "omission stays omitted: {yaml}");
     assert!(
         store
             .get_executor_def("codex")
@@ -140,10 +138,7 @@ fn empty_or_unknown_host_os_is_refused_at_load_and_names_the_asset() {
             .list_executor_defs()
             .expect_err("bad host_os must fail the load");
         let message = error.to_string();
-        assert!(
-            message.contains(&path.display().to_string()),
-            "{message}"
-        );
+        assert!(message.contains(&path.display().to_string()), "{message}");
         assert!(message.contains(needle), "{message}");
     }
 }

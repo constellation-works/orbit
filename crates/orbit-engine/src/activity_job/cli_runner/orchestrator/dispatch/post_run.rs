@@ -4,6 +4,7 @@ use orbit_common::process::build_budget::read_waits;
 use orbit_common::security::redaction::PatternRedactor;
 use orbit_types::workflow::activity_job::V2AuditEventKind;
 
+use crate::activity_job::cli_runner::image_input::StagedImages;
 use crate::activity_job::cli_runner::inspection::SourceInspection;
 use crate::activity_job::dispatcher::{DispatchOutcome, ResolvedSandbox};
 use crate::activity_job::workspace::WorktreeBoundaryGuard;
@@ -30,6 +31,7 @@ pub(super) struct CliProviderCompletion<'a> {
     pub(super) print_timeout: Option<Duration>,
     pub(super) stall_window: Option<Duration>,
     pub(super) inspection: Option<&'a SourceInspection>,
+    pub(super) staged_images: Option<&'a StagedImages>,
     pub(super) scratch_dir: Option<&'a std::path::Path>,
     pub(super) build_wait_directory: &'a tempfile::TempDir,
     pub(super) process_exit: subprocess::ProviderProcessExit,
@@ -53,6 +55,7 @@ pub(super) fn finish_cli_dispatch(
         print_timeout,
         stall_window,
         inspection,
+        staged_images,
         scratch_dir,
         build_wait_directory,
         process_exit,
@@ -60,6 +63,8 @@ pub(super) fn finish_cli_dispatch(
     let CliDispatchContext {
         host,
         spec,
+        step_id,
+        activity_name,
         input,
         run_id,
         audit,
@@ -123,7 +128,8 @@ pub(super) fn finish_cli_dispatch(
             });
     let post_run_error = inspection_error.or(guard_error).or(refresh_error);
 
-    let completion = project_completion(ProviderExit {
+    let canary_provider = staged_images.is_some().then(|| provider.clone());
+    let mut completion = project_completion(ProviderExit {
         host,
         spec,
         input,
@@ -152,6 +158,18 @@ pub(super) fn finish_cli_dispatch(
         usage_context,
         build_budget_waits,
     });
+    if let (Some(staged), Some(provider), Ok(outcome)) =
+        (staged_images, canary_provider, completion.as_mut())
+    {
+        staged.verify(
+            outcome,
+            audit,
+            step_id,
+            activity_name,
+            &provider,
+            input.get("crew").and_then(serde_json::Value::as_str),
+        );
+    }
     step_error_after_provider_evidence(
         completion,
         post_run_error,

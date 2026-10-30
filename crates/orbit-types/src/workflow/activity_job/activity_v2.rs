@@ -193,6 +193,10 @@ pub struct AgentLoopSpec {
     /// dispatch are attributed to that account. Never persisted.
     #[serde(skip)]
     pub crew_account: Option<String>,
+    /// The dispatching crew sets `vision = false`, set with `crew_env`: an
+    /// image-input run on it is refused before launch. Never persisted.
+    #[serde(skip)]
+    pub crew_vision_disabled: bool,
 }
 
 /// Accepted-but-inert value of the retired `backend:` key [ORB-10801].

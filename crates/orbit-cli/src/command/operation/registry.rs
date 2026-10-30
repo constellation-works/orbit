@@ -470,7 +470,25 @@ impl Commands {
             }
             // The agent scorecards are registry-driven like codebase.
             Commands::Agents(command) => {
-                registry_operation(&command.command, runtime_dispatch!(Agents))
+                use super::super::agents::AgentsSubcommand;
+                match &command.command {
+                    AgentsSubcommand::Operation(invocation) => {
+                        registry_operation(invocation, runtime_dispatch!(Agents))
+                    }
+                    // The probe submits one canary run per crew, so it opens
+                    // the full runtime and audits as an admin action.
+                    AgentsSubcommand::VisionProbe(_) => CommandOperation::new(
+                        RuntimeNeed::Required,
+                        Some(admin_meta(
+                            "agents",
+                            Some("vision-probe"),
+                            Some("crew"),
+                            None,
+                        )),
+                        None,
+                        runtime_dispatch!(Agents),
+                    ),
+                }
             }
             // The deprecated orchestrator aliases are registry-driven too.
             Commands::Orchestrator(command) => {

@@ -846,6 +846,7 @@ fn crew_field_value(resolved: &ResolvedConfig, key: &str) -> Result<Option<JsonV
         "tags" => serde_json::json!(crew.tags),
         "enabled" => serde_json::json!(crew.enabled),
         "env" => serde_json::json!(crew.env),
+        "vision" => serde_json::json!(crew.vision),
         _ => JsonValue::Null,
     }))
 }

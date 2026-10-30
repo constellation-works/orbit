@@ -238,6 +238,7 @@ impl orbit_engine::test_support::NullRuntimeHost for InspectionHost {
             command: self.command.display().to_string(),
             args: self.args.clone(),
             inspection_args: self.inspection_args.clone(),
+            image_input: None,
         })
     }
     fn run_deterministic(

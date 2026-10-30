@@ -18,6 +18,7 @@ test-support = ["orbit-common/test-support"]
 
 [dependencies]
 chrono.workspace = true
+getrandom.workspace = true
 libc = { workspace = true }
 orbit-agent = { path = "../orbit-agent" }
 orbit-common = { path = "../orbit-common" }

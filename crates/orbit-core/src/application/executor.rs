@@ -1,8 +1,10 @@
 use orbit_common::OrbitError;
 use orbit_store::contracts::ExecutorDefStoreBackend;
-use orbit_types::resource::{EXECUTOR_RESOURCE_SCHEMA_VERSION, ExecutorResource, ResourceKind};
+use orbit_types::resource::{
+    EXECUTOR_RESOURCE_SCHEMA_VERSION, ExecutorResource, ExecutorResourceSpec, ResourceKind,
+};
 use orbit_types::workflow::activity_job::RETIRED_PROVIDER_IDS;
-use orbit_types::workflow::{ExecutorDef, ExecutorSandboxKind, ExecutorType};
+use orbit_types::workflow::{ExecutorDef, ExecutorImageInput, ExecutorSandboxKind, ExecutorType};
 
 pub(crate) const DEFAULT_EXECUTOR_FILES: &[(&str, &str)] = &[
     ("claude", include_str!("../../assets/executors/claude.yaml")),
@@ -222,27 +224,42 @@ pub(crate) fn declared_inspection_args(
     if let Some(args) = installed.and_then(|def| def.inspection_args.as_ref()) {
         return Some(args.clone());
     }
-    shipped_inspection_args().get(name).cloned().flatten()
+    shipped_executor_spec(name).and_then(|spec| spec.inspection_args.clone())
 }
 
-/// Each shipped executor's `inspection_args`, by name, parsed once.
-fn shipped_inspection_args()
--> &'static std::collections::BTreeMap<&'static str, Option<Vec<String>>> {
+/// The `image_input` the executor named `name` declares, or `None` when it
+/// cannot take images. Falls back to the shipped default of the same name
+/// exactly as [`declared_inspection_args`] does, so an upgrade gives the
+/// installed shipped executors the declarations their probes earned; a crew
+/// opts out with `vision = false`.
+pub(crate) fn declared_image_input(
+    installed: Option<&ExecutorDef>,
+    name: &str,
+) -> Option<ExecutorImageInput> {
+    if let Some(declared) = installed.and_then(|def| def.image_input.as_ref()) {
+        return Some(declared.clone());
+    }
+    shipped_executor_spec(name).and_then(|spec| spec.image_input.clone())
+}
+
+/// The shipped executor named `name`, parsed once.
+fn shipped_executor_spec(name: &str) -> Option<&'static ExecutorResourceSpec> {
     static SHIPPED: std::sync::OnceLock<
-        std::collections::BTreeMap<&'static str, Option<Vec<String>>>,
+        std::collections::BTreeMap<&'static str, ExecutorResourceSpec>,
     > = std::sync::OnceLock::new();
-    SHIPPED.get_or_init(|| {
-        DEFAULT_EXECUTOR_FILES
-            .iter()
-            .map(|(name, yaml)| {
-                let args = serde_yaml::from_str::<ExecutorResource>(yaml)
-                    .map_err(|error| {
-                        tracing::warn!(executor = name, %error, "unreadable shipped executor");
-                    })
-                    .ok()
-                    .and_then(|resource| resource.spec.inspection_args);
-                (*name, args)
-            })
-            .collect()
-    })
+    SHIPPED
+        .get_or_init(|| {
+            DEFAULT_EXECUTOR_FILES
+                .iter()
+                .filter_map(|(name, yaml)| {
+                    serde_yaml::from_str::<ExecutorResource>(yaml)
+                        .map_err(|error| {
+                            tracing::warn!(executor = name, %error, "unreadable shipped executor");
+                        })
+                        .ok()
+                        .map(|resource| (*name, resource.spec))
+                })
+                .collect()
+        })
+        .get(name)
 }

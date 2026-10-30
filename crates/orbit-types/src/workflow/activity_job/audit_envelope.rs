@@ -263,6 +263,22 @@ pub enum V2AuditEventKind {
         task_id: String,
         brief: crate::workflow::ExploreBriefRecord,
     },
+    /// Whether an image-input invocation returned its canary code, emitted
+    /// once per invocation whose provider finished its turn. Two misses in a
+    /// row hold the crew for visual purposes; the code itself is never
+    /// recorded.
+    ImageCanaryChecked {
+        /// The pipeline step that dispatched the activity.
+        step_id: String,
+        activity_name: String,
+        provider: String,
+        /// The crew the activity input named, when it named one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        crew: Option<String>,
+        /// The lane's `spec.image_input` mode.
+        mode: crate::workflow::ImageInputMode,
+        seen: bool,
+    },
     /// What live experiment arms changed in a CLI backend invocation, emitted
     /// once per invocation before the subprocess starts, and only when an arm
     /// applied. Each record carries the digest of what the dispatch received.
@@ -454,6 +470,7 @@ impl V2AuditEventKind {
             }
             V2AuditEventKind::TagInstructionsApplied { .. } => "activity.tag_instructions_applied",
             V2AuditEventKind::ExploreBriefApplied { .. } => "activity.explore_brief_applied",
+            V2AuditEventKind::ImageCanaryChecked { .. } => "activity.image_canary_checked",
             V2AuditEventKind::ExperimentOverlayApplied { .. } => {
                 "activity.experiment_overlay_applied"
             }

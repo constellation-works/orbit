@@ -1079,6 +1079,7 @@ fn follower_cli(runtime: &OrbitRuntime, provider: &str, command: &str) {
             command: Some(command.to_string()),
             args: vec![],
             inspection_args: None,
+            image_input: None,
             stdout_format: None,
             model_pair_override: None,
             model_flag: None,
