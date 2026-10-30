@@ -2,7 +2,7 @@
 title: Orbit Core — Overview
 owner: codex
 last_updated: 2026-10-28
-last_validated: 2026-10-28
+last_validated: 2026-10-30
 status: Accepted
 stage: shipped
 next: "—"
@@ -61,7 +61,8 @@ source scan, enforces the runtime direction.
 - **Application port** — `orbit_runtime::ApplicationPort`, the operations
   the kernel calls back into (task reads, automation updates, audit records,
   run reconciliation, crew redraws). `orbit-core`'s `runtime` module
-  implements it on the `OrbitRuntime` that owns the kernel.
+  implements it on `CoreApplicationPort`, which hands each call the
+  `OrbitRuntime` that owns the kernel.
 - **Application operations** — use-case DTOs and coordinated task, job,
   workflow, search, and health behavior. Store-coordinated
   lifecycle transitions live here; pure invariants live in `orbit-types`.
@@ -124,10 +125,10 @@ source scan, enforces the runtime direction.
 
 ## 4. Store Access Boundary
 
-`OrbitStores` is Core's internal holder for typed `orbit-store` backends; it is
-not an external SDK surface. Code inside Core delegates ordinary persistence
-to the owning backend traits [ORB-10355], while outer crates use explicit `OrbitRuntime`
-methods and application APIs. Runtime exposes mechanisms; coordination across
+`OrbitStores`, defined in `orbit-runtime`'s `context` module, is the typed holder
+for `orbit-store` backends; it is not an external SDK surface. Code inside Core
+delegates ordinary persistence to the owning backend traits [ORB-10355], while
+outer crates use explicit `OrbitRuntime` methods and application APIs. Runtime exposes mechanisms; coordination across
 stores or side effects belongs to the owning application operation.
 
 ## 5. Application-Internal Layering
