@@ -167,7 +167,8 @@ impl OrbitRuntime {
         let settle = read_record::<VisualSettleRecord>(self, &task.id, VISUAL_SETTLE_ARTIFACT)
             .ok()
             .flatten()
-            .map(|(settle, _)| settle);
+            .map(|(settle, _)| settle)
+            .filter(|settle| settle.candidate_sha == record.candidate_sha);
         Ok(Some(serde_json::json!({
             "summary": visual_review_summary(&record, checks.as_ref(), settle.as_ref()),
             "mode": record.mode.as_str(),

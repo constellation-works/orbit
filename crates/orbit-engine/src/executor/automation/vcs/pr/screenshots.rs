@@ -216,7 +216,8 @@ fn visual_evidence(task_id: &str, artifacts: &[TaskArtifact]) -> Option<VisualEv
         .and_then(|artifact| serde_json::from_slice::<VisualChecksRecord>(&artifact.content).ok())
         .filter(|checks| checks.candidate_sha == record.candidate_sha);
     let settle = find(VISUAL_SETTLE_ARTIFACT)
-        .and_then(|artifact| serde_json::from_slice::<VisualSettleRecord>(&artifact.content).ok());
+        .and_then(|artifact| serde_json::from_slice::<VisualSettleRecord>(&artifact.content).ok())
+        .filter(|settle| settle.candidate_sha == record.candidate_sha);
     let mut images = Vec::new();
     for mock in &record.mocks {
         let Some(capture) = &mock.capture else {
