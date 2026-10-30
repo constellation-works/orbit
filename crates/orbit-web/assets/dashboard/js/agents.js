@@ -769,18 +769,22 @@ function radarNode(row) {
     tableRow.dataset.term = axis.key;
     tableBody.append(tableRow);
   });
-  const table = el("table", { class: "visually-hidden" }, [
+  // A table ignores overflow and its nowrap columns set a minimum width, so
+  // the offscreen profile sits in a 1px scroll container. Its columns stay in
+  // the accessibility tree and out of the Analytics pane's scroll range.
+  const table = el("table", {}, [
     el("caption", { text: `Agent profile: ${row.crew} · ${row.model}; ranked fleet in ${windowLabel()}` }),
     el("thead", {}, [el("tr", {}, ["Axis", "Agent rate", "Fleet median rate", "Weight", "Contribution vs fleet median", "Raw count and units", "Evidence"].map((text) => heading(text, "col")))]),
     tableBody,
   ]);
+  const profile = el("div", { class: "visually-hidden" }, [table]);
   return el("section", { class: `agents-radar${below(row) ? " is-muted" : ""}`, "aria-label": "Agent profile" }, [
     el("h4", { text: "Agent profile" }),
     el("p", { class: "agents-muted", text: "Outward is better · each axis is the row's percentile in the ranked fleet; the dashed fleet median always sits on the middle ring. Weight and contribution vs the median explain each axis." }),
     ...(below(row) ? [el("p", { class: "agents-radar-note", text: row.unjudged ? "Nothing to compare: no unit of this row is judged yet." : "Too little evidence to compare: below minimum support." })] : []),
     plot,
     el("p", { class: "agents-radar-legend" }, [el("span", { class: "agents-radar-own-key", text: "Selected agent" }), el("span", { class: "agents-radar-fleet-key", text: "Fleet median" })]),
-    labels, tooltip, table,
+    labels, tooltip, profile,
   ]);
 }
 
