@@ -113,6 +113,7 @@ an opt-in `--format-version` for `/2` synthetic fixtures.
 A split manifest (`check-split`) assigns each case to `train`, `dev` or
 `holdout` and is rejected when:
 
+- a dataset case has no entry in `assignments` (a missing, empty or partial map);
 - the same `family_id` (task family or normalized failure family) or subject
   appears on both sides of the holdout boundary;
 - a `holdout_id` was previously opened/used (reused holdouts are rejected);
