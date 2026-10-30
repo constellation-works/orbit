@@ -36,7 +36,7 @@ class GuardrailTests(unittest.TestCase):
                         GUARD_TEST_LOG=str(self.log), GUARD_TEST_METADATA=str(self.metadata),
                         GUARD_TEST_BIN=str(self.bin / "fixture-test-bin"),
                         GUARD_TEST_CALLS=str(self.guard_calls))
-        for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+        for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "NEXTEST_SHARDS", "NEXTEST_PARTITIONS"):
             self.env.pop(key, None)
         # Pin the guard pool's width and ignore any host build-budget file.
         self.env.update(ORBIT_CARGO_JOBS="4", ORBIT_BUILD_BUDGET_DIR=str(self.root / "budget"))
@@ -968,6 +968,15 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         self.assertEqual(self.log.read_text(), "", "the partition guard neither builds nor archives")
         self.assertEqual((self.guard_calls / "check-nextest-partitions.py").read_text().splitlines(),
                          ["--shards", "3", "--", "cargo", "nextest", "list", "--archive-file", archive,
+                          "--workspace-remap", str(self.root)])
+        # Hosted CI has three shard jobs but four partitions: the build job
+        # runs one. An explicit partition count takes precedence over the
+        # legacy shard-count fallback exercised above.
+        result = self.run_guard("ci-guardrails.sh", "--test-partitions", archive,
+                                env_overrides={"NEXTEST_SHARDS": "3", "NEXTEST_PARTITIONS": "4"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.guard_calls / "check-nextest-partitions.py").read_text().splitlines(),
+                         ["--shards", "4", "--", "cargo", "nextest", "list", "--archive-file", archive,
                           "--workspace-remap", str(self.root)])
         self.assertEqual({path.name for path in self.guard_calls.iterdir()} - {"require-python.sh"},
                          {"check-nextest-partitions.py"}, "no repository guard or self-test runs")
