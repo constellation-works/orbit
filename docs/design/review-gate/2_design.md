@@ -1795,6 +1795,14 @@ snapshot, so follower-local coefficients are never accepted. The captured
 risk estimates remain unavailable until a durable owner snapshot seam exists;
 path predicates continue to use the complete owner-verifiable diff.
 
+The frozen identity embeds its fit window and the history it was fitted on, so
+it never equals a later resolution of the same configuration. Upgrade resume
+and completion observation therefore judge a captured selective policy changed
+only when an operator predicate (`mode`, `risk_threshold`, `paths`,
+`unknown_risk`) differs from today's. The frozen identity, the digest derived
+from it and the provenance map are ignored in that comparison; the run keeps
+its captured policy, and the gate still applies it.
+
 Selection receipts retain their original candidate identity across trusted
 reviewer repairs. Only a passed host settlement can advance the completion pin
 to the certificate's final candidate; claimed acceptance verifies that the

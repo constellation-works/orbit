@@ -138,6 +138,7 @@ mod purpose_crews;
 mod readiness_population;
 mod regression_risk;
 mod resource_profiles;
+mod risk_history;
 
 mod run_cli_invocations;
 mod run_history;
