@@ -21,6 +21,7 @@ spec:
     surfaces: []
     ui_base_url: "http://127.0.0.1:7878"
     runner: "scripts/ux-rules/run.mjs"
+    max_new_tasks: null
   steps:
     - id: run
       target: script:ux_rules_runner

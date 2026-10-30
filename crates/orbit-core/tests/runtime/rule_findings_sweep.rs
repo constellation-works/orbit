@@ -161,6 +161,40 @@ fn cap_takes_highest_severity_first_and_floor_records_only() {
     assert_eq!(outcome["recorded_only"][0]["fingerprint"], "fp-nit");
 }
 
+fn blank_file_at_uses_configured_floor() {
+    let (_root, runtime) = fixture("[ux_rules]\nfile_at = \"high\"\n");
+    let outcome = file(
+        &runtime,
+        document(vec![result("fail", "medium", "fp-empty-floor", json!({}))]),
+        json!({"file_at": ""}),
+    );
+    assert_eq!(outcome["file_at"], "high", "{outcome}");
+    assert_eq!(outcome["filed_count"], 0, "{outcome}");
+}
+
+fn default_ux_rules_pipeline_file_step_binds_optional_inputs() {
+    let (_root, runtime) = fixture("[ux_rules]\nmax_new_tasks = 2\nfile_at = \"high\"\n");
+    let activity_dir = _root.path().join("home/.orbit/resources/activities");
+    std::fs::create_dir_all(&activity_dir).unwrap();
+    std::fs::write(
+        activity_dir.join("file_rule_findings.yaml"),
+        include_str!("../../assets/activities/file_rule_findings.yaml"),
+    )
+    .unwrap();
+
+    let mut pipeline: serde_yaml::Value =
+        serde_yaml::from_str(include_str!("../../assets/jobs/ux_rules_pipeline.yaml")).unwrap();
+    let steps = pipeline["spec"]["steps"].as_sequence().unwrap();
+    let mut file_step = steps[1].clone();
+    file_step["default_input"]["results"] = serde_yaml::to_value(document(Vec::new())).unwrap();
+    pipeline["spec"]["steps"] = serde_yaml::Value::Sequence(vec![file_step]);
+
+    let job_path = _root.path().join("repo/ux_rules_pipeline_file_step.yaml");
+    std::fs::write(&job_path, serde_yaml::to_string(&pipeline).unwrap()).unwrap();
+    let outcome = runtime.run_job_v2_from_yaml(&job_path, json!({})).unwrap();
+    assert!(outcome.success, "{outcome:?}");
+}
+
 fn errors_file_one_task_per_rule() {
     let (_root, runtime) = fixture("");
     let mut first_error = result("error", "medium", "cli.example|a", json!({"threw": "x"}));
@@ -186,5 +220,7 @@ crate::scenario_table!(
     oscillating_measurements_comment_on_return_to_earlier_value,
     fail_pass_fail_pass_records_second_pass_transition,
     cap_takes_highest_severity_first_and_floor_records_only,
+    blank_file_at_uses_configured_floor,
+    default_ux_rules_pipeline_file_step_binds_optional_inputs,
     errors_file_one_task_per_rule
 );

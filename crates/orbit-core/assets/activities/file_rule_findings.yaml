@@ -34,7 +34,7 @@ spec:
         type: string
         description: Directory evidence paths in an inline results document resolve against.
       max_new_tasks:
-        type: number
+        type: [number, 'null']
         minimum: 1
         maximum: 50
         description: Optional run override for ux_rules.max_new_tasks.
