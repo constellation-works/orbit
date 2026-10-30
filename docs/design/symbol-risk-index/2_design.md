@@ -21,8 +21,8 @@ record and the source of each field, the boundary between Orbit core and the lan
 indexer, the core storage shape, the rebuild routine, staleness and rename handling, how site
 history is computed, how the two readers use the index, and the backtest protocol behind each
 ship gate. The symbol index and its consumers are unbuilt; [ORB-19370] repaired the scope's
-test guidance and [ORB-19371] added the publication fence below. The task asked for a scope
-and a design document, so this
+test guidance and [ORB-19371] added the publication fence below. [ORB-19358] wrote this
+design and its scope, so this
 folder keeps a scope entry with a separate design file instead of choosing one track
 ([CONVENTIONS.md §1](../CONVENTIONS.md#1-folder-layout-per-feature-recommended)). The scope
 holds the problem, evidence, outputs and gates; this file holds the contracts.
@@ -376,8 +376,8 @@ A rename that also edits the body therefore breaks history unless the indexer pa
 or merge never carries history. A deleted symbol drops out of the view, and its events age out
 of the window.
 
-**Resolving recorded sites.** `regression.sites` are recorded at filing time and never
-rewritten on the task. At read time core resolves each `symbol:` site forward through lineage,
+**Resolving recorded sites.** `regression.sites` are recorded at filing time ([ORB-19276]
+made that recording unconditional) and never rewritten on the task. At read time core resolves each `symbol:` site forward through lineage,
 at most 16 hops and with a cycle guard, to a current selector. Agents often spell kinds
 inconsistently, for example `fn` against `function`. A site with no exact match therefore
 resolves by `path#name` when exactly one current symbol in that file has the name; the
