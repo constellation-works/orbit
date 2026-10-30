@@ -176,13 +176,14 @@ impl OrbitRuntime {
             })
     }
 
-    /// Fill the ux-rules pipeline's run inputs from effective `ux_rules.*`
-    /// config when the caller did not supply them, so scheduled routines
-    /// and direct runs measure the configured surfaces with the configured
-    /// runner and UI URL. Explicit caller values (including an empty
-    /// `surfaces` list) win; a `null` is treated as unsupplied, matching
-    /// the filer's handling of its optional inputs. The job's literal
-    /// `default_input` remains the fallback when config is at its defaults.
+    /// Fill the ux-rules pipeline's run inputs from explicitly configured
+    /// `ux_rules.*` config when the caller did not supply them, so scheduled
+    /// routines and direct runs measure the configured surfaces with the
+    /// configured runner and UI URL. Explicit caller values (including an
+    /// empty `surfaces` list) win; a `null` is treated as unsupplied,
+    /// matching the filer's handling of its optional inputs. Built-in
+    /// defaults are never injected, so the job's literal `default_input`
+    /// remains the fallback when a key is unset in config.
     pub(crate) fn resolve_ux_rules_input(&self, input: &mut Value) -> Result<(), OrbitError> {
         if input.is_null() {
             *input = serde_json::json!({});
@@ -211,7 +212,10 @@ impl OrbitRuntime {
                 && let Some(value) = config
                     .values()
                     .iter()
-                    .find(|entry| entry.key == config_key)
+                    .find(|entry| {
+                        entry.key == config_key
+                            && entry.source.kind() != orbit_config::ConfigValueSourceKind::BuiltIn
+                    })
                     .map(|entry| entry.value.clone())
             {
                 input[input_key] = value;
