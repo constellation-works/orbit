@@ -665,20 +665,43 @@ impl OrbitRuntime {
         } else {
             workflow
         };
+        // A `verify-mock-ui` task whose mocks no longer validate is refused
+        // before it starts, on every local route that reaches this shared
+        // transition (explicit ship, automatic discovery, local drains).
+        let before = self.get_task(id)?;
+        if let Err(detail) = self.mock_admission_check(&before) {
+            return Err(OrbitError::InvalidInput(format!(
+                "task '{id}' is not admitted for workflow '{workflow}': {detail}"
+            )));
+        }
         let mut admitted = None;
         self.stores().tasks().with_task_write_lock(id, &mut || {
             admitted = Some(self.admit_task_for_workflow_locked(id, workflow)?);
             Ok(())
         })?;
-        admitted
-            .ok_or_else(|| OrbitError::Execution("workflow admission lock body did not run".into()))
+        let (admitted, transitioned) = admitted.ok_or_else(|| {
+            OrbitError::Execution("workflow admission lock body did not run".into())
+        })?;
+        // Freeze the admitted mocks before implementation begins. A task
+        // this call started gets a new delivery's baseline (kept when a
+        // live ship run already froze this delivery's); an already
+        // `in-progress` task keeps its active baseline.
+        self.freeze_mock_digests_at_workflow_admission(&admitted, transitioned)?;
+        Ok(admitted)
     }
 
-    fn admit_task_for_workflow_locked(&self, id: &str, workflow: &str) -> Result<Task, OrbitError> {
+    /// Admit under the per-task write lock. The bool reports whether this
+    /// call performed the `backlog -> in-progress` transition (a new
+    /// delivery) rather than finding the task already started.
+    fn admit_task_for_workflow_locked(
+        &self,
+        id: &str,
+        workflow: &str,
+    ) -> Result<(Task, bool), OrbitError> {
         let task = self.ensure_task_can_enter_workflow_as_system(id, workflow)?;
 
         if task.status == TaskStatus::InProgress {
-            return Ok(task);
+            return Ok((task, false));
         }
 
         let note = Some(format!("workflow admission: {workflow}"));
@@ -710,7 +733,7 @@ impl OrbitRuntime {
             ))
         })?;
 
-        Ok(updated)
+        Ok((updated, true))
     }
 
     /// Return every task blocked by a missing provider launcher that now

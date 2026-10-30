@@ -80,7 +80,14 @@ impl TaskCommitBoundary {
             let guidance = guidance_capture(candidate.task)?;
             receipt.experiments = Some(guidance.experiments);
             receipt.explore_brief = guidance.explore_brief;
-            if self.commit_repair_claim(screen, receipt_key, orbit_dir, receipt, &candidate)? {
+            if self.commit_repair_claim(
+                screen,
+                receipt_key,
+                orbit_dir,
+                receipt,
+                &candidate,
+                &guidance.artifacts,
+            )? {
                 return Ok(true);
             }
         }
@@ -211,6 +218,7 @@ impl TaskCommitBoundary {
         orbit_dir: &Path,
         receipt: &mut AdmissionReceipt,
         candidate: &RepairCandidate<'_>,
+        guidance_artifacts: &[orbit_types::task::TaskArtifact],
     ) -> Result<bool, OrbitError> {
         let (identity, request) = (screen.identity, screen.request);
         let RepairCandidate {
@@ -325,7 +333,10 @@ impl TaskCommitBoundary {
                 ])
             },
             &effects,
-            &ClaimEvidence::default(),
+            &ClaimEvidence {
+                artifacts: guidance_artifacts.to_vec(),
+                ..ClaimEvidence::default()
+            },
             None,
         )?;
         match outcome {

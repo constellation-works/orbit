@@ -126,6 +126,24 @@ pub(crate) fn gate_admission_stop(
         }
         match runtime.ensure_task_can_enter_workflow_as_system(task_id, workflow) {
             Ok(task) => {
+                // A `verify-mock-ui` task whose mocks fail validation at
+                // this re-check is refused like any other admission hold:
+                // the child never launches, so its mock digests are frozen
+                // (at workflow admission) only for a delivery that starts.
+                if let Err(detail) = runtime.mock_admission_check(&task) {
+                    let status = task.status;
+                    task_statuses.push(serde_json::json!({
+                        "task_id": task.id,
+                        "status": status.to_string(),
+                        "admissible": false,
+                    }));
+                    refused.push((
+                        task_id.clone(),
+                        status.to_string(),
+                        format!("task '{task_id}' is not admitted: {detail}"),
+                    ));
+                    continue;
+                }
                 task_statuses.push(serde_json::json!({
                     "task_id": task.id,
                     "status": task.status.to_string(),

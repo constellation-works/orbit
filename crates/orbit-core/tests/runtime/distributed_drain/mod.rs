@@ -87,6 +87,7 @@ mod interrupted_review;
 mod landing_attribution;
 mod landing_repair;
 mod metadata;
+mod mock_pull;
 mod no_diff;
 mod ordering;
 #[cfg(unix)]
