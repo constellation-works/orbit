@@ -118,6 +118,7 @@ impl<'a> Deferred<'a> {
             }
         }
         leaf.put_report(&ReviewReport {
+            visual_resolutions: Vec::new(),
             external_evidence: self
                 .hosts
                 .iter()
@@ -304,6 +305,7 @@ fn a_nested_seatbelt_conformance_deferral_settles_on_its_host_replay() {
     let command = format!("cargo test -p orbit-core --test runtime {SEATBELT_CONFORMANCE_TABLE}");
     let (leaf, attempt_id) = leaf_with_probe_target(&probe(&[]), "runtime");
     leaf.put_report(&ReviewReport {
+        visual_resolutions: Vec::new(),
         external_evidence: vec![ReviewEvidenceRequirement {
             kind: ReviewEvidenceKind::HostSandboxTest,
             name: "Nested-Seatbelt conformance table".into(),

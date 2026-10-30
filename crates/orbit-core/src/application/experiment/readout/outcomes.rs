@@ -141,6 +141,30 @@ pub(super) const METRIC_SPECS: &[MetricSpec] = &[
         true,
     ),
     spec("lines_changed", Kind::Mean, Better::Lower, "lines", true),
+    // Visual review §12.3: the post-landing comparison's severity-weighted
+    // confirmed findings, the visual fixes and follow-ups of the delivery,
+    // and its reviewer's CONFIRMED / (CONFIRMED + REJECTED).
+    spec(
+        "visual_landed_mismatches",
+        Kind::Mean,
+        Better::Lower,
+        "weighted_findings",
+        true,
+    ),
+    spec(
+        "visual_review_repairs",
+        Kind::Mean,
+        Better::Lower,
+        "count",
+        true,
+    ),
+    spec(
+        "visual_verified_finding_rate",
+        Kind::Mean,
+        Better::Higher,
+        "rate",
+        true,
+    ),
 ];
 
 pub(super) fn metric_spec(name: &str) -> Option<&'static MetricSpec> {
@@ -510,6 +534,23 @@ impl OrbitRuntime {
                 "lines_changed",
                 settled(lines.get(id).filter(|_| done).map(|lines| *lines as f64)),
             );
+            let visual = self.visual_outcomes(id)?;
+            values.insert(
+                "visual_landed_mismatches",
+                match visual.landed_mismatches.filter(|_| done) {
+                    Some(weighted) => Outcome::Value(weighted),
+                    None if terminal => Outcome::Unmeasured,
+                    None => Outcome::Open,
+                },
+            );
+            values.insert(
+                "visual_review_repairs",
+                settled(visual.repairs.filter(|_| done)),
+            );
+            values.insert(
+                "visual_verified_finding_rate",
+                settled(visual.verified_rate),
+            );
             let crew_name = task.crew.clone().unwrap_or_else(|| "unset".to_string());
             let (admitted_pool, admitted_pool_label) =
                 match self.admitted_crew_pool(id, &crew_name)? {
@@ -551,6 +592,13 @@ impl OrbitRuntime {
     ) -> Result<BTreeMap<String, Spend>, OrbitError> {
         let mut spend: BTreeMap<String, Spend> = BTreeMap::new();
         for invocation in self.invocation_spend(Some(since))? {
+            // [visual-review §12.3] The post-landing comparison measures the
+            // arms; it is not a cost either arm's delivery pays.
+            if invocation.activity_id.as_deref().is_some_and(|activity| {
+                orbit_types::task::VISUAL_MEASURE_INVOCATION_IDS.contains(&activity)
+            }) {
+                continue;
+            }
             for id in invocation.task_ids.iter().filter(|id| ids.contains(*id)) {
                 let task = spend.entry(id.clone()).or_default();
                 if let Some(cost) = invocation.provider_cost_usd.or(invocation.derived_cost_usd) {
@@ -774,4 +822,66 @@ fn failed_check_heads(history: &[TaskHistoryEntry]) -> usize {
         }
     }
     heads.len()
+}
+
+/// One task's visual review outcomes (§12.3), each `None` when its record
+/// is absent.
+struct VisualOutcomes {
+    landed_mismatches: Option<f64>,
+    repairs: Option<f64>,
+    verified_rate: Option<f64>,
+}
+
+impl OrbitRuntime {
+    fn visual_outcomes(&self, task_id: &str) -> Result<VisualOutcomes, OrbitError> {
+        use orbit_types::task::{
+            VisualPass, VisualResolution, VisualReviewRecord, VisualVerdictKind,
+            visual_severity_weight,
+        };
+        let read = |pass: VisualPass| -> Result<Option<VisualReviewRecord>, OrbitError> {
+            Ok(self
+                .get_task_artifact(task_id, &pass.review_artifact())?
+                .and_then(|artifact| serde_json::from_slice(&artifact.content).ok()))
+        };
+        let landed_mismatches = read(VisualPass::Measure)?.map(|record| {
+            record
+                .findings
+                .iter()
+                .filter(|finding| finding.verdict.verdict == VisualVerdictKind::Confirmed)
+                .map(|finding| visual_severity_weight(finding.severity_of_record()))
+                .sum()
+        });
+        let delivery = read(VisualPass::Delivery)?;
+        let repairs = delivery.as_ref().map(|record| {
+            record
+                .findings
+                .iter()
+                .filter(|finding| {
+                    finding.resolution == Some(VisualResolution::Fixed)
+                        || finding.follow_up.is_some()
+                })
+                .count() as f64
+        });
+        let verified_rate = delivery.as_ref().and_then(|record| {
+            let (confirmed, rejected) = record
+                .findings
+                .iter()
+                .filter(|finding| finding.source == "comparison")
+                .fold(
+                    (0u32, 0u32),
+                    |(confirmed, rejected), finding| match finding.verdict.verdict {
+                        VisualVerdictKind::Confirmed => (confirmed + 1, rejected),
+                        VisualVerdictKind::Rejected => (confirmed, rejected + 1),
+                        VisualVerdictKind::Unverified => (confirmed, rejected),
+                    },
+                );
+            (confirmed + rejected > 0)
+                .then(|| f64::from(confirmed) / f64::from(confirmed + rejected))
+        });
+        Ok(VisualOutcomes {
+            landed_mismatches,
+            repairs,
+            verified_rate,
+        })
+    }
 }

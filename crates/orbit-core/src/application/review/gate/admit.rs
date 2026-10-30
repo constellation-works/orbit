@@ -680,8 +680,15 @@ fn admit(
     for task_id in context.task_ids.iter().filter(|_| !context.claimed) {
         mutation_proposals.extend(runtime.unapplied_mutation_proposals(task_id)?);
     }
+    // [visual-review §1] A live visual review's confirmed findings go in
+    // front of this reviewer, which resolves each in its report.
+    let mut visual_findings = Vec::new();
+    for task_id in &context.task_ids {
+        visual_findings.extend(runtime.visual_findings_for_review(task_id)?);
+    }
     let manifest = ReviewManifest {
         mutation_proposals,
+        visual_findings,
         satisfied_external_evidence,
         evidence_carried: carry.carried().cloned(),
         owed_external_evidence,

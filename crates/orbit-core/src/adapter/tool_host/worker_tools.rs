@@ -60,9 +60,11 @@ pub(crate) fn execute(
             CrewVerb::Ladder => false,
         },
         // Capture renders the checkout it runs in, so a claimed leaf
-        // captures locally rather than routing to the owner.
+        // captures locally rather than routing to the owner. Accepting a
+        // dispute is the owner's operator decision, refused below.
         OrbitBuiltinAction::Visual(verb) => match verb {
             VisualVerb::Capture => false,
+            VisualVerb::AcceptDispute => true,
         },
         OrbitBuiltinAction::Orchestrator(verb) => match verb {
             OrchestratorVerb::Scorecard | OrchestratorVerb::Show => false,
@@ -385,6 +387,13 @@ pub(crate) fn execute(
         },
         OrbitBuiltinAction::Visual(verb) => match verb {
             VisualVerb::Capture => return Ok(None),
+            VisualVerb::AcceptDispute => {
+                return Err(OrbitError::PolicyDenied(
+                    "a claimed worker cannot accept a visual finding's dispute; the owner's \
+                     operator does"
+                        .into(),
+                ));
+            }
         },
         OrbitBuiltinAction::Orchestrator(verb) => match verb {
             OrchestratorVerb::Scorecard | OrchestratorVerb::Show => return Ok(None),

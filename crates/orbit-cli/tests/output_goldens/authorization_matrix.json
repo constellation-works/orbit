@@ -1740,6 +1740,19 @@
   },
   {
     "surface": "tool",
+    "operation": "orbit.visual.accept_dispute",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "tool",
     "operation": "orbit.visual.capture",
     "required_any": [],
     "verdicts": {

@@ -1,4 +1,5 @@
-//! The `orbit.visual.*` tools: the implementer's mock self-check capture.
+//! The `orbit.visual.*` tools: the implementer's mock self-check capture
+//! and the operator's acceptance of a disputed visual finding.
 use crate::OrbitRuntime;
 use orbit_common::{
     OrbitError,
@@ -22,5 +23,10 @@ pub(super) fn dispatch(
             serde_json::to_value(report)
                 .map_err(|error| OrbitError::Execution(format!("visual capture report: {error}")))
         }
+        VisualVerb::AcceptDispute => runtime.visual_accept_dispute(
+            &input.required_string("id")?,
+            &input.required_string("finding")?,
+            &input.required_string("reason")?,
+        ),
     }
 }

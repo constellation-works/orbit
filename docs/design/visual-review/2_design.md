@@ -1,7 +1,7 @@
 ---
 title: Visual Review — Design
 owner: claude
-last_updated: 2026-10-29
+last_updated: 2026-10-30
 last_validated: 2026-10-29
 status: Draft
 feature: visual-review
@@ -829,6 +829,26 @@ If the gate fails on the verified-finding rate, the questions and the precedence
 revised and the experiment is cloned, not extended. If control's landed-head mismatches are
 already near zero, the self-check is doing the work and the reviewer is not needed; the
 readout says so.
+
+### 12.5 As built in phase 6
+
+- The code reviewer's resolutions are its review report's `visual_resolutions` (`fixed`,
+  `disputed`, `unfixed`), keyed to the manifest's `visual_findings`. `visual_recapture`
+  records each resolution, an operator's accepted dispute and the recapture in
+  `visual/review.json` and `visual/recapture/`; the review certificate itself is unchanged.
+- An unresolved blocking finding holds the run with `delivery_visual_review_unresolved`
+  before `complete_pr`. `orbit visual accept-dispute` is the operator's acceptance; a
+  managed run or a claimed worker is refused it.
+- The post-landing comparison is a set of `pass: measure` steps after landing in
+  `task_pr_pipeline`, recorded under `visual/measure/` with `purpose: visual_measure`. It
+  reviews the delivered head, has no escalation round, and its reviewer and verifier
+  invocations (`visual_measure_reviewer`, `visual_measure_verifier`) are excluded from cost.
+- The shipped experiment is `orbit experiment create <name> --template visual-review`. The
+  verified-finding rate is reported per arm as `visual_verified_finding_rate`; its absolute
+  0.6 threshold, the Wilson bound and rule 3 of §12.4 are read from the readout by the
+  operator, because guardrails compare arms. The lead-time guardrail is `+0.33` hours.
+- The implementer scorecard credits `mocks_matched`: each shown mock with no confirmed
+  `medium` or higher finding (§11.4).
 
 ## 13. Later: before/after review without mocks
 

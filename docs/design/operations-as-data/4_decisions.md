@@ -1,7 +1,7 @@
 ---
 title: Operations as Data — Decisions
 owner: claude
-last_updated: 2026-10-27
+last_updated: 2026-10-30
 last_validated: 2026-10-12
 status: Accepted
 feature: operations-as-data
@@ -268,6 +268,13 @@ script grant|revoke` — so the rows exist to make both names operator-only in
 called: an agent session or plugin callback naming either is refused rather
 than defaulting to a grantable mutation. `GOVERNED_TOOL_PLACEMENT` records
 both as unadvertised.
+
+Current surface addition (2026-10-30): `orbit.visual.accept_dispute` is governed
+`operator` and unadvertised (`mcp_scope: None`); the operator surface is `orbit visual
+accept-dispute`. Accepting a disputed blocking visual finding overrides the reviewer's and
+verifier's confirmation and lets a held candidate land, so an agent session is refused at
+the row, and the tool entry also refuses a managed run and a claimed worker.
+`GOVERNED_TOOL_PLACEMENT` records it unadvertised.
 
 ### Rejected alternatives
 

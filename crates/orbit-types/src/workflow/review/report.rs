@@ -61,6 +61,9 @@ pub struct ReviewReport {
     /// Why the review stopped when the verdict is not a pass.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub escalation: Option<String>,
+    /// How the reviewer resolved each of the manifest's `visual_findings`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub visual_resolutions: Vec<super::ReviewVisualResolution>,
 }
 
 impl ReviewReport {
@@ -176,7 +179,12 @@ fn normalize_report(report: &mut Value) {
     if matches!(report.get("summary"), None | Some(Value::Null)) {
         report.insert("summary".to_string(), Value::String(String::new()));
     }
-    for list in ["findings", "validation", "retired_validation"] {
+    for list in [
+        "findings",
+        "validation",
+        "retired_validation",
+        "visual_resolutions",
+    ] {
         if report.get(list).is_some_and(Value::is_null) {
             report.remove(list);
         }

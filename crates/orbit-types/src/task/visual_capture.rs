@@ -14,7 +14,8 @@ use serde::{Deserialize, Serialize};
 
 use super::visual_review::{
     DEFAULT_VISUAL_MAX_FINDINGS, DEFAULT_VISUAL_MAX_IMAGE_TOKENS, DEFAULT_VISUAL_MAX_IMAGES,
-    VisualReviewRecord, VisualVerdictKind,
+    VisualReviewRecord, VisualThreshold, VisualVerdictKind, default_block_at, default_file_at,
+    is_default_block_at, is_default_file_at,
 };
 use super::{MockDigest, has_verify_mock_ui_tag};
 
@@ -68,7 +69,8 @@ pub enum VisualReviewMode {
     Off,
     /// Capture and check, record everything, block and file nothing.
     Shadow,
-    /// Accepted for phase 6; until then it records like `shadow`.
+    /// Capture, check and compare; confirmed findings block, are given
+    /// to the code reviewer and are filed under `block_at`/`file_at`.
     Live,
 }
 
@@ -176,6 +178,19 @@ pub struct VisualReviewContract {
     pub manifests: Vec<VisualManifestCapture>,
     /// Mock digests frozen at admission, in artifact order.
     pub mocks: Vec<VisualMockDigest>,
+    /// `visual_review.block_at`; omitted at its default so older readers
+    /// decode the contract.
+    #[serde(
+        default = "default_block_at",
+        skip_serializing_if = "is_default_block_at"
+    )]
+    pub block_at: VisualThreshold,
+    /// `visual_review.file_at`; omitted at its default.
+    #[serde(
+        default = "default_file_at",
+        skip_serializing_if = "is_default_file_at"
+    )]
+    pub file_at: VisualThreshold,
 }
 
 impl VisualReviewContract {
@@ -534,8 +549,13 @@ pub fn visual_review_summary_with_review(
                 .collect::<Vec<_>>()
                 .join(", ");
             line.push_str(&format!(
-                "; checks: {} finding(s) ({counts}), recorded only",
-                checks.findings.len()
+                "; checks: {} finding(s) ({counts}){}",
+                checks.findings.len(),
+                if capture.mode == VisualReviewMode::Live {
+                    ""
+                } else {
+                    ", recorded only"
+                }
             ));
         }
         None => line.push_str("; checks: not run"),
@@ -563,7 +583,7 @@ pub fn visual_review_summary_with_review(
             _ => {
                 let (confirmed, rejected, unverified) = review.verdict_counts();
                 line.push_str(&format!(
-                    "; review: {} finding(s) ({} {}, {} {}, {} {}), recorded only",
+                    "; review: {} finding(s) ({} {}, {} {}, {} {})",
                     review.findings.len(),
                     confirmed,
                     VisualVerdictKind::Confirmed.as_str(),
@@ -572,6 +592,27 @@ pub fn visual_review_summary_with_review(
                     unverified,
                     VisualVerdictKind::Unverified.as_str(),
                 ));
+                if review.recorded_only {
+                    line.push_str(", recorded only");
+                } else {
+                    let (blocking, optional, recorded) = review.disposition_counts();
+                    let unresolved = review.unresolved_blocking().len();
+                    line.push_str(&format!(
+                        ", {blocking} blocking ({unresolved} unresolved), {optional} optional, \
+                         {recorded} recorded"
+                    ));
+                    let filed = review
+                        .findings
+                        .iter()
+                        .filter(|finding| finding.follow_up.is_some())
+                        .count();
+                    if filed > 0 {
+                        line.push_str(&format!(", {filed} filed as follow-ups"));
+                    }
+                    if let Some(recapture) = &review.recapture {
+                        line.push_str(&format!(", recapture {}", recapture.outcome));
+                    }
+                }
                 if review.invalid_evidence_dropped > 0 {
                     line.push_str(&format!(
                         ", {} dropped as invalid_evidence",

@@ -18,6 +18,7 @@ mod refusal;
 mod report;
 mod selective;
 mod verdict;
+mod visual;
 
 #[cfg(test)]
 mod tests;
@@ -58,3 +59,4 @@ pub use verdict::{
     NegativeControl, RetainedObligation, ReviewAssurance, ReviewBaselineClaim, ReviewValidation,
     ReviewVerdict, ValidationOutcome, ValidationRole,
 };
+pub use visual::{ReviewVisualFinding, ReviewVisualResolution};

@@ -89,6 +89,7 @@ fn leaf_with_probe_target_at(
 /// sandbox could not run, for `os`.
 fn reviewer_needs_host(leaf: &ReviewedLeaf, attempt_id: &str, command: &str, os: EvidenceHostOs) {
     leaf.put_report(&ReviewReport {
+        visual_resolutions: Vec::new(),
         external_evidence: vec![ReviewEvidenceRequirement {
             kind: ReviewEvidenceKind::HostSandboxTest,
             name: "Sandbox probe".into(),

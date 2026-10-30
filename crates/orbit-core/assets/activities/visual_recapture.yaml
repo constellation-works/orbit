@@ -1,0 +1,44 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: visual_recapture
+spec:
+  type: deterministic
+  description: >
+    Before a `verify-mock-ui` delivery lands in `visual_review.mode = "live"`,
+    settle the code reviewer's resolutions of its confirmed visual findings
+    (its report's `visual_resolutions`). A finding marked fixed counts only
+    when a review commit changed the candidate; then the candidate is
+    recaptured under `visual/recapture/` and its checks rerun (no second
+    comparison review), and a blocking check finding still present stays
+    unresolved. An operator's accepted dispute
+    (`orbit visual accept-dispute`) resolves a blocking finding. The
+    resolutions are written into the system-written `visual/review.json`.
+    While a finding at or above `visual_review.block_at` is unresolved, the
+    run ends held (`delivery_visual_review_unresolved`) with the candidate
+    preserved for the operator. Every other delivery reports
+    `applies: false`.
+  input_schema_json:
+    type: object
+    required: [workspace_path]
+    properties:
+      job_run_id:
+        type: string
+      completed_task_ids:
+        type: array
+        items:
+          type: string
+      workspace_path:
+        type: string
+  output_schema_json:
+    type: object
+    required: [applies, resolved]
+    properties:
+      applies:
+        type: boolean
+      resolved:
+        type: array
+        items:
+          type: object
+  action: visual_recapture
+  config: {}

@@ -46,6 +46,11 @@ pub struct ReviewManifest {
     /// inputs, and only while the artifacts still hold these digests.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mutation_proposals: Vec<crate::task::ReviewedMutationProposal>,
+    /// Confirmed visual review findings the reviewer resolves in its
+    /// report's `visual_resolutions`: each must-address one fixed or
+    /// disputed, an optional one fixed or left (visual-review §1).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub visual_findings: Vec<super::ReviewVisualFinding>,
     /// Earlier report on this task, retained as advisory continuation context.
     /// A new attempt still needs a report naming its own attempt identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]

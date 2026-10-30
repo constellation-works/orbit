@@ -28,11 +28,19 @@ pub(super) fn dispatch(
         view_json(runtime.change_experiment(&input.required_string("id")?, change, by()?)?)
     };
     match verb {
-        ExperimentVerb::Create => view_json(runtime.create_experiment(
-            &input.required_string("name")?,
-            definition_input(&input, None)?,
-            by()?,
-        )?),
+        ExperimentVerb::Create => {
+            let mut definition = definition_input(&input, None)?;
+            if let Some(template) = input.optional_string("template")? {
+                definition = crate::application::experiment::experiment_definition_from_template(
+                    &template, definition,
+                )?;
+            }
+            view_json(runtime.create_experiment(
+                &input.required_string("name")?,
+                definition,
+                by()?,
+            )?)
+        }
         ExperimentVerb::Update => view_json(runtime.update_experiment(
             &input.required_string("id")?,
             definition_input(&input, input.optional_string("name")?)?,

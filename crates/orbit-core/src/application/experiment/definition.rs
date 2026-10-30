@@ -29,6 +29,9 @@ pub const EXPERIMENT_METRICS: &[&str] = &[
     "delivery_done_rate",
     "escaped_regressions",
     "lines_changed",
+    "visual_landed_mismatches",
+    "visual_review_repairs",
+    "visual_verified_finding_rate",
 ];
 
 /// Complexities a population filter may name.

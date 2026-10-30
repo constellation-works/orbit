@@ -414,15 +414,19 @@ fn check_finding(check: &Value, catalog: &VisualImageCatalog) -> Value {
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
-    // The capture of the mock the check names (`visual/<mock-name>/…`),
+    // The capture of the mock the check names (`<pass prefix>/<mock-name>/…`),
     // else any capture image in the catalog.
     let preferred = format!(
-        "visual/{}/",
+        "/{}/",
         crate::application::visual_capture::mock_output_name(&mock)
     );
     let chosen = catalog
         .iter()
-        .find(|(image, _)| image.starts_with(&preferred) && !image.contains("side-by-side"))
+        .find(|(image, _)| {
+            image.starts_with("visual/")
+                && image.contains(&preferred)
+                && !image.contains("side-by-side")
+        })
         .or_else(|| {
             catalog
                 .iter()

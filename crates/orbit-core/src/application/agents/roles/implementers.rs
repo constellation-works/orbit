@@ -45,6 +45,13 @@ const TERMS: &[Term] = &[
         group: "credit",
     },
     Term {
+        key: "mocks_matched",
+        label: "Mocks matched",
+        weight: 0.25,
+        definition: "verify-mock-ui mocks the comparison review (purpose visual_review) showed on the row's first candidate with no finding its in-line verifier CONFIRMED at medium or above, 0.25 each: how well the implementer's self-check worked.",
+        group: "credit",
+    },
+    Term {
         key: "review_rejects",
         label: "Review rejects",
         weight: -1.0,
@@ -226,6 +233,26 @@ fn compute_tallies<'a>(
                     run_id: task
                         .attempt_at(review.at)
                         .and_then(|index| task.attempts[index].runner.run_id.clone()),
+                }),
+            );
+        }
+        if let Some(visual) = &task.visual_review
+            && visual.mocks_matched > 0
+            && task.attempt_at(visual.at).is_some_and(|index| {
+                let attempt = &task.attempts[index];
+                counted(attempt, since) && key(attempt) == *row
+            })
+        {
+            tallies.entry("mocks_matched").or_default().add(
+                task,
+                visual.mocks_matched as f64,
+                Some(Occurrence {
+                    at: visual.at,
+                    detail: format!(
+                        "{} mock(s) matched on the first candidate",
+                        visual.mocks_matched
+                    ),
+                    run_id: None,
                 }),
             );
         }

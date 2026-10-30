@@ -344,6 +344,15 @@ pub(crate) fn run_deterministic(
         CoreDeterministicAction::VisualSettle => {
             crate::application::visual_delivery::visual_settle_step(runtime, action, input)
         }
+        // Visual review §1, §11.3: in `live`, settle the code reviewer's
+        // resolutions before landing (recapturing a changed candidate), and
+        // file what landed unresolved as follow-ups after landing.
+        CoreDeterministicAction::VisualRecapture => {
+            crate::application::visual_delivery::visual_recapture_step(runtime, action, input)
+        }
+        CoreDeterministicAction::VisualLanded => {
+            crate::application::visual_delivery::visual_landed_step(runtime, action, input)
+        }
         // Operator-admitted review reconciliation of an already-merged
         // foreign delivery head: re-observe and pin the head, run required
         // validation at the head (and its base for failures), then settle the

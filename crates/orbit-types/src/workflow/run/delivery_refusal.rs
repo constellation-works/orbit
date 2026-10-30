@@ -45,6 +45,11 @@ pub enum DeliveryRefusal {
     /// `visual_review.require_established` holds it until an operator
     /// releases it or a host with a verified browser kit captures it.
     VisualNotEstablished,
+    /// A `verify-mock-ui` delivery in `visual_review.mode = "live"` still has
+    /// a confirmed finding at or above `visual_review.block_at` the code
+    /// reviewer did not fix, or disputed without the operator accepting the
+    /// dispute; the candidate is held for the operator.
+    VisualReviewUnresolved,
 }
 
 impl DeliveryRefusal {
@@ -66,6 +71,7 @@ impl DeliveryRefusal {
             Self::ForgeObservationUnavailable => "delivery_forge_observation_unavailable",
             Self::OriginUnavailable => "delivery_origin_unavailable",
             Self::VisualNotEstablished => "delivery_visual_not_established",
+            Self::VisualReviewUnresolved => "delivery_visual_review_unresolved",
         }
     }
 
@@ -87,6 +93,7 @@ impl DeliveryRefusal {
             "delivery_forge_observation_unavailable" => Some(Self::ForgeObservationUnavailable),
             "delivery_origin_unavailable" => Some(Self::OriginUnavailable),
             "delivery_visual_not_established" => Some(Self::VisualNotEstablished),
+            "delivery_visual_review_unresolved" => Some(Self::VisualReviewUnresolved),
             _ => None,
         }
     }

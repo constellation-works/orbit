@@ -1,4 +1,5 @@
-//! Visual capture has no guarded modes; its shared spec owns input validation.
+//! The visual verbs' guarded modes: capture has none; accepting a disputed
+//! visual finding is an operator decision managed runs are refused.
 use super::operation::GuardedModes;
 use crate::ToolContext;
 use orbit_common::{
@@ -8,9 +9,18 @@ use orbit_common::{
 use serde_json::Value;
 
 impl GuardedModes for VisualVerb {
-    fn preempt(self, _ctx: &ToolContext, _input: &Value) -> Option<Result<Value, OrbitError>> {
+    fn preempt(self, ctx: &ToolContext, _input: &Value) -> Option<Result<Value, OrbitError>> {
         match self {
             Self::Capture => None,
+            Self::AcceptDispute => ctx
+                .orbit_host
+                .as_ref()
+                .is_some_and(|host| host.task_scope().run_id.is_some())
+                .then(|| {
+                    Err(OrbitError::CapabilityDenied(
+                        "managed runs cannot accept a visual finding's dispute".into(),
+                    ))
+                }),
         }
     }
 
@@ -20,19 +30,19 @@ impl GuardedModes for VisualVerb {
         _input: &OperationInput,
     ) -> Option<Result<Value, OrbitError>> {
         match self {
-            Self::Capture => None,
+            Self::Capture | Self::AcceptDispute => None,
         }
     }
 
     fn shape_input(self, _ctx: &ToolContext, _input: &mut Value) -> Result<(), OrbitError> {
         match self {
-            Self::Capture => Ok(()),
+            Self::Capture | Self::AcceptDispute => Ok(()),
         }
     }
 
     fn schema_extension(self) -> Option<fn(&mut Value)> {
         match self {
-            Self::Capture => None,
+            Self::Capture | Self::AcceptDispute => None,
         }
     }
 }

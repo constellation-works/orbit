@@ -11,12 +11,11 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
 use orbit_types::task::{
-    VISUAL_CAPTURE_ARTIFACT, VISUAL_CHECKS_ARTIFACT, VisualCaptureRecord, VisualCheckFinding,
-    VisualChecksRecord, visual_review_summary,
+    VisualCaptureRecord, VisualCheckFinding, VisualChecksRecord, VisualPass, visual_review_summary,
 };
 use serde_json::{Value, json};
 
-use super::{attach_system_artifacts, json_artifact, read_record};
+use super::{attach_system_artifacts, json_artifact, read_record, step_pass};
 use crate::OrbitRuntime;
 use crate::application::visual_capture::VisualCaptureMock;
 
@@ -31,9 +30,10 @@ pub(crate) fn visual_checks_step(
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
+    let pass = step_pass(input);
     let mut results = Vec::new();
     for capture in &captures {
-        let result = check_task(runtime, capture)
+        let result = check_task(runtime, capture, pass)
             .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
         results.push(result);
     }
@@ -44,15 +44,19 @@ pub(crate) fn visual_checks_step(
     }))
 }
 
-fn check_task(runtime: &OrbitRuntime, capture: &Value) -> Result<Value, OrbitError> {
+pub(super) fn check_task(
+    runtime: &OrbitRuntime,
+    capture: &Value,
+    pass: VisualPass,
+) -> Result<Value, OrbitError> {
     let task_id = capture
         .get("task_id")
         .and_then(Value::as_str)
         .ok_or_else(|| OrbitError::InvalidInput("capture entry names no task_id".into()))?;
-    let (record, _) =
-        read_record::<VisualCaptureRecord>(runtime, task_id, VISUAL_CAPTURE_ARTIFACT)?.ok_or_else(
-            || OrbitError::Execution(format!("{task_id} has no {VISUAL_CAPTURE_ARTIFACT}")),
-        )?;
+    let capture_artifact = pass.capture_artifact();
+    let checks_artifact = pass.checks_artifact();
+    let (record, _) = read_record::<VisualCaptureRecord>(runtime, task_id, &capture_artifact)?
+        .ok_or_else(|| OrbitError::Execution(format!("{task_id} has no {capture_artifact}")))?;
     let scratch = capture
         .get("scratch_dir")
         .and_then(Value::as_str)
@@ -89,7 +93,7 @@ fn check_task(runtime: &OrbitRuntime, capture: &Value) -> Result<Value, OrbitErr
         .collect();
     if !image_budget_mocks.is_empty()
         && let Some((earlier_checks, _)) =
-            read_record::<VisualChecksRecord>(runtime, task_id, VISUAL_CHECKS_ARTIFACT)?
+            read_record::<VisualChecksRecord>(runtime, task_id, &checks_artifact)?
         && earlier_checks.candidate_sha == record.candidate_sha
     {
         findings.extend(earlier_checks.findings.into_iter().filter(|finding| {
@@ -115,12 +119,12 @@ fn check_task(runtime: &OrbitRuntime, capture: &Value) -> Result<Value, OrbitErr
     attach_system_artifacts(
         runtime,
         task_id,
-        vec![json_artifact(VISUAL_CHECKS_ARTIFACT, &checks)?],
+        vec![json_artifact(&checks_artifact, &checks)?],
     )?;
     Ok(json!({
         "task_id": task_id,
         "findings": checks.findings.len(),
-        "checks_artifact": VISUAL_CHECKS_ARTIFACT,
+        "checks_artifact": checks_artifact,
         "summary": visual_review_summary(&record, Some(&checks), None),
     }))
 }

@@ -481,6 +481,7 @@ spec:
       when: "{{ steps.visual_capture.output.applies }} == true"
       target: activity:visual_settle
       default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         capture: "{{ steps.visual_capture.output }}"
         checks: "{{ steps.visual_checks.output }}"
@@ -743,6 +744,21 @@ spec:
         base_ref: "{{ steps.sync_base.output.base_ref }}"
         lease_remote_sha: "{{ steps.push.output.local_sha }}"
         pr_number: "{{ steps.pr_open.output.pr_number }}"
+
+    # Visual review §1: in `visual_review.mode = "live"`, settle the code
+    # reviewer's resolutions of the confirmed visual findings before the
+    # candidate lands. A candidate a review commit changed is recaptured and
+    # its checks rerun; a finding at or above `visual_review.block_at` left
+    # unfixed, still failing its check, or disputed without the operator
+    # accepting the dispute ends the run held
+    # (`delivery_visual_review_unresolved`), the PR open and unmerged.
+    - id: visual_recapture
+      when: "{{ steps.visual_capture.output.applies }} == true && {{ steps.commit.output.skipped_no_diff_expected }} != true"
+      target: activity:visual_recapture
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
 
     - id: complete_pr
       stage: { id: merge, label: Merge }
@@ -1022,3 +1038,136 @@ spec:
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         no_diff_expected: true
         already_landed_checkpoint: "{{ steps.commit.output }}"
+
+    # Visual review §11.3, §12: after a live delivery lands, file what its
+    # visual review left unresolved as proposed `visual-review` follow-ups,
+    # and name the landed tasks a visual review experiment enrolled. It
+    # always runs, so the measure steps' conditions may read its output;
+    # a task that did not land (`done`) files nothing.
+    - id: visual_landed
+      target: activity:visual_landed
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        base: "{{ input.base_branch }}"
+
+    # The post-landing comparison (`pass: measure`): the landed head of each
+    # enrolled task, in both arms, captured and compared with its mocks under
+    # `visual/measure/` and recorded with purpose `visual_measure`. Its
+    # workers (`visual_measure_reviewer`, `visual_measure_verifier`) are
+    # excluded from the experiment's cost metric. One verification round, no
+    # escalation; nothing here blocks or is filed.
+    - id: visual_measure_capture
+      target: activity:visual_capture
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ steps.visual_landed.output.measure_task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        pass: measure
+
+    - id: visual_measure_checks
+      when: "{{ steps.visual_measure_capture.output.applies }} == true"
+      target: activity:visual_checks
+      default_input:
+        capture: "{{ steps.visual_measure_capture.output }}"
+
+    - id: visual_measure_review_prepare
+      target: activity:visual_review_prepare
+      default_input:
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        capture: "{{ steps.visual_measure_capture.output }}"
+
+    - id: visual_measure_review_empty
+      when: "{{ steps.visual_measure_review_prepare.output.review_count }} == 0"
+      fan_out:
+        items: "[]"
+        max_workers: 1
+        worker:
+          id: empty_visual_measure_reviewer
+          target: activity:visual_review
+      fan_in:
+        join: { mode: all }
+        collect: visual_measure_review_results
+        errors: visual_measure_review_errors
+
+    - id: visual_measure_reviewers
+      when: "{{ steps.visual_measure_review_prepare.output.review_count }} != 0"
+      fan_out:
+        items: "{{ steps.visual_measure_review_prepare.output.reviews }}"
+        max_workers: 3
+        worker:
+          id: visual_measure_reviewer
+          target: activity:visual_review
+          default_input:
+            task_id: "{{ item.task_id }}"
+            candidate_sha: "{{ item.candidate_sha }}"
+            workspace_path: "{{ item.workspace_path }}"
+            crew: "{{ item.crew }}"
+            image_input: "{{ item.image_input }}"
+            staged_images: "{{ item.staged_images }}"
+            shown: "{{ item.shown }}"
+            not_shown: "{{ item.not_shown }}"
+            max_findings: "{{ item.max_findings }}"
+            task: "{{ item.task }}"
+            deviations: "{{ item.deviations }}"
+            check_findings: "{{ item.check_findings }}"
+            design_rules: "{{ item.design_rules }}"
+            catalog: "{{ item.catalog }}"
+      fan_in:
+        join: { mode: any }
+        collect: visual_measure_review_results
+        errors: visual_measure_review_errors
+
+    - id: visual_measure_verify_prepare
+      target: activity:visual_verify_prepare
+      default_input:
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        prepared: "{{ steps.visual_measure_review_prepare.output }}"
+        review_results: "{{ steps.visual_measure_review_results.output }}"
+
+    - id: visual_measure_verify_empty
+      when: "{{ steps.visual_measure_verify_prepare.output.partition_count }} == 0"
+      fan_out:
+        items: "[]"
+        max_workers: 1
+        worker:
+          id: empty_visual_measure_verifier
+          target: activity:visual_verify
+      fan_in:
+        join: { mode: all }
+        collect: visual_measure_verify_results
+        errors: visual_measure_verify_errors
+
+    - id: visual_measure_verifiers
+      when: "{{ steps.visual_measure_verify_prepare.output.partition_count }} != 0"
+      fan_out:
+        items: "{{ steps.visual_measure_verify_prepare.output.partitions }}"
+        max_workers: 5
+        worker:
+          id: visual_measure_verifier
+          target: activity:visual_verify
+          default_input:
+            task_id: "{{ item.task_id }}"
+            partition_index: "{{ item.partition_index }}"
+            escalation: "{{ item.escalation }}"
+            workspace_path: "{{ item.workspace_path }}"
+            crew: "{{ item.crew }}"
+            image_input: "{{ item.image_input }}"
+            staged_images: "{{ item.staged_images }}"
+            findings: "{{ item.findings }}"
+            catalog: "{{ item.catalog }}"
+      fan_in:
+        join: { mode: any }
+        collect: visual_measure_verify_results
+        errors: visual_measure_verify_errors
+
+    - id: visual_measure_settle
+      when: "{{ steps.visual_measure_capture.output.applies }} == true"
+      target: activity:visual_settle
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        capture: "{{ steps.visual_measure_capture.output }}"
+        checks: "{{ steps.visual_measure_checks.output }}"
+        verified: "{{ steps.visual_measure_verify_prepare.output }}"
+        verify_results: "{{ steps.visual_measure_verify_results.output }}"

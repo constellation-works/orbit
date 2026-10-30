@@ -1,6 +1,7 @@
-//! The visual capture operations behind `orbit visual` and the
-//! `orbit.visual.*` tools: the implementer's mock self-check, which
-//! renders the current working tree for a task's mocks.
+//! The visual operations behind `orbit visual` and the `orbit.visual.*`
+//! tools: the implementer's mock self-check, which renders the current
+//! working tree for a task's mocks, and the operator's acceptance of a
+//! disputed blocking visual review finding.
 use crate::governance::operation::{
     CliArgKind, CliHelp, Effect, NounSpec, OperationSpec, ParamSpec, ParamType,
     ToolOnlyRegistration, UnknownFields, both, mcp_only, operation_registry, required,
@@ -16,6 +17,8 @@ operation_registry! {
     {
         /// Capture the working tree beside a task's mocks.
         Capture => CAPTURE,
+        /// Accept the code reviewer's dispute of a blocking visual finding.
+        AcceptDispute => ACCEPT_DISPUTE,
     }
 }
 
@@ -24,7 +27,7 @@ pub const VISUAL: NounSpec<VisualVerb> = NounSpec {
     cli_name: "visual",
     tool_prefix: "orbit.visual",
     tool_only_registration: ToolOnlyRegistration::Inactive,
-    cli_about: "Capture the working tree beside a task's mocks for comparison",
+    cli_about: "Capture the working tree beside a task's mocks, or accept a disputed visual finding",
     audit_target_type: "task",
     audit_target_param: "id",
     cli_groups: &[],
@@ -93,4 +96,58 @@ const CAPTURE: OperationSpec<VisualVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+};
+
+const ACCEPT_DISPUTE_PARAMS: &[ParamSpec] = &[
+    required(both(
+        "id",
+        ParamType::String,
+        "Task ID whose delivery holds on the disputed finding.",
+        CliArgKind::flag("task"),
+        "Task whose delivery holds on the disputed finding",
+    )),
+    required(both(
+        "finding",
+        ParamType::String,
+        "The finding id in the task's visual review record (`orbit task show` lists it).",
+        CliArgKind::flag("finding"),
+        "Finding id in the task's visual review record",
+    )),
+    required(both(
+        "reason",
+        ParamType::String,
+        "Why the dispute is accepted; recorded on the task.",
+        CliArgKind::flag("reason"),
+        "Why the dispute is accepted",
+    )),
+];
+
+const ACCEPT_DISPUTE: OperationSpec<VisualVerb> = OperationSpec {
+    verb: VisualVerb::AcceptDispute,
+    cli_path: &["accept-dispute"],
+    tool_name: "orbit.visual.accept_dispute",
+    tool_description: "Accept the code reviewer's dispute of a confirmed visual review finding that blocks the task's delivery (`visual_review.mode = \"live\"`, at or above `visual_review.block_at`). Records the acceptance on the task; the held delivery then lands once resumed, and the finding is filed as a follow-up after landing. Operators only: managed runs are refused.",
+    cli_about: "Accept a disputed blocking visual finding so the delivery can land",
+    cli_help: CliHelp {
+        long_about: Some(
+            "Accept a disputed blocking visual finding so the delivery can land.\n\n\
+             In `visual_review.mode = \"live\"`, a confirmed finding at or above \
+             `visual_review.block_at` holds the candidate until the code reviewer fixes it. \
+             When the reviewer disputes it instead, the delivery is held for an operator. \
+             Accepting the dispute records it on the task, lets the held delivery land once \
+             resumed, and files the finding as a follow-up after landing.",
+        ),
+        after_help: Some(
+            "Only the disputed finding of a live visual review can be accepted. Managed runs \
+             are refused.",
+        ),
+        flag_order: &[],
+        constraints: &[],
+    },
+    effect: Effect::Write,
+    params: &[ACCEPT_DISPUTE_PARAMS],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
+    mcp_scope: None,
 };

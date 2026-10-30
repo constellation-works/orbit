@@ -722,6 +722,8 @@ const LEAF_ACTIVITIES: &[&str] = &[
     "visual_verify_prepare",
     "visual_verify",
     "visual_settle",
+    "visual_recapture",
+    "visual_landed",
 ];
 
 fn shipped_leaf() -> orbit_types::workflow::JobV2 {
