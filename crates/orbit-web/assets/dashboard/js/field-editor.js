@@ -9,10 +9,12 @@
 
 import { el } from './common.js';
 
-/* A save that resolves hands the surrounding view back to its own data: the
-   caller re-renders, which replaces this node, so the widget deliberately has
-   no post-save view of its own. A save that rejects keeps the editor open with
-   the operator's text intact — that text is the only copy of the draft. */
+/* A save that resolves closes the editor and hands the surrounding view back to
+   its own data: the widget returns to its read-only view before `onSaved`, so
+   the caller's re-render either replaces this node or, when the detail is kept
+   for another open draft, repaints it from the saved record. A save that
+   rejects keeps the editor open with the operator's text intact — that text is
+   the only copy of the draft. */
 export function buildInlineFieldEditor({
   label,
   value,
@@ -101,7 +103,10 @@ export function buildInlineFieldEditor({
       error.textContent = "";
       try {
         const saved = await save(input.value, toggleValue());
+        const hadFocus = Boolean(document.activeElement && wrap.contains(document.activeElement));
         onEditingChange(false);
+        const editButton = showView();
+        if (hadFocus) editButton.focus();
         onSaved(saved);
       } catch (failure) {
         saveButton.disabled = false;

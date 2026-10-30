@@ -16,11 +16,23 @@ let schedulePost = null;
 let routineTrigger = { Alpha: { cron: '0 9 * * *', missed_run: 'skip' }, Beta: { cron: '0 8 * * *', missed_run: 'skip' } };
 let routineTarget = { Alpha: 'job:alpha', Beta: 'job:beta' };
 let triggerPost = null;
+// A save the fixture holds until the test releases it, to order a late
+// completion after a scope change: `{ armed, fail, release }`.
+let hold = null;
+const heldUntilReleased = async () => {
+  if (!hold || !hold.armed) return null;
+  const gate = hold;
+  gate.armed = false;
+  await new Promise(resolve => { gate.release = resolve; });
+  return gate.fail ? response({ error: 'late refusal from the retired save' }, 500) : null;
+};
 
 globalThis.fetch = async (path, options = {}) => {
   const url = new URL(path, 'http://dashboard.test');
   if (url.pathname === '/api/auto-tasks/schedule' && options.method === 'POST') {
     schedulePost = JSON.parse(options.body);
+    const lateSchedule = await heldUntilReleased();
+    if (lateSchedule) return lateSchedule;
     if (JSON.stringify(schedulePost.expected_schedule) !== JSON.stringify({ every_minutes: autoMinutes[schedulePost.name] })) {
       return response({ error: 'stale_auto_task_schedule: schedule changed since the editor opened' }, 409);
     }
@@ -29,6 +41,8 @@ globalThis.fetch = async (path, options = {}) => {
   }
   if (url.pathname === '/api/routines/trigger' && options.method === 'POST') {
     triggerPost = JSON.parse(options.body);
+    const lateTrigger = await heldUntilReleased();
+    if (lateTrigger) return lateTrigger;
     if (JSON.stringify(triggerPost.expected_trigger) !== JSON.stringify(routineTrigger[triggerPost.name])
       || triggerPost.target !== routineTarget[triggerPost.name]) {
       return response({ error: 'stale_routine_trigger: trigger changed since the editor opened' }, 409);
@@ -107,5 +121,74 @@ assert(triggerPost?.name === 'Alpha' && triggerPost.source === 'one' && triggerP
 assert(routineEditorEl('Alpha') && routineInput('Alpha')?.value === '0 10 * * *', 'routine stale refusal preserves draft');
 assert(routineEditorEl('Alpha').querySelector('.schedule-error')?.textContent.includes('stale'),
   `routine stale refusal is shown: ${routineEditorEl('Alpha').querySelector('.schedule-error')?.textContent}`);
+
+// --- A late save from a retired editor leaves its replacement alone ---
+// The save starts, the workspace changes away and back (the same editor key),
+// a replacement draft opens under that key, and only then does the old save
+// settle. Neither its success nor its failure may close, overwrite or report
+// into the replacement.
+const { closeEditors } = await import('./js/schedule-editor.js');
+const leaveAndReturn = async () => {
+  setWorkspace('two');
+  setWorkspace('one');
+  await tick();
+};
+for (const outcome of ['success', 'failure']) {
+  autoMinutes.Alpha = 15;
+  closeEditors('auto-task');
+  await fetchAndRenderOperations('auto-tasks');
+  autoCard('Alpha').querySelector('.schedule-edit').click();
+  autoInput('Alpha').value = '30';
+  autoInput('Alpha').dispatchEvent(new Event('input', { bubbles: true }));
+  hold = { armed: true, fail: outcome === 'failure', release: null };
+  const retired = hold;
+  autoEditor('Alpha').querySelector('.schedule-editor-controls button').click();
+  await tick();
+  assert(retired.release, `${outcome}: the auto-task save is in flight`);
+  await leaveAndReturn();
+  await fetchAndRenderOperations('auto-tasks');
+  assert(!autoEditor('Alpha'), `${outcome}: leaving the scope closes the old auto-task editor`);
+  autoCard('Alpha').querySelector('.schedule-edit').click();
+  autoInput('Alpha').value = '45';
+  autoInput('Alpha').dispatchEvent(new Event('input', { bubbles: true }));
+  retired.release();
+  await tick();
+  assert(autoEditor('Alpha'), `${outcome}: a late auto-task save must not close the replacement editor`);
+  assert(autoInput('Alpha')?.value === '45', `${outcome}: the replacement draft survives, got ${autoInput('Alpha')?.value}`);
+  assert(!autoEditor('Alpha').querySelector('.schedule-error')?.textContent, `${outcome}: the late result is not reported into the replacement`);
+  assert(!autoEditor('Alpha').querySelector('.schedule-editor-controls button').disabled || autoInput('Alpha').value === '45',
+    `${outcome}: the replacement stays usable`);
+  autoEditor('Alpha').querySelectorAll('.schedule-editor-controls button')[1].click();
+  await tick();
+  assert(!autoEditor('Alpha'), `${outcome}: Cancel still closes the current auto-task editor`);
+}
+for (const outcome of ['success', 'failure']) {
+  routineTrigger.Alpha = { cron: '0 9 * * *', missed_run: 'skip' };
+  routineTarget.Alpha = 'job:alpha';
+  closeEditors('routine');
+  await fetchAndRenderOperations('routines');
+  routineCard('Alpha').querySelector('.schedule-edit').click();
+  routineInput('Alpha').value = '0 10 * * *';
+  routineInput('Alpha').dispatchEvent(new Event('input', { bubbles: true }));
+  hold = { armed: true, fail: outcome === 'failure', release: null };
+  const retired = hold;
+  routineEditorEl('Alpha').querySelector('.schedule-editor-controls button').click();
+  await tick();
+  assert(retired.release, `${outcome}: the routine save is in flight`);
+  await leaveAndReturn();
+  await fetchAndRenderOperations('routines');
+  assert(!routineEditorEl('Alpha'), `${outcome}: leaving the scope closes the old routine editor`);
+  routineCard('Alpha').querySelector('.schedule-edit').click();
+  routineInput('Alpha').value = '0 12 * * *';
+  routineInput('Alpha').dispatchEvent(new Event('input', { bubbles: true }));
+  retired.release();
+  await tick();
+  assert(routineEditorEl('Alpha'), `${outcome}: a late routine save must not close the replacement editor`);
+  assert(routineInput('Alpha')?.value === '0 12 * * *', `${outcome}: the replacement routine draft survives, got ${routineInput('Alpha')?.value}`);
+  assert(!routineEditorEl('Alpha').querySelector('.schedule-error')?.textContent, `${outcome}: the late result is not reported into the replacement routine`);
+  routineEditorEl('Alpha').querySelectorAll('.schedule-editor-controls button')[1].click();
+  await tick();
+  assert(!routineEditorEl('Alpha'), `${outcome}: Cancel still closes the current routine editor`);
+}
 
 globalThis.scheduleStaleTestsPassed = true;

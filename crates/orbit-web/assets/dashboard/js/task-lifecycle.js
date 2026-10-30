@@ -1,10 +1,10 @@
 // Orbit dashboard task detail metadata: the meta block, the lifecycle and
 // delivery-stage strips, the hands chain, the delivery card and the OS readout.
 
-import { el, infoHint, isAggregateView, runHref } from './common.js';
+import { el, infoHint, isAggregateView } from './common.js';
 import { elapsedLabel } from './task-runtime.js';
 import { buildExecutionProvenance, formatExecutionLocation } from './distributed.js';
-import { absTimeNode, canMutateTask, pullRequestLink } from './task-shared.js';
+import { absTimeNode, canMutateTask, pullRequestLink, taskRunHref } from './task-shared.js';
 import { explicitCrewValue, resolvedCrewName } from './task-crew.js';
 import { buildRiskChip } from './task-riskiness.js';
 import { buildCrewUpdateControl, buildStatusUpdateControl } from './task-status-controls.js';
@@ -138,7 +138,7 @@ export function buildStageStrip(task) {
     let label = el("span", { class: "task-stage-label", text });
     if (stage.state === "current" && ended && task.job_run_id && task.job_run_navigable !== false) {
       const link = el("a", { class: "task-stage-label task-stage-link", text });
-      link.href = runHref(String(task.job_run_id));
+      link.href = taskRunHref(task, String(task.job_run_id));
       label = link;
     }
     const step = el("li", { class: `task-stage-step ${stage.state}` }, [
@@ -374,7 +374,7 @@ function buildRunValue(task) {
   const value = el("span", { class: "value run-value" });
   if (task.job_run_navigable !== false) {
     const link = el("a", { class: "mono", text: runId });
-    link.href = runHref(runId);
+    link.href = taskRunHref(task, runId);
     value.appendChild(link);
   } else {
     value.appendChild(el("span", { class: "mono", text: runId }));

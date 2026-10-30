@@ -338,6 +338,9 @@ export function buildTaskFieldEditor(task, field, detail, context, editSlot = nu
   const mutable = canMutateTask(task);
   const editTitle = `Edit ${spec.label} for ${task.id}`;
   const wrap = el("div", { class: "field-editor-cell" });
+  wrap.dataset.field = field;
+  wrap.fieldSignature = fieldCellSignature(task, field);
+  wrap.rebuildField = (fresh) => buildTaskFieldEditor(fresh, field, detail, context, editSlot);
   wrap.appendChild(
     buildInlineFieldEditor({
       label: spec.label,
@@ -362,6 +365,33 @@ export function buildTaskFieldEditor(task, field, detail, context, editSlot = nu
   const feedbackNode = buildMutationFeedback(feedback);
   if (feedbackNode) wrap.appendChild(feedbackNode);
   return wrap;
+}
+
+// What a closed field cell shows: its value, whether it can be edited, and the
+// save note beside it.
+function fieldCellSignature(task, field) {
+  return JSON.stringify([
+    TASK_FIELD_EDITORS[field].toText(task),
+    canMutateTask(task),
+    taskState.fieldFeedback.get(fieldFeedbackKey(task.id, field)) || null,
+  ]);
+}
+
+/* A detail kept for another open draft still shows each closed field from the
+   record it was built with, so a saved field repaints here: its view, edit
+   button and "saved" note come from the current task. A cell holding an open
+   editor is left alone — its text is a draft. */
+export function refreshFieldCells(wrap, task) {
+  for (const cell of wrap.querySelectorAll(".field-editor-cell")) {
+    if (typeof cell.rebuildField !== "function") continue;
+    if (cell.querySelector(".field-editor-input")) continue;
+    if (cell.fieldSignature === fieldCellSignature(task, cell.dataset.field)) continue;
+    const hadFocus = Boolean(document.activeElement && cell.contains(document.activeElement));
+    const fresh = cell.rebuildField(task);
+    cell.replaceWith(fresh);
+    const editButton = fresh.querySelector(".field-edit");
+    if (hadFocus && editButton) editButton.focus();
+  }
 }
 
 function completeFieldSave(taskId, field, updatedTask, context) {

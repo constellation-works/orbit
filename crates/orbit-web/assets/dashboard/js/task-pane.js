@@ -27,6 +27,8 @@ function refreshDraftDetails(wrap, task, context, readinessTask = task) {
   }
   refreshDraftCrewControl(wrap, task, context);
   refreshFixPrControls(wrap, task, context);
+  taskFields.refreshFieldCells(wrap, readinessTask);
+  taskReadiness.refreshOperatorRecordFeedback(wrap, task);
   if (Array.isArray(readinessTask.context_files)) {
     const count = wrap.querySelector(`#detail-${task.id}-tab-context_files .detail-tab-count`);
     if (count) count.textContent = String(readinessTask.context_files.length);
@@ -122,7 +124,7 @@ function buildPinnedTask(ptask, context) {
   const wrap = el("div", { class: "pinned-task-wrap" }, [row, detail]);
   wrap.teardown = () => taskComments.disconnectCommentCards(wrap);
   wrap.dataset.key = `pinned-${ptask.id}`;
-  wrap.dataset.hash = `${row.dataset.hash}-${JSON.stringify(ptask)}-${taskDrainSignature(drain)}-${detailFeedbackSignature(ptask.id)}-${fixPrSignature(ptask)}-${taskEvidence.decisionSignature(ptask)}`;
+  wrap.dataset.hash = `${row.dataset.hash}-${JSON.stringify(ptask)}-${taskDrainSignature(drain)}-${detailFeedbackSignature(ptask.id)}-${fixPrSignature(ptask)}-${taskEvidence.decisionSignature(ptask)}-${taskReadiness.operatorRecordSignature(ptask)}`;
   return wrap;
 }
 /* ORB-11655: a comment or reject form, or an open field editor (ORB-12235),

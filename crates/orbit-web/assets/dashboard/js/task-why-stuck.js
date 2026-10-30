@@ -1,7 +1,7 @@
 // Orbit dashboard task description and criteria toggles, why-stuck and the block callout.
 
-import { el, runHref } from './common.js';
-import { taskState, absTimeNode } from './task-shared.js';
+import { el } from './common.js';
+import { taskState, absTimeNode, taskRunHref } from './task-shared.js';
 import * as taskComments from './task-comments.js';
 import * as taskFields from './task-fields.js';
 
@@ -201,7 +201,7 @@ export function buildTaskBlockCallout(task, context, detail) {
   }
   if (block.run_id) {
     const run = el("a", { class: "attention-action", text: "View run" });
-    run.href = runHref(block.run_id, task.workspace_id ? { workspace: task.workspace_id } : {});
+    run.href = taskRunHref(task, block.run_id);
     actions.appendChild(run);
   }
   if (!actions.children.length) {

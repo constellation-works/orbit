@@ -1,6 +1,6 @@
 // Orbit dashboard task agent actions: Run pilot, escalation triage, recovery and Fix PR, with their refusal maps and run watchers.
 
-import { captureWorkspaceVisit, el, fetchJson, postJson, runHref } from './common.js';
+import { captureWorkspaceVisit, el, fetchJson, postJson } from './common.js';
 import { taskState, rerender, refreshTasks, canMutateTask, aggregateRefusalTitle, taskWorkspacePath, taskMutationPath, GITHUB_PR_REF_SYSTEM, actionErrorNode } from './task-shared.js';
 import * as taskShared from './task-shared.js';
 import * as taskReadiness from './task-readiness.js';
@@ -68,7 +68,7 @@ export function appendPilotControls(actions, task, detail, context, mutable) {
   actions.appendChild(btn);
   if (running) {
     const link = el("a", { class: "task-quick-link pilot-run-link mono", text: running.runId, title: `Open pilot run ${running.runId}` });
-    link.href = runHref(running.runId, task.workspace_id ? { workspace: task.workspace_id } : {});
+    link.href = taskShared.taskRunHref(task, running.runId);
     actions.appendChild(link);
   }
   const refusal = pilotRefusals.get(taskShared.taskDispatchIdentity(task));
@@ -118,6 +118,13 @@ async function runPilot(task, detail, btnNode, context) {
   if (runId) watchPilotRun(task, key, runId, visit, context);
 }
 
+// Drop this run's own local guard. A retired visit or a settled run releases
+// only the entry it created: a newer run on the same task keeps its guard.
+function releaseRunGuard(runs, key, runId) {
+  const entry = runs.get(key);
+  if (entry && entry.runId === runId) runs.delete(key);
+}
+
 // Follow the submitted run until it settles, then refresh: the task then shows
 // the new `task_pilot_applied` entry or the pilot's warnings. A run that cannot
 // be read any more is dropped; `readiness.preparing` takes over for a live one.
@@ -126,7 +133,7 @@ async function watchPilotRun(task, key, runId, visit, context) {
   let state = "";
   for (let polls = 0; polls < PILOT_POLL_LIMIT; polls += 1) {
     await new Promise((resolve) => setTimeout(resolve, PILOT_POLL_MS));
-    if (!visit.isCurrent()) return;
+    if (!visit.isCurrent()) return releaseRunGuard(pilotRunsByTask, key, runId);
     try {
       // The run detail is `{ run, steps }`.
       const detail = await fetchJson(path);
@@ -137,7 +144,7 @@ async function watchPilotRun(task, key, runId, visit, context) {
     }
     if (PILOT_TERMINAL_STATES.has(state)) break;
   }
-  pilotRunsByTask.delete(key);
+  releaseRunGuard(pilotRunsByTask, key, runId);
   if (!visit.isCurrent()) return;
   if (state) taskState.taskActionNotice = `${task.id}: pilot run ${runId} ${state}`;
   await refreshTasks(context);
@@ -190,7 +197,7 @@ export function appendTriageControls(actions, task, detail, context, mutable) {
   actions.appendChild(btn);
   if (running) {
     const link = el("a", { class: "task-quick-link triage-run-link mono", text: running.runId, title: `Open triage run ${running.runId}` });
-    link.href = runHref(running.runId, task.workspace_id ? { workspace: task.workspace_id } : {});
+    link.href = taskShared.taskRunHref(task, running.runId);
     actions.appendChild(link);
   }
   const refusal = triageRefusals.get(taskShared.taskDispatchIdentity(task));
@@ -248,7 +255,7 @@ async function watchTriageRun(task, key, runId, visit, context) {
   let state = "";
   for (let polls = 0; polls < PILOT_POLL_LIMIT; polls += 1) {
     await new Promise((resolve) => setTimeout(resolve, PILOT_POLL_MS));
-    if (!visit.isCurrent()) return;
+    if (!visit.isCurrent()) return releaseRunGuard(triageRunsByTask, key, runId);
     try {
       // The run detail is `{ run, steps }`.
       const detail = await fetchJson(path);
@@ -259,7 +266,7 @@ async function watchTriageRun(task, key, runId, visit, context) {
     }
     if (PILOT_TERMINAL_STATES.has(state)) break;
   }
-  triageRunsByTask.delete(key);
+  releaseRunGuard(triageRunsByTask, key, runId);
   if (!visit.isCurrent()) return;
   if (state) taskState.taskActionNotice = `${task.id}: triage run ${runId} ${state}`;
   await refreshTasks(context);

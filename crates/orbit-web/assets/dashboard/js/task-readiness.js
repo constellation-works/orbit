@@ -116,7 +116,7 @@ export function buildDeliveryAttentionBanner(task) {
   if (attention.run_id) {
     if (task.job_run_navigable !== false) {
       const run = el("a", { class: "attention-action", text: "View run" });
-      run.href = runHref(attention.run_id, task.workspace_id ? { workspace: task.workspace_id } : {});
+      run.href = taskShared.taskRunHref(task, attention.run_id);
       run.addEventListener("click", (event) => event.stopPropagation());
       actions.appendChild(run);
     } else {
@@ -200,8 +200,9 @@ export function buildPilotAdmissionHold(task, detail, context) {
   approve.addEventListener("click", (e) => { e.stopPropagation(); runOperatorRecord(task, detail, approve, context, { kind: "pilot", verdict: "approve-anyway" }); });
   actions.appendChild(approve);
   content.appendChild(actions);
-  const refusal = taskShared.taskState.operatorRecordRefusals.get(taskShared.taskDispatchIdentity(task));
-  if (refusal) content.appendChild(taskShared.actionErrorNode(refusal));
+  content.dataset.operatorRecord = "true";
+  const refusal = operatorRecordRefusalNode(task);
+  if (refusal) content.appendChild(refusal);
   return el("section", { class: "task-attention warning pilot-admission-hold", "aria-label": "Pilot admission hold" }, [
     el("span", { class: "task-attention-icon", "aria-hidden": "true" }),
     content,
@@ -210,6 +211,29 @@ export function buildPilotAdmissionHold(task, detail, context) {
 
 export function operatorRecordSignature(task) {
   return taskShared.taskState.operatorRecordRefusals.get(taskShared.taskDispatchIdentity(task)) || "";
+}
+
+// The typed refusal of this task's last operator record, or null.
+export function operatorRecordRefusalNode(task) {
+  const refusal = operatorRecordSignature(task);
+  if (!refusal) return null;
+  const node = taskShared.actionErrorNode(refusal);
+  node.classList.add("operator-record-refusal");
+  return node;
+}
+
+// A detail kept for another open draft is not rebuilt, so each operator-record
+// host (the pilot hold and the owed-criteria list) repaints its refusal here:
+// the note a refused record leaves appears, and a cleared one goes.
+export function refreshOperatorRecordFeedback(wrap, task) {
+  const refusal = operatorRecordSignature(task);
+  for (const host of wrap.querySelectorAll("[data-operator-record]")) {
+    const shown = host.querySelector(":scope > .operator-record-refusal");
+    if ((shown ? shown.textContent : "") === refusal) continue;
+    if (shown) shown.remove();
+    const node = operatorRecordRefusalNode(task);
+    if (node) host.appendChild(node);
+  }
 }
 
 // One-click operator records: pilot-admission decisions and post-deploy
@@ -267,10 +291,15 @@ export async function runOperatorRecord(task, detail, btnNode, context, request)
   }
   const requestPath = visit.path(taskShared.taskMutationPath(task, suffix));
   taskShared.taskState.operatorRecordRefusals.delete(key);
-  for (const b of detail.querySelectorAll(".action, .attention-action")) b.disabled = true;
+  // The controls this request holds, and only those: a retained detail keeps
+  // them after the request settles, so each is given back, never one a draft or
+  // another request already had disabled.
+  const held = Array.from(detail.querySelectorAll(".action, .attention-action")).filter((b) => !b.disabled);
+  for (const b of held) b.disabled = true;
   try {
     await postJson(requestPath, body);
   } catch (error) {
+    for (const b of held) b.disabled = false;
     if (!visit.isCurrent()) return;
     const code = error && error.code ? error.code : "operator_record_refused";
     const message = `[${code}] ${error.message || String(error)}`;
@@ -286,6 +315,9 @@ export async function runOperatorRecord(task, detail, btnNode, context, request)
   if (!visit.isCurrent()) return;
   taskShared.taskState.taskActionNotice = successText;
   await taskShared.refreshTasks(context);
+  // A detail kept for a draft still shows the settled record's own controls
+  // (its hold or criterion); everything else it holds is usable again.
+  for (const b of held) if (!b.closest("[data-operator-record]")) b.disabled = false;
 }
 
 // The readiness dot beside a backlog task's ID: the pool colour, its words as

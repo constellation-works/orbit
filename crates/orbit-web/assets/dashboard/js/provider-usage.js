@@ -612,6 +612,8 @@ export function renderProviderUsage(payload, host = document.getElementById('pro
   if (ui.host === host && ui.signature === signature) return;
 
   const refocus = document.activeElement?.dataset?.usageKey;
+  // Changed readings rebuild the open dialog, and with it the focused control.
+  const dialogFocused = !!ui.key && !!dialogNode().contains?.(document.activeElement);
   // The rebuilt chips are under the same pointer, but the removed ones never
   // report it leaving.
   ui.pointerInside = !!(ui.key && (ui.anchor?.matches?.(':hover') || dialogNode().matches?.(':hover')));
@@ -634,8 +636,13 @@ export function renderProviderUsage(payload, host = document.getElementById('pro
   host.replaceChildren(summary, ...chips);
   if (ui.key && ui.views.has(ui.key)) {
     ui.anchor = visibleChip(ui.key);
-    if (ui.anchor) { fillDialog(); setHidden(dialogNode(), false); placeDialog(); syncExpanded(); }
-    else closeUsage();
+    if (ui.anchor) {
+      fillDialog();
+      setHidden(dialogNode(), false);
+      placeDialog();
+      syncExpanded();
+      if (dialogFocused) focusQuietly(ui.pinButton);
+    } else closeUsage();
   } else if (ui.key) closeUsage();
   if (refocus && ui.chips.has(refocus)) focusQuietly(ui.chips.get(refocus).find(node => node === visibleChip(refocus)));
 }

@@ -458,6 +458,16 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
     segments.splice(0, segments.length, "analytics", "agents", "orchestrators");
     legacyRoute = true;
   }
+  // A `#comment-<task>-<n>` fragment, as older copies of a comment link carry
+  // it, opens that task and names the comment.
+  const legacyComment = /^comment-([\w.-]{1,64})-(\d+)$/.exec(head);
+  if (legacyComment) {
+    head = "tasks";
+    segments.splice(0, segments.length, "tasks");
+    query.set("open", legacyComment[1]);
+    query.set("comment", legacyComment[2]);
+    legacyRoute = true;
+  }
   if (head === "runs" && !segments[1] && query.get("run_id")) {
     segments[1] = encodeURIComponent(query.get("run_id"));
   }

@@ -214,9 +214,16 @@ function commentActionButton(label, title) {
   return button;
 }
 
-function commentPermalink(anchorId) {
+// A link another tab can follow: the tasks route that opens this task (full
+// page when it is the page on screen) and names the comment, behind the same
+// host, workspace and window query as this address.
+function commentPermalink(task, index) {
   const href = window.location && window.location.href ? String(window.location.href) : "";
-  return `${href.split("#")[0]}#${anchorId}`;
+  const id = encodeURIComponent(task.id);
+  const route = taskState.taskPageId === task.id
+    ? `#tasks/${id}?comment=${index + 1}`
+    : `#tasks?open=${id}&comment=${index + 1}`;
+  return `${href.split("#")[0]}${route}`;
 }
 
 function renderedCommentHeadings(view) {
@@ -413,7 +420,7 @@ function buildCommentCard(task, comment, index, context) {
     if (typeof card.scrollIntoView === "function") {
       card.scrollIntoView({ behavior: "smooth", block: "start" });
     }
-    copyWithFeedback(permalink, commentPermalink(card.id));
+    copyWithFeedback(permalink, commentPermalink(task, index));
   });
 
   card.appendChild(head);
@@ -423,7 +430,11 @@ function buildCommentCard(task, comment, index, context) {
   return card;
 }
 
+// The anchor of the comment the address names: a pasted `#comment-<id>-<n>`
+// fragment, else the comment the tasks route names while its task is open.
 export function getCommentHash() {
+  const target = taskState.commentTarget;
+  if (target && target.taskId === taskState.openTaskId) return `#${commentAnchorId(target.taskId, target.number - 1)}`;
   if (typeof window === "undefined" || !window.location || !window.location.hash) return "";
   const raw = String(window.location.hash);
   return raw.startsWith("#") ? raw : `#${raw}`;

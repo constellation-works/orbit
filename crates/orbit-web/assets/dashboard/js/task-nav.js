@@ -52,6 +52,12 @@ function findTaskRow(taskId) {
 }
 
 export function openVisibleTask(taskId, context) {
+  // A full page has no list beside it: the link opens that task's own page,
+  // whatever the list's filter hides.
+  if (taskState.taskPageId) {
+    if (taskState.taskPageId !== taskId) openLinkedTaskPage(taskId, context);
+    return;
+  }
   const visible = filterTasks(taskList(context), context).some((task) => task.id === taskId);
   if (!visible) {
     copyTaskIdWithNotice(taskId, context);
@@ -139,7 +145,24 @@ export function openTaskPage(taskId, context) {
   taskState.focusPaneTitle = true;
   if (taskState.openTaskId !== taskId) setOpenTask(taskId);
   rerender(context);
-  window.location.hash = `#tasks/${encodeURIComponent(taskId)}`;
+  window.location.hash = taskPageHash(taskId);
+}
+
+// Follow a link from one full page to another task's page. The route changes
+// with the state, so the address, reload and Back name the task on screen; Back
+// returns to the page left, and the page has no list entry behind it.
+function openLinkedTaskPage(taskId, context) {
+  taskState.taskPageReturn = null;
+  taskState.taskPageId = taskId;
+  taskState.taskPageError = null;
+  taskState.taskActionNotice = null;
+  taskState.focusPaneTitle = true;
+  taskState.selectedTaskId = null;
+  taskState.pinnedExternalTask = null;
+  taskState.pendingOpenTaskId = taskId;
+  setOpenTask(taskId);
+  rerender(context);
+  window.location.hash = taskPageHash(taskId);
 }
 
 // Leave the page state; the next render restores the list where it was.
@@ -185,6 +208,9 @@ function writeOpenTaskToUrl(taskId) {
   const params = new URLSearchParams(split < 0 ? "" : hash.slice(split + 1));
   if (taskId) params.set("open", taskId);
   else params.delete("open");
+  const target = taskState.commentTarget;
+  if (target && target.taskId === taskId) params.set("comment", String(target.number));
+  else params.delete("comment");
   const query = params.toString();
   const next = query ? `#tasks?${query}` : "#tasks";
   if (next !== hash) window.history.replaceState(null, "", next);
@@ -193,6 +219,8 @@ function writeOpenTaskToUrl(taskId) {
 export function setOpenTask(taskId) {
   openTaskGeneration += 1;
   taskState.openTaskId = taskId;
+  // A comment link names one task's thread; another task drops it.
+  if (taskState.commentTarget && taskState.commentTarget.taskId !== taskId) taskState.commentTarget = null;
   writeOpenTaskToUrl(taskId);
 }
 
@@ -332,8 +360,15 @@ export function refreshChips(context) {
 // restores the same filtered view instead of resetting to the default.
 export function buildTasksHash(context) {
   // The full-page view is its own route; the list filter waits behind it.
-  if (taskState.taskPageId) return `#tasks/${encodeURIComponent(taskState.taskPageId)}`;
+  if (taskState.taskPageId) return taskPageHash(taskState.taskPageId);
   return buildTasksListHash(context);
+}
+
+// `#tasks/<id>`, keeping the comment a link named while it is that task's.
+function taskPageHash(taskId) {
+  const target = taskState.commentTarget;
+  const comment = target && target.taskId === taskId ? `?comment=${target.number}` : "";
+  return `#tasks/${encodeURIComponent(taskId)}${comment}`;
 }
 
 function buildTasksListHash(context) {
@@ -353,6 +388,8 @@ function buildTasksListHash(context) {
   const q = searchQueryValue(context);
   if (q) sp.set("q", q);
   if (taskState.openTaskId) sp.set("open", taskState.openTaskId);
+  const target = taskState.commentTarget;
+  if (target && target.taskId === taskState.openTaskId) sp.set("comment", String(target.number));
   const qs = sp.toString();
   return qs ? `#tasks?${qs}` : "#tasks";
 }
@@ -365,11 +402,12 @@ export function applyTasksHashQuery(query, context, page = null) {
   // A router replay of the route we just wrote is still the same lookup.
   // Retire it only when navigation actually changes the represented state.
   const current = buildTasksHash(context);
+  const open = pageId || parseOpenTaskId(query.get("open"));
+  const commentNumber = open && /^[1-9]\d{0,5}$/.test(query.get("comment") || "") ? Number(query.get("comment")) : null;
   const replay = pageId
-    ? current === `#tasks/${encodeURIComponent(pageId)}`
+    ? current === `#tasks/${encodeURIComponent(pageId)}${commentNumber ? `?comment=${commentNumber}` : ""}`
     : query.toString() === (current.split("?")[1] || "");
   if (!replay && context?.cancelTaskLookup) context.cancelTaskLookup();
-  const open = pageId || parseOpenTaskId(query.get("open"));
   if (taskState.openTaskId !== open) {
     if (taskState.selectedTaskId && taskState.selectedTaskId !== open) taskState.selectedTaskId = null;
     taskState.pinnedExternalTask = null;
@@ -378,6 +416,7 @@ export function applyTasksHashQuery(query, context, page = null) {
   openTaskGeneration += 1;
   taskState.openTaskId = open;
   taskState.pendingOpenTaskId = open;
+  taskState.commentTarget = commentNumber ? { taskId: open, number: commentNumber } : null;
   if (pageId) {
     if (taskState.taskPageId !== pageId) taskState.taskPageError = null;
     taskState.taskPageId = pageId;

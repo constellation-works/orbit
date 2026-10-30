@@ -54,6 +54,9 @@ try {
   const page = await context.newPage();
   page.on('pageerror', error => errors.push(String(error)));
   let override = null;
+  // The change stream pushes host samples past /api/host/resources, so it is
+  // refused here and the page polls the payload this fixture rewrites.
+  await page.route('**/api/events/stream*', route => route.abort());
   await page.route('**/api/host/resources', async route => {
     const response = await route.fetch();
     const body = await response.json();
@@ -368,6 +371,21 @@ try {
   assert.equal(await open(), false, 'a provider dialog with no chip on screen closes at the breakpoint');
   await assertFocusOnVisible('after a provider dialog closes at the breakpoint');
 
+  // A poll that changes the readings rebuilds the dialog body; keyboard focus on
+  // its Pin button must stay in the dialog rather than fall to the body.
+  await load(1920, () => document.querySelectorAll('#provider-usage-chips .provider-usage-item').length === 4);
+  await away();
+  await chip('claude').click();
+  await page.locator('.usage-pin').focus();
+  const claudeWindow = override.provider_limits.find(item => item.provider === 'claude' && item.window === 'five_hour');
+  claudeWindow.used_percent = 41;
+  await page.waitForFunction(() => /41%/.test(document.getElementById('provider-usage-dialog').innerText), undefined, { timeout: 15000 });
+  assert.equal(await open(), true, 'a changed poll keeps the dialog open');
+  assert.equal(await page.evaluate(() => document.activeElement.className), 'usage-pin', 'focus stays on Pin when a poll changes the readings');
+  await page.keyboard.press('Escape');
+  assert.equal(await open(), false);
+  assert.equal(await page.evaluate(() => document.activeElement.dataset.usageKey), 'claude', 'Esc after a changed poll returns focus to the chip');
+
   // ---- A stale-by-date reading that is still gated lists its gate and held crews.
   override = (() => {
     const now = new Date();
@@ -394,8 +412,8 @@ try {
   const stalePill = await page.evaluate(() => document.querySelector('#provider-usage-dialog .usage-pill').textContent);
   assert.match(stalePill, /^gated until .* · 24h old$/, 'the pill names the active gate and the age');
   const staleRows = await dialogRows();
-  assert.match(staleRows[0], /old/, 'the window row retains the age flag');
-  assert.match(staleRows[0], /gated/, 'the window row lists the active gate');
+  assert.match(staleRows[0], /old/i, 'the window row retains the age flag');
+  assert.match(staleRows[0], /gated/i, 'the window row lists the active gate');
   assert.match(await dialog.innerText(), /Held back: codex-main/, 'the dialog names the held crew');
   await page.keyboard.press('Escape');
 
@@ -403,6 +421,7 @@ try {
   const touch = await browser.newContext({ viewport: { width: 375, height: 800 }, hasTouch: true, isMobile: true });
   const phone = await touch.newPage();
   phone.on('pageerror', error => errors.push(String(error)));
+  await phone.route('**/api/events/stream*', route => route.abort());
   await phone.route('**/api/host/resources', async route => {
     const response = await route.fetch();
     await route.fulfill({ response, json: { ...(await response.json()), ...override } });
