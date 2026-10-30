@@ -35,8 +35,8 @@ enum Returned {
 /// against a committed view manifest, in shadow mode, and a follower with a
 /// verified kit that claims it. Returns the pair, its drain and leaf, and
 /// the contract the claim's receipt carries.
-fn claimed_mock_task() -> (Pair, TempDir, String, String, VisualReviewContract) {
-    let mut pair = Pair::with_owner_config(CONFIG, &[None]);
+fn prepared_mock_pair(config: &str) -> (Pair, TempDir) {
+    let mut pair = Pair::with_owner_config(config, &[None]);
     let repo = pair.owner_repo.clone();
     git(&repo, &["init", "-q", "-b", "main"]);
     git(&repo, &["config", "core.bare", "false"]);
@@ -81,6 +81,12 @@ fn claimed_mock_task() -> (Pair, TempDir, String, String, VisualReviewContract) 
         .with_host_os(Some(HostOs::Linux))
         .with_browser_kit_home(kit_home.path());
     *pair.wire.accept_handoffs.lock().unwrap() = true;
+    (pair, kit_home)
+}
+
+fn claimed_mock_task() -> (Pair, TempDir, String, String, VisualReviewContract) {
+    let (pair, kit_home) = prepared_mock_pair(CONFIG);
+    let task = pair.tasks[0].clone();
     let drain = pair.run_drain();
     let leaf = pair.running_leaf(&drain, 1);
     assert_eq!(pair.claimed_task(&leaf), task);
@@ -583,3 +589,5 @@ crate::scenario_table!(
     task_show_ignores_a_settle_for_another_candidate,
     visual_settlement_records_deviation_verdicts
 );
+
+mod live;

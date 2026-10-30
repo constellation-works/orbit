@@ -11,7 +11,7 @@ use crate::contracts::MigrationCompatibility;
 
 /// Highest workspace-layout version this binary knows how to produce.
 /// Bump together with a new `LAYOUT_MIGRATIONS` entry — never without one.
-pub const SUPPORTED_LAYOUT_VERSION: u32 = 5;
+pub const SUPPORTED_LAYOUT_VERSION: u32 = 6;
 
 /// One entry in the layout-migration registry.
 pub(crate) struct LayoutMigration {
@@ -82,6 +82,15 @@ pub(crate) const LAYOUT_MIGRATIONS: &[LayoutMigration] = &[
         // one refuses. Neither may read or write this workspace's jobs and
         // run snapshots, so they are fenced; a standalone schemaVersion 3
         // file is refused by every older loader on its own.
+        compat: MigrationCompatibility::Breaking,
+        apply: apply_baseline_layout,
+    },
+    LayoutMigration {
+        version: 6,
+        name: "visual-live-review-contracts",
+        description: "fence clients without live visual final-candidate gates and strict visual-resolution records; preserve existing records unchanged",
+        // New visual dispositions affect landing authority; old readers either
+        // ignore manifest obligations or cannot decode populated strict records.
         compat: MigrationCompatibility::Breaking,
         apply: apply_baseline_layout,
     },

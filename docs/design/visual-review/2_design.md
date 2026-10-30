@@ -2,7 +2,7 @@
 title: Visual Review — Design
 owner: claude
 last_updated: 2026-10-30
-last_validated: 2026-10-29
+last_validated: 2026-10-30
 status: Draft
 feature: visual-review
 doc_role: design
@@ -494,6 +494,7 @@ failed verification mid-window), capture records `outcome: not_established` with
 | `kit_pin_mismatch` | The kit's Playwright version is not this build's pin. |
 | `setup_failed` | Every app's candidate setup failed before rendering. |
 | `no_vision_crew` | Capture and checks ran, but no crew can take images (§9); the review step only. |
+| `review_result_missing` | The comparison reviewer returned no findings array for the task; no clean review or measurement is established. |
 
 `not_established` appears in `orbit run show`, `orbit task show`, the PR body and the
 reviewer prompt. It is never rendered as a pass, and it is not a spec-compliance finding
@@ -503,7 +504,13 @@ delivery is resumed on a host with a kit.
 
 ### 6.2 Claimed runs
 
-A claim already captures the owner's review contract. Visual review adds to it: the
+The following capture protocol is supported in `shadow`. Claimed `live` delivery is
+held as `visual_live_claim_unsupported` at owner admission, handoff observation and
+landing, including already accepted claims. A negotiated, owner-verifiable resolution
+of the exact final candidate is required before claimed live delivery can be supported.
+This repair neither enables live mode nor establishes a completed live experiment.
+
+A shadow claim captures the owner's review contract. Visual review adds to it: the
 `visual_review` settings, the manifest bytes and revision read at the claim base, the mocks'
 digests, and the visual crews drawn by the owner. The follower runs that contract, never its
 own settings.
@@ -837,12 +844,31 @@ readout says so.
   records each resolution, an operator's accepted dispute and the recapture in
   `visual/review.json` and `visual/recapture/`; the review certificate itself is unchanged.
 - An unresolved blocking finding holds the run with `delivery_visual_review_unresolved`
-  before `complete_pr`. `orbit visual accept-dispute` is the operator's acceptance; a
+  before `complete_pr` and each bounded re-review completion. These gates apply only
+  when this run captured visual evidence. Live delivery requires complete evidence for
+  every frozen mock at the final head, including candidates whose initial review found
+  nothing. Changed heads are recaptured; missing, partial or stale evidence holds.
+  A fixed finding remains unresolved when recapture is missing, incomplete or not established.
+  `orbit visual accept-dispute` is the operator's acceptance; a
   managed run or a claimed worker is refused it.
 - The post-landing comparison is a set of `pass: measure` steps after landing in
   `task_pr_pipeline`, recorded under `visual/measure/` with `purpose: visual_measure`. It
-  reviews the delivered head, has no escalation round, and its reviewer and verifier
+  captures the exact merge revision from the durable successful completion checkpoint,
+  rather than the checkout's current HEAD. Missing landed identity, unavailable capture
+  or incomplete comparison is unmeasured, never zero mismatches. It has no escalation
+  round, and its reviewer and verifier
   invocations (`visual_measure_reviewer`, `visual_measure_verifier`) are excluded from cost.
+- Live visual records and landing obligations require workspace layout 6 (Breaking;
+  existing records are preserved). Guarded upgrade must fence every older live client
+  before opening the new store; an operator warning is not the fence.
+- Claimed `live` delivery is explicitly unavailable pending negotiated, owner-verifiable
+  final-candidate visual-resolution proof. Owner admission holds these tasks, and old
+  live handoffs are refused at observation and landing. Shadow claimed captures remain
+  supported. This safety repair does not establish the full claimed live design or a
+  completed live experiment; those require a subsequent supported proof seam and
+  controlled evaluation.
+- Follow-ups use a durable per-task/candidate/finding action key. Retry completes missing
+  required images and verification history on the same task before recording it filed.
 - The shipped experiment is `orbit experiment create <name> --template visual-review`. The
   verified-finding rate is reported per arm as `visual_verified_finding_rate`; its absolute
   0.6 threshold, the Wilson bound and rule 3 of §12.4 are read from the readout by the

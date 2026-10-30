@@ -24,7 +24,7 @@ use super::{attach_system_artifacts, json_artifact, read_record, step_task_ids};
 use crate::OrbitRuntime;
 use crate::application::task::{
     FINDING_VERIFICATION_SCHEMA_VERSION, FindingEvidence, FindingVerdict, FindingVerification,
-    TaskAddParams, TaskListFilter, TaskUpdateParams, VerdictConfidence, VerdictSource,
+    TaskAddParams, TaskUpdateParams, VerdictConfidence, VerdictSource, VerdictWrite,
     VerifierVerdict, finding_fingerprint,
 };
 
@@ -147,23 +147,16 @@ fn file_follow_up(
 ) -> Result<String, OrbitError> {
     let severity = follow_up_severity(finding);
     let title = format!("Visual review: {} ({})", finding.title.trim(), finding.mock);
-    // A follow-up filed before a retried step recorded it is found again.
-    let existing = runtime.task_candidates(
-        &TaskListFilter {
-            tags: vec![VISUAL_REVIEW_TAG.to_string()],
-            ..Default::default()
-        },
-        500,
-    )?;
-    if let Some(found) = existing.items.iter().find(|candidate| {
-        candidate.title == title
-            && candidate.relations.iter().any(|relation| {
-                relation.relation_type == TaskRelationType::SpawnedFrom
-                    && relation.target == task.id.as_str()
-            })
-    }) {
-        return Ok(found.id.to_string());
-    }
+    // The owner's transactional action key survives a lost creation reply and
+    // does not depend on a capped task listing, mutable title or task status.
+    let action_key = format!(
+        "visual-follow-up:{}:{}:{}",
+        task.id, record.candidate_sha, finding.finding_id
+    );
+    let existing = runtime
+        .stores()
+        .tasks()
+        .automation_task_for_key(&action_key)?;
     let why = match finding.disposition {
         Some(VisualDisposition::FollowUpHigh) => {
             "It is at or above `visual_review.block_at`, but the delivery ran no review before \
@@ -175,45 +168,72 @@ fn file_follow_up(
         }
         _ => "It was an optional fix the code reviewer did not make.",
     };
-    let filed = runtime.add_task(TaskAddParams {
-        title,
-        description: format!(
-            "The visual review of {} confirmed this {severity} finding on mock `{}` (question \
-             {}) at candidate {}, and the delivery landed without fixing it. {why}\n\n{}\n\n\
-             The mock, the capture and the side-by-side are attached.",
-            task.id,
-            finding.mock,
-            finding.question,
-            record.candidate_sha,
-            finding.detail.trim(),
-        ),
-        acceptance_criteria: vec![format!(
-            "The view `{}` renders matches its mock: {}",
-            finding.mock,
-            finding.title.trim()
-        )],
-        relations: vec![TaskRelation {
-            relation_type: TaskRelationType::SpawnedFrom,
-            target: task.id.clone(),
-            regression: None,
-        }],
-        tags: vec![VISUAL_REVIEW_TAG.to_string()],
-        priority: match severity {
-            "critical" => TaskPriority::Critical,
-            "high" => TaskPriority::High,
-            "medium" => TaskPriority::Medium,
-            _ => TaskPriority::Low,
-        },
-        complexity: TaskComplexity::Unassessed,
-        task_type: Some(TaskType::Bug),
-        status: Some(TaskStatus::Proposed),
-        system_created: true,
-        ..TaskAddParams::default()
-    })?;
+    let description = format!(
+        "The visual review of {} confirmed this {severity} finding on mock `{}` (question \
+         {}) at candidate {}, and the delivery landed without fixing it. {why}\n\n{}\n\n\
+         The mock, the capture and the side-by-side are attached.",
+        task.id,
+        finding.mock,
+        finding.question,
+        record.candidate_sha,
+        finding.detail.trim()
+    );
+    let acceptance_criteria = vec![format!(
+        "The view `{}` renders matches its mock: {}",
+        finding.mock,
+        finding.title.trim()
+    )];
+    let filed = if let Some(existing) = existing {
+        if existing.title != title
+            || existing.description != description
+            || existing.acceptance_criteria != acceptance_criteria
+            || existing.task_type != TaskType::Bug
+            || !existing.tags.iter().any(|tag| tag == VISUAL_REVIEW_TAG)
+            || !existing.relations.iter().any(|relation| {
+                relation.relation_type == TaskRelationType::SpawnedFrom
+                    && relation.target == task.id
+            })
+        {
+            return Err(OrbitError::Execution(format!(
+                "visual follow-up '{}' material changed; preserve the operator's changes for review",
+                existing.id
+            )));
+        }
+        existing
+    } else {
+        runtime.add_task_admitted(
+            TaskAddParams {
+                title,
+                description,
+                acceptance_criteria,
+                relations: vec![TaskRelation {
+                    relation_type: TaskRelationType::SpawnedFrom,
+                    target: task.id.clone(),
+                    regression: None,
+                }],
+                tags: vec![VISUAL_REVIEW_TAG.to_string()],
+                priority: match severity {
+                    "critical" => TaskPriority::Critical,
+                    "high" => TaskPriority::High,
+                    "medium" => TaskPriority::Medium,
+                    _ => TaskPriority::Low,
+                },
+                complexity: TaskComplexity::Unassessed,
+                task_type: Some(TaskType::Bug),
+                status: Some(TaskStatus::Proposed),
+                system_created: true,
+                ..TaskAddParams::default()
+            },
+            None,
+            None,
+            Some(&action_key),
+        )?
+    };
     let mut images = Vec::new();
-    if let Some(mock) = runtime.get_task_artifact(&task.id, &finding.mock)? {
-        images.push(mock);
-    }
+    let mock = runtime
+        .get_task_artifact(&task.id, &finding.mock)?
+        .ok_or_else(|| OrbitError::Execution("visual follow-up mock evidence is missing".into()))?;
+    images.push(mock);
     let captured = capture
         .and_then(|capture| {
             capture
@@ -222,13 +242,13 @@ fn file_follow_up(
                 .find(|mock| mock.artifact == finding.mock)
         })
         .and_then(|mock| mock.capture.as_ref());
-    for path in captured
-        .into_iter()
-        .flat_map(|image| [image.path.as_str(), image.side_by_side.as_str()])
-    {
-        if let Some(artifact) = runtime.get_task_artifact(&task.id, path)? {
-            images.push(artifact);
-        }
+    let captured = captured.ok_or_else(|| {
+        OrbitError::Execution("visual follow-up capture evidence is missing".into())
+    })?;
+    for path in [captured.path.as_str(), captured.side_by_side.as_str()] {
+        images.push(runtime.get_task_artifact(&task.id, path)?.ok_or_else(|| {
+            OrbitError::Execution(format!("visual follow-up evidence '{path}' is missing"))
+        })?);
     }
     let images: Vec<TaskArtifact> = images
         .into_iter()
@@ -296,6 +316,43 @@ fn file_follow_up(
         verified_at: Utc::now(),
     };
     let history = runtime.get_task_history(&filed.id)?;
-    runtime.record_finding_verification(&filed.id, &verification, filed.status, history.len())?;
+    let already_verified = history
+        .iter()
+        .filter(|entry| entry.event == "finding_verified")
+        .filter_map(|entry| entry.note.as_deref())
+        .filter_map(|note| serde_json::from_str::<FindingVerification>(note).ok())
+        .any(|previous| {
+            previous.source == VerdictSource::VisualReview
+                && previous.verified_sha == verification.verified_sha
+                && previous.finding_fingerprint == verification.finding_fingerprint
+        });
+    if !already_verified {
+        match runtime.record_finding_verification(
+            &filed.id,
+            &verification,
+            filed.status,
+            history.len(),
+        )? {
+            VerdictWrite::Recorded(_) => {}
+            VerdictWrite::Superseded { detail, .. } => {
+                let matching = runtime
+                    .get_task_history(&filed.id)?
+                    .iter()
+                    .filter(|entry| entry.event == "finding_verified")
+                    .filter_map(|entry| entry.note.as_deref())
+                    .filter_map(|note| serde_json::from_str::<FindingVerification>(note).ok())
+                    .any(|previous| {
+                        previous.source == VerdictSource::VisualReview
+                            && previous.verified_sha == verification.verified_sha
+                            && previous.finding_fingerprint == verification.finding_fingerprint
+                    });
+                if !matching {
+                    return Err(OrbitError::Execution(format!(
+                        "visual follow-up verification was superseded: {detail}"
+                    )));
+                }
+            }
+        }
+    }
     Ok(filed.id.to_string())
 }

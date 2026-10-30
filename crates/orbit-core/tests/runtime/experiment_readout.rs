@@ -910,3 +910,5 @@ fn cost_readout_excludes_partial_sums_and_identifies_estimated_tasks() {
                 .all(|arm| arm.get("cost_coverage").is_none()))
     );
 }
+
+mod visual;

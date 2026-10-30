@@ -898,6 +898,14 @@ spec:
     # re-review. A conflict here rebases and recovers exactly like
     # `complete_pr` and asks for one more re-review round below, instead of
     # stopping an accepted candidate as review_gate_stale.
+    - id: visual_recapture_re_review
+      when: "{{ steps.visual_capture.output.applies }} == true && {{ steps.re_review_gate_admit.output.applies }} == true"
+      target: activity:visual_recapture
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+
     - id: complete_reviewed_pr
       when: "{{ steps.re_review_gate_admit.output.applies }} == true"
       recovery_activity: pr_conflict_recovery
@@ -1003,6 +1011,14 @@ spec:
         rewrite_performed: "{{ steps.complete_reviewed_pr.output.rebased.rewritten }}"
         rewrite_head_before: "{{ steps.complete_reviewed_pr.output.rebased.head_sha_before }}"
         expected_remote_sha: "{{ steps.complete_reviewed_pr.output.rebased.remote_sha_before }}"
+
+    - id: visual_recapture_re_review_2
+      when: "{{ steps.visual_capture.output.applies }} == true && {{ steps.re_review_gate_admit_2.output.applies }} == true"
+      target: activity:visual_recapture
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
 
     - id: complete_reviewed_pr_2
       when: "{{ steps.re_review_gate_admit_2.output.applies }} == true"

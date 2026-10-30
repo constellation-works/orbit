@@ -22,6 +22,18 @@ impl OrbitRuntime {
     ) -> Result<HandoffLandingContext, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
         let (claim, accepted) = self.landing_claim(handoff_id)?;
+        let receipt = self.claim_receipt(&accepted.handoff.claim_id)?;
+        if receipt
+            .visual_review
+            .as_ref()
+            .is_some_and(|contract| contract.mode == orbit_types::task::VisualReviewMode::Live)
+            || (self.visual_review_settings().mode == orbit_types::task::VisualReviewMode::Live
+                && orbit_types::task::has_verify_mock_ui_tag(
+                    &self.get_task(&accepted.handoff.task_id)?.tags,
+                ))
+        {
+            return Err(OrbitError::CapabilityDenied("visual_live_claim_unsupported: accepted live handoff has no owner-verified visual-resolution proof".into()));
+        }
         // [ORB-15677] The hosted checks the accepted review owed the owner,
         // read from the certificate the handoff pinned and acceptance judged.
         let owed_hosted_checks = self

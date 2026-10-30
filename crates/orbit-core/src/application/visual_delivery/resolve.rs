@@ -18,8 +18,9 @@ use orbit_engine::DispatchError;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
     TaskComment, TaskHistoryEntry, VISUAL_DISPUTE_ACCEPTED_EVENT, VisualCaptureOutcome,
-    VisualChecksRecord, VisualDisposition, VisualPass, VisualRecaptureRecord, VisualResolution,
-    VisualReviewFinding, VisualReviewMode, VisualReviewRecord, VisualVerdictKind,
+    VisualCaptureRecord, VisualChecksRecord, VisualDisposition, VisualPass, VisualRecaptureRecord,
+    VisualResolution, VisualReviewContract, VisualReviewFinding, VisualReviewMode,
+    VisualReviewRecord, VisualVerdictKind, has_verify_mock_ui_tag,
 };
 use orbit_types::workflow::{
     DeliveryRefusal, REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT, ReviewManifest,
@@ -30,6 +31,7 @@ use serde_json::{Value, json};
 
 use super::capture::{capture_output, capture_task};
 use super::checks::check_task;
+use super::contract::MockDigestSource;
 use super::{attach_system_artifacts, json_artifact, read_record, required_string, step_task_ids};
 use crate::OrbitRuntime;
 use crate::application::task::TaskRecordUpdateParams;
@@ -121,10 +123,7 @@ impl OrbitRuntime {
             .iter()
             .filter(|finding| reviewer_resolves(finding))
             .filter(|finding| {
-                !matches!(
-                    finding.resolution,
-                    Some(VisualResolution::Fixed | VisualResolution::DisputeAccepted)
-                )
+                !matches!(finding.resolution, Some(VisualResolution::DisputeAccepted))
             })
             .map(|finding| {
                 let mut images: Vec<String> = finding
@@ -323,11 +322,39 @@ fn resolve_task(
     workspace: &Path,
     run_id: &str,
 ) -> Result<Option<(Value, Vec<String>)>, OrbitError> {
-    let Some(mut record) = live_review_record(runtime, task_id)? else {
+    let task = runtime.get_task(task_id)?;
+    if runtime.visual_review_settings().mode != VisualReviewMode::Live
+        || !has_verify_mock_ui_tag(&task.tags)
+    {
         return Ok(None);
+    }
+    let missing = |reason: &str| {
+        Some((
+            json!({"task_id":task_id,"unresolved":1}),
+            vec![format!("{task_id}: {reason}")],
+        ))
     };
-    if !record.findings.iter().any(reviewer_resolves) {
-        return Ok(None);
+    let Some(mut record) = live_review_record(runtime, task_id)? else {
+        return Ok(missing(
+            "the current delivery has no live visual review evidence",
+        ));
+    };
+    let contract = match runtime.visual_review_contract_for(&task, MockDigestSource::Frozen) {
+        Ok(Some(contract)) => contract,
+        _ => return Ok(missing("the frozen visual contract cannot be established")),
+    };
+    for mock in &contract.mocks {
+        let stored = runtime.get_task_artifact(task_id, &mock.artifact)?;
+        if stored.as_ref().is_none_or(|artifact| {
+            orbit_types::task::mock_sha256_hex(&artifact.content) != mock.sha256
+        }) {
+            return Ok(missing(
+                "the mock differs from the frozen delivery contract",
+            ));
+        }
+    }
+    if contract.reviewer && (record.outcome != "reviewed" || !record.not_established.is_empty()) {
+        return Ok(missing("the comparison review is not established"));
     }
     let head = candidate_head(workspace)?;
     let changed = head != record.candidate_sha;
@@ -372,11 +399,7 @@ fn resolve_task(
         finding.resolution = Some(resolution);
         finding.resolution_reason = reason;
     }
-    let fixed = record
-        .findings
-        .iter()
-        .any(|finding| finding.resolution == Some(VisualResolution::Fixed));
-    if changed && fixed {
+    if changed {
         recapture(runtime, task_id, workspace, run_id, &head, &mut record)?;
     }
     attach_system_artifacts(
@@ -387,7 +410,7 @@ fn resolve_task(
             &record,
         )?],
     )?;
-    let held: Vec<String> = record
+    let mut held: Vec<String> = record
         .unresolved_blocking()
         .iter()
         .map(|finding| {
@@ -402,6 +425,22 @@ fn resolve_task(
             )
         })
         .collect();
+    let pass = if changed {
+        VisualPass::Recapture
+    } else {
+        VisualPass::Delivery
+    };
+    let established =
+        read_record::<VisualCaptureRecord>(runtime, task_id, &pass.capture_artifact())?
+            .is_some_and(|(capture, _)| capture_matches_final_contract(&capture, &contract, &head));
+    if !established
+        || (changed
+            && record.recapture.as_ref().is_none_or(|recapture| {
+                recapture.candidate_sha != head || recapture.outcome != "passed"
+            }))
+    {
+        held.push(format!("{task_id}: visual evidence is missing, incomplete or stale for the final candidate {head}"));
+    }
     let (blocking, optional, _) = record.disposition_counts();
     Ok(Some((
         json!({
@@ -450,25 +489,37 @@ fn recapture(
     record: &mut VisualReviewRecord,
 ) -> Result<(), OrbitError> {
     let pass = VisualPass::Recapture;
-    let fixed_checks = |record: &VisualReviewRecord| -> Vec<String> {
+    let fixed_findings = |record: &VisualReviewRecord| -> Vec<String> {
         record
             .findings
             .iter()
-            .filter(|finding| {
-                finding.resolution == Some(VisualResolution::Fixed) && finding.source == "check"
-            })
+            .filter(|finding| finding.resolution == Some(VisualResolution::Fixed))
             .map(|finding| finding.finding_id.clone())
             .collect()
     };
+    for finding in &mut record.findings {
+        finding.recaptured.clear();
+    }
     let Some(capture) = capture_task(runtime, task_id, workspace, run_id, pass)? else {
         record.recapture = Some(VisualRecaptureRecord {
             candidate_sha: head.to_string(),
             outcome: "not_established".to_string(),
-            still_failing: fixed_checks(record),
+            still_failing: fixed_findings(record),
         });
         return Ok(());
     };
-    let established = capture.record.outcome == VisualCaptureOutcome::Captured;
+    let established = capture.record.outcome == VisualCaptureOutcome::Captured
+        && capture.record.candidate_sha == head
+        && capture.record.not_established.is_empty()
+        && capture.record.over_budget.is_empty()
+        && !capture.record.mocks.is_empty()
+        && capture.record.mocks.iter().all(|mock| {
+            mock.error.is_none()
+                && mock
+                    .capture
+                    .as_ref()
+                    .is_some_and(|image| image.commit == head)
+        });
     let images: Vec<(String, Vec<String>)> = capture
         .record
         .mocks
@@ -508,18 +559,41 @@ fn recapture(
             })
             .map(|finding| finding.finding_id.clone())
             .collect(),
-        _ => fixed_checks(record),
+        _ => fixed_findings(record),
     };
     for finding in &mut record.findings {
-        if finding.resolution == Some(VisualResolution::Fixed)
-            && let Some((_, recaptured)) = images.iter().find(|(mock, _)| *mock == finding.mock)
-        {
-            finding.recaptured.clone_from(recaptured);
+        if finding.resolution == Some(VisualResolution::Fixed) {
+            // Never retain images from a previous recapture when this one
+            // failed to render the finding's own mock.
+            finding.recaptured.clear();
+            if let Some((_, recaptured)) = images.iter().find(|(mock, _)| *mock == finding.mock) {
+                finding.recaptured.clone_from(recaptured);
+            }
         }
     }
-    let outcome = if !established || checks.is_none() {
+    let missing_fixed_mock = record.findings.iter().any(|finding| {
+        finding.must_address()
+            && finding.resolution == Some(VisualResolution::Fixed)
+            && !capture.record.mocks.iter().any(|mock| {
+                mock.artifact == finding.mock
+                    && mock.error.is_none()
+                    && mock
+                        .capture
+                        .as_ref()
+                        .is_some_and(|image| image.commit == head)
+            })
+    });
+    let blocking_check = checks.as_ref().is_some_and(|checks| {
+        checks.findings.iter().any(|finding| {
+            record
+                .block_at
+                .unwrap_or(orbit_types::task::VisualThreshold::High)
+                .admits(&finding.severity)
+        })
+    });
+    let outcome = if !established || checks.is_none() || missing_fixed_mock {
         "not_established"
-    } else if still_failing.is_empty() {
+    } else if still_failing.is_empty() && !blocking_check {
         "passed"
     } else {
         "incomplete"
@@ -530,4 +604,30 @@ fn recapture(
         still_failing,
     });
     Ok(())
+}
+
+/// Every frozen mock must have rendered the exact candidate before it can land.
+fn capture_matches_final_contract(
+    capture: &VisualCaptureRecord,
+    contract: &VisualReviewContract,
+    head: &str,
+) -> bool {
+    capture.task_id == contract.task_id
+        && capture.candidate_sha == head
+        && capture.outcome == VisualCaptureOutcome::Captured
+        && capture.not_established.is_empty()
+        && capture.over_budget.is_empty()
+        && !contract.mocks.is_empty()
+        && capture.mocks.len() == contract.mocks.len()
+        && contract.mocks.iter().all(|expected| {
+            capture.mocks.iter().any(|mock| {
+                mock.artifact == expected.artifact
+                    && mock.sha256 == expected.sha256
+                    && mock.error.is_none()
+                    && mock
+                        .capture
+                        .as_ref()
+                        .is_some_and(|image| image.commit == head)
+            })
+        })
 }
