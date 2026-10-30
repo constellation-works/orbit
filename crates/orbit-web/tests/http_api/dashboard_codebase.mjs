@@ -69,6 +69,8 @@ class Node {
   addEventListener(type, fn) { (this.listeners[type] ||= []).push(fn); }
   contains(node) { for (let current = node; current; current = current.parentNode) if (current === this) return true; return false; }
   focus() { document.activeElement = this; }
+  select() { document.selection = this.value; }
+  remove() { this.parentNode?.removeChild(this); }
   querySelectorAll(selector) {
     const chains = selector.split(',').map(part => part.trim().split(/\s+/));
     const out = [];
@@ -481,6 +483,30 @@ click(button(part('file-head'), 'Copy path'));
 await settle();
 assert.deepEqual(copied, ['src/a/']);
 assert.ok(button(part('file-head'), 'Copied'), 'the copy action confirms');
+// Copy path shares the dashboard's copy contract: without the async clipboard
+// (a plain-HTTP LAN page) or when it refuses, the selection copy takes over,
+// and a copy nothing accepted says so instead of confirming.
+const asyncClipboard = navigator.clipboard;
+const legacyCopies = [];
+const legacyCopy = accepts => () => { if (accepts) legacyCopies.push(document.selection); return accepts; };
+const copyHead = async (label, expected, message) => {
+  click(button(part('file-head'), label));
+  await settle();
+  assert.ok(button(part('file-head'), expected), `${message}: ${part('file-head').querySelectorAll('button').map(node => node.textContent)}`);
+};
+navigator.clipboard = undefined;
+await copyHead('Copied', 'Copy failed', 'no clipboard and no selection copy reports the failure');
+document.execCommand = legacyCopy(true);
+await copyHead('Copy failed', 'Copied', 'without the async clipboard the selection copy succeeds');
+navigator.clipboard = { writeText: async () => { throw new Error('denied'); } };
+document.execCommand = legacyCopy(false);
+await copyHead('Copied', 'Copy failed', 'a refused clipboard and a refused selection copy report the failure');
+document.execCommand = legacyCopy(true);
+await copyHead('Copy failed', 'Copied', 'a refused async clipboard falls back to the selection copy');
+assert.deepEqual(legacyCopies, ['src/a/', 'src/a/'], 'the selection copy carried the path');
+assert.deepEqual(copied, ['src/a/'], 'the async clipboard took only the first copy');
+navigator.clipboard = asyncClipboard;
+delete document.execCommand;
 assert.match(relatedBox().textContent, /Group by file to see what lands alongside one/);
 assert.equal(relatedRequestCount(), requestsBeforeFile, 'a directory key asks for no related files');
 

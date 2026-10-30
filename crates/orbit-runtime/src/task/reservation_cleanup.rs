@@ -301,30 +301,72 @@ impl RuntimeKernel {
             self.record_terminal_outcome_conflict(run_id, prior, state, finished_at);
         }
         if state.is_terminal() {
-            self.best_effort_release_task_reservations_for_owner_run_id(run_id, release_reason);
-            // Coupling-out: clean up the run's coupled tasks only on the first
-            // terminalization into a failure, cancellation, or interrupted state. Gating on
-            // the atomic `Finalized` outcome keeps this idempotent — a replayed
-            // terminalization is a no-op and never clobbers a task a human
-            // already moved on. Cancellation selects backlog versus blocked.
-            // Cleanup is best-effort so a status-write failure never blocks
-            // the run from terminalizing or its reservations/file locks from being released.
-            if outcome == JobRunFinalization::Finalized
-                && super::block_on_run_failure::run_state_blocks_coupled_tasks(state)
-            {
-                self.best_effort_block_tasks_for_terminal_run(run_id, state, diagnostic);
-            }
-            // [ORB-13663] A claimed leaf's settlement is recorded as it
-            // terminalizes, whichever process terminalizes it, and its own
-            // worker delivers it — no longer only the drain that admitted it.
-            // Not gated on `Finalized`: recording and delivery are idempotent,
-            // and a replay retries a delivery an earlier attempt lost.
-            self.best_effort_settle_terminal_claimed_leaf(run_id, diagnostic);
-            // [ORB-13890] A run never ends holding a review attempt open.
-            // Idempotent, so not gated on `Finalized` either.
-            self.best_effort_release_run_review_attempts(run_id, finished_at);
+            self.cleanup_after_terminal_write(
+                run_id,
+                state,
+                outcome,
+                finished_at,
+                release_reason,
+                diagnostic,
+            );
         }
         Ok(outcome != JobRunFinalization::Missing)
+    }
+
+    /// The cleanup a run's terminal write owes, for a caller whose own atomic
+    /// store decision just terminalized the run into `state`, such as a
+    /// pending-only cancel: the same release, coupled-task and settlement
+    /// steps [`Self::finalize_job_run_with_reservation_cleanup`] runs after a
+    /// `Finalized` outcome.
+    pub fn cleanup_after_job_run_finalized(
+        &self,
+        run_id: &str,
+        state: JobRunState,
+        finished_at: DateTime<Utc>,
+        release_reason: TaskReservationReleaseReason,
+        diagnostic: Option<(&str, &str)>,
+    ) {
+        self.cleanup_after_terminal_write(
+            run_id,
+            state,
+            JobRunFinalization::Finalized,
+            finished_at,
+            release_reason,
+            diagnostic,
+        );
+    }
+
+    fn cleanup_after_terminal_write(
+        &self,
+        run_id: &str,
+        state: JobRunState,
+        outcome: JobRunFinalization,
+        finished_at: DateTime<Utc>,
+        release_reason: TaskReservationReleaseReason,
+        diagnostic: Option<(&str, &str)>,
+    ) {
+        self.best_effort_release_task_reservations_for_owner_run_id(run_id, release_reason);
+        // Coupling-out: clean up the run's coupled tasks only on the first
+        // terminalization into a failure, cancellation, or interrupted state. Gating on
+        // the atomic `Finalized` outcome keeps this idempotent — a replayed
+        // terminalization is a no-op and never clobbers a task a human
+        // already moved on. Cancellation selects backlog versus blocked.
+        // Cleanup is best-effort so a status-write failure never blocks
+        // the run from terminalizing or its reservations/file locks from being released.
+        if outcome == JobRunFinalization::Finalized
+            && super::block_on_run_failure::run_state_blocks_coupled_tasks(state)
+        {
+            self.best_effort_block_tasks_for_terminal_run(run_id, state, diagnostic);
+        }
+        // [ORB-13663] A claimed leaf's settlement is recorded as it
+        // terminalizes, whichever process terminalizes it, and its own
+        // worker delivers it — no longer only the drain that admitted it.
+        // Not gated on `Finalized`: recording and delivery are idempotent,
+        // and a replay retries a delivery an earlier attempt lost.
+        self.best_effort_settle_terminal_claimed_leaf(run_id, diagnostic);
+        // [ORB-13890] A run never ends holding a review attempt open.
+        // Idempotent, so not gated on `Finalized` either.
+        self.best_effort_release_run_review_attempts(run_id, finished_at);
     }
 
     pub(crate) fn release_task_reservations_for_owner_run_id(

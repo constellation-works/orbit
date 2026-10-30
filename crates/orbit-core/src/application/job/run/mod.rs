@@ -13,6 +13,7 @@
 //! - `admissions_stop` — stopping new admissions on a live auto drain.
 //! - `window_extension` — lengthening a live drain's window.
 //! - `drain_cancel` — graceful and forced cancellation of a drain with in-flight leaves.
+//! - `queued_cancel` — cancelling a run only while it is still queued, refusing one that started.
 //! - `interrupted_review` — keeping the repair of a review a stopped run was inside.
 //! - `child_timeout` — cancelling a child whose parent's wait expired, keeping its candidate.
 //! - `completion_audit` — the completion audit the stop, worker-ceiling and extension controls share.
@@ -35,6 +36,7 @@ mod interrupted_review;
 mod owner;
 mod projection;
 mod query;
+mod queued_cancel;
 mod reconcile;
 mod root_cause;
 mod step_recovery;

@@ -180,7 +180,9 @@ function autoDrainQueuedRow(payload, drain) {
 }
 
 // Cancels this queued run alone through the run cancel path; a never-started
-// window has admitted nothing, and the live window is not touched.
+// window has admitted nothing, and the live window is not touched. The request
+// is queued-only: a window that started after this card rendered is refused
+// (409) by the server and keeps running.
 function autoDrainQueuedCancel(payload, runId) {
   const key = `auto-drain:cancel-queued:${runId}`;
   const refusal = workspaceReadOnlyReason();
@@ -203,14 +205,18 @@ function autoDrainQueuedCancel(payload, runId) {
     feedback("auto-drain-operation-feedback", "pending", `Cancelling queued window ${runId}…`);
     renderAutoDrain(payload);
     try {
-      const result = await postJson(visit.path(`/api/runs/${encodeURIComponent(runId)}/cancel`), { reason: null, force: false });
+      const result = await postJson(visit.path(`/api/runs/${encodeURIComponent(runId)}/cancel`), { reason: null, force: false, queued_only: true });
       if (!visit.isCurrent()) return;
       feedback("auto-drain-operation-feedback", "success", result?.outcome === "already_terminal"
         ? `Queued window ${runId} had already ended.`
         : `Queued window ${runId} cancelled.`);
       await refreshDrainAfterAction();
     } catch (error) {
-      if (visit.isCurrent()) feedback("auto-drain-operation-feedback", "error", `Cancelling queued window ${runId} failed: ${error.message}`);
+      if (!visit.isCurrent()) return;
+      feedback("auto-drain-operation-feedback", "error", error.status === 409
+        ? `Queued window ${runId} has already started, so it was not cancelled. Stop it from the live window's controls if you mean to.`
+        : `Cancelling queued window ${runId} failed: ${error.message}`);
+      if (error.status === 409) await refreshDrainAfterAction();
     } finally {
       pendingOperations.delete(key);
       if (operationsState.lastAutoDrain) renderAutoDrain(operationsState.lastAutoDrain);

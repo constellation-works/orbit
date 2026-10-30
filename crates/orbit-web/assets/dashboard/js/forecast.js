@@ -776,6 +776,11 @@ function coverageCard() {
   const thinHint = reportsReviewMode()
     ? `Fewer than ${min} deliveries of the same complexity, crew pool and review mode. The wider pool may keep the review mode (any crew of that complexity, then any delivery of that mode) or drop it. Review mode dropped counts only the tasks that lost review conditioning.`
     : `Fewer than ${min} deliveries of the same complexity and crew pool: sampled from a wider pool.`;
+  // Without a complexity the first pool that keeps the review mode is every
+  // delivery of that mode; an older response predates review conditioning.
+  const unassessedHint = reportsReviewMode()
+    ? `No complexity yet: sampled from every delivery of the task's review mode when there are at least ${min}, otherwise from every delivery, dropping the review mode.`
+    : "No complexity yet: sampled from every delivery.";
   const reviewItems = reportsReviewMode() ? [
     ["Review mode dropped", coverage.review_mode_fallbacks, `The sample no longer conditions on the task's review mode. The mode-preserving pools had fewer than ${min} deliveries, including when the lookback has no history. A wider pool that still keeps the review mode is counted under thin-cell fallbacks instead.`],
     ["Unknown review assumption", coverage.review_mode_unknown, "The task's review mode could not be resolved, so it is not treated as a measured review policy. An unknown assumption uses the mode-pooled fallback."],
@@ -788,7 +793,7 @@ function coverageCard() {
   ] : [];
   const items = [
     ...regressionItems,
-    ["Unassessed", coverage.unassessed, "No complexity yet: sampled from every delivery."],
+    ["Unassessed", coverage.unassessed, unassessedHint],
     ["Thin-cell fallbacks", coverage.thin_cell_fallbacks, thinHint],
     ...reviewItems,
     ["Uncovered model", coverage.uncovered_model, "No sampled delivery has every run priced, so tokens are not forecast for these tasks."],

@@ -23,6 +23,7 @@ use crate::Store;
 use crate::contracts::{
     ChildJobRunAdmissionOutcome, ChildJobRunAdmissionParams, JobRunFinalization, JobRunQuery,
     JobRunStepParams, JobRunStoreBackend, KeyedJobRunAdmission, KeyedJobRunParams,
+    PendingJobRunCancellation,
 };
 use crate::fs::path_safety::validate_path_stem;
 
@@ -775,6 +776,28 @@ impl JobRunStoreBackend for SqliteJobRunStore {
             run.finished_at = Some(finished_at);
             run.duration_ms = duration_ms;
             outcome = JobRunFinalization::Finalized;
+            Ok(true)
+        })?;
+        Ok(outcome)
+    }
+
+    fn cancel_pending_job_run(
+        &self,
+        run_id: &str,
+        finished_at: DateTime<Utc>,
+    ) -> Result<PendingJobRunCancellation, OrbitError> {
+        let mut outcome = PendingJobRunCancellation::Missing;
+        // The same immediate transaction as `mark_job_run_running`, so the
+        // pending check and the cancel cannot straddle a start.
+        self.update_run_and_state(run_id, |run| {
+            if run.state != JobRunState::Pending {
+                outcome = PendingJobRunCancellation::NotPending(run.state);
+                return Ok(false);
+            }
+            run.state = run.state.try_transition(RunEvent::Cancel)?;
+            run.finished_at = Some(finished_at);
+            run.duration_ms = None;
+            outcome = PendingJobRunCancellation::Cancelled;
             Ok(true)
         })?;
         Ok(outcome)

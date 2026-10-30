@@ -41,6 +41,10 @@ pub(in crate::api) struct CancelRunBody {
     /// Keep a cancelled task leaf blocked instead of returning it to backlog.
     #[serde(default)]
     block: bool,
+    /// Cancel only while the run is still queued; one that has started is
+    /// refused with 409 and left running.
+    #[serde(default)]
+    queued_only: bool,
 }
 
 pub(in crate::api) async fn cancel_run_action(
@@ -52,15 +56,28 @@ pub(in crate::api) async fn cancel_run_action(
         Ok(id) => id.to_string(),
         Err(message) => return bad_request(message),
     };
+    if body.queued_only && body.force {
+        return bad_request("queued_only cannot be combined with force".to_string());
+    }
     match blocking("cancel run", move || {
-        Ok(runtime.cancel_job_run_with_options_and_policy(
-            &id,
-            "dashboard",
-            "web",
-            body.reason.as_deref(),
-            body.force,
-            body.block,
-        ))
+        Ok(if body.queued_only {
+            runtime.cancel_queued_job_run(
+                &id,
+                "dashboard",
+                "web",
+                body.reason.as_deref(),
+                body.block,
+            )
+        } else {
+            runtime.cancel_job_run_with_options_and_policy(
+                &id,
+                "dashboard",
+                "web",
+                body.reason.as_deref(),
+                body.force,
+                body.block,
+            )
+        })
     })
     .await
     {

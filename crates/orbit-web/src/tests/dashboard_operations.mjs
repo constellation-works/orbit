@@ -104,6 +104,8 @@ const readinessTasks = [
   { task_id: 'ORB-9', status: 'backlog', eligible: false, reason: 'unmet_dependency' },
 ];
 window.confirm = message => { confirmations.push(message); return true; };
+// Queued windows the fixture server has since started.
+const startedQueuedRuns = new Set();
 // What readiness reports the composer may start: the owner drains its own
 // backlog; a replica pulls from its owner, and the runtime's refusal for the
 // other source is shown as it words it.
@@ -153,6 +155,13 @@ globalThis.fetch = async (path, options = {}) => {
       const runId = decodeURIComponent(cancelledRun);
       if (Array.isArray(drainCapacityOverride.queued_drains)) {
         drainCapacityOverride = { ...drainCapacityOverride, queued_drains: drainCapacityOverride.queued_drains.filter(drain => drain.run_id !== runId) };
+      }
+      // A queued window that started after its card rendered: the server
+      // refuses a queued-only cancel and the window keeps running.
+      if (startedQueuedRuns.has(runId)) {
+        if (body?.queued_only === true) return response({ error: `job run '${runId}' is no longer queued (it is running); the queued-only cancel was refused and the run left untouched` }, 409);
+        startedQueuedRuns.delete(runId);
+        return response({ run_id: runId, outcome: 'cancelled', previous_state: 'running', final_state: 'cancelled' });
       }
       return response({ run_id: runId, outcome: 'cancelled', previous_state: 'pending', final_state: 'cancelled' });
     }
@@ -1818,7 +1827,8 @@ await fetchAndRenderOperations();
 // A window started while another runs waits for it. The card lists it under
 // the live window with its run, ceiling, completion, crews and window, flags a
 // Claude crew it would start with no credential, and cancels it alone through
-// the per-run cancel. With nothing queued the card is unchanged.
+// the per-run queued-only cancel, which a window that started after the card
+// rendered refuses. With nothing queued the card is unchanged.
 drainRunId = 'jrun-20260923-0400-a1';
 drainPhase = 'draining';
 drainCapacityOverride = {};
@@ -1851,13 +1861,17 @@ const cancelQueued = runId => descendants(get('auto-drain-body')).find(node => n
 assert(cancelQueued(queuedClaude) && !cancelQueued(queuedClaude).disabled, 'each queued window offers Cancel');
 const confirmsBeforeCancel = confirmations.length;
 const requestsBeforeCancel = requests.length;
+// The live window ended and this queued one started after the card rendered.
+startedQueuedRuns.add(queuedClaude);
 cancelQueued(queuedClaude).click(); await tick(); await tick(); await tick(); await tick();
 const cancelPosts = requests.slice(requestsBeforeCancel).filter(request => request.method === 'POST');
-assert(cancelPosts.length === 1 && cancelPosts[0].path === `/api/runs/${queuedClaude}/cancel` && cancelPosts[0].body.force === false && cancelPosts[0].workspace === 'one', `Cancel posts the per-run cancel for that window alone: ${JSON.stringify(cancelPosts)}`);
+assert(cancelPosts.length === 1 && cancelPosts[0].path === `/api/runs/${queuedClaude}/cancel` && cancelPosts[0].body.force === false && cancelPosts[0].body.queued_only === true && cancelPosts[0].workspace === 'one', `Cancel posts the per-run queued-only cancel for that window alone: ${JSON.stringify(cancelPosts)}`);
 assert(confirmations.length === confirmsBeforeCancel + 1 && confirmations.at(-1).includes(queuedClaude) && confirmations.at(-1).includes('the live window keeps running'), `Cancel confirms first: ${confirmations.at(-1)}`);
-assert(get('auto-drain-operation-feedback').textContent === `Queued window ${queuedClaude} cancelled.`, `the cancel reports its result: ${get('auto-drain-operation-feedback').textContent}`);
-assert(!queuedRow(queuedClaude) && queuedRow(queuedDone) && get('auto-drain-live'), 'the card drops the cancelled window and keeps the live one');
+assert(startedQueuedRuns.has(queuedClaude) && get('auto-drain-operation-feedback').textContent === `Queued window ${queuedClaude} has already started, so it was not cancelled. Stop it from the live window's controls if you mean to.`, `a window that started first is refused, not cancelled: ${get('auto-drain-operation-feedback').textContent}`);
+assert(!queuedRow(queuedClaude) && queuedRow(queuedDone) && get('auto-drain-live'), 'the refusal refreshes the card, which no longer lists the started window as queued');
+startedQueuedRuns.delete(queuedClaude);
 cancelQueued(queuedDone).click(); await tick(); await tick(); await tick(); await tick();
+assert(get('auto-drain-operation-feedback').textContent === `Queued window ${queuedDone} cancelled.`, `a still-queued window cancels: ${get('auto-drain-operation-feedback').textContent}`);
 assert(!get('auto-drain-queued') && cardMarkup() === unqueuedCard, 'with the last queued window cancelled the card shows only the live drain');
 drainCapacityOverride = {};
 drainRunId = null;

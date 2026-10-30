@@ -479,6 +479,11 @@ The card shows:
   **Winding down · N workers still running** once admissions stop; or `idle`.
   The header links the live window's run. Windows started from the CLI show
   here too.
+- **Queued windows.** A window started while another runs waits under the
+  live one, with its own settings and a **Cancel**. Cancel only removes a
+  window that has not started: if the live window ended and the queued one
+  started in the meantime, Cancel is refused, the window keeps running, and
+  the card refreshes to show it.
 - **Capacity.** Running tasks against the limit, free slots, and what a window
   started now would admit.
 - **Admission forecast.** The last pass's forecast time, CPU and memory peaks

@@ -632,6 +632,154 @@ fn run_state(fixture: &Fixture, run_id: &str) -> JobRunState {
         .unwrap_or_else(|| panic!("missing run {run_id}"))
 }
 
+/// The dashboard's queued-window Cancel promises the window has not started.
+/// A queued auto window starts under the same run id when the live one ends,
+/// so a Cancel sent from a card rendered before that start must be refused,
+/// leaving the started window, its owner and its audit trail untouched; a
+/// still-queued window cancels, and the general cancel still stops a running
+/// window [ORB-20120].
+#[test]
+fn queued_only_cancel_refuses_a_window_that_started_after_the_card_rendered() {
+    isolated(
+        "workflows::queued_only_cancel_refuses_a_window_that_started_after_the_card_rendered",
+        || {
+            use orbit_store::compose::workspace_job_run_store;
+            use orbit_store::contracts::AuditEventFilter;
+            use orbit_types::workflow::JobRunStartOutcome;
+
+            let fixture = Fixture::new();
+            let server = fixture.server(true);
+            let jobs = workspace_job_run_store(
+                fixture.runtime.sqlite_store().unwrap(),
+                fixture.runtime.workspace_id().unwrap(),
+            );
+            let cancel_path = |run_id: &str| format!("/api/runs/{run_id}/cancel?workspace={WS}");
+            let cancel_audits = |run_id: &str| {
+                fixture
+                    .runtime
+                    .list_audit_events_filtered(&AuditEventFilter {
+                        job_run_id: Some(run_id.to_string()),
+                        limit: 50,
+                        ..AuditEventFilter::default()
+                    })
+                    .unwrap()
+                    .into_iter()
+                    .filter_map(|event| event.tool_name)
+                    .filter(|tool| tool.starts_with("pipeline.run.cancel"))
+                    .collect::<Vec<_>>()
+            };
+
+            // Rendered queued, then started by the worker's start arbiter
+            // before the Cancel arrived.
+            let mut owner = std::process::Command::new("sleep")
+                .arg("60")
+                .spawn()
+                .expect("spawn stand-in window owner");
+            let started = fixture.seed_run(
+                "jrun-queued-then-started",
+                "workspace_auto_pipeline",
+                JobRunState::Pending,
+            );
+            assert_eq!(
+                jobs.mark_job_run_running(&started.run_id, Utc::now(), owner.id())
+                    .unwrap(),
+                JobRunStartOutcome::Started
+            );
+            let before = fixture.runtime.show_job_run(&started.run_id).unwrap();
+            let refused = server.send(
+                "POST",
+                &cancel_path(&started.run_id),
+                json!({"reason": null, "force": false, "queued_only": true}),
+            );
+            let status = refused.status().as_u16();
+            let body: Value = refused.json().unwrap();
+            assert_eq!(
+                status, 409,
+                "a started window refuses a queued-only cancel: {body}"
+            );
+            assert!(
+                body["error"]
+                    .as_str()
+                    .is_some_and(|error| error.contains("no longer queued")),
+                "the refusal says why: {body}"
+            );
+            let after = fixture.runtime.show_job_run(&started.run_id).unwrap();
+            assert_eq!(
+                after.state,
+                JobRunState::Running,
+                "the started window keeps running"
+            );
+            assert_eq!(
+                (after.pid, after.started_at),
+                (before.pid, before.started_at)
+            );
+            assert!(
+                owner.try_wait().unwrap().is_none(),
+                "the started window's owner was not stopped"
+            );
+            assert_eq!(
+                cancel_audits(&started.run_id),
+                Vec::<String>::new(),
+                "a refused queued-only cancel records no cancellation"
+            );
+            assert!(
+                fixture
+                    .runtime
+                    .read_run_state(&started.run_id)
+                    .unwrap()
+                    .and_then(|state| state.task_cancellation_policy)
+                    .is_none(),
+                "a refused queued-only cancel writes no task cancellation policy"
+            );
+            let combined = server.send(
+                "POST",
+                &cancel_path(&started.run_id),
+                json!({"queued_only": true, "force": true}),
+            );
+            assert_eq!(combined.status().as_u16(), 400, "queued_only refuses force");
+            assert_eq!(run_state(&fixture, &started.run_id), JobRunState::Running);
+
+            // A window still queued cancels at once.
+            let queued = fixture.seed_run(
+                "jrun-still-queued",
+                "workspace_auto_pipeline",
+                JobRunState::Pending,
+            );
+            let cancelled = json_ok(server.send(
+                "POST",
+                &cancel_path(&queued.run_id),
+                json!({"reason": null, "force": false, "queued_only": true}),
+            ));
+            assert_eq!(cancelled["outcome"], "cancelled", "{cancelled}");
+            assert_eq!(cancelled["previous_state"], "pending", "{cancelled}");
+            assert_eq!(run_state(&fixture, &queued.run_id), JobRunState::Cancelled);
+            assert!(
+                cancel_audits(&queued.run_id)
+                    .iter()
+                    .any(|tool| tool == "pipeline.run.cancel.completed"),
+                "the queued cancel keeps its audit trail"
+            );
+            let again = json_ok(server.send(
+                "POST",
+                &cancel_path(&queued.run_id),
+                json!({"queued_only": true}),
+            ));
+            assert_eq!(again["outcome"], "already_terminal", "{again}");
+
+            // The general cancel still stops a running window.
+            let general = json_ok(server.send(
+                "POST",
+                &cancel_path(&started.run_id),
+                json!({"reason": null, "force": false}),
+            ));
+            assert_eq!(general["previous_state"], "running", "{general}");
+            assert_eq!(run_state(&fixture, &started.run_id), JobRunState::Cancelled);
+            let _ = owner.kill();
+            let _ = owner.wait();
+        },
+    );
+}
+
 #[test]
 fn replay_returns_a_durable_receipt_while_the_job_runs_in_a_detached_worker() {
     isolated(

@@ -348,6 +348,17 @@ pub trait JobRunStoreBackend: Send + Sync {
         finished_at: DateTime<Utc>,
         duration_ms: Option<u64>,
     ) -> Result<JobRunFinalization, OrbitError>;
+    /// Cancel a run only while it is still `pending`: the state check and the
+    /// terminal write share the immediate transaction
+    /// [`Self::mark_job_run_running`] starts a run in, so a run either starts
+    /// or is cancelled here, never both. A run that already started or ended
+    /// is left untouched and reported as
+    /// [`PendingJobRunCancellation::NotPending`].
+    fn cancel_pending_job_run(
+        &self,
+        run_id: &str,
+        finished_at: DateTime<Utc>,
+    ) -> Result<PendingJobRunCancellation, OrbitError>;
     /// Compatibility surface: `true` means the run exists, including replay.
     fn finalize_job_run(
         &self,
@@ -415,6 +426,17 @@ pub enum JobRunFinalization {
     Finalized,
     /// An earlier terminal state won; this call did not change it.
     AlreadyTerminal(JobRunState),
+}
+
+/// The result of [`JobRunStoreBackend::cancel_pending_job_run`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PendingJobRunCancellation {
+    /// The run did not exist.
+    Missing,
+    /// This call moved the still-pending run to `cancelled`.
+    Cancelled,
+    /// The run had left `pending` (it is in this state); nothing was written.
+    NotPending(JobRunState),
 }
 
 /// Durable inputs for one parent-authorized child admission.
