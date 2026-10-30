@@ -136,8 +136,10 @@ pub(super) struct Phase<'a> {
 pub(super) struct PhaseRun {
     pub(super) end: BuildPhaseEnd,
     /// The stdout kept apart from the log (empty without `stdout_cap`).
+    #[cfg(target_os = "linux")]
     pub(super) stdout: Vec<u8>,
     /// Stdout went past `stdout_cap`; what is kept is its head.
+    #[cfg(target_os = "linux")]
     pub(super) stdout_over_cap: bool,
 }
 
@@ -249,16 +251,23 @@ pub(super) fn run_phase<G>(
     {
         end = BuildPhaseEnd::BuildDirCapExceeded;
     }
-    // The capped stdout sink marks an overflow with a trailing byte past
-    // the cap, so the head it kept stays exactly the bytes the child wrote.
-    let mut stdout = outcome.stdout;
-    let stdout_over_cap = request.stdout_cap.is_some_and(|cap| stdout.len() > cap);
-    if let Some(cap) = request.stdout_cap {
-        stdout.truncate(cap);
-    }
+    // Only Linux script runs consume a separate stdout answer. Build phases
+    // on every platform retain their output in the shared log instead.
+    #[cfg(target_os = "linux")]
+    let (stdout, stdout_over_cap) = {
+        // The sink keeps one byte past the cap to mark an overflow.
+        let mut stdout = outcome.stdout;
+        let over_cap = request.stdout_cap.is_some_and(|cap| stdout.len() > cap);
+        if let Some(cap) = request.stdout_cap {
+            stdout.truncate(cap);
+        }
+        (stdout, over_cap)
+    };
     Ok(PhaseRun {
         end,
+        #[cfg(target_os = "linux")]
         stdout,
+        #[cfg(target_os = "linux")]
         stdout_over_cap,
     })
 }

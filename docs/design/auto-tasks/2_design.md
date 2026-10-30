@@ -463,6 +463,30 @@ The next run reads the newest completed design-sync chore's artifact, never
 its summary prose; missing ledgers and unverified evidence are explicit.
 Clean runs follow the workspace's validated no-diff evidence requirements.
 
+### 4g. `workflow-health-audit`: jobs and routines must produce their effects
+
+The weekly `workflow-health-audit` default inventories every effective job and
+routine, including disabled and custom definitions. Owner-only, non-reconciling
+inspection traces triggers through admission and terminal settlement, and checks
+durable effects rather than treating a green wrapper as proof of success. The
+seven-day scan uses up to 30 days for sparse definitions and records unobserved,
+unavailable and unvalidated rows explicitly. Existing isolated public-boundary
+fixtures can supply missing proof under the workspace's validation policy;
+production jobs and providers are never fired to manufacture coverage.
+
+Concrete, testable repairs become deduplicated proposed tasks. Other actionable
+obstacles become frictions naming the evidence or external action needed. Each
+pass files at most five new records and retains overflow. Its
+`workflow-health-audit.json` artifact contains the complete per-definition
+inventory, provenance, expected effects, evidence, validation gaps and finding
+dispositions. It complements `run-failure-patterns`: even a successful sweep
+with no output must explain eligible findings and their dispositions.
+
+Like other bundled defaults it is disabled until the operator enables it with
+`orbit auto-task enable workflow-health-audit on`; `skip_if_open` prevents
+overlapping weekly audit tasks. Enabling or running the audit grants no
+production retry, dispatch, configuration, merge or release authority.
+
 ## 5. CRUD surfaces
 
 `crud.rs` is the single choke point behind both the CLI (`orbit auto-task
