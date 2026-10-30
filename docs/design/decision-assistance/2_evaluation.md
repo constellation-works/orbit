@@ -28,7 +28,7 @@ adds the first labeler's recorded `value` to the import so rewriting
 `expected` cannot hide first/second disagreement. `validate`, `score`,
 `check-split` and `check-targets` accept both versions; `schema` keeps
 `format_version` at `/1` for evidence-envelope compatibility and lists
-both under `supported_format_versions`, and `seed` defaults to `/1` with
+both legacy versions alongside `/3` under `supported_format_versions`, and `seed` defaults to `/1` with
 an opt-in `--format-version` for `/2` synthetic fixtures.
 
 - **Consumers/questions.** `failure_categorization`: one choice question
@@ -186,35 +186,306 @@ confusion matrices, latency, cost per answered case, and every metric that is
 comparison is manual, because `score` reports metrics and does not read the
 target file. A well-formed answer is not evidence of correctness.
 
-## Proposed extension: delivery-quality grading
+## Delivery-quality offline contract (`decision-assistance-eval/3`)
 
-The [delivery-quality proposal](specs/delivery-quality.md) is a new consumer,
-not a renamed `task_quality` authoring assessment. Neither frozen format nor
-the existing `schema`, `seed`, `score` or `check-targets` command implements
-its six-dimensional ordinal evaluation. Add versioned questions, applicability,
-coverage/attribution and ordinal metric/target support before running it;
-preserve legacy dataset readability and never reinterpret old predicate labels.
+This additive offline family implements the [delivery-quality proposal](specs/delivery-quality.md).
+It remains **proposed for adoption**. It does not extend the native service's numeric
+answer types, change a runtime consumer, activate paid calls, or authorize a ladder
+routing action. `/1` and `/2` retain their original consumers, validation and scoring;
+`schema` still emits `/1` at the top level and advertises `/3` separately under
+`delivery_quality`. `delivery-schema` emits just the new contract. The CLI dispatches
+`/3` to the stdlib-only `delivery_quality_eval.py`, `delivery_quality_sampling.py`,
+`delivery_quality_study.py` and `delivery_quality_seed.py` modules beside the existing
+entrypoint. Existing classifier public checks remain the admitted regression suite;
+the following seed commands are manual mechanics QA, not a new accuracy test suite.
 
-Keep two independent human labels per applicable dimension and third-person
-adjudication, including original disagreement and insufficient evidence.
-Register exact/adjacent-grade and ordinal agreement, material grading errors,
-coverage/abstention, bias controls and sample sizes before opening a fresh
-family/time holdout. Reference-model agreement alone is not ground truth.
-Evaluate grade stability under irrelevant identity, length and formatting
-changes; incomplete evidence must abstain rather than earn a confident grade.
+### Questions, packets and answers
 
-Freeze evidence at grading intake and keep later regression/rework outcomes
-out of the grader packet. Those later outcomes may test predictive usefulness
-on a separately specified prospective cohort. Preserve all eligible units and
-ungraded gaps in that cohort; neither selective sampling nor retrospective
-rescoring can certify fleet quality. Do not average missing dimensions or mix
-rubric/model versions in a crew comparison.
+`delivery-quality-questions/1` and `delivery-quality-rubric/1` freeze six independent
+string-choice dimensions: `scope_contract_fit`, `robustness`, `structure`,
+`standards_conventions`, `verification_quality`, `clarity_maintenance`. `delivery-schema`
+exports each question and all five anchors. Choices are `deficient`, `weak`, `adequate`,
+`strong`, `exemplary`, `not_applicable`, `insufficient_evidence`. Only the first five map
+to ordinal positions 1–5 inside this scorer. Gate choices are separately declared as
+`deficient`/`weak`. Grade, optional `probability` confidence, service `disposition` and
+host applicability are distinct fields; no confidence calibration is claimed.
 
-A well-formed offline fixture is not calibration or adoption. The existing
-development-screen failures remain recorded, but are not accuracy measurements
-for this untested consumer. Live study, advisory display and any scorecard or
-routing integration each retain the proposal's explicit evidence and authority
-boundaries.
+A dataset has `format_version`, `dataset_id`, `question_version`, timezone-qualified
+`intake_snapshot_at`, `population`, and `cases`. The shipped seeds additionally carry
+`mechanics_only: true`; they cannot be imported or opened as human accuracy evidence.
+Each case carries `case_id`, `consumer: delivery_quality`, `question_version`,
+`family_id`, `join`, `evidence_packet`, `applicability`, `label`, `expected` (null until
+labeled), and local-only `host_metadata`. One owner/workspace/task appears at most once.
+Different commits or grading retries do not give that task additional votes.
+
+The packet fields are exactly `packet_id`, `subject_id`, `collected_at`,
+`source_revision`, `evidence_refs`, `question_evidence`, `omissions`, `truncated`,
+`scope` (`complete`/`partial`), and `blinded: true` (host redaction attestation).
+Each reference is `{id, content, digest, observed_at}`. Digests use `sha256:` plus
+SHA-256 of canonical UTF-8 JSON (`sort_keys`, compact separators, no NaN); this includes
+the JSON quotes around string content. `question_evidence` maps every dimension to
+host-selected reference IDs. An answer cannot cite invented or unselected references;
+an ordinal value requires at least one selected reference. All reference observations
+precede collection, which precedes both `join.as_of` and intake. Later regression,
+review or rework outcomes are separate prospective evidence, never packet additions.
+Source comments and logs are untrusted data, including instructions embedded in them.
+
+For every dimension, host `applicability` contains `{status, rule, reviewer_id,
+reviewed_at}`. Status is `applicable`, `not_applicable`, or `unavailable`. Applicable
+and N/A decisions require a named versioned rule and host reviewer at intake; unavailable
+applicability cannot earn an ordinal grade. A model cannot invent N/A. Non-code work
+cannot receive an applicable programming rubric or an artificial perfect grade.
+
+An answer document contains `format_version`, `sample_digest`, `answers`, and optional
+`repeats`. Each row has `case_id`, unique `assessment_id`, `binding`, `epoch`,
+`recorded_at`, `disposition`, `gap_reason`, `answers`, and measurements. `binding` is
+the canonical digest of the case's join, packet, applicability, question version,
+family and host metadata;
+wrong implementation attempts, changed evidence, grader versions and epochs are refused.
+A calibration dataset cannot mix source/rubric/grader/builder versions.
+`sample_digest` binds the frozen preselection receipt. `recorded_at` must follow receipt
+creation. Requested grades are `{value, evidence_refs, probability?}`. `suggested`
+requires all six dimensions and a complete packet without omissions/truncation.
+`uncertain`, `invalid`, and `stale` can retain partial typed values but never vote;
+`refused`/`unavailable` carry none. Fixed gap reasons are `budget`, `outage`, `pending`,
+`oversize`, `partial`. No response is a `missing` gap. Repeated assessments belong in
+`repeats`, refer to a primary assessment's case, and affect repeatability and call cost,
+never task counts. Usage is nullable; known cost needs `pricing_version`. Missing
+measurements or price provenance are unavailable, never silently zero.
+
+### Frozen sampling and ladder joins
+
+`population` is `delivery-quality-population/1`: `cohort_id`, `epoch`,
+`eligibility_watermark`, `frozen_at`, `source_version`, stable `seed`,
+`algorithm: sha256-sort/1`, and nonnegative `control_count`. Before collecting answers,
+`freeze-sample` selects every eligible candidate and the first `control_count` controls
+per trial/segment/tier/type/source/rubric/grader/builder stratum after sorting the hash
+of `[algorithm, seed, cohort_id, epoch, eligibility_watermark, [owner, workspace, task]]`
+(with task identity as a tie-breaker). This selection never reads grades, labels or
+outcomes. Probability is 1 for candidates, selected-control-count/control-enrollment for
+controls. Set the control cap in advance to the intended candidate sample size; capped
+strata and their probabilities remain visible. No later response can redraw controls.
+
+The exclusive `--output` receipt (`delivery-quality-sample/1`) retains the population,
+every task/case, binding, cohort flags, eligibility, selection, probability, frame digest
+and actual creation time. Retry with identical inputs returns the existing receipt;
+changed epochs, attempts, evidence, watermarks or rosters are refused. Preserve this
+receipt on restart and across hosts, and before answers. It is a host-produced record,
+not a cryptographic proof that an offline file's author told the truth about timing.
+
+`delivery-quality-join/1` is an additive export from `ladder-export` (also included in
+`score`). Every row retains **all** `join` fields, with old missing capture data explicitly
+null: `owner`, `workspace`, `experiment_id`, `trial_id`, `assignment_arm`,
+`segment_digest`, `overlay_digest`, `excluded`, `forced`, `live`, `task_id`,
+`implementation_attempt`, `change_unit`, `admission_tier`, `admission_type`,
+`actual_run_id`, `actual_provider`, `actual_model`, `actual_effort`,
+`configuration_fingerprint`, `source_version`, `rubric_version`, `grader_version`,
+`builder_version`, `as_of`, `attribution`, `non_code`.
+`change_unit` contains immutable `base_revision`, `candidate_revision`, optional
+`landed_revision`, and `patch_digest`; an unavailable unit is null. Available attribution
+requires the actual implementation attempt/run/provider/model/effort/fingerprint and
+unit. Attribution can instead be `shared`, `partial`, `unavailable`. A repeated shared
+unit is unattributed for individual task counts even if its input rows claim otherwise.
+Keep joint assessments readable; never allocate the same grade to multiple tasks.
+
+`overlay_digest` identifies assignment policy and remains distinct from the configuration
+fingerprint of the crew that **actually executed**. A shadow assignment is never evidence
+of candidate execution. `live: false` is hypothetical, null is uncaptured; neither enters
+live coverage. Excluded/forced/non-code flags also admit null for uncaptured old data;
+eligibility requires explicitly false flags, never an assumption from null. Forced, excluded, hypothetical/uncaptured and non-code flag combinations
+remain separate cohorts, with full enrollment counts. Missing current capture fields
+are never recovered from today's mutable configuration.
+
+Per comparable arm/cohort and dimension, the export shows enrolled, eligible,
+preselected, unsampled, assessment-recorded and assessed counts. Assessed means a
+recorded typed dimension value, including abstention; valid ordinal is a separate count. Eligibility requires live capture, no forced/excluded/non-code flag, candidate or
+control arm, and captured experiment/trial/segment/overlay. For each dimension:
+
+- Coverage denominator = **frozen preselected eligible tasks minus host-approved N/A
+  tasks with available task attribution and captured admission tier/type**. Unknown
+  applicability, partial/unattributed units, missing old admission data and all selected
+  operational gaps remain in the denominator. N/A from an unapproved model answer is
+  refused. Non-code and otherwise ineligible cohorts remain population records outside
+  this programming-sample denominator.
+- Coverage numerator = selected, attributable, completely evidenced, applicable
+  `suggested` ordinal results. Repeats add no votes. A useful grade cannot hide missing
+  required evidence or missing dimensions. Each dimension's denominator is independent.
+- Bad-grade numerator = valid `deficient` + `weak`; bad-grade denominator = valid ordinal
+  results for that dimension. Counts support a separately adopted guardrail's proportion
+  and interval calculation, without averaging dimensions or embedding a routing action.
+- Every gap is explicit: missing, partial, unattributed, capture/applicability unavailable,
+  budget, outage, pending, oversize, refusal, unavailable, invalid, stale, uncertain,
+  insufficient evidence. Approved N/A, ineligible and unsampled remain separate counts.
+  Exclusive coverage states prioritize unavailable attribution/capture, host applicability,
+  then response/packet state; rows also retain the original assessment disposition,
+  gap reason and typed answers so simultaneous limitations are inspectable.
+
+`min_grade_coverage` and the inter-arm coverage-gap check use that per-dimension
+**preselected** denominator. Example: 10 enrolled candidates and 90 enrolled controls;
+all candidates and 10 seeded controls selected and valid => candidate coverage 10/10,
+control coverage 10/10, both **100%**. Controls still show enrollment 90, selected 10,
+unsampled 80. This is not 11% failed coverage. Removing one selected control result makes
+control coverage 9/10 = 90%; it leaves 80 unsampled controls visible. Full-enrollment
+sampling rates and applicability rules remain visible beside sample coverage. Selection
+bias, different sampling probabilities and missingness still limit population inference.
+The current ladder implementation only admits off/shadow ladder modes and refuses
+`delivery_quality=shadow` and `guardrail`; this offline export does not implement or
+authorize that later integration.
+
+### Blinded labels and fresh holdouts
+
+`export-labels` emits `delivery-quality-blind/1`: opaque `blind_id`, bounded packet
+without task/packet identity, dimension applicability rules, the rubric, intake and
+sample/export digests. Join, expected answers, human labels, author/model attribution,
+family and control labels stay local. `host_metadata.author_ids`, author/grader model
+families and perturbation pair IDs remain available only for attribution and host bias
+analysis. The host must redact identifiers embedded in source/reference content before
+attesting `blinded`; dropping metadata keys alone cannot redact arbitrary source text.
+Give independent labelers separate copies; do not show model answers or the other's label.
+
+`import-labels` accepts `delivery-quality-labels/1`, matching export/sample digests and
+`records: [{blind_id, label}]`. A human `label` has `provenance: independent_human`,
+`human_ground_truth: true`, `intake_snapshot_at`, two `independent_labels`, and nullable
+`adjudication`. Each original has `labeler_id`, qualification `role`, `kind: human`,
+`qualified: true`, `independent: true`, `blinded: true`, `labeled_at`, and six typed
+`values`. Labelers must differ, must not be change authors, and cannot be models.
+Qualifications, independence and permitted evidence use are host attestations, not
+facts this offline tool can discover. Both originals remain intact even when they
+abstain or disagree. Agreement becomes expected; unresolved disagreement becomes
+`insufficient_evidence` for that dimension. Optional adjudication uses the same fields,
+a third human identity, `rationale_category` and a timestamp after both originals; its
+values become expected. Existing independent labels cannot be overwritten through import.
+A new study/version is required to relabel. Synthetic imports use `provenance: synthetic`,
+`human_ground_truth: false`, `kind: fixture_person`, and retain that status permanently.
+They can exercise adjudication mechanics but cannot become human ground truth.
+
+Before access, `register-targets` exclusively persists `delivery-quality-targets/1`
+with `holdout_id`, `purpose: human_evaluation`, actual registration receipt time,
+declared `registered_at`, named baseline plus explicit measurements/unknowns, and frozen
+study identity (question/rubric/grader/builder/source versions, cohort/epoch/watermark,
+sample frame digest). Each of the six targets requires positive `min_samples`,
+`min_exact`, `min_adjacent`, `min_weighted_agreement`, `max_material_overgrading`,
+`max_material_undergrading`, `min_coverage`, `max_abstention`,
+`max_human_disagreement`, `min_repeatability`. Rates are finite in [0,1]. Predeclare
+`uncertainty.method: wilson95+family-bootstrap95/1` and `max_interval_width`.
+Declare all controls listed by `delivery-schema` and `comparison: absolute_ordinal`.
+No pairwise comparison is implemented; any later pairwise protocol must predeclare
+presentation-order swaps. These thresholds have no universal defaults and no routing effect.
+
+`check-targets` checks without registering; opening requires the stored registration.
+It never overwrites an existing target digest. `check-split` requires
+`delivery-quality-split/1`, matching purpose/holdout/target digest/intake, full `sample`
+receipt and `assignments` for every case (`train`, `dev`, `holdout`), with nonempty
+holdout and development populations and `split_strategy: family_and_time/1`.
+Family, subject and task identities cannot cross the holdout boundary; earliest
+holdout evidence must be strictly later than the latest development evidence. Human
+holdouts require independent human labels. Reused IDs **or identities under a new ID**
+are refused. A human holdout ID already opened in the legacy `/1` or `/2` ledger is
+also refused; changing contract versions cannot refresh it. Future evidence and changed source/grader/epoch/frame identities are refused.
+Successful opening creates an exclusive receipt, bound to dataset/manifest/target digests,
+and never rolls it back. Rechecking the same opening is refused. Target changes or
+post-opening registrations fail even with a backdated declared timestamp. The opening
+reports actual per-dimension labeled sample sizes and whether the registered sample-size
+requirements are met; opening alone does not certify sufficient samples or adoption.
+
+Receipts live under `.decision-assistance-eval/delivery/<purpose>/{targets,openings}/`
+in the evaluation working directory. Preserve the whole ledger across retries and hosts;
+run study commands in one directory. Opening checks serialize across IDs with Unix
+`flock`; local filesystem owners can delete files, so this is not tamper-proof archival
+storage or permission to copy a holdout into a fresh directory. Keep host-controlled
+access history with the human study. `purpose: synthetic_mechanics` has a disjoint
+receipt namespace, requires `mechanics_only: true` and synthetic labels, and always
+returns `accuracy_eligible: false`. It exercises irreversible opening/reuse mechanics
+without weakening human-holdout admission.
+
+### Ordinal readout and uncertainty
+
+`delivery-quality-scorer/1` emits no composite or fleet ranking. Each dimension reports:
+
+- Exact and adjacent (absolute ordinal distance <= 1) agreement, a full 5x5 confusion
+  matrix (rows expected, columns predicted), material over/under-grading (distance >= 2),
+  counts and 95% Wilson intervals for these proportions. Only paired valid ordinal
+  predictions and ordinal accepted labels enter agreement; every missing/abstained case
+  remains in coverage. Zero observations produce null metrics, never perfect agreement.
+- Quadratic weighted agreement `1 - mean(((predicted-human)/4)^2)` and quadratic weighted
+  Cohen kappa `1 - observed_disagreement/independent_marginal_disagreement`. Kappa is
+  unknown when marginal disagreement is zero. Intervals use 1,000 family-cluster
+  percentile bootstrap draws with seed 0. Fewer than two families, or fewer than 950
+  defined bootstrap estimates, leave the interval explicitly unavailable. Wilson
+  intervals are descriptive task proportions; clustering and a small or biased cohort
+  limit inference. No claimed calibration follows from an interval alone.
+- Coverage and abstention on the selected dimension frame, retained human disagreement
+  and abstention (including N/A and insufficient evidence), human inter-rater ordinal
+  agreement, adjudication counts, and repeatability against primary recorded answers.
+  Independent repeats never increase enrollment, coverage, or sample size.
+- Call latency and token/cost totals/means, with unknown status if any call lacks a
+  measurement. Known zero is distinct from missing pricing/usage. Cost per useful
+  assessment divides **all** call costs, including retries/repeats, by unique selected
+  attributable tasks with at least one valid applicable dimension. Per-dimension useful
+  cost instead divides that same spend by that dimension's valid task count; these
+  six costs must never be added or averaged. Missing spend or no useful result yields
+  null. This is a cost denominator, not a quality composite.
+- Host-only author/grader model-family strata and paired perturbation stability, without
+  ranking families or asserting a causal model effect. Unknown family attribution stays
+  null; it is never inferred from current settings. Control fixtures cover minimal good
+  work, deficient changes, overengineering, inherited poor code, shared/partial
+  attribution, missing validation, author/model labels, verbosity, formatting, source
+  prompt injection and evidence removal. Synthetic controls show mechanics, not judge
+  robustness or human accuracy.
+
+For adoption, qualified humans and the operator must still supply permitted frozen
+real changes, a representative population and power/sample-size rationale, qualification
+and independence attestations, blind dual labels plus adjudication, measured baseline,
+a fresh held-out readout against the predeclared targets/uncertainty, bias controls,
+repeat runs, and real usage/price provenance. Fit prompts only on development data.
+`score` does not decide whether targets authorize adoption; that remains a separate
+recorded operator decision, as do any live study, advisory surface or ladder guardrail.
+
+### Reproducible public CLI fixtures
+
+Run from a fresh directory beneath `.orbit/tmp/` so opening records stay in scratch.
+Set `ROOT` to this checkout before changing directory. No network or model is used.
+
+```bash
+ROOT="$PWD"
+mkdir -p .orbit/tmp/delivery-demo
+cd .orbit/tmp/delivery-demo
+python3 "$ROOT/scripts/evaluate-decision-assistance.py" delivery-schema > schema.json
+python3 "$ROOT/scripts/evaluate-decision-assistance.py" seed --format-version decision-assistance-eval/3 > dataset.json
+python3 "$ROOT/scripts/evaluate-decision-assistance.py" freeze-sample --dataset dataset.json --output sample.json > freeze.json
+python3 "$ROOT/scripts/evaluate-decision-assistance.py" seed --format-version decision-assistance-eval/3 --answers --dataset dataset.json --sample sample.json > answers.json
+python3 "$ROOT/scripts/evaluate-decision-assistance.py" validate --dataset dataset.json --answers answers.json --sample sample.json
+python3 "$ROOT/scripts/evaluate-decision-assistance.py" score --dataset dataset.json --answers answers.json --sample sample.json > report.json
+python3 "$ROOT/scripts/evaluate-decision-assistance.py" ladder-export --dataset dataset.json --answers answers.json --sample sample.json > join.json
+python3 "$ROOT/scripts/evaluate-decision-assistance.py" export-labels --dataset dataset.json --sample sample.json > blind.json
+```
+
+The default `ladder` seed is exactly 10 candidates and 90 controls. Repeat
+`freeze-sample` to verify stable selections/receipt. Delete one selected answer in a
+copy of `answers.json` to observe 90% coverage in that arm. Mutate a choice, evidence
+reference, epoch or implementation attempt in copies to observe exit 2 refusals.
+`seed --scenario controls` supplies the recorded minimal/overengineered/inherited,
+adversarial, operational-gap and cohort fixtures; generate its frame and answers with
+the same commands. Its deliberately wrong recorded answers demonstrate material errors,
+not measured grader behavior. All its unknown latency/usage/pricing remain unknown.
+
+For label/split mechanics use `seed --scenario study`, freeze its frame, then:
+
+```bash
+python3 "$ROOT/scripts/evaluate-decision-assistance.py" study-seed --dataset study.json --sample study-sample.json --output-dir inputs > inputs.json
+python3 "$ROOT/scripts/evaluate-decision-assistance.py" import-labels --dataset study.json --sample study-sample.json --labels inputs/labels.json > labeled.json
+python3 "$ROOT/scripts/evaluate-decision-assistance.py" register-targets --targets inputs/targets.json
+python3 "$ROOT/scripts/evaluate-decision-assistance.py" check-split --dataset labeled.json --manifest inputs/split.json
+```
+
+The synthetic study preserves unresolved disagreement and a third-person adjudication.
+Reopening is refused; registering modified/backdated targets after opening is refused.
+In copies, duplicate a labeler or use an original as adjudicator, substitute a model or
+self-label, overlap a family, put development evidence after holdout evidence, inject
+future evidence, or change the manifest to `human_evaluation`: each must be refused.
+A separate fresh working directory is for an independent fixture run, never a workaround
+for an opened human holdout. Fixture targets intentionally exceed fixture sample size;
+the opening reports unmet sizes and no accuracy eligibility.
 
 ## Live activation and budget handoff (not authorized here)
 
