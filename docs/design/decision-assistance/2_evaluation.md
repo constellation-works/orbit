@@ -186,6 +186,36 @@ confusion matrices, latency, cost per answered case, and every metric that is
 comparison is manual, because `score` reports metrics and does not read the
 target file. A well-formed answer is not evidence of correctness.
 
+## Proposed extension: delivery-quality grading
+
+The [delivery-quality proposal](specs/delivery-quality.md) is a new consumer,
+not a renamed `task_quality` authoring assessment. Neither frozen format nor
+the existing `schema`, `seed`, `score` or `check-targets` command implements
+its six-dimensional ordinal evaluation. Add versioned questions, applicability,
+coverage/attribution and ordinal metric/target support before running it;
+preserve legacy dataset readability and never reinterpret old predicate labels.
+
+Keep two independent human labels per applicable dimension and third-person
+adjudication, including original disagreement and insufficient evidence.
+Register exact/adjacent-grade and ordinal agreement, material grading errors,
+coverage/abstention, bias controls and sample sizes before opening a fresh
+family/time holdout. Reference-model agreement alone is not ground truth.
+Evaluate grade stability under irrelevant identity, length and formatting
+changes; incomplete evidence must abstain rather than earn a confident grade.
+
+Freeze evidence at grading intake and keep later regression/rework outcomes
+out of the grader packet. Those later outcomes may test predictive usefulness
+on a separately specified prospective cohort. Preserve all eligible units and
+ungraded gaps in that cohort; neither selective sampling nor retrospective
+rescoring can certify fleet quality. Do not average missing dimensions or mix
+rubric/model versions in a crew comparison.
+
+A well-formed offline fixture is not calibration or adoption. The existing
+development-screen failures remain recorded, but are not accuracy measurements
+for this untested consumer. Live study, advisory display and any scorecard or
+routing integration each retain the proposal's explicit evidence and authority
+boundaries.
+
 ## Live activation and budget handoff (not authorized here)
 
 Live evaluation or advisory activation requires a separate operator decision
@@ -199,6 +229,7 @@ operator-coordinated evidence, not prerequisites for this offline delivery.
 
 ## Task References
 
+- ORB-20000 — propose separate delivery-quality questions and evaluation; no evaluator changes.
 - ORB-19720 — implement these evaluation contracts, seed set and scoring.
 - ORB-19760 — scope of the `check-targets` checks; the remaining target
   registration rules are manual steps.

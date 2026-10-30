@@ -9,7 +9,7 @@ next: "Improve rubrics/packets, independently adjudicate permitted data and regi
 feature: decision-assistance
 doc_role: scope
 type: design
-summary: "Scope: optional typed model judgments for failure categorization, task quality and six later candidates."
+summary: "Scope: optional typed model judgments, parked rollout and a proposed advisory delivery-quality grader."
 tags: [decision-assistance]
 ---
 
@@ -26,7 +26,9 @@ them is no longer the next step. Private collector code completion is separate
 from effectiveness and adoption: this delivery authorizes no deployment, paid
 replay, prompt tuning, configuration change or API activation.
 The [service contract](specs/service.md) documents the host-only configuration,
-durable ledger and public application boundary.
+durable ledger and public application boundary. A new
+[delivery-quality grader proposal](specs/delivery-quality.md) defines a separate
+offline evaluation candidate; it is not implemented or activated by this design.
 
 Bearing: builds on [activities and jobs](../activity-job/2_design.md),
 [auto-tasks](../auto-tasks/2_design.md), the shipped
@@ -101,21 +103,27 @@ measurements a prerequisite for consuming its answers.
 
 ## Goal
 
-Make bounded judgments reusable, inspectable and measurable. Prioritize failure
-categorization and task-creation quality checks, then evaluate six additional
-uses. Keep Orbit's semantic contracts provider-neutral, with an optional OpenAI
-adapter and explicit host-owned enablement for sending evidence outside the host.
+Make bounded judgments reusable, inspectable and measurable. The original two
+consumer screens remain negative evidence and their rollout remains parked.
+The delivery-quality grader adds a separate proposed evaluation of programming
+quality alongside observed outcomes; it does not reactivate an older consumer.
+Keep the six original later candidates recorded for independent evaluation and
+Orbit's contracts provider-neutral, with explicit host-owned enablement for
+sending evidence outside the host.
 
 ## Shape
 
 ### Candidate inventory and order
 
-These are opportunities to evaluate, not approval to automate every action.
+The original priority labels below describe the initial scope, not an active
+execution queue. These are opportunities to evaluate, not approval to automate
+every action; current implementation and parked status are recorded above.
 
 | Order | Candidate | Evidence and typed question | Consumer and limit |
 |---|---|---|---|
 | First | Failure-pattern categorization | Bounded failure evidence; choose one category from the existing taxonomy plus `insufficient_evidence`. | Failure-pattern report suggests categories; investigator verifies causes and dispositions. |
 | First | Task-creation quality checks | Title, description and individually numbered criteria; independent predicates for unclear outcomes, non-observable criteria, contradictory requirements and mixed outcomes. | Author and pilot see advisory flags; no task rejection or approval. |
+| Proposed, offline only | Delivery-quality grader | Frozen task/diff/contracts and validation evidence; independent anchored 1–5 choices for scope fit, robustness, structure, standards, verification and maintainability, with abstention. | Separate advisory quality profile; no scorecard term, routing change or review authority. See [proposal](specs/delivery-quality.md). |
 | Later | Task tag suggestions | Task text and an approved workspace vocabulary; one predicate per tag because several may apply. | Suggest descriptive tags; separately evaluate automatic application and every tag with execution effects. |
 | Later | Backlog duplicate/landed candidates | Search-selected task pairs, scopes and available delivery evidence; choose same issue, partial overlap, distinct, or insufficient evidence. | Rank candidates in backlog hygiene; commit inspection establishes landed coverage. |
 | Later | Friction grouping and rejection classification | Retrieved report pairs and current rejection rationale; classify same mechanism and administrative versus terminal rejection. | Curator inspects current behavior and records canonical mappings; similarity cannot close a friction. |
@@ -129,6 +137,21 @@ Existing instruction anchors for the later candidates are
 [escape-to-guard](../../../crates/orbit-core/assets/auto_tasks/escape-to-guard.yaml),
 [finding verification](../../../crates/orbit-core/assets/activities/verify_finding.yaml),
 and the task-pilot and authoring instructions above.
+
+### Proposed consumer: delivery-quality grading
+
+A [delivery-quality profile](specs/delivery-quality.md) would describe programming
+qualities that completion/review/regression outcomes do not directly measure.
+Assess the exact attributable delivered change against its scope and repository
+contracts, using six independent anchored dimensions rather than one overall
+number. Missing context must produce an explicit gap, not an average over the
+most convenient files. Grade identity follows the actual implementation attempt,
+not a task's later crew assignment; reviewer repairs need separate attribution.
+
+This proposal does not change the current agent score or task-type routing.
+The existing two development screens do not evaluate delivery grading. Require
+its own human-adjudicated calibration and fresh holdout, then a separately
+authorized private shadow study before considering an advisory surface.
 
 ### Shared request and result contract
 
@@ -299,8 +322,9 @@ fields are implementation contracts still to be designed.
   source-bound feasibility and repair remain in their existing activities.
 - **New deterministic classification.** Existing typed codes, validation, identity
   matching, age thresholds and arithmetic do not need model judgment.
-- **Immediate automatic tagging.** All eight candidates are recorded, but the first
-  implementation covers the two priority consumers. A later proposal must specify
+- **Immediate automatic tagging.** The eight original candidates and the new
+  grading proposal are recorded, but the first implementation covers the two
+  priority consumers. A later proposal must specify
   which tags may be applied and audit their downstream effects.
 
 ## Concerns and honest limitations
@@ -340,8 +364,11 @@ an instruction to resume the archived/deferred work.
    per-question thresholds and sample-size requirements before opening a fresh
    holdout. Enable advisory mode only for consumers that meet those declared targets;
    keep measured regressions reversible by switching the consumer off.
-4. **Later candidates.** Evaluate the six remaining candidates independently. Any
-   automatic application of annotations or descriptive tags needs its own evidence
+4. **Later candidates.** Evaluate the six original remaining candidates independently.
+   The [delivery-quality grader](specs/delivery-quality.md) is an additional proposed
+   evaluation, not a restart of the archived consumers. It needs an explicit
+   evidence/labeling protocol, ordinal-scoring support and its own adoption
+   decision. Any automatic application of annotations or descriptive tags needs its own evidence
    and action contract. Keep execution-bearing tags (`ui`, `os:`, `crew-purpose:`,
    approval/review skips and instruction mappings) outside that automatic scope.
 
@@ -382,6 +409,7 @@ an instruction to resume the archived/deferred work.
 
 ## Task References
 
+- ORB-20000 — propose an independently evaluated advisory delivery-quality grader.
 - ORB-19718 — author this design and open its review PR; no implementation authorized.
 - ORB-19720 — offline evaluation contract and protocol.
 - ORB-19721 — optional generic service and synthetic public-boundary fixtures.
