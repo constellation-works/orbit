@@ -241,9 +241,9 @@ function firstDockCardOffset(side) {
 }
 
 // Re-level whenever something above the first task block, or the dock itself,
-// changes size: the toolbar or status pills wrapping, the pager or the create
-// form coming and going, the dock coming back after a task closes, the tab bar
-// changing height. A tab switch re-levels from applyDockMode. Passing notices
+// changes size: the toolbar or status pills wrapping, the pager coming and
+// going, the dock coming back after a task closes, the tab bar changing height.
+// The create dialog is in the top layer and moves nothing. A tab switch re-levels from applyDockMode. Passing notices
 // sit in the message area and move nothing.
 function wireDockAlignment() {
   const dock = $("tasks-dock");
