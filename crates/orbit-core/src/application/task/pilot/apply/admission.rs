@@ -12,7 +12,8 @@ use serde_json::Value;
 
 use crate::OrbitRuntime;
 use crate::application::task::{
-    CiSweepAdmissionDecision, NoDiffClosure, PILOT_VERIFIED_NO_DIFF, PromotionDecision,
+    CiSweepAdmissionDecision, CiSweepFilingEvidence, NoDiffClosure, PILOT_VERIFIED_NO_DIFF,
+    PromotionDecision,
 };
 
 use super::super::drain_promotion::{self, Approval, DrainAdmissionDecision, DrainAuthority};
@@ -120,7 +121,7 @@ pub(in super::super) enum PromotionAuthority<'a> {
     None,
     /// A CI sweep's exact filing record; `promotion_authorized` is the literal
     /// authority, carried into each decision.
-    CiSweep(&'a Value, bool),
+    CiSweep(&'a CiSweepFilingEvidence, bool),
     /// A verified `--approve-proposed` drain.
     Drain(DrainAuthority),
 }

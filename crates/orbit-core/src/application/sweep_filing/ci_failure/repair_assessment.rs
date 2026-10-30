@@ -168,16 +168,8 @@ impl<'a> Assessor<'a> {
         self.verify_delivery(owner, &assessment)?;
         self.verify_revisions(cluster, &assessment, &before, &after)?;
 
-        let mut sources = cluster.filing_entry(&owner.id)["sources"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
-        sources.sort_by_key(|source| {
-            (
-                value_string(source, "run_id"),
-                value_string(source, "job_id"),
-            )
-        });
+        let mut sources = cluster.filing_entry(&owner.id).sources;
+        sources.sort_by_key(|source| (source.run_id.display(), source.job_id.display()));
         sources.dedup();
         Ok(
             json!({"schema_version": 1, "outcome": "covered_by_repair", "task_id": owner.id,

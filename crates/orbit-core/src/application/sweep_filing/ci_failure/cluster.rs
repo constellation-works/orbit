@@ -23,6 +23,7 @@ use crate::application::sweep_filing::duplicate_tasks::{
     DuplicateTaskMatch, find_covering_task,
 };
 use crate::application::sweep_filing::{digest, display, is_open_ci_owner_status, truncate_chars};
+use crate::application::task::{CiSweepFilingEvidence, CiSweepFilingSource};
 
 /// Legacy description labels shared only by rendering and the legacy reader.
 pub(super) const COMPILER_CAUSE_LINE: &str = "- Compiler cause identity: `";
@@ -318,26 +319,26 @@ impl FailureCluster {
             .collect()
     }
 
-    pub(super) fn filing_entry(&self, task_id: &str) -> Value {
-        json!({
-            "task_id": task_id,
-            "failure_key": self.failure_key,
-            "cluster_key": self.cluster_key,
-            "workflow": self.workflow,
-            "job": self.job,
-            "step": self.step,
-            "jobs": self.jobs,
-            "tested_commit": self.tested_commit,
-            "sources": self.runs.iter().map(|run| json!({
-                "run_id": run["run_id"], "job_id": run["job_id"],
-                "workflow": run["workflow"], "failed_jobs": run["failed_jobs"],
-                "actual_checkout_shas": run["actual_checkout_shas"],
-            })).collect::<Vec<_>>(),
-            "run_ids": self.run_ids(),
-            "run_urls": self.run_urls(),
-            "ref_kinds": self.distinct_run_strings("ref_kind"),
-            "head_branches": self.distinct_run_strings("head_branch"),
-        })
+    pub(super) fn filing_entry(&self, task_id: &str) -> CiSweepFilingEvidence {
+        CiSweepFilingEvidence {
+            task_id: task_id.to_string(),
+            failure_key: self.failure_key.clone(),
+            cluster_key: self.cluster_key.clone(),
+            workflow: self.workflow.clone(),
+            job: self.job.clone(),
+            step: self.step.clone(),
+            jobs: self.jobs.iter().cloned().collect(),
+            tested_commit: self.tested_commit.clone(),
+            sources: self
+                .runs
+                .iter()
+                .map(CiSweepFilingSource::decode_legacy)
+                .collect(),
+            run_ids: self.run_ids(),
+            run_urls: self.run_urls(),
+            head_branches: json!(self.distinct_run_strings("head_branch")),
+            ..CiSweepFilingEvidence::with_ref_kinds(self.distinct_run_strings("ref_kind"))
+        }
     }
 
     fn distinct_run_strings(&self, field: &str) -> Vec<String> {

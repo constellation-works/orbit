@@ -53,7 +53,7 @@ use crate::application::sweep_filing::duplicate_tasks::{
     DuplicateTaskLookup, DuplicateTaskMatch, SnapshotDuplicateLookup,
 };
 use crate::application::sweep_filing::{bounded_error, bounded_u64, digest, display};
-use crate::application::task::{TaskAddParams, TaskUpdateParams};
+use crate::application::task::{CiSweepFilingEvidence, TaskAddParams, TaskUpdateParams};
 
 use super::branch_observation::{note_branch_retention, retain_branch_observations};
 use super::cancellation::{
@@ -617,7 +617,7 @@ where
                 "workflow": cluster.workflow,
                 "match_kind": match_kind,
                 "match_evidence": evidence,
-                "sources": cluster.filing_entry(&task_id)["sources"],
+                "sources": cluster.filing_entry(&task_id).sources,
             }));
             continue;
         }
@@ -631,8 +631,8 @@ where
                 "cluster_key": cluster.cluster_key,
                 "task_id": filed
                     .iter()
-                    .find(|entry: &&Value| entry["failure_key"] == json!(cluster.failure_key))
-                    .and_then(|entry| entry["task_id"].as_str())
+                    .find(|entry: &&CiSweepFilingEvidence| entry.failure_key == cluster.failure_key)
+                    .map(|entry| entry.task_id.as_str())
                     .unwrap_or_default(),
                 "workflow": cluster.workflow,
                 "match_kind": "exact_key",
@@ -729,10 +729,10 @@ where
             filed_compiler_sets.insert(identity, task_id.clone());
         }
         let mut filing = cluster.filing_entry(&task_id);
-        filing["runner_os"] = json!(runners);
-        filing["os_tags"] = json!(os_tags);
+        filing.runner_os = Some(json!(runners));
+        filing.os_tags = Some(os_tags);
         if !operator.failed_covers.is_empty() {
-            filing["failed_covers"] = json!(operator.failed_covers);
+            filing.failed_covers = Some(json!(operator.failed_covers));
         }
         pilot_candidate_ids.insert(task_id);
         pilot_candidates.push(filing.clone());

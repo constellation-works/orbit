@@ -217,7 +217,7 @@ fn authority<'a>(
     let piloted_elsewhere = if let Some(filing) = ci_sweep_filing
         && selection.tasks.is_empty()
     {
-        let task_id = filing.fields.task_id.non_empty("task_id", action)?;
+        let task_id = filing.required_task_id(action)?;
         runtime.ci_sweep_piloted_elsewhere(action, task_id, selection.prepared)?
     } else {
         None
@@ -243,7 +243,7 @@ fn authority<'a>(
                 "ci_sweep_filing and drain_promotion are separate authorities; supply one",
             ));
         }
-        (Some(filing), None) => PromotionAuthority::CiSweep(&filing.raw, promotion_authorized),
+        (Some(filing), None) => PromotionAuthority::CiSweep(filing, promotion_authorized),
         (None, Some(_)) if !promotion_authorized => {
             return Err(DispatchError::action_failed(
                 action,
@@ -260,7 +260,7 @@ fn authority<'a>(
     };
     if let (Some(filing), Some(prepared_task_id)) = (ci_sweep_filing, selection.tasks.keys().next())
     {
-        let filed_task_id = filing.fields.task_id.non_empty("task_id", action)?;
+        let filed_task_id = filing.required_task_id(action)?;
         if filed_task_id != prepared_task_id {
             return Err(DispatchError::action_failed(
                 action,

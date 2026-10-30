@@ -15,8 +15,8 @@ use crate::application::task::pilot::{
     PromotionFindings, auto_approval_opted_out, promotion_findings, recommendation_has_evidence,
 };
 use crate::application::task::{
-    CiSweepAdmission, CiSweepAdmissionDecision, PILOT_VERIFIED_NO_DIFF, PromotionDecision,
-    VerifiedNoDiff,
+    CiSweepAdmission, CiSweepAdmissionDecision, CiSweepFilingEvidence, PILOT_VERIFIED_NO_DIFF,
+    PromotionDecision, VerifiedNoDiff,
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -26,24 +26,24 @@ pub(crate) fn assess_ci_sweep_admission(
     task: &Task,
     assessment: &Value,
     selectors: &[String],
-    filing: &Value,
+    filing: &CiSweepFilingEvidence,
     promotion_authorized: bool,
     dependencies: &[String],
     is_done: &dyn Fn(&str) -> bool,
 ) -> Result<CiSweepAdmission, DispatchError> {
-    let filed_task_id = required_string(filing, "task_id", action)?;
+    let filed_task_id = filing.required_task_id(action)?;
     if filed_task_id != task_id {
         return Err(DispatchError::action_failed(
             action,
             format!("CI-sweep filing names task {filed_task_id}, expected {task_id}"),
         ));
     }
-    let failure_key = required_string(filing, "failure_key", action)?;
-    let tested_commit = required_string(filing, "tested_commit", action)?;
-    let workflow = required_string(filing, "workflow", action)?;
-    let job = required_string(filing, "job", action)?;
-    let step = required_string(filing, "step", action)?;
-    let run_urls = required_string_array(filing, "run_urls", action)?;
+    let failure_key = filing.required_failure_key(action)?;
+    let tested_commit = filing.required_tested_commit(action)?;
+    let workflow = filing.required_workflow(action)?;
+    let job = filing.required_job(action)?;
+    let step = filing.required_step(action)?;
+    let run_urls = filing.required_run_urls(action)?;
     if run_urls.is_empty() {
         return Err(DispatchError::action_failed(
             action,
@@ -88,17 +88,8 @@ pub(crate) fn assess_ci_sweep_admission(
     // A release failure may share a cluster with a pull-request run of the
     // same commit. It is release-only for remediation purposes as long as no
     // integration-head run is in that cluster.
-    let ref_kinds = filing.get("ref_kinds").and_then(Value::as_array);
-    let release_head_failure = ref_kinds.is_some_and(|kinds| {
-        kinds.iter().any(|kind| kind.as_str() == Some("release"))
-            && !kinds
-                .iter()
-                .any(|kind| kind.as_str() == Some("integration"))
-    });
-    let head_branches = filing
-        .get("head_branches")
-        .cloned()
-        .unwrap_or_else(|| json!([]));
+    let release_head_failure = filing.release_head_failure();
+    let head_branches = &filing.head_branches;
     let red_failure = json!({
         "head_branches": head_branches,
         "tested_commit": tested_commit,
@@ -201,8 +192,8 @@ pub(crate) fn assess_ci_sweep_admission(
                 "step": step,
                 "tested_commit": tested_commit,
                 "run_urls": run_urls,
-                "ref_kinds": filing.get("ref_kinds").cloned().unwrap_or_else(|| json!([])),
-                "head_branches": filing.get("head_branches").cloned().unwrap_or_else(|| json!([])),
+                "ref_kinds": filing.ref_kinds_echo(),
+                "head_branches": filing.head_branches,
             }),
             evidence,
             closure: Default::default(),
