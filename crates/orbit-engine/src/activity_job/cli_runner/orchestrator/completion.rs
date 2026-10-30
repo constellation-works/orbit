@@ -54,6 +54,7 @@ pub(super) struct ProviderExit<'a> {
     pub(super) run_id: &'a str,
     pub(super) provider: String,
     pub(super) model: Option<String>,
+    pub(super) agent_execution_id: Option<i64>,
     pub(super) task_ids: &'a [String],
     pub(super) worktree_boundary: Option<WorktreeBoundaryGuard>,
     pub(super) sandbox: Option<&'a ResolvedSandbox>,
@@ -101,6 +102,7 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
         run_id,
         provider,
         model,
+        agent_execution_id,
         task_ids,
         worktree_boundary,
         sandbox,
@@ -764,6 +766,7 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
         invocation: trace.map(|trace| DispatchInvocationTrace {
             provider,
             model,
+            agent_execution_id,
             account: spec.crew_account.clone(),
             trace,
         }),

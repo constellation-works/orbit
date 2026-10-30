@@ -2,6 +2,33 @@
 //! inherent record and metrics methods.
 
 impl crate::contracts::InvocationStoreBackend for crate::driver::sqlite::connection::Store {
+    fn begin_agent_execution(
+        &self,
+        workspace: &str,
+        run_id: &str,
+        activity_id: &str,
+        provider: &str,
+        model: Option<&str>,
+        identity: &orbit_types::telemetry::AgentExecutionIdentity,
+    ) -> Result<i64, orbit_common::OrbitError> {
+        Self::begin_agent_execution(
+            self,
+            workspace,
+            run_id,
+            activity_id,
+            provider,
+            model,
+            identity,
+        )
+    }
+    fn agent_executions(
+        &self,
+        workspace: &str,
+        run_id: &str,
+    ) -> Result<Vec<crate::contracts::AgentExecutionRecord>, orbit_common::OrbitError> {
+        Self::agent_executions(self, workspace, run_id)
+    }
+
     fn insert_invocation_trace_record(
         &self,
         workspace_id: &str,

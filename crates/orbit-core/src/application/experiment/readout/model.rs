@@ -72,6 +72,8 @@ pub struct ReadoutEnrollment {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ReadoutArm {
+    /// Actual completed invocations linked to this arm's enrolled tasks.
+    pub effort_breakdown: Vec<orbit_types::telemetry::AgentEffortUsage>,
     pub name: String,
     pub control: bool,
     pub weight: u32,

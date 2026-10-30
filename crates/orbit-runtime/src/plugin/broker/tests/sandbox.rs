@@ -257,6 +257,7 @@ impl BrokerHost {
         )
         .expect("audit writer");
         let spec = AgentLoopSpec {
+            crew_name: None,
             tool_disallow_list: None,
             instruction: String::new(),
             steering_instruction: None,

@@ -134,6 +134,7 @@ fn record_activity(
         .unwrap();
     runtime
         .insert_invocation_trace_record(&InvocationInsertParams {
+            agent_execution_id: None,
             job_run_id: run.run_id.clone(),
             activity_id: activity.into(),
             agent: "codex".into(),

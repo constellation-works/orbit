@@ -7,6 +7,7 @@ use rusqlite::Connection;
 use crate::contracts::{ForwardCompatibleOpen, StateComponent, evaluate_newer_state};
 
 mod admission_reservations;
+mod agent_execution;
 mod assistance;
 mod audit_events;
 mod backlog_forecasts;
@@ -39,6 +40,7 @@ mod worker_resource_limits;
 
 // Schema steps, referenced by the ordered `ledger::MIGRATIONS` registry.
 use admission_reservations::apply_admission_reservations;
+use agent_execution::apply_agent_execution_identity;
 use assistance::apply_decision_assistance;
 use audit_events::{
     apply_audit_actor_alias_v2, apply_audit_actor_identity, apply_audit_machine_name_columns,

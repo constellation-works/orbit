@@ -91,6 +91,10 @@ pub(super) fn role_header(
     let spec = roles::spec(role);
     let mut payload = query.header(facts, since, cache_ttl);
     payload["role"] = json!(role.as_str());
+    payload["effort_breakdown"] = json!(orbit_store::contracts::agent_effort_usage(
+        facts.invocations.iter().filter(|fact| fact.ts >= since)
+    ));
+    payload["effort_population"] = json!("completed_workspace_invocations");
     payload["unit"] = json!(spec.unit);
     payload["status"] = json!(if spec.rows.is_some() {
         "ok"
@@ -129,7 +133,15 @@ pub fn agent_scorecard(
     };
     payload["fleet_average"] = json!(fleet_average.map(score::number));
     payload["provisional"] = json!(score::provisional(role, &scored));
-    payload["rows"] = scored.iter().map(|row| row.row(spec.terms)).collect();
+    payload["rows"] = scored
+        .iter()
+        .map(|row| {
+            let mut value = row.row(spec.terms);
+            value["effort_breakdown"] =
+                row_effort_breakdown(facts, role, since, &row.input.crew, &row.input.model);
+            value
+        })
+        .collect();
     payload
 }
 
@@ -260,6 +272,8 @@ pub fn agent_detail(
     payload["fleet_average"] = json!(fleet_average.map(score::number));
     payload["provisional"] = json!(score::provisional(role, &scored));
     payload["row"] = row.row(spec.terms);
+    payload["row"]["effort_breakdown"] =
+        row_effort_breakdown(facts, role, since, &row.input.crew, &row.input.model);
     payload["terms"] = json!(row.terms(spec.terms));
     Ok(payload)
 }
@@ -279,4 +293,48 @@ pub fn agent_attribution(facts: &AgentFacts, query: &AgentQuery, cache_ttl: Dura
     );
     payload["cache_ttl_seconds"] = json!(cache_ttl.as_secs());
     payload
+}
+
+fn row_effort_breakdown(
+    facts: &AgentFacts,
+    role: AgentRole,
+    since: DateTime<Utc>,
+    crew: &str,
+    model: &str,
+) -> Value {
+    // Authors are not execution crews. Task creation/orchestration does not
+    // record dispatch effort, so its historical population stays unknown.
+    if role == AgentRole::Orchestrators {
+        return json!([{"crew": crew, "model": model, "reasoning_effort": "unknown", "source": "task_authorship"}]);
+    }
+    let rows =
+        orbit_store::contracts::agent_effort_usage(facts.invocations.iter().filter(|fact| {
+            fact.ts >= since
+                && fact
+                    .execution
+                    .as_ref()
+                    .and_then(|execution| execution.crew.as_deref())
+                    == Some(crew)
+                && fact.model.as_deref() == Some(model)
+                && match role {
+                    AgentRole::Implementers => matches!(
+                        fact.activity_id.as_deref(),
+                        Some("implement_one" | "agent_implement")
+                    ),
+                    AgentRole::Reviewers => fact
+                        .activity_id
+                        .as_deref()
+                        .is_some_and(|id| id.contains("review")),
+                    AgentRole::Pilots => fact
+                        .activity_id
+                        .as_deref()
+                        .is_some_and(|id| id.contains("pilot")),
+                    AgentRole::Orchestrators => false,
+                }
+        }));
+    if rows.is_empty() {
+        json!([{"crew": crew, "model": model, "reasoning_effort": "unknown", "source": "no_dispatch_evidence"}])
+    } else {
+        json!(rows)
+    }
 }

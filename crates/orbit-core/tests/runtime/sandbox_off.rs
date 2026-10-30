@@ -159,6 +159,7 @@ fn dispatch_codex(
     )
     .expect("audit writer");
     let spec = ActivityV2Spec::AgentLoop(AgentLoopSpec {
+        crew_name: None,
         tool_disallow_list: None,
         instruction: "Return the requested response envelope.".to_string(),
         steering_instruction: None,

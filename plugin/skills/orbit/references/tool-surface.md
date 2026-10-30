@@ -515,6 +515,19 @@ MCP it is in the `analytics` toolset.
   with its crew, model, tier, configured type, tags, context-file selectors, path
   prefixes and per-term counts, plus the type list used. Without these switches,
   the ranking is returned.
+- **Recorded effort.** Each ranking/detail row includes `effort_breakdown` of
+  completed invocations by immutable dispatch crew, model and reasoning effort,
+  with counts, linked tasks, duration, tokens and provider-reported cost.
+  `null` means provider default; `"unknown"` means no dispatch record exists.
+  Scores retain their crew/model population. The top-level breakdown covers
+  completed workspace invocations in the selected window; `effort_population`
+  identifies that separate descriptive population. Orchestrator authorship stays
+  unknown because authorship does not record an execution effort. Never infer
+  historical effort from the crew's current configuration or an audit event.
+  The ladder's `effort_breakdown` covers 90 days (`effort_window_days`);
+  experiment arms break down invocations linked to their enrolled tasks.
+  Run show exposes `agent_executions` on the run and displayed steps, captured
+  before launch so interrupted runs remain inspectable.
 - **Cost.** Each call scans the workspace once (`cache_ttl_seconds` is 0), except
   the `shadow` report, which reads recorded draws only.
 - The dashboard's Agents view reads this payload.

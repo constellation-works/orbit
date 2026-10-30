@@ -960,6 +960,17 @@ pub trait NullRuntimeHost: Send + Sync {
         ToolContext::default()
     }
 
+    fn begin_agent_execution(
+        &self,
+        _run_id: &str,
+        _activity_id: &str,
+        _provider: &str,
+        _model: Option<&str>,
+        _identity: &orbit_types::telemetry::AgentExecutionIdentity,
+    ) -> Result<Option<i64>, OrbitError> {
+        Ok(None)
+    }
+
     fn persist_invocation_trace(
         &self,
         _job_run_id: &str,

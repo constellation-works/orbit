@@ -706,3 +706,5 @@ td.run-event-detail pre {
   font: inherit;
   color: var(--fg);
 }
+
+.run-agent-effort { display: block; color: var(--muted); font-size: 11px; white-space: normal; overflow-wrap: anywhere; }

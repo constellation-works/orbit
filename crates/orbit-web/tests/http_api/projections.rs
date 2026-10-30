@@ -332,6 +332,7 @@ fn seed_metrics_invocation_with_filters(
     fixture
         .runtime
         .insert_invocation_trace_record(&InvocationInsertParams {
+            agent_execution_id: None,
             job_run_id: run.into(),
             activity_id: activity_id.into(),
             agent: agent.into(),
@@ -1938,6 +1939,7 @@ fn seed_scope_aggregate(
 ) {
     runtime
         .insert_invocation_trace_record(&InvocationInsertParams {
+            agent_execution_id: None,
             job_run_id: run.into(),
             activity_id: activity.into(),
             agent: agent.into(),

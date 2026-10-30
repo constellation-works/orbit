@@ -1315,6 +1315,26 @@ provider = "antigravity"
 
 An unsupported `effort` (`max` on Grok, `effort = "hard"`) is ignored for that crew, never remapped, with a warning naming the file, crew, value and accepted values. `orbit doctor` lists ignored properties; `orbit config set` refuses a value load would drop. A selected crew's provider, model and effort each override an activity's inline baseline.
 
+**Recorded effort.** Each provider launch records its resolved crew, model and
+`reasoning_effort` before the process starts, after crew/inline precedence and
+configuration admission. `null` means no effort option was rendered (provider
+default); `"unknown"` identifies history without a dispatch record. Editing a
+crew never changes these records, and audit history is not backfilled.
+`orbit run show --json` and `orbit.workflow.run.show` expose `agent_executions`
+on the run and its displayed steps, including retries and interrupted launches.
+The dashboard shows the same provenance on run detail and step rows.
+
+Scorecard rows keep their compatible crew/model ranking and include an
+`effort_breakdown` of recorded invocation counts, linked tasks, duration, tokens
+and provider-reported cost. The score itself still describes the whole row. The top-level scorecard
+`effort_breakdown` covers completed workspace invocations in the selected
+window (`effort_population` names that population).
+Orchestrator authorship has no recorded execution effort and stays `unknown`;
+it never borrows an implementer's effort. The crew ladder includes a 90-day
+completed-invocation breakdown; experiment arms include the completed invocations
+linked to their enrolled tasks; managed usage buckets break down by actual
+crew, model and effort. Null/default and historical unknown remain separate.
+
 **Editing.** Crew fields are `crews.<name>.<field>`:
 
 ```bash

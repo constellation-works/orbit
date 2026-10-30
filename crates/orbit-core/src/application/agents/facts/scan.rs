@@ -127,7 +127,15 @@ pub(in crate::application::agents) fn scan(
             BTreeMap::new()
         });
     let (charges, credits) = attribution::attribute(&facts, &regressions, &pilots);
+    let invocations = runtime.sqlite_store()?.list_invocation_accounting_facts(
+        &orbit_store::contracts::InvocationAccountingQuery {
+            workspace_id: Some(runtime.stores().jobs().workspace_id().to_string()),
+            since: Some(horizon),
+            until: computed_at,
+        },
+    )?;
     Ok(AgentFacts {
+        invocations,
         computed_at,
         tasks_scanned,
         tasks: facts,

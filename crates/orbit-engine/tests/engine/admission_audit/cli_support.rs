@@ -177,6 +177,7 @@ pub(super) fn test_agent_loop_spec_for(provider: &str, timeout: Duration) -> Age
         other => panic!("unsupported provider for test: {other}"),
     };
     AgentLoopSpec {
+        crew_name: None,
         tool_disallow_list: None,
         instruction: String::new(),
         steering_instruction: None,

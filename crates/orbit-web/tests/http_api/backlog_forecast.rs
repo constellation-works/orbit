@@ -490,6 +490,7 @@ fn completed_delivery(
     fixture
         .runtime
         .insert_invocation_trace_record(&InvocationInsertParams {
+            agent_execution_id: None,
             job_run_id: format!("delivery-{id}"),
             account: None,
             activity_id: "implement_one".into(),

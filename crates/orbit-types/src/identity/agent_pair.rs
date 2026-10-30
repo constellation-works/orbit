@@ -51,7 +51,7 @@ pub struct CrewAssignment {
 /// This closed set is shared by config admission and CLI argument rendering so
 /// an unsupported value cannot make it past config loading and then be
 /// silently ignored at execution time.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ReasoningEffort {
     Low,

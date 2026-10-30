@@ -353,3 +353,6 @@ a.agents-cause-note { display: inline-flex; align-items: center; min-height: 44p
 
 .agents-tier-control { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 14px; }
 .agents-tier-control select { min-height: 44px; color: var(--fg); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; font: inherit; }
+
+/* Recorded effort populations wrap inside the existing crew identity column. */
+.agents-effort { display: block; white-space: normal; max-width: 30ch; overflow-wrap: anywhere; }

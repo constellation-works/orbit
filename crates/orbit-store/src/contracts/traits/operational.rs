@@ -225,6 +225,23 @@ pub trait ProviderLimitStoreBackend: Send + Sync {
 }
 
 pub trait InvocationStoreBackend: Send + Sync {
+    /// Record immutable launch identity before a provider starts.
+    fn begin_agent_execution(
+        &self,
+        workspace: &str,
+        run_id: &str,
+        activity_id: &str,
+        provider: &str,
+        model: Option<&str>,
+        identity: &orbit_types::telemetry::AgentExecutionIdentity,
+    ) -> Result<i64, OrbitError>;
+    /// Launch identities of one workspace-qualified run in launch order.
+    fn agent_executions(
+        &self,
+        workspace: &str,
+        run_id: &str,
+    ) -> Result<Vec<crate::contracts::AgentExecutionRecord>, OrbitError>;
+
     /// Records one invocation under `workspace_id`, the workspace whose run
     /// produced it. The caller supplies it from its own runtime binding, never
     /// from `params`, which can arrive over the metrics ingest endpoint.

@@ -1014,6 +1014,24 @@ impl RuntimeHost for OrbitRuntime {
         )
     }
 
+    fn begin_agent_execution(
+        &self,
+        run_id: &str,
+        activity_id: &str,
+        provider: &str,
+        model: Option<&str>,
+        identity: &orbit_types::telemetry::AgentExecutionIdentity,
+    ) -> Result<Option<i64>, OrbitError> {
+        Ok(Some(self.sqlite_store()?.begin_agent_execution(
+            self.stores().jobs().workspace_id(),
+            run_id,
+            activity_id,
+            provider,
+            model,
+            identity,
+        )?))
+    }
+
     fn persist_invocation_trace(
         &self,
         job_run_id: &str,

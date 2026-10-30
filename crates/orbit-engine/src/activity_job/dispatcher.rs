@@ -147,6 +147,7 @@ pub struct DispatchOutcome {
 
 #[derive(Debug, Clone)]
 pub struct DispatchInvocationTrace {
+    pub agent_execution_id: Option<i64>,
     pub provider: String,
     pub model: Option<String>,
     /// The crew account the invocation ran under, when its crew sets `env`.

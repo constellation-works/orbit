@@ -13,6 +13,7 @@ use orbit_types::workflow::activity_job::Provider;
 /// silently coercing dispatch to a wrong runtime.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CrewConfig {
+    pub name: Option<String>,
     pub provider: Option<Provider>,
     pub model: Option<String>,
     pub reasoning_effort: Option<orbit_types::identity::ReasoningEffort>,

@@ -779,6 +779,7 @@ fn invocation(fixture: &Fixture, id: &str, end: DateTime<Utc>, hours: u64, usd: 
     fixture
         .runtime
         .insert_invocation_trace_record(&InvocationInsertParams {
+            agent_execution_id: None,
             job_run_id: run.clone(),
             account: None,
             activity_id: "implement_one".into(),

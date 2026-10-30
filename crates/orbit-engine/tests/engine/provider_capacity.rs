@@ -127,6 +127,7 @@ impl FakeProvider {
 
 pub(super) fn agent_spec(provider: Provider) -> AgentLoopSpec {
     AgentLoopSpec {
+        crew_name: None,
         tool_disallow_list: None,
         instruction: "implement the task".to_string(),
         steering_instruction: None,

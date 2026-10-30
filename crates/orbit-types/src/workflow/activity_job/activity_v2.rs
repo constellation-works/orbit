@@ -187,6 +187,9 @@ pub struct AgentLoopSpec {
     /// supply it.
     #[serde(skip)]
     pub crew_env: Vec<crate::identity::CrewEnvVar>,
+    /// Canonical crew resolved by the host for this dispatch, never an input hint.
+    #[serde(skip)]
+    pub crew_name: Option<String>,
     /// The dispatching crew's name when it sets `env` and so is its own
     /// provider account ([`crate::identity::Crew::account`]), set with
     /// `crew_env`. A failure, a usage reading and an invocation of this

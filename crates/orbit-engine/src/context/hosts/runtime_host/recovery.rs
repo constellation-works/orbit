@@ -209,6 +209,15 @@ macro_rules! recovery_methods {
 
         /// Record one dispatch's invocation: its provider, model, crew account
         /// and trace.
+        fn begin_agent_execution(
+            &self,
+            run_id: &str,
+            activity_id: &str,
+            provider: &str,
+            model: Option<&str>,
+            identity: &orbit_types::telemetry::AgentExecutionIdentity,
+        ) -> Result<Option<i64>, OrbitError>;
+
         fn persist_invocation_trace(
             &self,
             job_run_id: &str,

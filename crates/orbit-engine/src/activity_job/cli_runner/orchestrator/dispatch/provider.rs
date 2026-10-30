@@ -464,7 +464,7 @@ pub(super) fn dispatch_prepared_provider(
     });
     audit.emit_lossy(V2AuditEventKind::CliInvocationStarted {
         provider: provider.clone(),
-        reasoning_effort: spec.reasoning_effort.map(|effort| effort.to_string()),
+        reasoning_effort: config.reasoning_effort.map(|effort| effort.to_string()),
         configuration_fingerprint: serde_json::to_vec(spec).ok().map(|bytes| {
             use sha2::{Digest, Sha256};
             format!(
@@ -653,6 +653,20 @@ pub(super) fn dispatch_prepared_provider(
     let plugin_broker = RunPluginBroker::start(host, run_id, broker_run.as_ref(), sandbox);
     child_env.retain(|(key, _)| key != crate::context::PLUGIN_BROKER_ENV);
     child_env.extend(plugin_broker.env());
+    let agent_execution_id = host
+        .begin_agent_execution(
+            run_id,
+            step_id,
+            &provider,
+            model.as_deref(),
+            &orbit_types::telemetry::AgentExecutionIdentity {
+                crew: spec.crew_name.clone(),
+                reasoning_effort: config.reasoning_effort,
+            },
+        )
+        .map_err(|error| {
+            DispatchError::CliInvocationPermanent(format!("record agent execution: {error}"))
+        })?;
     let process_exit = subprocess::invoke_cli_provider(subprocess::CliProviderInvocation {
         context,
         provider: &provider,
@@ -677,6 +691,7 @@ pub(super) fn dispatch_prepared_provider(
         context,
         provider,
         model,
+        agent_execution_id,
         task_ids: &task_ids,
         worktree_boundary,
         sandbox,

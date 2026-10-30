@@ -172,6 +172,7 @@ fn seed_muse_executor(
 
 fn spec(timeout_seconds: u64) -> AgentLoopSpec {
     AgentLoopSpec {
+        crew_name: None,
         tool_disallow_list: None,
         instruction: "Return the requested Orbit response envelope.".to_string(),
         steering_instruction: None,

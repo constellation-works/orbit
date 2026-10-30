@@ -365,6 +365,7 @@ fn enroll_primary_sample(
     if let Some(tokens) = tokens {
         runtime
             .insert_invocation_trace_record(&InvocationInsertParams {
+                agent_execution_id: None,
                 job_run_id: format!("fixture-{task_id}"),
                 account: None,
                 activity_id: "agent_implement".into(),
@@ -411,6 +412,7 @@ fn enroll_first_edit_sample(
             .collect();
         runtime
             .insert_invocation_trace_record(&InvocationInsertParams {
+                agent_execution_id: None,
                 job_run_id: format!("fixture-{task_id}"),
                 account: None,
                 activity_id: "agent_implement".into(),
@@ -688,6 +690,7 @@ fn first_edit_readout_excludes_a_retry_when_same_timestamp_paging_stalls() {
 
     runtime
         .insert_invocation_trace_record(&InvocationInsertParams {
+            agent_execution_id: None,
             job_run_id: "first-edit-retry".into(),
             account: None,
             activity_id: "agent_implement".into(),
@@ -829,12 +832,40 @@ fn cost_readout_excludes_partial_sums_and_identifies_estimated_tasks() {
         (vec![reported], false),
     ];
     for arm in ["control", "treatment"] {
-        for (invocations, terminal) in &cases {
+        for (case_index, (invocations, terminal)) in cases.iter().enumerate() {
             let task_id =
                 enroll_primary_sample(&runtime, &experiment.id, arm, TaskComplexity::Low, None);
             for (index, (model, cost, input, cache_read)) in invocations.iter().enumerate() {
+                let run_id = format!("fixture-{task_id}-{index}");
+                let activity = if index == 0 {
+                    "agent_implement"
+                } else {
+                    "review"
+                };
+                let execution = (case_index % 4 != 3).then(|| {
+                    runtime
+                        .sqlite_store()
+                        .unwrap()
+                        .begin_agent_execution(
+                            runtime.stores().jobs().workspace_id(),
+                            &run_id,
+                            activity,
+                            "codex",
+                            *model,
+                            &orbit_types::telemetry::AgentExecutionIdentity {
+                                crew: Some("fixture".into()),
+                                reasoning_effort: match case_index % 4 {
+                                    0 => Some(orbit_types::identity::ReasoningEffort::High),
+                                    1 => Some(orbit_types::identity::ReasoningEffort::Xhigh),
+                                    _ => None,
+                                },
+                            },
+                        )
+                        .unwrap()
+                });
                 runtime
                     .insert_invocation_trace_record(&InvocationInsertParams {
+                        agent_execution_id: execution,
                         job_run_id: format!("fixture-{task_id}-{index}"),
                         account: None,
                         activity_id: if index == 0 {
@@ -866,6 +897,16 @@ fn cost_readout_excludes_partial_sums_and_identifies_estimated_tasks() {
     }
 
     let readout = runtime.experiment_readout(&experiment.id, None).unwrap();
+    for arm in &readout.arms {
+        let efforts: std::collections::BTreeSet<_> = arm
+            .effort_breakdown
+            .iter()
+            .map(|row| serde_json::to_string(&row.reasoning_effort).unwrap())
+            .collect();
+        for expected in ["\"high\"", "\"xhigh\"", "null", "\"unknown\""] {
+            assert!(efforts.contains(expected), "{:?}", arm.effort_breakdown);
+        }
+    }
     let metric = readout
         .metrics
         .iter()

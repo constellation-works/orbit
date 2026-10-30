@@ -551,6 +551,7 @@ function rankingNode(ranking) {
     }, [
       el("span", { class: "agents-crew", text: row.crew }),
       el("span", { class: "agents-model", text: row.model }),
+      el("span", { class: "agents-model agents-effort", text: effortSummary(row) }),
     ]);
     select.addEventListener("click", () => selectRow(row));
     const tags = [...(row.unjudged ? [unjudgedTag()] : []), ...(panel && panel.rowTags ? panel.rowTags(row) : [])];
@@ -853,6 +854,7 @@ function detailNode(rankedRow) {
       el("span", { class: "agents-detail-rank", text: rankedRow.unjudged ? "unjudged" : rankedRow.rank == null ? `below ${scorecard.min_support}` : `#${rankedRow.rank}` }),
       el("h3", { text: row.crew }),
       el("span", { class: "agents-model", text: row.model }),
+      el("span", { class: "agents-model agents-effort", text: effortSummary(row) }),
     ]),
     el("div", { class: "agents-detail-score" }, [
       el("strong", { text: number(rankedRow.score) }),
@@ -931,4 +933,9 @@ function rolePanelNode(panel) {
   node.dataset.key = "panel";
   node.dataset.hash = JSON.stringify([role, scorecard.rows]);
   return node;
+}
+
+function effortSummary(row) {
+  return `Effort: ${(row.effort_breakdown || [{ reasoning_effort: "unknown" }]).map(item =>
+    `${item.reasoning_effort === null ? "provider default" : item.reasoning_effort || "unknown"}${item.invocations == null ? "" : ` (${item.invocations} invocations, ${item.tasks} tasks)`}`).join("; ")}`;
 }

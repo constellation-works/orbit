@@ -18,6 +18,7 @@ use crate::{Store, now_string};
 /// `v1_upgrade_and_fresh_database_have_identical_columns` keeps an upgraded
 /// legacy database's columns identical to a fresh one's.
 pub(crate) const INVOCATION_INSERT_COLUMNS: &[&str] = &[
+    "agent_execution_id",
     "ts",
     "workspace_id",
     "job_run_id",
@@ -72,6 +73,7 @@ impl Store {
         tx.execute(
             INVOCATION_INSERT_SQL.as_str(),
             params![
+                params.agent_execution_id,
                 now_string(),
                 workspace_id,
                 params.job_run_id,

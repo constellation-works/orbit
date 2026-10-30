@@ -182,6 +182,9 @@ pub(crate) fn run_show_payload(
             tracing::warn!(target: "orbit.cli.run", run_id = %run.run_id, %error, "pull drain crew window unreadable; drain shown without it");
             None
         });
+    let effort_evidence = runtime
+        .activity_invocation_evidence(&run.run_id)
+        .unwrap_or_default();
     let mut doc = json!({
         "run": run_projection,
         "recovery_attempts": recovery.to_json(),
@@ -198,7 +201,7 @@ pub(crate) fn run_show_payload(
         // The steps the view below renders, whichever source answered. The
         // record's own `run.steps` stay exactly as stored, so a caller can
         // still tell the two apart [ORB-12113].
-        "steps": steps.iter().map(|step| step.to_json_with_command_output(state.as_ref())).collect::<Vec<_>>(),
+        "steps": steps.iter().map(|step| step.to_json_with_agent_execution(state.as_ref(), &effort_evidence)).collect::<Vec<_>>(),
         "steps_source": steps_source.as_str(),
         // What a drain's leaves did; null for any run that is not a drain.
         // The drain's own `state` only says the coordinator ran.
@@ -253,6 +256,29 @@ pub(crate) fn run_show_payload(
         ));
     }
 
+    for launch in &effort_evidence {
+        let effort = launch
+            .execution
+            .as_ref()
+            .map(|identity| {
+                identity
+                    .reasoning_effort
+                    .map(|effort| effort.to_string())
+                    .unwrap_or_else(|| "provider default".into())
+            })
+            .unwrap_or_else(|| "unknown".into());
+        header.push_str(&format!(
+            "\nReasoning effort ({}): {} · {} · {}",
+            launch.activity_id,
+            launch
+                .execution
+                .as_ref()
+                .and_then(|identity| identity.crew.as_deref())
+                .unwrap_or("unknown crew"),
+            launch.model.as_deref().unwrap_or("unknown model"),
+            effort
+        ));
+    }
     if let Some(line) = review_layer_line(&doc["run"]["review_layer"]) {
         header.push('\n');
         header.push_str(&line);

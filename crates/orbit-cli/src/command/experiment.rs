@@ -237,6 +237,7 @@ fn readout_blocks(value: &Value) -> Vec<Block> {
         Column::new("N").number(),
         Column::new("SEGMENTS"),
         Column::new("CREW MIX"),
+        Column::new("RECORDED EFFORT"),
         Column::new("DRIFT"),
     ])
     .empty_message("no arms defined");
@@ -266,6 +267,25 @@ fn readout_blocks(value: &Value) -> Vec<Block> {
             text(&arm["n"]),
             segments,
             crews,
+            arm["effort_breakdown"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|row| {
+                    format!(
+                        "{} · {} · {}: {}",
+                        text(&row["crew"]),
+                        text(&row["model"]),
+                        if row["reasoning_effort"].is_null() {
+                            "provider default".into()
+                        } else {
+                            text(&row["reasoning_effort"])
+                        },
+                        text(&row["invocations"])
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("; "),
             if arm["drifted"] == Value::Bool(true) {
                 "drifted".to_string()
             } else {

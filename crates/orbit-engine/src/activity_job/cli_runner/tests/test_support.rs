@@ -140,6 +140,7 @@ pub(in crate::activity_job::cli_runner) fn test_agent_loop_spec_for(
         other => panic!("unsupported provider for test: {other}"),
     };
     AgentLoopSpec {
+        crew_name: None,
         tool_disallow_list: None,
         instruction: String::new(),
         steering_instruction: None,

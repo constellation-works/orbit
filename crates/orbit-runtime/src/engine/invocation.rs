@@ -43,6 +43,7 @@ struct BucketKey {
 
 #[derive(Debug, Default)]
 struct BucketAccumulator {
+    effort_usage: orbit_store::contracts::AgentEffortUsageAccumulator,
     linked_task_ids: BTreeSet<String>,
     invocation_count: u64,
     input_tokens: u64,
@@ -136,6 +137,7 @@ impl TokenAccumulator {
 
 impl BucketAccumulator {
     fn add(&mut self, fact: &InvocationAccountingFact) {
+        orbit_store::contracts::record_agent_effort_usage(&mut self.effort_usage, fact);
         self.invocation_count = self.invocation_count.saturating_add(1);
         self.input_tokens = self.input_tokens.saturating_add(fact.input_tokens);
         self.cache_read_tokens = self
@@ -207,6 +209,7 @@ impl BucketAccumulator {
             })
             .collect();
         OrchestratorInvocationMetricsBucket {
+            effort_breakdown: orbit_store::contracts::finish_agent_effort_usage(self.effort_usage),
             kind,
             orchestrator,
             invocation_count: self.invocation_count,

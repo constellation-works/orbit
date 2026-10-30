@@ -17,6 +17,7 @@ use crate::context::RuntimeHost;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedAgentSettings {
+    pub crew_name: Option<String>,
     pub provider: Provider,
     pub model: Option<String>,
     pub reasoning_effort: Option<ReasoningEffort>,
@@ -93,6 +94,7 @@ fn non_empty_str<'a>(input: &'a Value, key: &str) -> Option<&'a str> {
 
 fn resolve_from_config(config: &CrewConfig, inline: &AgentLoopSpec) -> ResolvedAgentSettings {
     ResolvedAgentSettings {
+        crew_name: config.name.clone(),
         provider: config.provider.unwrap_or(inline.provider),
         model: config.model.clone().or_else(|| inline.model.clone()),
         reasoning_effort: config.reasoning_effort.or(inline.reasoning_effort),
@@ -103,6 +105,7 @@ fn resolve_from_config(config: &CrewConfig, inline: &AgentLoopSpec) -> ResolvedA
 }
 
 pub fn apply_resolved_settings(spec: &mut AgentLoopSpec, resolved: &ResolvedAgentSettings) {
+    spec.crew_name = resolved.crew_name.clone();
     spec.provider = resolved.provider;
     spec.model = resolved.model.clone();
     spec.reasoning_effort = resolved.reasoning_effort;

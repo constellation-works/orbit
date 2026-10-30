@@ -27,6 +27,7 @@ fn record_invocation(store: &Store, workspace_id: &str, run_id: &str, activity_i
         .insert_invocation_trace_record(
             workspace_id,
             &InvocationInsertParams {
+                agent_execution_id: None,
                 job_run_id: run_id.to_string(),
                 account: None,
                 activity_id: activity_id.to_string(),
@@ -221,6 +222,7 @@ fn stored_sol_costs_preserve_history_and_start_current_rates_at_verified_observa
             .insert_invocation_trace_record(
                 "ws_sol",
                 &InvocationInsertParams {
+                    agent_execution_id: None,
                     job_run_id: "pricing-replay".to_string(),
                     account: None,
                     activity_id: activity.clone(),

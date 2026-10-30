@@ -3183,6 +3183,7 @@ fn dispatch_audited_linked_activity(
 /// A one-iteration Codex agent loop that requires the completion envelope.
 fn agent_loop(instruction: &str) -> ActivityV2Spec {
     ActivityV2Spec::AgentLoop(AgentLoopSpec {
+        crew_name: None,
         tool_disallow_list: None,
         instruction: instruction.to_string(),
         steering_instruction: None,
