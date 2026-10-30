@@ -34,7 +34,7 @@ Forward-looking only. The contract in [specs/federated-workspace-mcp.md](./specs
 
 ### Host-registry catalog roles
 
-Owner vs replica checkouts, `machine_id` vs `host_id`, and checkout-health as repo-root presence are live v1 catalog rules. This feature maps new nouns onto those roles instead of creating a parallel ownership vocabulary. See [host-registry 2_design.md](../host-registry/2_design.md). A workspace with absent `owner_machine_id` cannot advertise `control_plane`.
+Owner vs replica checkouts keyed by `owner_machine_id` (the retired `owner_host_ids` key is accepted but never written), and checkout health as repo-root presence, are live v1 catalog rules. This feature maps new nouns onto those roles instead of creating a parallel ownership vocabulary. See [host-registry 2_design.md](../host-registry/2_design.md). A workspace with absent `owner_machine_id` cannot advertise `control_plane`.
 
 ### mcp-bridge v1
 
