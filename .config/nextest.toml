@@ -1,4 +1,4 @@
-nextest-version = { required = "0.9.48" }
+nextest-version = { required = "0.9.91" }
 
 [profile.default]
 # Individual integration fixtures use seconds-long process deadlines. Ten
@@ -60,6 +60,24 @@ test-group = 'mcp-contracts'
 [profile.ci]
 test-threads = 6
 retries = 0
+
+# Start measured long carriers before the ordinary queue so their final rows
+# do not leave the other slots idle at the end of a shard. Priority changes
+# scheduling only: count partitions, ignored applicability, isolation and the
+# inherited group caps are unchanged. Keep this CI-only; local default runs
+# retain their ordinary order. See the CI timing notes in test_strategy.md.
+[[profile.ci.overrides]]
+filter = '''
+  (package(orbit-core) & binary(runtime) & (
+    test(=task_delivery::source_repair::published_completion_scenarios) |
+    test(=origin_fetch_hold::worktree_setup_origin_outage_holds_backlog_and_fails_in_progress))) |
+  (package(orbit-engine) & binary(engine) & (
+    test(=pr_landing::validation_repairs_and_logs) |
+    test(=pr_landing::ci_rerun::owner_retry_preserves_read_only_and_independent_candidate_routes))) |
+  (package(orbit-tools) & binary(tools) & test(=public_tool_surface::github_log_goldens::every_selected_window_hides_credential_fragments)) |
+  (package(orbit-web) & binary(http_api) & test(=events::change_stream_notices_other_process_writes_and_resumes_after_reconnect))
+'''
+priority = 100
 
 # Per-test durations for the slowest-test table in
 # docs/design-patterns/test_strategy.md. Each CI shard uploads its report.

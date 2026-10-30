@@ -144,8 +144,16 @@ const window = { location: { search: '?window=24h', hash: '' }, confirm: () => t
 const copied = [];
 const navigator = { clipboard: { writeText: async text => { copied.push(text); } } };
 const pending = [];
+const unresolved = new Set();
 const response = (payload, status = 200) => ({ ok: status >= 200 && status < 300, status, headers: { get: () => null }, json: async () => payload, text: async () => JSON.stringify(payload) });
-const fetch = (path, options = {}) => new Promise(resolve => pending.push({ url: new URL(path, 'http://dashboard.test'), options, resolve }));
+const fetch = (path, options = {}) => new Promise(resolve => {
+  const request = {
+    url: new URL(path, 'http://dashboard.test'), options,
+    resolve(payload) { unresolved.delete(request); resolve(payload); },
+  };
+  unresolved.add(request);
+  pending.push(request);
+});
 const context = vm.createContext({
   URLSearchParams, URL, AbortController, console, setTimeout, clearTimeout, fetch, document, window, navigator, Node, Intl,
 });
@@ -736,5 +744,12 @@ assert.equal(audit.buildAuditHash(), '#diagnostics/incidents/events?since=7d&sta
 audit.renderDenialCount({ denials: 0, window: '7d' });
 assert.equal(badge.hidden, true, 'no denials, no badge');
 assert.equal(badge.dataset.route, undefined);
+
+// Workspace listeners also request panels outside the scenario being served.
+// Complete those owned fetches so fetchJsonPage's finally clears each real
+// 30-second request timer. Keep the production timeout and every assertion.
+for (const request of unresolved) request.resolve(response({ error: 'Fixture teardown' }, 503));
+await settle();
+assert.equal(unresolved.size, 0, 'fixture teardown leaves no unanswered fetches');
 
 console.log('codebase view, Events default filter and denial badge behaviors passed');
