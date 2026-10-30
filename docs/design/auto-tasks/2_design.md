@@ -35,8 +35,8 @@ semantics remain current.
 `schedule`, `template`, `dedupe`, the optional `skip_if_unchanged` (§4b) and
 `skip_unless_blocked_candidates` (§4c) preconditions, and
 provenance (`created_by/at`, `updated_by/at`). `schedule` is an untagged enum
-— exactly one of `{ cron: "…" }`, `{ every_minutes: N }`, or
-`{ deliveries_landed: { … } }`. Delivery schedules use source evaluation and
+— exactly one of `{ cron: "…" }`, `{ every_minutes: N }`,
+`{ deliveries_landed: { … } }`, or `{ condition: { … } }`. A `condition` is checked and explained but never fired in this release, so the definition must stay `enabled: false`. Delivery schedules use source evaluation and
 durable coverage state rather than time-slot due-math. `template` carries `title`, `description`,
 `acceptance_criteria`, `task_type`, `tags`, `priority`, optional `complexity`,
 `crew`, optional `required_tools` and `context_files`, and `status` (default `backlog`).

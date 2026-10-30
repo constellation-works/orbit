@@ -233,6 +233,11 @@ body {
   border: 0;
   box-shadow: inset 0 0 0 1px var(--sl-color-hairline-light);
   table-layout: fixed;
+  /* Prose such as a nested type signature has no break opportunity. anywhere,
+     unlike break-word, also lowers the minimum width that auto layout gives the
+     description column, so the table fits its container at 320 px and 1152 px.
+     Code keeps its own overflow-wrap: normal. */
+  overflow-wrap: anywhere;
 }
 
 .sl-markdown-content table.orbit-config-keys th:first-child,
@@ -322,13 +327,6 @@ body {
     border-bottom: 0;
     padding-bottom: 0.25rem;
   }
-}
-
-.sl-markdown-content table.sl-table-options th:first-child,
-.sl-markdown-content table.sl-table-options td:first-child,
-.sl-markdown-content table.orbit-table-options th:first-child,
-.sl-markdown-content table.orbit-table-options td:first-child {
-  white-space: nowrap;
 }
 
 /* CLI reference rows keep both columns on their first line. Their code wraps

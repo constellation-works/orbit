@@ -1,0 +1,17 @@
+Explain what condition-triggered routines and auto-tasks would match
+
+Usage: orbit automation [OPTIONS] <COMMAND>
+
+Commands:
+  explain  Show a condition's matches, closest misses and clause tree over live state
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header

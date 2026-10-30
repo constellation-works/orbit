@@ -158,7 +158,7 @@ first) and `failure_streak` (`count`, `since`, `truncated`).
 
 A routine is one YAML file under the registered checkout's gitignored
 `.orbit/routines/`. Choose exactly one of `trigger.cron`,
-`trigger.deliveries_landed` or `trigger.state`. Routines use `schemaVersion: 1`;
+`trigger.deliveries_landed`, `trigger.state` or `trigger.condition`. A `condition` is checked and explained but never fired in this release, so the routine must stay disabled. Routines use `schemaVersion: 1`;
 interval (`every_minutes`) scheduling belongs to auto-tasks, not routines.
 The cron form is:
 

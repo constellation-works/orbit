@@ -41,6 +41,7 @@ use super::loader::{AutoTaskCollection, auto_tasks_dir, collect_auto_tasks, defi
 use super::schedule::validate_schedule;
 use super::scheduler::mint_task;
 use super::state::cursor_state_path;
+use orbit_automation::condition::{ConditionCarrier, check_condition};
 
 /// Parameters for creating a definition.
 #[derive(Debug, Clone)]
@@ -229,7 +230,12 @@ impl OrbitRuntime {
                 schema_version: AUTO_TASK_SCHEMA_VERSION,
                 name: params.name,
                 description: params.description,
-                enabled: !matches!(&params.schedule, AutoTaskSchedule::Deliveries { .. }),
+                // Delivery definitions start disabled until reviewed; a
+                // condition cannot be enabled in this Orbit at all.
+                enabled: !matches!(
+                    &params.schedule,
+                    AutoTaskSchedule::Deliveries { .. } | AutoTaskSchedule::Condition { .. }
+                ),
                 schedule: params.schedule,
                 template: params.template,
                 dedupe: params.dedupe,
@@ -643,6 +649,10 @@ impl OrbitRuntime {
         // here too means CRUD never persists a schedule the scheduler would
         // reject at fire time.
         validate_schedule(&definition.schedule)?;
+        if let AutoTaskSchedule::Condition { condition } = &definition.schedule {
+            check_condition(condition, ConditionCarrier::AutoTask)
+                .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
+        }
         // A definition still naming the retired `system` crew stays editable;
         // its mints route through the complexity pools [ORB-15663].
         if let Some(crew) = self.crew_unless_retired(definition.template.crew.as_deref()) {

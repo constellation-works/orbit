@@ -1185,6 +1185,149 @@ fn forwarded_audit_cursor_walks_the_remote_window_page_by_page() {
     );
 }
 
+// Run the public ticket issuer in the server's HOME without changing the test process environment.
+#[test]
+#[ignore]
+fn local_session_ticket_child() {
+    orbit_web::open_dashboard(orbit_web::OpenArgs { no_open: true }).unwrap();
+}
+
+fn local_session_ticket(fixture: &Fixture) -> String {
+    let home = fixture.path("");
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    orbit_common::test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    command
+        .current_dir(&home)
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .env_remove("RUST_TEST_THREADS")
+        .args([
+            "--exact",
+            "host_forward::local_session_ticket_child",
+            "--ignored",
+            "--nocapture",
+        ]);
+    let logs = tempfile::tempdir().unwrap();
+    let output =
+        orbit_common::test_env::run_child_test(&mut command, "local session ticket", logs.path());
+    assert!(output.status.success(), "ticket issuer failed");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    stdout
+        .split("#orbit-session=")
+        .nth(1)
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_owned()
+}
+
+#[test]
+fn local_forward_preserves_browser_sessions() {
+    isolated(
+        "host_forward::local_forward_preserves_browser_sessions",
+        || {
+            let disabled = Fixture::new();
+            let server = disabled.server(true);
+            assert_eq!(server.get("/api/on/http-fixture/session").status(), 404);
+            assert_eq!(
+                server
+                    .request("POST", "/api/on/http-fixture/session")
+                    .header("origin", &server.origin)
+                    .body("invalid")
+                    .send()
+                    .unwrap()
+                    .status(),
+                404
+            );
+            drop(server);
+
+            let fixture = Fixture::new();
+            OpenOptions::new()
+                .append(true)
+                .open(fixture.global.join("config.toml"))
+                .unwrap()
+                .write_all(b"\n[machine.web_terminal]\nenabled = true\n")
+                .unwrap();
+            let server = fixture.server(true);
+            let direct = json_ok(server.get("/api/session"));
+            let ticket = local_session_ticket(&fixture);
+            let post = |path: &str, ticket: &str| {
+                server
+                    .request("POST", path)
+                    .header("origin", &server.origin)
+                    .body(ticket.to_owned())
+                    .send()
+                    .unwrap()
+            };
+            let direct_post = post("/api/session", &ticket);
+            assert_eq!(direct_post.status(), 204);
+            assert!(direct_post.headers().contains_key("set-cookie"));
+            let ticket = local_session_ticket(&fixture);
+            let forwarded_post = post("/api/on/http-fixture/session", &ticket);
+            assert_eq!(forwarded_post.status(), 204);
+            assert!(forwarded_post.headers().contains_key("set-cookie"));
+            assert_eq!(post("/api/on/http-fixture/session", &ticket).status(), 401);
+            assert_eq!(
+                post("/api/on/http-fixture/session", "invalid").status(),
+                401
+            );
+            assert_eq!(json_ok(server.get("/api/on/http-fixture/session")), direct);
+        },
+    );
+}
+
+/// The serving host's own name is answered locally: outer `/on/<host>/<rest>`
+/// captures must not leak into the inner router, or every inner `Path<_>`
+/// sees host, rest and its own capture (ORB-20148).
+#[test]
+fn local_forward_preserves_inner_path_params() {
+    isolated(
+        "host_forward::local_forward_preserves_inner_path_params",
+        || {
+            let fixture = Fixture::new();
+            let task = seed_task(&fixture);
+            let server = fixture.server(false);
+
+            let direct_score = server.get(
+                "/api/agents/implementers/scorecard?workspace=ws_http_fixture&window=last500&min_support=1",
+            );
+            let direct_status = direct_score.status();
+            let direct_body = direct_score.text().unwrap();
+            assert_eq!(
+                direct_status.as_u16(),
+                200,
+                "direct scorecard: {direct_body}"
+            );
+            let direct_score_json: Value = serde_json::from_str(&direct_body).unwrap();
+            let forwarded_score = server.get(
+                "/api/on/http-fixture/agents/implementers/scorecard?workspace=ws_http_fixture&window=last500&min_support=1",
+            );
+            let status = forwarded_score.status();
+            let body = forwarded_score.text().unwrap();
+            assert_eq!(status.as_u16(), 200, "host-qualified scorecard: {body}");
+            let forwarded_score_json: Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(
+                forwarded_score_json, direct_score_json,
+                "host-qualified scorecard matches the direct route"
+            );
+
+            let direct_task = json_ok(server.get(&format!("/api/tasks/{task}{WS}")));
+            let forwarded_task = server.get(&format!("/api/on/http-fixture/tasks/{task}{WS}"));
+            let status = forwarded_task.status();
+            let body = forwarded_task.text().unwrap();
+            assert_eq!(status.as_u16(), 200, "host-qualified task: {body}");
+            let forwarded_task_json: Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(
+                forwarded_task_json, direct_task,
+                "host-qualified task keeps its own id param"
+            );
+        },
+    );
+}
+
 /// A scan that hits its cap on a page with no matches returns an empty page
 /// that still carries a cursor. The forward must not drop it, or the rest of
 /// the window stays unreachable from the host dashboard.
