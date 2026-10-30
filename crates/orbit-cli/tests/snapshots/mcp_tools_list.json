@@ -2548,7 +2548,7 @@
         },
         "workspace": {
           "type": "string",
-          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd."
+          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace. An id whose prefix belongs to another registered host is refused with `task_prefix_remote`, naming that host; this server does not relay. Never inferred from the server process cwd."
         }
       },
       "required": [
