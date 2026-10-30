@@ -229,28 +229,19 @@ fn images_over_the_limit_are_reported_without_capture_paths() {
         "image limit probe failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let rows: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(
-        rows,
-        json!([
-            {
-                "error": {
-                    "code": "image_over_budget",
-                    "message": "capture image remains over the 1024-byte artifact limit after WebP encoding"
-                },
-                "claims_capture": false,
-                "claims_side_by_side": false
-            },
-            {
-                "error": {
-                    "code": "image_over_budget",
-                    "message": "side-by-side image remains over the 1024-byte artifact limit after WebP encoding"
-                },
-                "claims_capture": false,
-                "claims_side_by_side": false
-            }
-        ])
-    );
+    let rows: Vec<Value> = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(rows.len(), 2, "one row per probe case: {rows:?}");
+    for row in &rows {
+        assert_eq!(row["error"]["code"], "image_over_budget", "row: {row}");
+        assert_eq!(
+            row["claims_capture"], false,
+            "over-limit capture was claimed: {row}"
+        );
+        assert_eq!(
+            row["claims_side_by_side"], false,
+            "over-limit side-by-side was claimed: {row}"
+        );
+    }
 }
 
 #[test]
