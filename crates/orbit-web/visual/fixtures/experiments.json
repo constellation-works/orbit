@@ -1,0 +1,7 @@
+{
+  "fixture": "experiments",
+  "frozen_instant": "2026-01-01T12:00:00Z",
+  "tasks": [
+    { "title": "Experiment fixture baseline task", "complexity": "low", "status": "backlog" }
+  ]
+}
