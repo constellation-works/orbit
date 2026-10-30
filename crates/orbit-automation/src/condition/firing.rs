@@ -252,7 +252,44 @@ pub fn advance_pass(
         next.lap_after = observation.lap_after.clone();
         let fire_existing = trigger.on_enable == ConditionOnEnable::FireExisting;
         for subject in &observation.subjects {
-            let record = next.subjects.entry(subject.key.clone()).or_default();
+            if !next.subjects.contains_key(&subject.key)
+                && subject.key != CONDITION_WORKSPACE_SUBJECT
+                && subject.when != Truth::True
+            {
+                continue;
+            }
+            if !next.subjects.contains_key(&subject.key)
+                && next.subjects.len() >= CONDITION_RETAINED_RECORDS
+            {
+                // A partial baseline would turn remaining existing matches into
+                // new edges on the next pass. Retry the entire baseline instead.
+                let mut retry = state.clone();
+                prune(&mut retry, now);
+                Skips {
+                    state: &mut retry,
+                    now,
+                }
+                .record("backpressure", Some(&subject.key), None);
+                return Ok(PassOutcome {
+                    next: retry,
+                    fired: Vec::new(),
+                    reason: "backpressure",
+                });
+            }
+            let sequence = next
+                .fires
+                .iter()
+                .filter(|fire| fire.subject == subject.key)
+                .map(|fire| fire.arm_sequence)
+                .max()
+                .map_or(0, |n| n.saturating_add(1));
+            let record =
+                next.subjects
+                    .entry(subject.key.clone())
+                    .or_insert_with(|| ConditionSubject {
+                        arm_sequence: sequence,
+                        ..Default::default()
+                    });
             // Each baseline starts a new arm generation, so a later fire of
             // the same subject never reuses an earlier identity.
             record.arm_sequence = record.arm_sequence.saturating_add(1);
@@ -285,13 +322,38 @@ pub fn advance_pass(
     let mut edges = Vec::new();
     let mut holding = 0usize;
     let mut skips = Vec::<(&'static str, String, Option<String>)>::new();
-    let full = next.subjects.len() >= CONDITION_RETAINED_RECORDS;
+    let mut backpressure = false;
     for subject in &observation.subjects {
-        if full && !next.subjects.contains_key(&subject.key) {
-            skips.push(("backpressure", subject.key.clone(), None));
+        if !next.subjects.contains_key(&subject.key)
+            && subject.key != CONDITION_WORKSPACE_SUBJECT
+            && subject.when != Truth::True
+        {
+            if let Truth::Unknown(reason) = &subject.when {
+                skips.push(("unknown", subject.key.clone(), Some(reason.clone())));
+            }
             continue;
         }
-        let record = next.subjects.entry(subject.key.clone()).or_default();
+        if next.subjects.len() >= CONDITION_RETAINED_RECORDS
+            && !next.subjects.contains_key(&subject.key)
+        {
+            skips.push(("backpressure", subject.key.clone(), None));
+            backpressure = true;
+            continue;
+        }
+        let sequence = next
+            .fires
+            .iter()
+            .filter(|fire| fire.subject == subject.key)
+            .map(|fire| fire.arm_sequence)
+            .max()
+            .map_or(0, |n| n.saturating_add(1));
+        let record = next
+            .subjects
+            .entry(subject.key.clone())
+            .or_insert_with(|| ConditionSubject {
+                arm_sequence: sequence,
+                ..Default::default()
+            });
         let continuous = record
             .observed_at
             .is_some_and(|at| now.signed_duration_since(at) <= gap);
@@ -352,6 +414,10 @@ pub fn advance_pass(
             }
         }
     }
+    if backpressure {
+        next.lap_after.clone_from(&state.lap_after);
+        next.last_pass.lap_complete = false;
+    }
     {
         let mut recorder = Skips {
             state: &mut next,
@@ -401,7 +467,13 @@ pub fn advance_pass(
     let hour_ago = now - Duration::hours(1);
     let day_ago = now - Duration::hours(24);
     let mut fired = Vec::new();
-    let mut reason = if holding > 0 { "holding" } else { "armed" };
+    let mut reason = if backpressure {
+        "backpressure"
+    } else if holding > 0 {
+        "holding"
+    } else {
+        "armed"
+    };
     for key in edges {
         let Some(subject) = observed.get(key.as_str()) else {
             continue;
@@ -425,6 +497,25 @@ pub fn advance_pass(
             })
             .count();
         let record = next.subjects.get(&key).cloned().unwrap_or_default();
+        if next.fires.len() >= CONDITION_RETAINED_RECORDS {
+            if let Some(index) = next.fires.iter().position(|fire| {
+                fire.state != ConditionFireState::Intent && fire.observed_at <= day_ago
+            }) {
+                next.fires.remove(index);
+            } else {
+                if let Some(entry) = next.subjects.get_mut(&key) {
+                    entry.deferred = Some("backpressure".into());
+                    entry.deferred_since.get_or_insert(now);
+                }
+                Skips {
+                    state: &mut next,
+                    now,
+                }
+                .record("backpressure", Some(&key), None);
+                reason = "backpressure";
+                continue;
+            }
+        }
         if depth > MAX_CONDITION_CHAIN_DEPTH {
             let fire = new_fire(
                 &next,
@@ -523,7 +614,7 @@ pub fn advance_pass(
         fired.push(fire.fire_id.clone());
         next.fires.push(fire);
     }
-    if !fired.is_empty() && next.stall.is_none() {
+    if !fired.is_empty() && next.stall.is_none() && reason != "backpressure" {
         reason = "fired";
     }
     next.last_pass.fired = fired.len();
@@ -579,25 +670,13 @@ fn sample<'a>(keys: impl Iterator<Item = &'a str>) -> Vec<String> {
     keys.take(STALL_SAMPLE).map(str::to_owned).collect()
 }
 
-/// Drop fire records past retention or over the cap, never an unsettled
-/// intent.
+/// Drop fire records past retention, never an unsettled intent. Capacity
+/// eviction happens only when a new record needs room.
 fn prune(state: &mut ConditionState, now: DateTime<Utc>) {
     let horizon = now - Duration::days(CONDITION_FIRED_RETENTION_DAYS);
     state
         .fires
         .retain(|fire| fire.state == ConditionFireState::Intent || fire.observed_at >= horizon);
-    while state.fires.len() > CONDITION_RETAINED_RECORDS - 1 {
-        match state
-            .fires
-            .iter()
-            .position(|fire| fire.state != ConditionFireState::Intent)
-        {
-            Some(index) => {
-                state.fires.remove(index);
-            }
-            None => break,
-        }
-    }
 }
 
 /// Forget subjects that carry nothing: armed, not holding, not waiting and
