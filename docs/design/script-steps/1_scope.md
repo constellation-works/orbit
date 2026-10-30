@@ -286,8 +286,9 @@ The rules:
   grant. At run time Orbit execs that recorded path itself; the kernel's `#!`
   handling and the caller's `PATH` are never used. Interpreter arguments are literal.
   The known inline-code flags (`-c` for `sh`, `bash`, `zsh`, `dash` and `python*`, `-e`
-  for `perl`, `ruby` and `node`) are refused, so an interpreter list can't smuggle
-  code past the digest.
+  for `perl`, `ruby` and `node`, `-E` for `perl`, and `-p`, `--eval` and `--print` for
+  `node`), including bundled spellings such as `bash -ec`, are refused, so an
+  interpreter list can't smuggle code past the digest.
 - **Routines don't name scripts.** A routine `target: script:<name>` is rejected at
   parse time with guidance to wrap the script in a one-step job, the treatment
   `activity:<name>` already gets.
