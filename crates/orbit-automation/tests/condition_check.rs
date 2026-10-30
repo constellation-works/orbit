@@ -289,7 +289,70 @@ fn origin_dependent_task_condition_still_loads() {
     assert_eq!(collection.definitions[0].definition.name, "originbound");
 }
 
+/// A template naming the retired `system` crew mints an unassigned task under
+/// the default crew set ([ORB-15663]), so a condition reading the absent crew
+/// matches its own template output and is a load error naming the definition
+/// and `schedule.condition.when`.
+#[test]
+fn retired_system_crew_absent_subject_is_a_load_error() {
+    let root = tempfile::tempdir().unwrap();
+    write_condition_definition_with_crew(
+        root.path(),
+        "retiredabsent",
+        "task.status == 'backlog' && !has(task.crew)",
+        &[],
+        Some("system"),
+    );
+
+    let collection = orbit_automation::auto_tasks::loader::collect_auto_tasks(root.path());
+    assert!(
+        collection.definitions.is_empty(),
+        "a retired-crew self-matching definition loaded: {:?}",
+        collection.definitions
+    );
+    assert_eq!(collection.errors.len(), 1, "{:?}", collection.errors);
+    let message = &collection.errors[0].message;
+    assert!(
+        message.contains("retiredabsent"),
+        "load error names no definition: {message}"
+    );
+    assert!(
+        message.contains("schedule.condition.when"),
+        "load error names no clause: {message}"
+    );
+}
+
+/// A condition that can only match when the minted task carries the retired
+/// name still loads: the mint drops that crew, so `has(task.crew)` is false
+/// on its own template output.
+#[test]
+fn retired_system_crew_equality_still_loads() {
+    let root = tempfile::tempdir().unwrap();
+    write_condition_definition_with_crew(
+        root.path(),
+        "retiredkept",
+        "task.status == 'backlog' && has(task.crew) && task.crew == 'system'",
+        &[],
+        Some("system"),
+    );
+
+    let collection = orbit_automation::auto_tasks::loader::collect_auto_tasks(root.path());
+    assert!(collection.errors.is_empty(), "{:?}", collection.errors);
+    assert_eq!(collection.definitions.len(), 1);
+    assert_eq!(collection.definitions[0].definition.name, "retiredkept");
+}
+
 fn write_condition_definition(root: &std::path::Path, name: &str, when: &str, tags: &[&str]) {
+    write_condition_definition_with_crew(root, name, when, tags, None);
+}
+
+fn write_condition_definition_with_crew(
+    root: &std::path::Path,
+    name: &str,
+    when: &str,
+    tags: &[&str],
+    crew: Option<&str>,
+) {
     use std::fmt::Write as _;
 
     let dir = orbit_automation::auto_tasks::loader::auto_tasks_dir(root);
@@ -306,10 +369,13 @@ fn write_condition_definition(root: &std::path::Path, name: &str, when: &str, ta
     } else {
         format!("  tags: [{tag_list}]")
     };
+    let crew_yaml = crew
+        .map(|crew| format!("  crew: {crew}\n"))
+        .unwrap_or_default();
     std::fs::write(
         dir.join(format!("{name}.yaml")),
         format!(
-            "schemaVersion: 1\nname: {name}\nschedule:\n  condition:\n    scope: task\n    when: \"{when}\"\ntemplate:\n  title: Fixture {name}\n{tags_yaml}\n"
+            "schemaVersion: 1\nname: {name}\nschedule:\n  condition:\n    scope: task\n    when: \"{when}\"\ntemplate:\n  title: Fixture {name}\n{tags_yaml}\n{crew_yaml}"
         ),
     )
     .unwrap();
