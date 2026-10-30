@@ -50,7 +50,7 @@ use serde_json::{Value, json};
 use crate::OrbitRuntime;
 use crate::application::contracts::CI_FAILURE_TAG;
 use crate::application::sweep_filing::duplicate_tasks::{
-    DuplicateTaskLookup, DuplicateTaskMatch, SnapshotDuplicateLookup,
+    DuplicateMatchKind, DuplicateTaskLookup, DuplicateTaskMatch, SnapshotDuplicateLookup,
 };
 use crate::application::sweep_filing::{bounded_error, bounded_u64, digest, display};
 use crate::application::task::{CiSweepFilingEvidence, TaskAddParams, TaskUpdateParams};
@@ -510,7 +510,7 @@ where
             }
             Ok(assessment.owner.map(|task_id| DuplicateTaskMatch {
                 task_id,
-                match_kind: "covered_by_repair",
+                match_kind: DuplicateMatchKind::CoveredByRepair,
                 evidence: assessment.evidence,
             }))
         })
@@ -580,7 +580,7 @@ where
             let task_id = filed_compiler_sets.get(&identity)?.clone();
             Some(DuplicateTaskMatch {
                 task_id,
-                match_kind: "open_compiler_diagnostics",
+                match_kind: DuplicateMatchKind::OpenCompilerDiagnostics,
                 evidence: json!({
                     "fingerprint": "ci_open_compiler_diagnostics",
                     "matched_fields": [{"field": "compiler_diagnostic_set", "value": identity}],
@@ -593,10 +593,10 @@ where
             evidence,
         }) = duplicate_match
         {
-            if match_kind == "covered_by_repair" {
+            if match_kind == DuplicateMatchKind::CoveredByRepair {
                 repair_assessment::retain(runtime, &task_id, &evidence)?;
             }
-            if match_kind == "open_compiler_diagnostics" {
+            if match_kind == DuplicateMatchKind::OpenCompilerDiagnostics {
                 retain_compiler_observations(runtime, &task_id, cluster)?;
             }
             if let Some(existing) = duplicate_task {
@@ -635,7 +635,7 @@ where
                     .map(|entry| entry.task_id.as_str())
                     .unwrap_or_default(),
                 "workflow": cluster.workflow,
-                "match_kind": "exact_key",
+                "match_kind": DuplicateMatchKind::ExactKey,
                 "match_evidence": {
                     "fingerprint": "same_sweep_key",
                     "matched_fields": [{

@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use crate::OrbitRuntime;
 use crate::application::contracts::DEPENDABOT_TAG;
 use crate::application::sweep_filing::duplicate_tasks::{
-    DuplicateTaskLookup, DuplicateTaskMatch, MATCH_REJECTED_OWNER, find_covering_task,
+    DuplicateMatchKind, DuplicateTaskLookup, DuplicateTaskMatch, find_covering_task,
 };
 use crate::application::sweep_filing::{bounded_u64, digest, display, truncate_chars};
 use crate::application::task::TaskAddParams;
@@ -264,7 +264,7 @@ where
         {
             // A rejected owner suppresses re-filing but owns nothing: the
             // alert's siblings must not be told open work covers it.
-            if match_kind == MATCH_REJECTED_OWNER {
+            if match_kind == DuplicateMatchKind::RejectedOwner {
                 suppressed_code_alerts += 1;
             } else {
                 covered_by_cause

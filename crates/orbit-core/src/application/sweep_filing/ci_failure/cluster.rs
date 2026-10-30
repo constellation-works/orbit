@@ -20,8 +20,8 @@ use super::log_signature::{
 use super::runner_os::{RunnerOsEvidence, RunnerOsSource};
 use crate::application::contracts::CI_FAILURE_TAG;
 use crate::application::sweep_filing::duplicate_tasks::{
-    CoverageAnchor, CoverageFingerprint, DuplicateCandidate, DuplicateTaskLookup,
-    DuplicateTaskMatch, find_covering_task,
+    CoverageAnchor, CoverageFingerprint, DuplicateCandidate, DuplicateMatchKind,
+    DuplicateTaskLookup, DuplicateTaskMatch, find_covering_task,
 };
 use crate::application::sweep_filing::{digest, display, is_open_ci_owner_status, truncate_chars};
 use crate::application::task::{CiSweepFilingEvidence, CiSweepFilingSource};
@@ -96,7 +96,7 @@ impl FailureCluster {
             {
                 return Ok(Some(DuplicateTaskMatch {
                     task_id: owner.id.clone(),
-                    match_kind: "open_compiler_diagnostics",
+                    match_kind: DuplicateMatchKind::OpenCompilerDiagnostics,
                     evidence: json!({
                         "fingerprint": "ci_open_compiler_diagnostics",
                         "matched_fields": [{"field": "compiler_diagnostic_set", "value": identity}],
