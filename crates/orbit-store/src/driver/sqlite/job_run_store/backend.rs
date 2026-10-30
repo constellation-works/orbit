@@ -292,6 +292,16 @@ impl JobRunStoreBackend for SqliteJobRunStore {
         })
     }
 
+    fn observed_run_page(&self, after: &str, limit: usize) -> Result<Vec<JobRun>, OrbitError> {
+        self.store.with_read_connection(|conn| {
+            let mut statement = conn.prepare(&format!(
+                "SELECT {JOB_RUN_COLUMNS} FROM job_runs WHERE workspace_id=?1 AND run_id>?2 ORDER BY run_id LIMIT ?3"
+            )).map_err(sqlite_store_error)?;
+            statement.query_map(rusqlite::params![self.workspace_id, after, limit.clamp(1,32)], row_to_job_run)
+                .map_err(sqlite_store_error)?.collect::<Result<Vec<_>,_>>().map_err(sqlite_store_error)
+        })
+    }
+
     fn automation_job_for_key(&self, key: &str) -> Result<Option<String>, OrbitError> {
         self.store.with_read_connection(|conn| {
             conn.query_row(

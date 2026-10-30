@@ -69,6 +69,28 @@ pub struct AssistanceService {
 }
 
 impl AssistanceService {
+    /// Stable adapter revision for consumer assessment and sampling identities.
+    /// This performs no credential resolution, I/O or queue mutation.
+    pub fn assistance_adapter_revision(&self) -> &str {
+        self.adapter.assistance_adapter_identity()
+    }
+
+    /// Consumer capability restricted to private shadow operation. Advisory
+    /// grants do not implicitly adopt a new consumer or public display.
+    pub fn assistance_shadow_policy_epoch(
+        &self,
+        workspace: &str,
+        use_case: &str,
+    ) -> Result<Option<String>, OrbitError> {
+        let settings = (self.settings)()?;
+        settings.validate_assistance_settings()?;
+        settings
+            .assistance_policy(workspace, use_case)
+            .filter(|p| p.mode == AssistanceMode::Shadow)
+            .map(|p| preparation::assistance_policy_digest(&settings, p))
+            .transpose()
+    }
+
     /// Local host-grant identity. This neither resolves credentials nor writes
     /// work; consumers use it to leave disabled workspaces entirely untouched.
     pub fn assistance_policy_epoch(

@@ -220,6 +220,8 @@ fn agent_task_context_json(
     // literal, and takes the map by value instead of cloning it.
     let mut context = match serde_json::json!({
         "id": task.id.clone(),
+        "admission_tier": task.complexity,
+        "admission_type": task.task_type,
         "status": task.status.cli_name(),
         "terminal": refuses_implementer_writes(task.status),
         "title": task.title.clone(),
