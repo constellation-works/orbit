@@ -7,8 +7,9 @@ spec:
   description: >
     The deterministic checks over the capture of record: the workspace's UI
     rules, which ran on each capture's live page, plus the capture checks
-    `render_timeout`, `setup_failed`, `off_loopback_request`,
-    `color_scheme_leak` and `unstable_view`. Findings are recorded in the
+    `render_timeout`, `setup_failed`, `image_over_budget`,
+    `off_loopback_request`, `color_scheme_leak` and `unstable_view`.
+    Findings are recorded in the
     system-written `visual/checks.json`; in shadow nothing blocks and
     nothing is filed.
   input_schema_json:
