@@ -201,9 +201,7 @@ a.agents-strip-entry:focus-visible { outline: 2px solid var(--accent); outline-o
 .agents-detail-note { margin: 4px 0 0; color: var(--warn-fg); font-size: 12px; line-height: 1.45; }
 /* Numbered axes keep full term labels readable even in the 280px column.
    Dashed spokes and explicit labels distinguish context from scored terms. */
-/* Keep the offscreen accessible profile table inside this radar's scrollable
-   overflow; its wide nowrap columns must not expand the Analytics pane. */
-.agents-radar { position: relative; overflow: clip; margin-top: 14px; border-top: 1px solid var(--hair); }
+.agents-radar { position: relative; margin-top: 14px; border-top: 1px solid var(--hair); }
 .agents-radar svg { display: block; width: 100%; max-width: 360px; margin: 4px auto 0; overflow: visible; }
 .agents-radar-grid { fill: none; stroke: var(--border); stroke-width: 1; }
 .agents-radar-spoke { stroke: var(--border); stroke-width: 1; }

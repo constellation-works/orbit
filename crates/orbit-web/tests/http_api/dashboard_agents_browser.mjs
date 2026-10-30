@@ -9,7 +9,9 @@
 // tier-calibration matrices, the empty state, and the 375px layout (ranking
 // scrolling in its own box, detail stacked below, 44px touch targets). The
 // Implementers regression measures document and active-pane overflow with a
-// selected radar at 1440, 1166 and 375, including after control changes.
+// selected radar at 1440, 1166 and 375, including after control changes, and
+// again with the radar and panel clips disabled, where the profile table would
+// otherwise widen the pane.
 // Screenshots of each role tab (and the Implementers ranking) go to evidence.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -214,7 +216,7 @@ try {
     const panel = document.querySelector('#agents-panel');
     const detail = document.querySelector('.agents-detail');
     const radar = document.querySelector('.agents-radar');
-    const profile = radar?.querySelector('table.visually-hidden');
+    const profile = radar?.querySelector('.visually-hidden > table');
     const wrap = document.querySelector('.agents-table-wrap');
     const table = wrap?.querySelector('.agents-table');
     const paneBox = rect(pane);
@@ -483,7 +485,7 @@ try {
   await page.waitForFunction(() => /in 30d/.test(document.getElementById('agents-meta').textContent));
   await body.locator('.agents-row', { hasText: /sol[\s\S]*model-b/ }).locator('.agents-row-select').click();
   await page.waitForFunction(() => document.querySelector('#agents-detail h3')?.textContent === 'sol');
-  const profileTable = body.locator('.agents-radar table.visually-hidden');
+  const profileTable = body.locator('.agents-radar .visually-hidden > table');
   assert.equal(await profileTable.count(), 1, 'the accessible profile table remains in the rendered detail');
   assert.equal(await profileTable.locator('tbody tr').count(), implementerCard().terms.length, 'the profile table exposes every scorecard axis');
   assert.match(await profileTable.locator('caption').textContent(), /^Agent profile: sol/);
@@ -506,6 +508,11 @@ try {
   await page.locator('#refresh-btn').click();
   await page.waitForTimeout(150);
   await measureImplementersWidths('refresh');
+  // Engines that do not contain the clipped profile table at the radar or the
+  // panel widened the pane to 2097px at 1440 in review; the pane must still fit.
+  const clipsIgnored = await page.addStyleTag({ content: '.agents-radar, #agents-panel { overflow: visible !important; }' });
+  await measureImplementersWidths('clips-not-honored');
+  await clipsIgnored.evaluate(node => node.remove());
   await body.locator('.agents-row', { hasText: /sol[\s\S]*model-b/ }).locator('.agents-row-select').click();
   await page.waitForFunction(() => document.querySelector('#agents-detail h3')?.textContent === 'sol');
   const overflowEvidence = {
@@ -785,11 +792,12 @@ try {
     await page.locator(`#agents-roles [data-view="${role}"]`).click();
     await body.locator('.agents-row').first().waitFor();
     await body.locator('.agents-row-select').first().click();
-    await page.waitForFunction(() => document.querySelector('.agents-radar table.visually-hidden'));
-    for (const width of [1440, 375]) {
+    await page.waitForFunction(() => document.querySelector('.agents-radar .visually-hidden > table'));
+    for (const width of [1440, 1166, 375]) {
       await page.setViewportSize({ width, height: width === 375 ? 812 : 1100 });
       await page.waitForTimeout(50);
       roleContainment.push({ role, ...(await viewportMetrics()) });
+      await shot(`agents-role-${role}-selected-dark-${width}`);
     }
   }
   fs.writeFileSync(path.join(evidence, 'agents-role-containment.json'), JSON.stringify(roleContainment, null, 2));
