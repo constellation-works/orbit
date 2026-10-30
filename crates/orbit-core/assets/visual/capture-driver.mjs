@@ -690,6 +690,11 @@ export async function captureMock({ browser, PNG, request, mock, server, ruleMod
     }
   }
   entry.captured_at = new Date().toISOString();
+  entry.stability = stability;
+  if (diffRegion) entry.diff_region = diffRegion;
+  if (firstDiagnostics && firstDiagnostics.offLoopback.length > 0) {
+    entry.off_loopback_requests = firstDiagnostics.offLoopback.slice(0, 10);
+  }
   await writeFile(path.join(dir, "capture.png"), shots[0]);
   await writeMockPng(browser, mock, path.join(dir, "mock.png"));
   await writeSideBySide(browser, mock, dir);
@@ -710,14 +715,9 @@ export async function captureMock({ browser, PNG, request, mock, server, ruleMod
   entry.side_by_side = `${mock.name}/${sideFile.file}`;
   entry.side_by_side_encoding = sideFile.encoding;
   entry.side_by_side_lossy = sideFile.lossy;
-  entry.stability = stability;
-  if (diffRegion) entry.diff_region = diffRegion;
   entry.sha256 = sha256Hex(await readFile(path.join(dir, captureFile.file)));
   entry.side_by_side_sha256 = sha256Hex(await readFile(path.join(dir, sideFile.file)));
   entry.mock_sha256 = sha256Hex(await readFile(mock.mock_file));
-  if (firstDiagnostics && firstDiagnostics.offLoopback.length > 0) {
-    entry.off_loopback_requests = firstDiagnostics.offLoopback.slice(0, 10);
-  }
   return entry;
 }
 

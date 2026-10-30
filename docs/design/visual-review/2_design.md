@@ -355,10 +355,11 @@ response until capture; `error` answers them with a 500 and a fixed body; `empty
 Every capture is taken twice, each in a fresh context, and the two are compared pixel by
 pixel. Identical: the image is stable. Different: a third capture is taken. If it equals one
 of the first two, the capture is recorded `stable_after_retry`, with the differing region.
-If not, it is `unstable`: its images are attached for the record, its differing regions are
+If not, it is `unstable`: its images are attached when they fit, its differing region is
 listed, it is kept out of the model review, and a check finding `unstable_view` (low) is
-recorded against the manifest, not the change. Both captures happen on one host in one
-browser build, so this measures the page, not host differences.
+recorded against the manifest, not the change. The finding and region remain in
+`visual/checks.json` if the image budget prevents attaching the images. Both captures happen on
+one host in one browser build, so this measures the page, not host differences.
 
 ### 4.4 Metadata
 
@@ -389,6 +390,10 @@ browser build, so this measures the page, not host differences.
 }
 ```
 
+When an image cannot be attached, that mock has an `error` and no `capture` object. The
+capture step preserves completed off-loopback, stability and colour-scheme findings in
+`visual/checks.json`; the checks step adds the `image_over_budget` finding and rule results.
+
 `outcome` is `captured` or `not_established` (§6). A capture whose `commit` is not the
 delivery's final candidate (or review commit, after a recapture) is refused by
 `visual_settle` as `stale_capture`: screenshots cannot outlive the commit they show. A mock
@@ -406,8 +411,10 @@ whose `sha256` differs from the digest read at admission is refused as `mock_cha
   PNG). The driver encodes PNG first; over the limit, lossless WebP; still over, WebP at
   quality 90 with `lossy: true`. If quality 90 still exceeds the limit, the driver records an
   `image_over_budget` error for that mock and names no capture images in `capture.json`, so no
-  over-limit bytes are attached. Pixel comparison always runs on the decoded captures in
-  scratch before encoding.
+  over-limit bytes are attached. The capture step preserves completed stability, differing
+  region, off-loopback and colour-scheme findings in `visual/checks.json`; `visual_checks`
+  adds the image-budget error. Pixel comparison always runs on the decoded captures in scratch
+  before encoding.
 - **Count.** At most `max_mocks` mocks, each with one capture and one side-by-side.
 - **Retention.** Captures are task artifacts and live as long as the task. `pr_open` puts
   each side-by-side image in the PR's screenshots section, ahead of implementer
@@ -532,6 +539,7 @@ driver keeps each context open until its checks have run). Two kinds of check:
 |---|---|---|
 | `render_timeout` | The `ready` selector never became visible. | high |
 | `setup_failed` | The candidate's setup failed for this app. | high |
+| `image_over_budget` | Neither capture image fits the artifact limit; no capture images are attached. | medium |
 | `off_loopback_request` | A browser request off loopback, blocked. | medium |
 | `color_scheme_leak` | A `color_scheme_invariant` app whose light-preference capture differs from its dark one. | medium |
 | `unstable_view` | §4.3; recorded against the manifest. | low |
