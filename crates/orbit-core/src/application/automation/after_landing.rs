@@ -485,6 +485,7 @@ pub fn after_landing_health(
     };
     let AutoTaskSchedule::Deliveries {
         deliveries_landed: declared,
+        ..
     } = &definition.schedule
     else {
         health.problems.push(

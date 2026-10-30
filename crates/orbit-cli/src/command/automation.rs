@@ -1,10 +1,12 @@
 //! The automation CLI, derived from the automation operation registry.
 //!
-//! `explain` calls the read-only `orbit.automation.explain` tool, so `--json`
-//! is that tool's payload. What is left here is the text rendering: the
-//! definition and its condition, the matches and closest misses, and one
-//! subject's clause tree with the values each clause read; or, for
-//! `job:<name>`, the job's auto-task steps.
+//! `explain` calls the read-only `orbit.automation.explain` tool and
+//! `clear-stall` the operator-only `orbit.automation.clear_stall` tool, so
+//! `--json` is each tool's payload. What is left here is the text rendering:
+//! the definition and its condition, the matches and closest misses, one
+//! subject's clause tree with the values each clause read, and the tracked
+//! state with recent fires and their chains; or, for `job:<name>`, the job's
+//! auto-task steps.
 
 use clap::Args;
 use orbit_common::governance::automation::AutomationVerb;
@@ -32,6 +34,13 @@ impl Execute for AutomationCommand {
                 job_explain_blocks(&value)
             }
             AutomationVerb::Explain => explain_blocks(&value),
+            AutomationVerb::ClearStall => vec![Block::text(format!(
+                "Cleared {} stall on {} ({}); audited as {}",
+                text(&value["cleared"]["reason"]),
+                text(&value["consumer"]),
+                text(&value["cleared"]["detail"]),
+                text(&value["audit"]["actor"]),
+            ))],
         };
         Ok(Payload::blocks(value, blocks).into())
     }
@@ -103,10 +112,22 @@ fn explain_blocks(value: &Value) -> Vec<Block> {
     }
 
     blocks.push(Block::text("\nMatches"));
-    let mut matches = Table::new(vec![Column::new("SUBJECT").fixed(), Column::new("TITLE")])
-        .empty_message("no subject matches");
+    let mut matches = Table::new(vec![
+        Column::new("SUBJECT").fixed(),
+        Column::new("ARM").fixed(),
+        Column::new("HOLD").fixed(),
+        Column::new("TITLE"),
+    ])
+    .empty_message("no subject matches");
     for row in rows(&value["matches"]) {
-        matches.add_row(vec![text(&row["subject"]), text(&row["title"])]);
+        matches.add_row(vec![
+            text(&row["subject"]),
+            text(&row["arm"]),
+            row["hold_remaining_minutes"]
+                .as_i64()
+                .map_or_else(|| "-".to_string(), |minutes| format!("{minutes}m left")),
+            text(&row["title"]),
+        ]);
     }
     blocks.push(Block::table(matches));
 
@@ -155,10 +176,7 @@ fn explain_blocks(value: &Value) -> Vec<Block> {
             "\nNo subject to explain: the prefilter selects no task.",
         )),
     }
-    blocks.push(Block::text(format!(
-        "\nArm state, holds, fires and self: not yet tracked ({})",
-        text(&value["tracking"]["note"])
-    )));
+    blocks.extend(tracking_blocks(&value["tracking"]));
     blocks
 }
 
@@ -249,6 +267,119 @@ fn job_explain_blocks(value: &Value) -> Vec<Block> {
         text(&value["runtime"]["note"])
     )));
     blocks
+}
+
+/// The durable state: ownership, arm states, the stall, the last pass and
+/// skip, `self`, and recent fires with their upstream chain.
+fn tracking_blocks(tracking: &Value) -> Vec<Block> {
+    if tracking["tracked"] != true {
+        return vec![Block::text(format!(
+            "\nState: not tracked yet (no pass recorded it); ownership {}",
+            text(&tracking["ownership"]).replace('_', " ")
+        ))];
+    }
+    let mut lines = vec![format!(
+        "\nState: {} armed, {} holding, {} waiting, {} fired, {} pending action(s); {}{}",
+        count(&tracking["armed"]),
+        count(&tracking["holding"]),
+        count(&tracking["waiting"]),
+        count(&tracking["fired"]),
+        count(&tracking["pending_intents"]),
+        if tracking["enabled_seen"] == true {
+            "enabled"
+        } else {
+            "disabled"
+        },
+        if tracking["epoch_current"] == true {
+            ""
+        } else {
+            "; definition changed: the next pass baselines"
+        },
+    )];
+    if let Some(stall) = tracking.get("stall") {
+        lines.push(format!(
+            "STALLED {} at {}: {} (clear with `orbit automation clear-stall`)",
+            text(&stall["reason"]),
+            text(&stall["at"]),
+            text(&stall["detail"]),
+        ));
+    }
+    if let Some(pass) = tracking.get("last_pass") {
+        lines.push(format!(
+            "Last pass {}: {} evaluated, {} matched, {} unknown, {} fired{}",
+            text(&pass["at"]),
+            count(&pass["evaluated"]),
+            count(&pass["matched"]),
+            count(&pass["unknown"]),
+            count(&pass["fired"]),
+            if pass["lap_complete"] == false {
+                " (lap continues next pass)"
+            } else {
+                ""
+            },
+        ));
+    }
+    if let Some(skip) = tracking.get("last_skip") {
+        lines.push(format!(
+            "Last skip {}: {}{}",
+            text(&skip["at"]),
+            text(&skip["reason"]),
+            skip["subject"]
+                .as_str()
+                .map(|subject| format!(" ({subject})"))
+                .unwrap_or_default(),
+        ));
+    }
+    let own = &tracking["self"];
+    lines.push(format!(
+        "Self: last fired {}, last minted {}{}, {} fire(s) in 24h",
+        own["last_fired"].as_str().unwrap_or("never"),
+        own["last_minted"].as_str().unwrap_or("never"),
+        own["last_minted_task"]
+            .as_str()
+            .map(|task| format!(" ({task})"))
+            .unwrap_or_default(),
+        count(&own["fires_24h"]),
+    ));
+    let mut blocks = vec![Block::text(lines.join("\n"))];
+    blocks.push(Block::text("\nRecent fires"));
+    let mut fires = Table::new(vec![
+        Column::new("SUBJECT").fixed(),
+        Column::new("STATE").fixed(),
+        Column::new("ACTION").fixed(),
+        Column::new("DEPTH").fixed(),
+        Column::new("CHAIN"),
+    ])
+    .empty_message("no fires recorded");
+    for fire in rows(&tracking["recent_fires"]) {
+        let chain = rows(&fire["chain"])
+            .iter()
+            .map(|link| {
+                if link["missing"] == true {
+                    format!("{} (gone)", short(&text(&link["fire_id"])))
+                } else {
+                    format!("{} on {}", text(&link["trigger"]), text(&link["subject"]))
+                }
+            })
+            .collect::<Vec<_>>();
+        fires.add_row(vec![
+            text(&fire["subject"]),
+            text(&fire["state"]),
+            fire["action_id"].as_str().unwrap_or("-").to_string(),
+            count(&fire["depth"]),
+            if chain.is_empty() {
+                "-".to_string()
+            } else {
+                chain.join(" ← ")
+            },
+        ]);
+    }
+    blocks.push(Block::table(fires));
+    blocks
+}
+
+fn short(id: &str) -> &str {
+    id.get(..12).unwrap_or(id)
 }
 
 /// One line per clause: a chain's operands joined by their operator, each

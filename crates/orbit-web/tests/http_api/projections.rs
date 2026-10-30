@@ -669,18 +669,10 @@ fn auto_task_and_routine_schedules_distinguish_armed_and_hypothetical_times() {
         || {
             let fixture = Fixture::new();
             for (name, schedule) in [
-                ("interval", AutoTaskSchedule::Interval { every_minutes: 60 }),
-                (
-                    "cron",
-                    AutoTaskSchedule::Cron {
-                        cron: "* * * * *".into(),
-                    },
-                ),
-                ("disabled", AutoTaskSchedule::Interval { every_minutes: 60 }),
-                (
-                    "unobserved",
-                    AutoTaskSchedule::Interval { every_minutes: 60 },
-                ),
+                ("interval", AutoTaskSchedule::every_minutes(60)),
+                ("cron", AutoTaskSchedule::cron("* * * * *")),
+                ("disabled", AutoTaskSchedule::every_minutes(60)),
+                ("unobserved", AutoTaskSchedule::every_minutes(60)),
             ] {
                 fixture
                     .runtime
@@ -951,7 +943,7 @@ fn replica_auto_task_controls_explain_owner_authority_and_refuse_mutations() {
                 .auto_task_add(AutoTaskAddParams {
                     name: "qa-sweep".into(),
                     description: "Replica control boundary fixture".into(),
-                    schedule: AutoTaskSchedule::Interval { every_minutes: 60 },
+                    schedule: AutoTaskSchedule::every_minutes(60),
                     template: AutoTaskTemplate {
                         title: "Should remain unminted".into(),
                         description: "An auto-task may not issue work from a replica.".into(),

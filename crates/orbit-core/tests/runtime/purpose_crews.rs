@@ -154,7 +154,7 @@ impl Fixture {
             .auto_task_add(AutoTaskAddParams {
                 name: name.into(),
                 description: "Purpose fixture".into(),
-                schedule: AutoTaskSchedule::Interval { every_minutes: 60 },
+                schedule: AutoTaskSchedule::every_minutes(60),
                 template: AutoTaskTemplate {
                     title: format!("Run {name}"),
                     description: "Exercise purpose crew routing.".into(),

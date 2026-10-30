@@ -2,15 +2,17 @@
 
 use super::loader::{AutoTaskLoadError, collect_auto_tasks, load_definition_file};
 use super::schedule::{AutoTaskDueDecision, decide_due};
+use crate::condition::GuardVerdict;
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::fs::io::with_exclusive_file_lock;
 use orbit_store::compose::auto_task::{
     CursorSession, cursor_state_path, load_cursor_state, with_cursor_lock,
 };
+use orbit_types::workflow::automation::ConditionGuardMiss;
 use orbit_types::workflow::{
-    AutoTaskCursor, AutoTaskDefinition, AutoTaskPendingClaim, AutoTaskSkipRecord, DedupePolicy,
-    InactivePluginWarning, SkipIfUnchanged,
+    AutoTaskCursor, AutoTaskDefinition, AutoTaskPendingClaim, AutoTaskSchedule, AutoTaskSkipRecord,
+    DedupePolicy, InactivePluginWarning, SkipIfUnchanged,
 };
 use std::path::{Path, PathBuf};
 
@@ -35,6 +37,34 @@ pub trait AutoTaskDispatch {
         dry_run: bool,
         now: DateTime<Utc>,
     ) -> Result<orbit_types::workflow::automation::AutomationDiagnostic, OrbitError>;
+
+    /// One pass of a condition definition's firing protocol: evaluate its
+    /// subjects, record each new edge and mint under the edge's key. Hosts
+    /// without condition support refuse, and nothing fires.
+    fn evaluate_condition(
+        &self,
+        _definition: &AutoTaskDefinition,
+        _dry_run: bool,
+        _now: DateTime<Utc>,
+    ) -> Result<crate::condition::ConditionDiagnostic, OrbitError> {
+        Err(OrbitError::Execution(
+            "condition evaluation unavailable on this host".into(),
+        ))
+    }
+
+    /// Evaluate the schedule's `when:` guard at a due slot. A host that
+    /// cannot evaluate a configured guard holds the slot: unknown fails
+    /// closed.
+    fn evaluate_guard(&self, definition: &AutoTaskDefinition, _now: DateTime<Utc>) -> GuardVerdict {
+        match definition
+            .schedule
+            .guard()
+            .and_then(|guard| guard.when.as_ref())
+        {
+            Some(_) => GuardVerdict::unknown("guard evaluation unavailable on this host"),
+            None => GuardVerdict::Open,
+        }
+    }
 
     fn definition_root(&self) -> PathBuf;
 
@@ -203,13 +233,6 @@ fn fire_definition(
     now: DateTime<Utc>,
     options: SchedulerOptions,
 ) -> Result<AutoTaskFireReport, OrbitError> {
-    // Conditions are checked and explained, never fired, in this release.
-    if matches!(
-        definition.schedule,
-        orbit_types::workflow::AutoTaskSchedule::Condition { .. }
-    ) {
-        return Ok(skipped(definition, "condition_not_evaluated"));
-    }
     // A plugin-seeded definition whose plugin is inactive cannot admit work.
     if let Some(skip) = host.skip_reason(definition) {
         let warning = InactivePluginWarning {
@@ -241,6 +264,9 @@ fn fire_definition(
         if let Some(report) = source_skip(definition, definition_path)? {
             return Ok(report);
         }
+        if matches!(definition.schedule, AutoTaskSchedule::Condition { .. }) {
+            return fire_condition(host, definition, true, now);
+        }
         if matches!(
             definition.schedule,
             orbit_types::workflow::AutoTaskSchedule::Deliveries { .. }
@@ -255,6 +281,18 @@ fn fire_definition(
     // Discovery happens before admission. A delete, edit, or toggle may have
     // replaced this definition while the pass waited for the shared cursor
     // lock, so admission revalidates the loaded revision under that lock.
+    // A condition keeps its edge state in the automation store and mints
+    // under each edge's key, never through the slot cursor. It shares the
+    // cursor file's lock with deletion and edits, so admission acts only on
+    // the revision discovery loaded.
+    if matches!(definition.schedule, AutoTaskSchedule::Condition { .. }) {
+        return with_exclusive_file_lock(state_path, "auto-task cursor", || {
+            if let Some(report) = admission_skip(definition, definition_path)? {
+                return Ok(report);
+            }
+            fire_condition(host, definition, false, now)
+        });
+    }
     if matches!(
         definition.schedule,
         orbit_types::workflow::AutoTaskSchedule::Deliveries { .. }
@@ -362,6 +400,68 @@ fn fire_delivery(
     })
 }
 
+fn fire_condition(
+    host: &dyn AutoTaskDispatch,
+    definition: &AutoTaskDefinition,
+    dry_run: bool,
+    now: DateTime<Utc>,
+) -> Result<AutoTaskFireReport, OrbitError> {
+    let diagnostic = host.evaluate_condition(definition, dry_run, now)?;
+    let task_id = diagnostic
+        .actions
+        .iter()
+        .rev()
+        .find_map(|action| action.action_id.clone());
+    let mut reason = diagnostic.reason.clone();
+    if !diagnostic.would_fire.is_empty() {
+        reason = format!("would_fire: {}", diagnostic.would_fire.join(", "));
+    }
+    Ok(AutoTaskFireReport {
+        name: definition.name.clone(),
+        action: "condition",
+        reason: Some(reason),
+        slot: None,
+        task_id,
+        blocking_task_id: None,
+        automation: None,
+    })
+}
+
+/// What the schedule's `when:` guard does to the due `slot`: `None` lets it
+/// fire. A false or unknown guard leaves the slot unconsumed, so it fires on
+/// the first later pass where the guard holds, unless `guard_miss: skip`
+/// consumes it (§11).
+fn guard_hold(
+    host: &dyn AutoTaskDispatch,
+    definition: &AutoTaskDefinition,
+    slot: &str,
+    now: DateTime<Utc>,
+) -> Option<(AutoTaskSkipRecord, bool)> {
+    let guard = definition.schedule.guard()?;
+    guard.when.as_ref()?;
+    let GuardVerdict::Closed { reason, detail } = host.evaluate_guard(definition, now) else {
+        return None;
+    };
+    let consume = guard.guard_miss == Some(ConditionGuardMiss::Skip);
+    Some((
+        AutoTaskSkipRecord {
+            at: now.to_rfc3339(),
+            slot: slot.to_string(),
+            reason: reason.to_string(),
+            reference: String::new(),
+            cursor_sha: String::new(),
+            tip_sha: String::new(),
+            cursor_task_id: None,
+            detail: Some(if consume {
+                format!("{detail}; slot consumed (guard_miss: skip)")
+            } else {
+                detail
+            }),
+        },
+        consume,
+    ))
+}
+
 fn dry_run_definition(
     host: &dyn AutoTaskDispatch,
     definition: &AutoTaskDefinition,
@@ -397,6 +497,12 @@ fn dry_run_definition(
                     slot: Some(slot),
                     blocking_task_id: Some(blocking_task_id),
                     ..skipped(definition, "dedupe_open")
+                });
+            }
+            if let Some((record, _)) = guard_hold(host, definition, &slot, now) {
+                return Ok(AutoTaskFireReport {
+                    slot: Some(slot),
+                    ..skipped(definition, &skip_reason(&record))
                 });
             }
             if let Precondition::Skip(record) = preconditions(host, definition, &slot, now) {
@@ -456,6 +562,26 @@ fn fire_locked(
                     slot: Some(slot),
                     blocking_task_id: Some(blocking_task_id),
                     ..skipped(definition, "dedupe_open")
+                });
+            }
+            if let Some((record, consume)) = guard_hold(host, definition, &slot, now) {
+                let reason = skip_reason(&record);
+                session.state.definitions.insert(
+                    definition.name.clone(),
+                    AutoTaskCursor {
+                        last_slot: if consume {
+                            Some(slot.clone())
+                        } else {
+                            cursor.last_slot.clone()
+                        },
+                        last_skip: Some(record),
+                        ..cursor
+                    },
+                );
+                session.save()?;
+                return Ok(AutoTaskFireReport {
+                    slot: Some(slot),
+                    ..skipped(definition, &reason)
                 });
             }
             match preconditions(host, definition, &slot, now) {

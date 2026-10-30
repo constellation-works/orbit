@@ -39,6 +39,7 @@ pub fn unresolvable_delivery_branches(
         let definition = listed.definition;
         let AutoTaskSchedule::Deliveries {
             deliveries_landed: declared,
+            ..
         } = &definition.schedule
         else {
             continue;
@@ -144,6 +145,7 @@ pub fn delivery_ownership_refusal(
 ) -> Option<UnadmittableDefinition> {
     let AutoTaskSchedule::Deliveries {
         deliveries_landed: declared,
+        ..
     } = &definition.schedule
     else {
         return None;
@@ -282,6 +284,7 @@ fn inspect_auto_task_inner(
 ) -> Result<AutomationDiagnostic, OrbitError> {
     let AutoTaskSchedule::Deliveries {
         deliveries_landed: declared,
+        ..
     } = &definition.schedule
     else {
         return Err(OrbitError::InvalidInput("not a delivery definition".into()));

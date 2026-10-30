@@ -11,6 +11,7 @@ mod assistance;
 mod audit_events;
 mod backlog_forecasts;
 mod baseline;
+mod condition_triggers;
 mod crew_performance;
 mod executor_census;
 mod experiments;
@@ -47,6 +48,7 @@ use audit_events::{
 };
 use backlog_forecasts::apply_backlog_forecasts;
 use baseline::apply_baseline_schema;
+use condition_triggers::apply_condition_triggers;
 use crew_performance::apply_crew_performance_snapshot;
 use executor_census::apply_executor_census;
 use experiments::{

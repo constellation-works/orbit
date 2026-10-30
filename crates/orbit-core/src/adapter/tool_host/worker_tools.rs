@@ -54,7 +54,7 @@ pub(crate) fn execute(
             AgentsVerb::Scorecard | AgentsVerb::Show => false,
         },
         OrbitBuiltinAction::Automation(verb) => match verb {
-            AutomationVerb::Explain => false,
+            AutomationVerb::Explain | AutomationVerb::ClearStall => false,
         },
         OrbitBuiltinAction::Crew(verb) => match verb {
             CrewVerb::Ladder => false,
@@ -379,6 +379,11 @@ pub(crate) fn execute(
         },
         OrbitBuiltinAction::Automation(verb) => match verb {
             AutomationVerb::Explain => return Ok(None),
+            AutomationVerb::ClearStall => {
+                return Err(OrbitError::PolicyDenied(
+                    "claimed worker operation requires its lifecycle boundary".into(),
+                ));
+            }
         },
         OrbitBuiltinAction::Crew(verb) => match verb {
             CrewVerb::Ladder => return Ok(None),

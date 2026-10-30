@@ -118,7 +118,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | Feature | Next | Lead |
 | --- | --- | --- |
 | [Backlog Forecast](./design/backlog-forecast/1_scope.md) | Residual rules (review phases, shadow resource-fit, follower capacity, richer calibration) are not filed | claude |
-| [Condition Triggers](./design/condition-triggers/1_scope.md) | File phase 2: firing for task and workspace scopes | claude |
+| [Condition Triggers](./design/condition-triggers/1_scope.md) | File phase 3: host scope and notifications | claude |
 | [Crew Ladder](./design/crew-ladder/1_scope.md) | Phase 1 shipped (config, shadow, report); Daniel reviews, then file phase 2 (live propose trials) | claude |
 | [Distributed Drain](./design/distributed-drain/1_overview.md) | Owner review of the building stage now that receipt compaction and accounting have an operator caller (ORB-19424). | claude |
 | [Experiments](./design/experiments/1_scope.md) | Raise a concluded-or-due experiment through the human decision channel (open; decision requests are task-bound today) | claude |

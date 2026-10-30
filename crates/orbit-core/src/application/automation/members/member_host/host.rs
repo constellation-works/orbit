@@ -45,6 +45,26 @@ impl MemberHost for Host<'_> {
     }
 
     fn admission(&self, member: &StateMember) -> Result<MemberAdmission, AutomationError> {
+        // A false or unknown `when:` guard withholds due members; they stay
+        // pending and are admitted on a later pass where it holds (§11).
+        if let Some(when) = self.guard.as_deref() {
+            let verdict = self
+                .guard_verdict
+                .borrow_mut()
+                .get_or_insert_with(|| {
+                    super::super::super::condition::evaluate_guard(
+                        self.runtime,
+                        when,
+                        "trigger.when",
+                        orbit_automation::condition::ConditionCarrier::Routine,
+                        chrono::Utc::now(),
+                    )
+                })
+                .clone();
+            if let Some(held) = verdict.describe() {
+                return Ok(MemberAdmission::Withhold(held));
+            }
+        }
         self.admission_for(member)
     }
 

@@ -1,9 +1,10 @@
-Explain what condition-triggered routines and auto-tasks would match, and jobs' auto-task steps
+Explain condition-triggered routines and auto-tasks and jobs' auto-task steps, and clear their stalls
 
 Usage: orbit automation [OPTIONS] <COMMAND>
 
 Commands:
-  explain  Show a condition's matches, closest misses and clause tree over live state, or a job's auto-task steps
+  explain      Show a condition's matches, closest misses and clause tree over live state, or a job's auto-task steps
+  clear-stall  Clear a stalled condition on the workspace owner, audited
 
 Options:
   -h, --help

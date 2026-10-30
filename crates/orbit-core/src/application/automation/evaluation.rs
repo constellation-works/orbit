@@ -31,6 +31,7 @@ pub(crate) fn evaluate_auto_task_with_cache(
 ) -> Result<AutomationDiagnostic, OrbitError> {
     let AutoTaskSchedule::Deliveries {
         deliveries_landed: declared,
+        ..
     } = &definition.schedule
     else {
         return Err(OrbitError::InvalidInput("not a delivery definition".into()));
@@ -193,6 +194,36 @@ struct Host<'a> {
 
 impl DeliveryHost for Host<'_> {
     fn admission_deferral(&self) -> Result<Option<String>, AutomationError> {
+        // A false or unknown `when:` guard dispatches nothing; the pending
+        // deliveries and their coverage debt stay owed, and `max_wait_minutes`
+        // does not override it (§11).
+        let (guard, clause, carrier) = match self.action {
+            Action::Task(definition) => (
+                definition
+                    .schedule
+                    .guard()
+                    .and_then(|guard| guard.when.as_deref()),
+                "schedule.when",
+                orbit_automation::condition::ConditionCarrier::AutoTask,
+            ),
+            Action::Job(definition) => (
+                definition.trigger.when.as_deref(),
+                "trigger.when",
+                orbit_automation::condition::ConditionCarrier::Routine,
+            ),
+        };
+        if let Some(when) = guard
+            && let Some(held) = super::condition::evaluate_guard(
+                self.runtime,
+                when,
+                clause,
+                carrier,
+                chrono::Utc::now(),
+            )
+            .describe()
+        {
+            return Ok(Some(held));
+        }
         if let Action::Task(definition) = self.action {
             return auto_task_admission_deferral(self.runtime, definition).map_err(Into::into);
         }

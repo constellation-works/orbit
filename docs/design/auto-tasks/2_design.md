@@ -1,7 +1,7 @@
 ---
 title: Auto-tasks — Design
 owner: claude
-last_updated: 2026-10-29
+last_updated: 2026-10-30
 last_validated: 2026-10-29
 status: Accepted
 feature: auto-tasks
@@ -36,7 +36,7 @@ semantics remain current.
 `skip_unless_blocked_candidates` (§4c) preconditions, and
 provenance (`created_by/at`, `updated_by/at`). `schedule` is an untagged enum
 — exactly one of `{ cron: "…" }`, `{ every_minutes: N }`,
-`{ deliveries_landed: { … } }`, or `{ condition: { … } }`. A `condition` is checked and explained but never fired in this release, so the definition must stay `enabled: false`. Delivery schedules use source evaluation and
+`{ deliveries_landed: { … } }`, or `{ condition: { … } }`. A `condition` fires once per subject edge on the workspace owner; the other forms take an optional `when` guard ([condition triggers](../condition-triggers/1_scope.md)). Delivery schedules use source evaluation and
 durable coverage state rather than time-slot due-math. `template` carries `title`, `description`,
 `acceptance_criteria`, `task_type`, `tags`, `priority`, optional `complexity`,
 `crew`, optional `required_tools` and `context_files`, and `status` (default `backlog`).

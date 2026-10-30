@@ -30,6 +30,7 @@ pub fn reset_auto_task(
 ) -> Result<ResetPreview, OrbitError> {
     let AutoTaskSchedule::Deliveries {
         deliveries_landed: declared,
+        ..
     } = &definition.schedule
     else {
         return Err(OrbitError::InvalidInput("not a delivery definition".into()));

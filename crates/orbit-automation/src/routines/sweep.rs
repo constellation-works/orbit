@@ -5,11 +5,13 @@ use super::due::{
     missed_slots_through, natural_slot_grace_for_cadence, parse_cron,
 };
 use super::loader::{LoadedRoutine, RoutineCollection, RoutineLoadError};
+use crate::condition::GuardVerdict;
 use chrono::{DateTime, Duration, Local, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::{
     RoutineFireIntentParams, RoutineFireRecord, RoutineFireState, RoutineStoreBackend,
 };
+use orbit_types::workflow::automation::ConditionGuardMiss;
 use orbit_types::workflow::{JobRunState, MissedRunPolicy, OverlapPolicy};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -47,6 +49,28 @@ pub trait RoutineDispatch {
         Err(OrbitError::Execution(
             "delivery source adapter unavailable".into(),
         ))
+    }
+
+    /// One pass of a condition routine's firing protocol. Hosts without
+    /// condition support refuse, and nothing fires.
+    fn evaluate_condition(
+        &self,
+        _routine: &LoadedRoutine,
+        _dry_run: bool,
+        _now: DateTime<Utc>,
+    ) -> Result<crate::condition::ConditionDiagnostic, OrbitError> {
+        Err(OrbitError::Execution(
+            "condition evaluation unavailable on this host".into(),
+        ))
+    }
+
+    /// Evaluate the trigger's `when:` guard at a due slot. A host that cannot
+    /// evaluate a configured guard holds the slot: unknown fails closed.
+    fn evaluate_guard(&self, routine: &LoadedRoutine, _now: DateTime<Utc>) -> GuardVerdict {
+        match routine.definition.trigger.when {
+            Some(_) => GuardVerdict::unknown("guard evaluation unavailable on this host"),
+            None => GuardVerdict::Open,
+        }
     }
 
     /// Submit `job_name` in the source workspace rooted at `source_orbit_dir`
@@ -300,6 +324,29 @@ fn sweep_routine(
         });
     }
 
+    // A condition routine is evaluated while disabled too: seeing the
+    // disable makes the next enable a baseline. A host-local pause holds it
+    // without touching its edge state.
+    if definition.trigger.condition.is_some() {
+        if pauses.contains_key(name) {
+            return Ok(skipped(routine, "paused_locally"));
+        }
+        let diagnostic = dispatch.evaluate_condition(routine, options.dry_run, now_utc)?;
+        let mut reason = diagnostic.reason.clone();
+        if !diagnostic.would_fire.is_empty() {
+            reason = format!("would_fire: {}", diagnostic.would_fire.join(", "));
+        }
+        return Ok(RoutineSweepReport {
+            reason: Some(reason),
+            run_id: diagnostic
+                .actions
+                .iter()
+                .rev()
+                .find_map(|action| action.action_id.clone()),
+            ..action(routine, "condition")
+        });
+    }
+
     // Toggle resolution order (2_design.md §4): versioned kill-switch →
     // host-local pause.
     if !definition.enabled {
@@ -307,10 +354,6 @@ fn sweep_routine(
     }
     if pauses.contains_key(name) {
         return Ok(skipped(routine, "paused_locally"));
-    }
-    // Conditions are checked and explained, never fired, in this release.
-    if definition.trigger.condition.is_some() {
-        return Ok(skipped(routine, "condition_not_evaluated"));
     }
 
     let cron = parse_cron(&definition.trigger.cron)?;
@@ -344,6 +387,18 @@ fn sweep_routine(
     // fire still takes precedence over a retry and is handled below.
     let suppress_skips = store.routine_blocking_fire(name)?.is_some()
         || retryable_failure(store, routine)?.is_some();
+    // A waiting `when:` guard keeps a due slot unconsumed past its natural
+    // grace: it fires on the first later pass where the guard is true, and
+    // the next slot collapses it (§11).
+    let guard_waits = definition.trigger.when.is_some()
+        && definition.trigger.guard_miss != Some(ConditionGuardMiss::Skip);
+    let decision = match decision {
+        DueDecision::RecordSkip { slot } if guard_waits && !suppress_skips => DueDecision::Fire {
+            slot,
+            is_catch_up: false,
+        },
+        other => other,
+    };
 
     match decision {
         DueDecision::Fire { slot, is_catch_up } => {
@@ -378,6 +433,7 @@ fn sweep_routine(
                     attempt: 1,
                     fired_action: "fired",
                     options,
+                    now_utc,
                 },
             )
         }
@@ -401,6 +457,7 @@ fn sweep_routine(
                             attempt: next_retry_attempt(store, &retry)?,
                             fired_action: "retry_fired",
                             options,
+                            now_utc,
                         },
                     );
                 }
@@ -435,6 +492,7 @@ fn sweep_routine(
                         attempt: next_retry_attempt(store, &retry)?,
                         fired_action: "retry_fired",
                         options,
+                        now_utc,
                     },
                 );
             }
@@ -591,6 +649,7 @@ struct FireRequest<'a> {
     attempt: u32,
     fired_action: &'static str,
     options: SweepOptions,
+    now_utc: DateTime<Utc>,
 }
 
 fn fire(
@@ -604,6 +663,7 @@ fn fire(
         attempt,
         fired_action,
         options,
+        now_utc,
     } = request;
     let definition = &routine.definition;
     let name = &definition.name;
@@ -617,6 +677,33 @@ fn fire(
         return Ok(RoutineSweepReport {
             slot: Some(slot.to_string()),
             ..skipped(routine, "overlap_in_flight")
+        });
+    }
+
+    if let GuardVerdict::Closed { reason, detail } = dispatch.evaluate_guard(routine, now_utc) {
+        let consume = definition.trigger.guard_miss == Some(ConditionGuardMiss::Skip)
+            && fired_action == "fired";
+        if consume && !options.dry_run {
+            // `guard_miss: skip` consumes the slot as a recorded skip.
+            let claimed = store.routine_record_fire_intent(&RoutineFireIntentParams {
+                routine_name: name.clone(),
+                slot: slot.to_string(),
+                attempt,
+                source_workspace: routine.source_workspace.clone(),
+            })?;
+            if claimed {
+                store.routine_mark_fire_outcome(
+                    name,
+                    slot,
+                    attempt,
+                    RoutineFireState::Skipped,
+                    Some(&format!("{reason}: {detail}")),
+                )?;
+            }
+        }
+        return Ok(RoutineSweepReport {
+            slot: Some(slot.to_string()),
+            ..skipped(routine, &format!("{reason}: {detail}"))
         });
     }
 

@@ -140,6 +140,18 @@ impl OrbitRuntime {
                     now,
                 )
                 .map_err(|error| restore_after_failure(&path, &original, error))?;
+                // Deleting the definition drops its condition edge memory and
+                // `self` history (§2).
+                if matches!(
+                    definition.schedule,
+                    orbit_types::workflow::AutoTaskSchedule::Condition { .. }
+                ) {
+                    crate::application::automation::condition::forget_condition_state(
+                        self,
+                        orbit_automation::condition::ConditionCarrier::AutoTask,
+                        name,
+                    );
+                }
                 // The definition is gone; a leftover settings entry would only
                 // resurface on a later restore or same-named add, which both
                 // drop it again.

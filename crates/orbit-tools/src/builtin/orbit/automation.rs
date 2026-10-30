@@ -1,4 +1,4 @@
-//! The automation explain has no guarded modes; its shared spec owns input validation.
+//! The automation verbs have no guarded modes; their shared specs own input validation.
 use super::operation::GuardedModes;
 use crate::ToolContext;
 use orbit_common::{
@@ -10,7 +10,7 @@ use serde_json::Value;
 impl GuardedModes for AutomationVerb {
     fn preempt(self, _ctx: &ToolContext, _input: &Value) -> Option<Result<Value, OrbitError>> {
         match self {
-            Self::Explain => None,
+            Self::Explain | Self::ClearStall => None,
         }
     }
 
@@ -20,19 +20,19 @@ impl GuardedModes for AutomationVerb {
         _input: &OperationInput,
     ) -> Option<Result<Value, OrbitError>> {
         match self {
-            Self::Explain => None,
+            Self::Explain | Self::ClearStall => None,
         }
     }
 
     fn shape_input(self, _ctx: &ToolContext, _input: &mut Value) -> Result<(), OrbitError> {
         match self {
-            Self::Explain => Ok(()),
+            Self::Explain | Self::ClearStall => Ok(()),
         }
     }
 
     fn schema_extension(self) -> Option<fn(&mut Value)> {
         match self {
-            Self::Explain => None,
+            Self::Explain | Self::ClearStall => None,
         }
     }
 }

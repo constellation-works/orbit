@@ -769,6 +769,8 @@ pub(super) fn rewind_retention_analytics(fixture: &Fixture) {
              DROP TABLE IF EXISTS assistance_slots;
              DROP TABLE IF EXISTS assistance_budgets;
              DROP TABLE IF EXISTS assistance_work;
+             DROP TABLE IF EXISTS automation_condition_audit;
+             DROP TABLE IF EXISTS automation_condition_states;
              DELETE FROM schema_meta WHERE key LIKE 'migration.v%' AND key >= 'migration.v0054';
              DROP TABLE landed_diff_stats;
              DROP TRIGGER job_run_tasks_insert;

@@ -9,14 +9,11 @@ use crate::application::admission::backlog_exclusion::backlog_snapshot_observed;
 use crate::application::automation::AutomationBoardPort;
 
 impl AutomationBoardPort for OrbitRuntime {
-    fn eligible_task_count(&self) -> Result<usize, OrbitError> {
+    fn eligible_task_ids(&self) -> Result<Vec<String>, OrbitError> {
         let pools = self.auto_crew_pools_for_input(&json!({}))?;
-        let snapshot =
-            backlog_snapshot_observed(self, "explain_automation_condition", None, &pools, None)
-                .map_err(|error| {
-                    OrbitError::Execution(format!("read eligibility view: {error}"))
-                })?;
-        Ok(snapshot.admissible_leaves.len())
+        let snapshot = backlog_snapshot_observed(self, "automation_condition", None, &pools, None)
+            .map_err(|error| OrbitError::Execution(format!("read eligibility view: {error}")))?;
+        Ok(snapshot.admissible_leaves)
     }
 
     fn local_drain_running(&self) -> Result<bool, OrbitError> {

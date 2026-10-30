@@ -520,6 +520,12 @@ fn definition_json(
         "schedule": definition.schedule,
         "schedule_summary": schedule_summary(&definition.schedule),
         "automation": automation,
+        // A condition definition's ownership, arm counts, stall and last
+        // fire and skip.
+        "condition": match runtime.auto_task_condition_listing(definition) {
+            Ok(listing) => json!(listing),
+            Err(error) => json!({"unavailable": error.to_string()}),
+        },
         "template_summary": template_summary(&definition.template),
         "template": {
             "title": definition.template.title,
@@ -568,23 +574,28 @@ fn definition_json(
 }
 
 fn schedule_summary(schedule: &AutoTaskSchedule) -> String {
-    match schedule {
+    let base = match schedule {
         AutoTaskSchedule::Deliveries {
             deliveries_landed: t,
+            ..
         } => format!(
             "{} deliveries on {} ({})",
             t.threshold, t.branch, t.coverage
         ),
-        AutoTaskSchedule::Cron { cron } => format!("cron {cron}"),
-        AutoTaskSchedule::Interval { every_minutes } if *every_minutes == 1 => {
+        AutoTaskSchedule::Cron { cron, .. } => format!("cron {cron}"),
+        AutoTaskSchedule::Interval { every_minutes, .. } if *every_minutes == 1 => {
             "every 1 minute".to_string()
         }
-        AutoTaskSchedule::Interval { every_minutes } => {
+        AutoTaskSchedule::Interval { every_minutes, .. } => {
             format!("every {every_minutes} minutes")
         }
         AutoTaskSchedule::Condition { condition } => {
             format!("{} condition: {}", condition.scope.as_str(), condition.when)
         }
+    };
+    match schedule.guard().and_then(|guard| guard.when.as_deref()) {
+        Some(when) => format!("{base}, when {when}"),
+        None => base,
     }
 }
 

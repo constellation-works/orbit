@@ -41,7 +41,7 @@ pub(crate) fn interval_params(name: &str, every_minutes: u64) -> AutoTaskAddPara
     AutoTaskAddParams {
         name: name.to_string(),
         description: format!("Auto-task {name}"),
-        schedule: AutoTaskSchedule::Interval { every_minutes },
+        schedule: AutoTaskSchedule::every_minutes(every_minutes),
         template: template(&format!("Chore for {name}")),
         dedupe: DedupePolicy::SkipIfOpen,
     }

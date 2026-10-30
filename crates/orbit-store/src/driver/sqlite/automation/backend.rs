@@ -5,12 +5,14 @@ use crate::contracts::AutomationStoreBackend;
 use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::workflow::automation::recovery::RecoveryRecord;
-use orbit_types::workflow::automation::{AcceptedCoverage, AutomationState};
+use orbit_types::workflow::automation::{
+    AcceptedCoverage, AutomationState, ConditionAudit, ConditionState,
+};
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
 use super::codec::{decode, encode};
 use super::transition::validate_transition;
-use super::{checkpoint, intents, recovery, waivers};
+use super::{checkpoint, condition, intents, recovery, waivers};
 
 impl AutomationStoreBackend for Store {
     fn automation_waive(
@@ -242,5 +244,51 @@ impl AutomationStoreBackend for Store {
             rows.map(|row| decode(&row.map_err(sqlite_store_error)?))
                 .collect()
         })
+    }
+
+    fn condition_state(&self, consumer: &str) -> Result<Option<ConditionState>, OrbitError> {
+        condition::load(self, consumer)
+    }
+
+    fn condition_states_page(
+        &self,
+        prefix: &str,
+        after: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<ConditionState>, OrbitError> {
+        condition::page(self, prefix, after, limit)
+    }
+
+    fn condition_initialize(&self, state: &ConditionState) -> Result<bool, OrbitError> {
+        condition::initialize(self, state)
+    }
+
+    fn condition_commit(
+        &self,
+        previous: &ConditionState,
+        next: &ConditionState,
+    ) -> Result<bool, OrbitError> {
+        condition::commit(self, previous, next)
+    }
+
+    fn condition_commit_audited(
+        &self,
+        previous: &ConditionState,
+        next: &ConditionState,
+        audit: &ConditionAudit,
+    ) -> Result<bool, OrbitError> {
+        condition::commit_audited(self, previous, next, audit)
+    }
+
+    fn condition_audits(
+        &self,
+        consumer: &str,
+        limit: usize,
+    ) -> Result<Vec<ConditionAudit>, OrbitError> {
+        condition::audits(self, consumer, limit)
+    }
+
+    fn condition_delete(&self, consumer: &str) -> Result<(), OrbitError> {
+        condition::delete(self, consumer)
     }
 }

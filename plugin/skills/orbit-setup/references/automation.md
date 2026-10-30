@@ -331,28 +331,49 @@ the same write: it refuses a target or trigger that changed since you read it,
 checks the new trigger as the loader would (exactly one of `cron`, `state`,
 `deliveries_landed` or `condition`; a cron that parses; a state kind whose job
 is the routine's target; `overlap: forbid` for state and delivery triggers; a
-condition that type-checks on a disabled routine), and rewrites only
+condition or `when` guard that type-checks), and rewrites only
 the `trigger:` block. Comments inside that block are not kept; the rest of the
 file is. Name, target, policy and `enabled` are not editable this way. Editing a
 seeded routine makes it a local edit: `orbit workspace sync` keeps your file and
 stops refreshing it from Orbit's template.
 
-### Condition triggers (checked and explained, not fired)
+### Condition triggers
 
 A routine's `trigger.condition` or an auto-task's `schedule.condition` is a CEL
-predicate over task and workspace state. This Orbit type-checks it when the
-file loads and refuses, per file, an unknown field, a non-`bool` result, a
-computed `tasks[...]` or `board.by_tag[...]` index, a task scope without a
-top-level status or literal-tag conjunct, an optional field (`task.origin`,
-`task.crew`, `self.last_fired`, ...) read without `has()`, `matches()`, and an
-expression over 4 KiB, 200 nodes or two nested comprehensions. The error names
-the file, the clause and the line:column in the expression. A condition never
-fires yet: one with `enabled: true` fails to load, and toggling it on is
-refused. `orbit automation explain <name>` (MCP `orbit.automation.explain`)
-shows its matches, closest misses and one subject's clause tree over live
-state, read-only. An older Orbit refuses such a file as an unknown field and
-keeps loading the rest. The keys and the readable schema are in the website's
-Scheduling YAML reference, Condition triggers.
+predicate over task and workspace state. Orbit type-checks it when the file
+loads and refuses, per file, an unknown field, a non-`bool` result, a computed
+`tasks[...]` or `board.by_tag[...]` index, a task scope without a top-level
+status or literal-tag conjunct, an optional field (`task.origin`, `task.crew`,
+`self.last_fired`, ...) read without `has()`, `matches()`, and an expression
+over 4 KiB, 200 nodes or two nested comprehensions. The error names the file,
+the clause and the line:column in the expression.
+
+Only the workspace owner fires a condition; followers and replica checkouts
+write and admit nothing. A `task` or `workspace` subject fires once per edge
+(true for `for_minutes`, then held fired until `rearm`), under a durable fire
+ID that a crash, restart or second clock cannot repeat. An auto-task files one
+task, a routine submits one job run with the subject and fire in its input.
+Unknown values never fire. Enabling baselines subjects already true unless
+`on_enable: fire_existing`; `orbit auto-task toggle <name> on --dry-run`
+previews the count, and an enable over `max_matches` is refused (a routine
+stalls as `too_many_matches`). Fire caps and cooldown defer fires; a match
+storm, a chain deeper than 5 (`loop_suspected`) or a subject oscillating more
+than three times an hour stalls the definition until
+`orbit automation clear-stall <name> --reason <text>` (operator, audited).
+`host` and `file` scopes are refused.
+
+`orbit automation explain <name>` (MCP `orbit.automation.explain`) shows
+matches with arm state and holds, closest misses, one subject's clause tree,
+and the durable tracking (stall, last pass and skip, recent fires with their
+chain, `self`), read-only. `orbit auto-task list`, `orbit routine list` and the
+dashboard show the condition state and any stall.
+
+A cron, interval, delivery or state trigger also takes a `when` guard (a
+workspace predicate without `self`). A false or unknown guard holds the fire:
+a cron or interval slot waits (`guard_miss: wait`, default) or is skipped
+(`guard_miss: skip`), delivery debt and state members are kept, and the skip
+records `guard_false` or `guard_unknown`. The keys and the readable schema are
+in the website's Scheduling YAML reference, Condition triggers.
 
 A job may also name an auto-task as a step (`target: auto-task:<name>`) with
 CEL `wait_until`, `expire_when` and `reuse_when` fields. These steps are

@@ -3,6 +3,7 @@
 mod backend;
 mod checkpoint;
 mod codec;
+mod condition;
 mod intents;
 mod members;
 mod recovery;

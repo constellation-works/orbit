@@ -1,7 +1,7 @@
 ---
 title: Operations as Data — Decisions
 owner: claude
-last_updated: 2026-10-27
+last_updated: 2026-10-30
 last_validated: 2026-10-12
 status: Accepted
 feature: operations-as-data
@@ -517,6 +517,13 @@ validated against, so a deny-mode activity never grants them. The dashboard's
 `auto_task.toggle` and `auto_task.mint` rows are unchanged: the dashboard still
 calls the runtime directly and still refuses a non-operator.
 
+**Condition stall clear ([ORB-20156]).** `orbit.automation.clear_stall` is
+governed `operator` and unadvertised (`mcp_scope: None`), and
+`GOVERNED_TOOL_PLACEMENT` records it: clearing a `match_storm`,
+`too_many_matches`, `loop_suspected` or `oscillating` stall lets a condition
+fire again, so only an operator decides it, with a required reason kept in the
+condition audit.
+
 **Field-level rows ([ORB-18545]).** A governed `Tool` row may name an input
 rather than a tool: `orbit.task.grant_tools` is checked at the chokepoint, in
 `authorize_registered_tool`, beside `orbit.task.add`'s or `orbit.task.update`'s
@@ -946,5 +953,6 @@ different contracts; a future equivalent surface can use this shape.
   placement and permission drift.
 - [ORB-18448] — stopped advertising operator-only tools to agent MCP
   sessions that can never call them.
+- [ORB-20156] — added the operator-only condition `clear_stall` tool.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

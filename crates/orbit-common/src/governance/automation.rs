@@ -1,6 +1,7 @@
-//! The read-only automation operations behind `orbit automation` and the
+//! The automation operations behind `orbit automation` and the
 //! `orbit.automation.*` tools: explaining a condition trigger over live state,
-//! or a job's auto-task steps as checked at load.
+//! or a job's auto-task steps as checked at load, and the operator's audited
+//! clear of a stalled condition.
 use crate::governance::operation::{
     CliArgKind, CliHelp, Effect, NounSpec, OperationSpec, ParamSpec, ParamType,
     ToolOnlyRegistration, UnknownFields, both, mcp_only, operation_registry, required,
@@ -17,6 +18,8 @@ operation_registry! {
         /// One condition definition's matches, closest misses and clause tree,
         /// or one job's auto-task steps.
         Explain => EXPLAIN,
+        /// Clear a stalled condition, audited.
+        ClearStall => CLEAR_STALL,
     }
 }
 
@@ -25,7 +28,7 @@ pub const AUTOMATION: NounSpec<AutomationVerb> = NounSpec {
     cli_name: "automation",
     tool_prefix: "orbit.automation",
     tool_only_registration: ToolOnlyRegistration::Inactive,
-    cli_about: "Explain what condition-triggered routines and auto-tasks would match, and jobs' auto-task steps",
+    cli_about: "Explain condition-triggered routines and auto-tasks and jobs' auto-task steps, and clear their stalls",
     audit_target_type: "automation",
     audit_target_param: "definition",
     cli_groups: &[],
@@ -58,12 +61,12 @@ const EXPLAIN: OperationSpec<AutomationVerb> = OperationSpec {
     verb: AutomationVerb::Explain,
     cli_path: &["explain"],
     tool_name: "orbit.automation.explain",
-    tool_description: "Explain one routine's `trigger.condition` or auto-task's `schedule.condition` over the workspace's live state, without writing anything: its scope, the store prefilter and literal cross-reads, the ownership verdict, the current matches (up to 20) and closest misses (up to 20; subjects failing exactly one top-level clause), and for one subject the tree of top-level && and || clauses with each clause's value and the operand values it read. Values that cannot be read evaluate as unknown, never false. Conditions do not fire in this Orbit, so arm state, holds, fires and `self` values are reported as not yet tracked. With `job:<name>` it reports that job's auto-task steps as checked at load instead: the outer `expire_when` bound, whether admission pins a source revision, and for each step its target auto-task (resolved, missing or unreadable, with its file digest, enabled state and own condition guard), `when`, `wait_until`, `expire_when`, `reuse_when`, `require_result` and the earlier steps it reads. Such a job cannot be enabled or run yet, so nothing is evaluated, waited on or minted.",
+    tool_description: "Explain one routine's `trigger.condition` or auto-task's `schedule.condition` over the workspace's live state, without writing anything: its scope, the store prefilter and literal cross-reads, the ownership verdict, the current matches (up to 20, each with its arm state and remaining hold) and closest misses (up to 20; subjects failing exactly one top-level clause), and for one subject the tree of top-level && and || clauses with each clause's value and the operand values it read. Values that cannot be read evaluate as unknown, never false. `tracking` is the durable state: arm states and holds, any stall, the last pass and skip, recent fires with their upstream chain, and `self`. With `job:<name>` it reports that job's auto-task steps as checked at load instead: the outer `expire_when` bound, whether admission pins a source revision, and for each step its target auto-task (resolved, missing or unreadable, with its file digest, enabled state and own condition guard), `when`, `wait_until`, `expire_when`, `reuse_when`, `require_result` and the earlier steps it reads. Such a job cannot be enabled or run yet, so nothing is evaluated, waited on or minted.",
     cli_about: "Show a condition's matches, closest misses and clause tree over live state, or a job's auto-task steps",
     cli_help: CliHelp {
         long_about: None,
         after_help: Some(
-            "Explain reads the task store, the drain's eligibility view and open runs, and writes\nnothing. A task-scope condition is evaluated over the tasks its status or tag prefilter\nselects, at most 200 per explain. Conditions do not fire yet: arm state, holds, fires\nand `self` values are shown as not yet tracked. job:<name> shows a job's auto-task steps\nas checked at load, with each named auto-task resolved; such jobs cannot run yet.\nExamples:\n  orbit automation explain release-prep\n  orbit automation explain routine:release-on-prep-done --subject <task-id> --json\n  orbit automation explain job:release-readiness",
+            "Explain reads the task store, the drain's eligibility view, open runs and the\ncondition's stored state, and writes nothing. A task-scope condition is evaluated over\nthe tasks its status or tag prefilter selects, at most 200 per explain. Tracking shows\narm states and holds, any stall, recent fires with their upstream chain, and `self`.\njob:<name> shows a job's auto-task steps as checked at load, with each named auto-task\nresolved; such jobs cannot run yet.\nExamples:\n  orbit automation explain release-prep\n  orbit automation explain routine:release-on-prep-done --subject <task-id> --json\n  orbit automation explain job:release-readiness",
         ),
         flag_order: &[],
         constraints: &[],
@@ -74,4 +77,43 @@ const EXPLAIN: OperationSpec<AutomationVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+};
+
+const CLEAR_STALL_PARAMS: &[ParamSpec] = &[
+    required(both(
+        "definition",
+        ParamType::String,
+        "The stalled routine or auto-task: its name, or `routine:<name>` / `auto-task:<name>` when a routine and an auto-task share the name.",
+        CliArgKind::Positional,
+        "Routine or auto-task name (routine:<name> or auto-task:<name> when both exist)",
+    )),
+    required(both(
+        "reason",
+        ParamType::String,
+        "Operator explanation, kept in the audit record. Required.",
+        CliArgKind::flag("reason"),
+        "Why the stall is cleared; kept in the audit record",
+    )),
+];
+
+const CLEAR_STALL: OperationSpec<AutomationVerb> = OperationSpec {
+    verb: AutomationVerb::ClearStall,
+    cli_path: &["clear-stall"],
+    tool_name: "orbit.automation.clear_stall",
+    tool_description: "Clear a condition definition's stall (match_storm, too_many_matches, loop_suspected or oscillating) on the workspace owner, recording the operator, reason and cleared stall in the condition audit. The next clock pass evaluates the condition again; a cause that persists stalls it again.",
+    cli_about: "Clear a stalled condition on the workspace owner, audited",
+    cli_help: CliHelp {
+        long_about: None,
+        after_help: Some(
+            "Operator only. The stall is cleared under the condition state's generation fence\nand the audit record is written in the same transaction. Nothing fires here: the next\nclock pass evaluates the condition, and a cause that persists stalls it again.\nExamples:\n  orbit automation clear-stall release-prep --reason \"storm was a bulk import\"",
+        ),
+        flag_order: &[],
+        constraints: &[],
+    },
+    effect: Effect::Write,
+    params: &[CLEAR_STALL_PARAMS],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
+    mcp_scope: None,
 };

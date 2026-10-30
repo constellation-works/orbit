@@ -1,7 +1,7 @@
 // Routine-definition and host clock operations [ORB-10875].
 
 import { captureWorkspaceVisit, el, fetchJson, getWorkspace, isAggregateView, postJson, relativeTime } from './common.js';
-import { renderAutomation } from './automation.js';
+import { conditionStateLabel, renderAutomation } from './automation.js';
 import { closeEditors, editorObserved, isOpen, openEditor, routineDraft, routineTriggerEditor, scheduleEditButton } from './schedule-editor.js';
 
 import {
@@ -341,9 +341,14 @@ function routineRow(payload, routine, workspaceId) {
   const identity = el("div", { class: "operation-identity" }, [
     el("strong", { text: routine.name }),
     state === "blocked" ? el("span", { class: "operation-state blocked", text: "blocked" }) : null,
+    routine.automation?.condition?.stall ? el("span", { class: "operation-state blocked", text: "stalled" }) : null,
   ]);
+  const condition = routine.automation?.condition;
   const cadence = routineEventDriven(routine)
-    ? [el("span", { class: "operation-cell-main", text: routineScheduleText(routine) })]
+    ? [
+      el("span", { class: "operation-cell-main", text: routineScheduleText(routine) }),
+      condition ? el("span", { class: "operation-cell-sub", text: conditionStateLabel(condition) }) : null,
+    ]
     : [
       el("span", { class: "operation-cell-main", text: cronText(routine.cron) }),
       routine.cron && cronText(routine.cron) !== routine.cron ? el("span", { class: "operation-cell-sub mono", text: routine.cron }) : null,

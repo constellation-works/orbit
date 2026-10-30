@@ -15,7 +15,7 @@ use orbit_types::workflow::{AutoTaskDefinition, AutoTaskSchedule};
 
 use super::schedule::validate_schedule;
 use super::settings::{AutoTaskSettingsTable, load_settings_table};
-use crate::condition::{ConditionCarrier, check_condition};
+use crate::condition::{ConditionCarrier, check_condition, check_guard};
 
 /// Directory under a workspace's `.orbit/` holding auto-task YAML files.
 pub const AUTO_TASKS_DIR: &str = "auto_tasks";
@@ -227,10 +227,7 @@ fn load_definition_with_settings(
             .map_err(|error| format!("auto-task settings for '{}': {error}", definition.name))?;
     }
     validate_schedule(&definition.schedule).map_err(|error| error.to_string())?;
-    if let AutoTaskSchedule::Condition { condition } = &definition.schedule {
-        check_condition(condition, ConditionCarrier::AutoTask)
-            .map_err(|error| error.to_string())?;
-    }
+    check_auto_task_conditions(&definition.schedule)?;
 
     // The file stem is the definition identity: reject a mismatch so CRUD (which
     // writes `<name>.yaml`) and the provenance tag stay consistent.
@@ -249,4 +246,18 @@ fn load_definition_with_settings(
         definition,
         path: path.to_path_buf(),
     })
+}
+
+/// Type-check a schedule's condition or `when:` guard against its schema; a
+/// refused expression names its clause and position.
+pub fn check_auto_task_conditions(schedule: &AutoTaskSchedule) -> Result<(), String> {
+    if let AutoTaskSchedule::Condition { condition } = schedule {
+        check_condition(condition, ConditionCarrier::AutoTask)
+            .map_err(|error| error.to_string())?;
+    }
+    if let Some(when) = schedule.guard().and_then(|guard| guard.when.as_ref()) {
+        check_guard(when, "schedule.when", ConditionCarrier::AutoTask)
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }

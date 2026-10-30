@@ -132,6 +132,7 @@ impl RoutineStatus {
         }
         if self.routine.definition.trigger.deliveries_landed.is_some()
             || self.routine.definition.trigger.state.is_some()
+            || self.routine.definition.trigger.condition.is_some()
         {
             return ScheduleDisplayState::Waiting;
         }
@@ -488,6 +489,34 @@ pub fn routine_statuses_with_providers(
                         }
                     },
                 )
+        });
+        // A condition routine's state: ownership, arm counts, any stall and
+        // the last fire and skip with its reason.
+        let automation = automation.or_else(|| {
+            routine.definition.trigger.condition.as_ref()?;
+            Some(
+                discovered
+                    .entries
+                    .iter()
+                    .find(|(_, runtime)| runtime.shared_root() == routine.source_orbit_dir)
+                    .map_or_else(
+                        || serde_json::json!({"reason": "source_unavailable"}),
+                        |(_, runtime)| match runtime.routine_condition_listing(&routine.definition)
+                        {
+                            Ok(listing) => serde_json::json!({
+                                "reason": listing
+                                    .as_ref()
+                                    .and_then(|listing| listing.stall.as_ref())
+                                    .map_or("condition", |stall| stall.reason.as_str()),
+                                "condition": listing,
+                            }),
+                            Err(error) => serde_json::json!({
+                                "reason": "state_unavailable",
+                                "error": error.to_string(),
+                            }),
+                        },
+                    ),
+            )
         });
         let automation_fires = automation_fires(&discovered, &routine)?;
         let last_fire = newest_fire(

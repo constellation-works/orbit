@@ -1,0 +1,27 @@
+Clear a stalled condition on the workspace owner, audited
+
+Usage: orbit automation clear-stall [OPTIONS] --reason <REASON> <DEFINITION>
+
+Arguments:
+  <DEFINITION>
+          Routine or auto-task name (routine:<name> or auto-task:<name> when both exist)
+
+Options:
+      --reason <REASON>
+          Why the stall is cleared; kept in the audit record
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header
+
+Operator only. The stall is cleared under the condition state's generation fence
+and the audit record is written in the same transaction. Nothing fires here: the next
+clock pass evaluates the condition, and a cause that persists stalls it again.
+Examples:
+  orbit automation clear-stall release-prep --reason "storm was a bulk import"

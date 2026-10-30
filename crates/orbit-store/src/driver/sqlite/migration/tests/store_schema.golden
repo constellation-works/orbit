@@ -480,3 +480,9 @@ v75 delivery_runs_stamp
 v76 job_run_step_activity_window_index
 + ["index","idx_job_run_steps_activity_window","job_run_steps","CREATE INDEX idx_job_run_steps_activity_window\n            ON job_run_steps(\n                workspace_id, run_id, target_type, target_id, state, started_at, finished_at\n            )"]
 
+v77 condition_triggers
++ ["index","idx_automation_condition_audit_consumer","automation_condition_audit","CREATE INDEX idx_automation_condition_audit_consumer\n            ON automation_condition_audit(consumer, audit_id)"]
++ ["index","sqlite_autoindex_automation_condition_states_1","automation_condition_states",null]
++ ["table","automation_condition_audit","automation_condition_audit","CREATE TABLE automation_condition_audit (\n            audit_id INTEGER PRIMARY KEY AUTOINCREMENT,\n            consumer TEXT NOT NULL,\n            at TEXT NOT NULL,\n            audit_json TEXT NOT NULL\n        )"]
++ ["table","automation_condition_states","automation_condition_states","CREATE TABLE automation_condition_states (\n            consumer TEXT PRIMARY KEY,\n            generation INTEGER NOT NULL,\n            state_json TEXT NOT NULL\n        )"]
+

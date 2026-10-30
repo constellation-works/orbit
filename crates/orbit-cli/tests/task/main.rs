@@ -33,6 +33,7 @@ mod auto_task_settings_cli;
 mod claimed_delivery_recovery;
 mod claimed_operator_comment;
 mod codebase_cli;
+mod condition_auto_task_cli;
 mod config_show_task_reads;
 mod context_selector_external_root;
 mod context_selector_worktree;

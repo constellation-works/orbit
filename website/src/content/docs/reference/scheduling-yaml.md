@@ -75,7 +75,9 @@ schedule:
 | `cron` | Five-field cron, evaluated in the host's local time. An empty value is rejected. |
 | `every_minutes` | An integer from 1 through 525600 (365 days). The interval is anchored at the slot first observed for this definition. |
 | `deliveries_landed` | Verified landings on a branch. There is no clock slot. See [Delivery triggers](#delivery-triggers). |
-| `condition` | A typed predicate over workspace state. It is checked and explained but does not fire yet, so the definition must stay `enabled: false`. See [Condition triggers](#condition-triggers). |
+| `condition` | A typed predicate over workspace state. It fires once per subject edge on the workspace owner. See [Condition triggers](#condition-triggers). |
+
+`cron`, `every_minutes` and `deliveries_landed` also take an optional `when` guard, and `cron` and `every_minutes` take `guard_miss`. See [Guard a schedule with `when`](#guard-a-schedule-with-when).
 
 A cron or interval definition that was asleep through several slots files one make-up task for the missed window, then waits for the next slot. A delivery definition does not catch up on a clock.
 
@@ -248,7 +250,9 @@ Replace `weekly_report_pipeline` with a job this workspace's catalog already has
 | `cron` | Five-field cron in the host's local time. `missed_run` applies to slots missed while the machine was down. |
 | `state` | `policy.overlap` is `forbid`. `target` is the job that kind requires. `cron` and `deliveries_landed` are absent. |
 | `deliveries_landed` | `policy.overlap` is `forbid`. `cron` and `state` are absent. The object is the [delivery trigger](#delivery-triggers). |
-| `condition` | The other forms are absent and `enabled` is `false`. The object is the [condition trigger](#condition-triggers). |
+| `condition` | The other forms are absent. The object is the [condition trigger](#condition-triggers). It takes no `when` guard. |
+
+`cron`, `state` and `deliveries_landed` take an optional `trigger.when` guard, and `cron` takes `trigger.guard_miss`. See [Guard a schedule with `when`](#guard-a-schedule-with-when).
 
 `missed_run: skip` is the default. Each missed slot is recorded and nothing is dispatched for it; `orbit routine list --json` shows the reason on `last_fire.detail`. `missed_run: catch_up_once` fires one make-up run. The seeded worktree-GC routine uses `catch_up_once`.
 
@@ -416,7 +420,7 @@ Replace the job name and the branch. Omit `owner_machine` to use the workspace's
 
 ## Condition triggers
 
-`trigger.condition` on a routine and `schedule.condition` on an auto-task use the same object: a predicate in the [Common Expression Language](https://github.com/google/cel-spec) (CEL) over the workspace's state. This release type-checks the predicate when the file loads and explains it on demand. It does not fire: a condition definition with `enabled: true` fails to load with a message saying conditions cannot fire yet, and nothing is minted or run. Use `orbit automation explain <name>` to see what it would match.
+`trigger.condition` on a routine and `schedule.condition` on an auto-task use the same object: a predicate in the [Common Expression Language](https://github.com/google/cel-spec) (CEL) over the workspace's state. The predicate is type-checked when the file loads. Each clock tick on the workspace owner evaluates every enabled condition, and a subject fires once when its predicate becomes true: an auto-task files one task, a routine submits one run of its job. Use `orbit automation explain <name>` to see what it matches before you enable it. `task` and `workspace` scopes fire; `host` and `file` scopes are refused.
 
 ```yaml
 schemaVersion: 1
@@ -435,6 +439,8 @@ template:
 dedupe: skip_if_open
 ```
 
+A condition auto-task with `dedupe: skip_if_open` waits while a task it filed is still open; the fire stays pending and files once that task closes.
+
 | Key | Default | Meaning |
 |---|---|---|
 | `scope` | required | `task` (one subject per task the prefilter selects, bound as `task`) or `workspace` (one subject; read `board`). `host` and `file` parse and are refused as `scope_unavailable`. |
@@ -448,7 +454,39 @@ dedupe: skip_if_open
 | `hosts` | owner | Host scope only. |
 | `roots`, `glob`, `max_depth`, `settle_seconds`, `identity`, `hash_full_max_bytes`, `group_by`, `group_settle_seconds` | — | File scope only. |
 
-The firing keys (`for_minutes` through `on_enable`) are validated now and take effect when conditions fire.
+### How a condition fires
+
+Each subject is either armed or fired. An armed subject fires when `when` has been true for `for_minutes` across consecutive evaluations. A gap longer than three clock cadences (at least five minutes) restarts the hold. A fired subject stays fired until `rearm` is true, then arms again. A value that cannot be read is unknown: it never fires, never re-arms, and breaks a hold, which restarts when the value is true again.
+
+- **Exactly once.** A fire is written to the condition's durable state before its task or run is created, under a fire ID built from the definition, the subject and the subject's revision. Two clocks, a lost reply, a crash or a restart cannot file it twice; the next pass finishes a pending fire. A fire whose task or run cannot be created after five attempts is recorded as failed.
+- **Owner only.** Only the workspace's owner machine evaluates and fires. A pull follower or a replica checkout writes nothing and admits nothing; `explain` shows the ownership verdict.
+- **Enabling.** Enabling, or changing `when`, `rearm`, `for_minutes`, `scope`, the template or the job, takes a baseline: subjects already true are marked fired without firing, unless `on_enable: fire_existing`. An auto-task whose enable would match more than `max_matches` subjects is refused with the count; `orbit auto-task toggle <name> on --dry-run` shows the count and the subjects that would be baselined or fired, and writes nothing. A routine enabled with too many matches stalls as `too_many_matches` and fires nothing.
+- **Caps and cooldown.** A fire past `max_fires_per_hour`, `max_fires_per_day` or a subject's `cooldown_minutes` waits, oldest first, and fires when the cap allows. A subject that has already fired three times in the past hour stalls the definition as `oscillating` instead of firing again.
+- **Stalls.** More than `max_matches` new edges in one pass stalls as `match_storm`. A stalled definition fires nothing until an operator runs `orbit automation clear-stall <name> --reason <text>`, which is audited; a cause that persists stalls it again.
+- **Chains.** A task filed by a fire records its origin (`trigger`, `fire_id`, `depth`), which a downstream condition reads as `task.origin`. A fire whose subject is itself at depth 5 is refused, recorded, and stalls the definition as `loop_suspected`.
+- **Own tasks.** `board` leaves out tasks the definition filed itself unless `board_includes_own: true`. `self` reads the definition's own fire history, which survives edits and a disable.
+- **Retention.** Fired subjects and fire records are kept 30 days, at most 1000 per definition.
+
+An auto-task template may use `{{subject.key}}`, `{{subject.fire_id}}`, `{{subject.revision}}` and `{{subject.task.<field>}}` (task scope) or `{{subject.board.<field>}}` (workspace scope). Each value is capped at 200 characters; a missing one renders as `(none)`. A routine's job input carries `subject` and `condition` (`fire_id`, `trigger`, `depth`, `subject`, `revision`).
+
+### Guard a schedule with `when`
+
+A cron, interval, delivery or state trigger can take a `when` guard: a workspace-scope CEL predicate (it cannot read `self`) checked when the trigger is due.
+
+```yaml
+schedule:
+  cron: "0 9 * * 1-5"
+  when: board.in_progress.count < 3
+  guard_miss: wait
+```
+
+| Trigger | When the guard is false or unknown |
+|---|---|
+| `cron`, `every_minutes` | `guard_miss: wait` (default) keeps the slot due and fires the latest due slot once when the guard opens; on a routine this replaces `missed_run: skip`. `skip` records the slot as skipped. |
+| `deliveries_landed` | The landed debt is kept and fires when the guard opens. |
+| `state` | Due members are held, not consumed, and are taken when the guard opens. |
+
+Each held or skipped fire records `guard_false` or `guard_unknown`.
 
 ### What an expression reads
 
@@ -473,6 +511,6 @@ A condition that fails any check fails to load. The error names the file, the cl
 - A `task` scope has a top-level `&&` conjunct that limits the subjects: `task.status == '<status>'`, `task.status in [...]`, or `'<tag>' in task.tags`.
 - The expression is at most 4 KiB, 200 parse nodes (macros expanded) and two nested comprehensions.
 
-`orbit automation explain <name>` (or `routine:<name>` / `auto-task:<name>` when both kinds share the name) evaluates the condition over live state and writes nothing. It shows the scope, the prefilter, the ownership verdict, up to 20 matches, up to 20 closest misses (subjects failing exactly one top-level clause), and for one subject (`--subject <task ID>`) each top-level `&&` and `||` clause with its value and the values it read. Arm state, holds, fires and `self` values show as not yet tracked.
+`orbit automation explain <name>` (or `routine:<name>` / `auto-task:<name>` when both kinds share the name) evaluates the condition over live state and writes nothing. It shows the scope, the prefilter, the ownership verdict, up to 20 matches, up to 20 closest misses (subjects failing exactly one top-level clause), and for one subject (`--subject <task ID>`) each top-level `&&` and `||` clause with its value and the values it read. Each match shows its arm state and remaining hold, and the tracking block shows any stall, the last pass and skip, recent fires with their upstream chain, and `self`. `orbit auto-task list`, `orbit routine list` and the dashboard show the same state.
 
 An Orbit release without condition triggers reports each such file as a load error (``unknown field `condition` ``) and keeps loading the rest.

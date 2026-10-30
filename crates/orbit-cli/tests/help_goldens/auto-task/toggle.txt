@@ -14,6 +14,9 @@ Arguments:
           - off: Disable the definition (preserved, not deleted)
 
 Options:
+      --dry-run
+          With `on` for a condition definition: show what enabling would baseline or fire, and whether max_matches refuses it, without enabling anything
+
   -h, --help
           Print help (see a summary with '-h')
 

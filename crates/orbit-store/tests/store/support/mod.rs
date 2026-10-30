@@ -1,6 +1,6 @@
 use std::process::Command;
 
-/// Remove v72/v73 tables and the v75 counter with its triggers before fixtures
+/// Remove v72/v73/v77 tables and the v75 counter with its triggers before fixtures
 /// replay their migrations from an older schema: a `job_runs` trigger names
 /// `run_resource_minutes`, which those fixtures drop.
 pub fn drop_replayed_migration_tables(connection: &rusqlite::Connection) -> rusqlite::Result<()> {
@@ -16,7 +16,9 @@ pub fn drop_replayed_migration_tables(connection: &rusqlite::Connection) -> rusq
          DROP TABLE IF EXISTS assistance_attempts;
          DROP TABLE IF EXISTS assistance_slots;
          DROP TABLE IF EXISTS assistance_budgets;
-         DROP TABLE IF EXISTS assistance_work;",
+         DROP TABLE IF EXISTS assistance_work;
+         DROP TABLE IF EXISTS automation_condition_audit;
+         DROP TABLE IF EXISTS automation_condition_states;",
     )
 }
 

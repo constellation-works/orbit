@@ -5,7 +5,7 @@ last_updated: 2026-10-30
 last_validated: 2026-10-30
 status: Draft
 stage: building
-next: "File phase 2: firing for task and workspace scopes"
+next: "File phase 3: host scope and notifications"
 feature: condition-triggers
 doc_role: scope
 type: design
@@ -16,8 +16,9 @@ tags: [condition-triggers, automation-triggers, routines, auto-tasks, scheduling
 # Scope: Condition triggers
 
 Status: proposed. This doc is the design deliverable of [ORB-19288]. Phase 1 (the CEL
-schema, load-time checking and `orbit automation explain`) shipped in [ORB-19990]; nothing
-fires yet. Revised 2026-10-29 with Daniel's answers to four open questions (transitions,
+schema, load-time checking and `orbit automation explain`) shipped in [ORB-19990]. Phase 2
+(firing for task and workspace scopes, `when:` guards, chains and `clear-stall`) shipped in
+[ORB-20156]; host and file scopes and high-authority actions are still refused. Revised 2026-10-29 with Daniel's answers to four open questions (transitions,
 own-task exclusion with `self` reads, follower-host definitions, re-enable); see
 [Open questions › Resolved](#resolved-2026-10-29). It reverses one recorded non-goal of
 [automation triggers](../automation-triggers/1_overview.md#1-motivation), "user
@@ -918,6 +919,9 @@ trigger:            # routine; an auto-task uses `schedule:` instead
 | `automation.condition_fired_retention_days` (workspace config) | `30` | How long fired-subject tombstones are kept, within the 1,000-record cap |
 | `automation.condition_pass_subjects` (workspace config) | `200` | Subjects evaluated per condition per pass |
 
+Phase 2 ships the two workspace keys as fixed values (30 days, 200 subjects); they become
+settable when a workspace needs a different value.
+
 File roots inside the owner checkout are allowed, except `.git/` and `.orbit/`,
 which are refused because watching them causes loops and exposes secrets. A root
 outside the checkout must be listed in `automation.watch_roots`, so a workspace
@@ -1305,7 +1309,7 @@ target: job:media_ingest_pipeline    # workspace-defined
    - `self` fire history, own-task exclusion from `board` with `board_includes_own`,
      and `on_enable` on re-enable (phase 1 already parses and type-checks them).
 
-   Covers use case A.
+   Covers use case A. Shipped in [ORB-20156].
 3. **Host scope and notifications.** Host facts from the sampler, notice records in
    the decision channel, the `notify` action, and `hosts:` (parsed since phase 1) with
    follower evaluation of host-local GC actions (§4). Covers use case C on the owner and on followers.
@@ -1418,6 +1422,7 @@ Daniel's answers, folded into the sections named:
 
 - [ORB-19288] — designs condition triggers (this doc).
 - [ORB-19990] — phase 1: CEL schema, load-time checking and `orbit automation explain`.
+- [ORB-20156] — phase 2: firing for task and workspace scopes, `when:` guards, chains and `clear-stall`.
 - [ORB-12746] — added state-trigger batching (`batch_size`), which presets would need.
 - [ORB-15732] — recorded the 30-day, release-gated compatibility window.
 - [ORB-19214] — added the `not_before` scheduled hold, which `board.eligible` excludes.

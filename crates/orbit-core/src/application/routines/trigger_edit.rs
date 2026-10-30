@@ -185,6 +185,14 @@ pub fn set_routine_trigger(
         )
         .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
     }
+    if let Some(when) = &edited.trigger.when {
+        orbit_automation::condition::check_guard(
+            when,
+            "trigger.when",
+            orbit_automation::condition::ConditionCarrier::Routine,
+        )
+        .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
+    }
     let rendered = rewrite_trigger_block(&raw, &edited.trigger)?;
     if parse_routine_yaml(&rendered)? != edited {
         return Err(OrbitError::Execution(

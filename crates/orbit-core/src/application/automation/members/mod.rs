@@ -42,6 +42,10 @@ pub(crate) struct Host<'a> {
     /// One provider-hold scan per evaluation clock, shared by observation and
     /// admission. Observation replaces it when its clock differs.
     pilot_hold: RefCell<Option<PilotHoldCache>>,
+    /// The routine's `when:` guard, evaluated once per evaluation at the
+    /// first due member.
+    guard: Option<String>,
+    guard_verdict: RefCell<Option<orbit_automation::condition::GuardVerdict>>,
 }
 
 struct PilotHoldCache {

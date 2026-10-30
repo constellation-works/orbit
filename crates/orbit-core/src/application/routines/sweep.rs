@@ -60,6 +60,44 @@ impl RoutineDispatch for RuntimeDispatch<'_> {
         )
     }
 
+    fn evaluate_condition(
+        &self,
+        routine: &super::loader::LoadedRoutine,
+        dry_run: bool,
+        now: chrono::DateTime<Utc>,
+    ) -> Result<orbit_automation::condition::ConditionDiagnostic, OrbitError> {
+        let runtime = self
+            .runtimes
+            .get(&routine.source_orbit_dir)
+            .ok_or_else(|| OrbitError::Execution("routine source missing".into()))?;
+        crate::application::automation::condition::evaluate_routine_condition(
+            runtime,
+            &routine.definition,
+            dry_run,
+            now,
+        )
+    }
+
+    fn evaluate_guard(
+        &self,
+        routine: &super::loader::LoadedRoutine,
+        now: chrono::DateTime<Utc>,
+    ) -> orbit_automation::condition::GuardVerdict {
+        let Some(when) = routine.definition.trigger.when.as_deref() else {
+            return orbit_automation::condition::GuardVerdict::Open;
+        };
+        match self.runtimes.get(&routine.source_orbit_dir) {
+            Some(runtime) => crate::application::automation::condition::evaluate_guard(
+                runtime,
+                when,
+                "trigger.when",
+                orbit_automation::condition::ConditionCarrier::Routine,
+                now,
+            ),
+            None => orbit_automation::condition::GuardVerdict::unknown("routine source missing"),
+        }
+    }
+
     fn submit(
         &self,
         source_orbit_dir: &Path,

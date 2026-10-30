@@ -14,6 +14,7 @@
 
 use serde::{Deserialize, Deserializer, Serialize};
 
+use super::super::automation::ScheduleGuard;
 use super::super::error::WorkflowError;
 use crate::task::{TaskComplexity, TaskPriority, TaskStatus, TaskType};
 
@@ -213,16 +214,77 @@ pub enum AutoTaskSchedule {
     /// Verified landings, independent of task completion.
     Deliveries {
         deliveries_landed: super::super::automation::DeliveryTrigger,
+        /// Optional `when:` guard; a false guard keeps the coverage debt.
+        #[serde(flatten)]
+        guard: ScheduleGuard,
     },
     /// Standard 5-field cron expression, evaluated in host-local time.
-    Cron { cron: String },
+    Cron {
+        cron: String,
+        /// Optional `when:` guard; a false guard leaves the slot unconsumed.
+        #[serde(flatten)]
+        guard: ScheduleGuard,
+    },
     /// Fire every N minutes, anchored at the definition's first-observed slot.
-    Interval { every_minutes: u64 },
-    /// A CEL predicate over workspace state. Checked and explained, never
-    /// fired in this release, so the definition must stay disabled.
+    Interval {
+        every_minutes: u64,
+        /// Optional `when:` guard; a false guard leaves the slot unconsumed.
+        #[serde(flatten)]
+        guard: ScheduleGuard,
+    },
+    /// A CEL predicate over workspace state: one mint per subject edge.
     Condition {
         condition: super::super::automation::ConditionTrigger,
     },
+}
+
+impl AutoTaskSchedule {
+    /// A cron schedule with no guard.
+    pub fn cron(cron: impl Into<String>) -> Self {
+        Self::Cron {
+            cron: cron.into(),
+            guard: ScheduleGuard::default(),
+        }
+    }
+
+    /// An interval schedule with no guard.
+    pub fn every_minutes(every_minutes: u64) -> Self {
+        Self::Interval {
+            every_minutes,
+            guard: ScheduleGuard::default(),
+        }
+    }
+
+    /// A delivery schedule with no guard.
+    pub fn deliveries(deliveries_landed: super::super::automation::DeliveryTrigger) -> Self {
+        Self::Deliveries {
+            deliveries_landed,
+            guard: ScheduleGuard::default(),
+        }
+    }
+
+    /// The `when:` guard beside a typed kind; `None` for a condition.
+    pub fn guard(&self) -> Option<&ScheduleGuard> {
+        match self {
+            Self::Deliveries { guard, .. }
+            | Self::Cron { guard, .. }
+            | Self::Interval { guard, .. } => Some(guard),
+            Self::Condition { .. } => None,
+        }
+    }
+
+    /// Replace the guard of a typed kind; a condition keeps none.
+    pub fn with_guard(mut self, replacement: ScheduleGuard) -> Self {
+        match &mut self {
+            Self::Deliveries { guard, .. }
+            | Self::Cron { guard, .. }
+            | Self::Interval { guard, .. } => {
+                *guard = replacement;
+            }
+            Self::Condition { .. } => {}
+        }
+        self
+    }
 }
 
 /// Wire representation used to preserve field-specific errors while enforcing
@@ -234,6 +296,8 @@ struct RawSchedule {
     every_minutes: Option<u64>,
     deliveries_landed: Option<super::super::automation::DeliveryTrigger>,
     condition: Option<super::super::automation::ConditionTrigger>,
+    when: Option<String>,
+    guard_miss: Option<super::super::automation::ConditionGuardMiss>,
 }
 
 impl<'de> Deserialize<'de> for AutoTaskSchedule {
@@ -257,18 +321,31 @@ impl<'de> Deserialize<'de> for AutoTaskSchedule {
             forms.push("condition");
         }
 
+        let guard = ScheduleGuard {
+            when: raw.when,
+            guard_miss: raw.guard_miss,
+        };
         match (
             raw.cron,
             raw.every_minutes,
             raw.deliveries_landed,
             raw.condition,
         ) {
-            (Some(cron), None, None, None) => Ok(Self::Cron { cron }),
-            (None, Some(every_minutes), None, None) => Ok(Self::Interval { every_minutes }),
-            (None, None, Some(deliveries_landed), None) => {
-                Ok(Self::Deliveries { deliveries_landed })
+            (Some(cron), None, None, None) => Ok(Self::Cron { cron, guard }),
+            (None, Some(every_minutes), None, None) => Ok(Self::Interval {
+                every_minutes,
+                guard,
+            }),
+            (None, None, Some(deliveries_landed), None) => Ok(Self::Deliveries {
+                deliveries_landed,
+                guard,
+            }),
+            (None, None, None, Some(condition)) if guard.is_empty() => {
+                Ok(Self::Condition { condition })
             }
-            (None, None, None, Some(condition)) => Ok(Self::Condition { condition }),
+            (None, None, None, Some(_)) => Err(<D::Error as serde::de::Error>::custom(
+                "schedule.when: a condition takes no guard; its own `when` is the expression",
+            )),
             _ => Err(<D::Error as serde::de::Error>::custom(format!(
                 "schedule must have exactly one of cron, every_minutes, deliveries_landed, condition; found: {}",
                 if forms.is_empty() {
@@ -401,22 +478,23 @@ impl AutoTaskDefinition {
             )));
         }
         match &self.schedule {
-            AutoTaskSchedule::Deliveries { deliveries_landed } => deliveries_landed.validate()?,
+            AutoTaskSchedule::Deliveries {
+                deliveries_landed,
+                guard,
+            } => {
+                deliveries_landed.validate()?;
+                guard.validate("schedule", false)?;
+            }
             AutoTaskSchedule::Condition { condition } => {
                 condition.validate("schedule.condition")?;
-                if self.enabled {
-                    return Err(super::super::automation::condition_enabled_refusal(
-                        "schedule.condition",
-                    ));
-                }
             }
-            AutoTaskSchedule::Cron { cron } if cron.trim().is_empty() => {
+            AutoTaskSchedule::Cron { cron, .. } if cron.trim().is_empty() => {
                 return Err(WorkflowError::Invalid(format!(
                     "auto-task '{}' schedule.cron must not be empty",
                     self.name
                 )));
             }
-            AutoTaskSchedule::Interval { every_minutes }
+            AutoTaskSchedule::Interval { every_minutes, .. }
                 if *every_minutes == 0 || *every_minutes > MAX_AUTO_TASK_INTERVAL_MINUTES =>
             {
                 return Err(WorkflowError::Invalid(format!(
@@ -425,6 +503,11 @@ impl AutoTaskDefinition {
                 )));
             }
             _ => {}
+        }
+        if let AutoTaskSchedule::Cron { guard, .. } | AutoTaskSchedule::Interval { guard, .. } =
+            &self.schedule
+        {
+            guard.validate("schedule", true)?;
         }
         if self.template.title.trim().is_empty() {
             return Err(WorkflowError::Invalid(format!(
