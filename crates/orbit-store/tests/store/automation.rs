@@ -43,6 +43,8 @@ fn baseline() -> AutomationState {
         tree: "base-tree".into(),
     };
     AutomationState {
+        reservations: vec![],
+        independent_review: false,
         members: None,
         consumer: "fixture/legacy".into(),
         epoch: "epoch".into(),
@@ -158,6 +160,7 @@ fn recovery(previous: &AutomationState, next: &AutomationState, write: Write) ->
         reissued: None,
         replayed_history: None,
         reset: matches!(write, Write::Reset).then(|| ResetRecord {
+            abandoned_actions: vec![],
             previous_generation: previous.generation,
             forgotten: CoverageDebt {
                 baseline: previous.baseline.clone(),
@@ -344,7 +347,9 @@ fn consumer_writes_accept_legacy_json_and_refuse_stale_snapshots() {
 
 #[test]
 fn concurrent_action_key_admission_initializes_one_run_and_resolves_without_writes() {
-    if automation_isolated("concurrent_action_key_admission_initializes_one_run_and_resolves_without_writes") {
+    if automation_isolated(
+        "concurrent_action_key_admission_initializes_one_run_and_resolves_without_writes",
+    ) {
         return;
     }
     use orbit_store::contracts::KeyedJobRunAdmission;

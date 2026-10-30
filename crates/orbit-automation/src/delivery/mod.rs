@@ -8,9 +8,11 @@ pub mod adopt;
 mod digest;
 mod evaluate;
 pub mod evidence;
+mod independent;
 mod observe;
 mod reconcile;
 pub mod recovery;
+mod recovery_batches;
 pub mod reset;
 pub mod stall;
 mod waiver;
@@ -23,6 +25,12 @@ pub use waiver::waive;
 
 /// Authority/source owner, implemented by Core. It never decides coverage rules.
 pub trait DeliveryHost {
+    /// Delivery review auto-tasks opt into disjoint independent reservations.
+    /// Job and legacy consumers keep their single-active semantics.
+    fn independent_review_batches(&self) -> bool {
+        false
+    }
+
     fn admission_deferral(&self) -> Result<Option<String>, AutomationError> {
         Ok(None)
     }

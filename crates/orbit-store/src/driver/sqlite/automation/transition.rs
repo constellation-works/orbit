@@ -36,6 +36,14 @@ pub(super) fn validate_transition(
         return members::validate(previous, next, receipt);
     }
 
+    if previous.independent_review
+        || next.independent_review
+        || !previous.reservations.is_empty()
+        || !next.reservations.is_empty()
+    {
+        return super::reservations::validate_reservations(previous, next, receipt);
+    }
+
     // An attempt may gain retries but never swap the batch it was frozen against,
     // and it may only disappear when a receipt retires it.
     if let Some(old) = &previous.active {
@@ -163,7 +171,7 @@ pub(super) fn validate_transition(
     Ok(())
 }
 
-fn validate_excluded_prefix_retirement(
+pub(super) fn validate_excluded_prefix_retirement(
     previous: &AutomationState,
     next: &AutomationState,
 ) -> Result<(), OrbitError> {

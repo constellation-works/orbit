@@ -21,6 +21,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RecoveryRequest {
+    /// Immutable batch to inspect or reissue. Required for action recovery
+    /// while several independent reservations remain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch_id: Option<String>,
     /// Adopt the definition's current compatible settings, retaining every
     /// covered, pending, unresolved and accepted fact the consumer holds.
     #[serde(default)]
@@ -82,6 +86,9 @@ pub struct ResetRecord {
     /// The frozen action abandoned by the reset, when one was held.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub abandoned_action: Option<StalledAction>,
+    /// Every retained reservation forgotten by a multi-batch reset.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub abandoned_actions: Vec<StalledAction>,
     /// Head of the configured branch the next evaluation re-baselines at.
     pub baseline: SourceRevision,
     /// Pinned `refs/orbit/automation/<consumer-digest>/*` refs released with
@@ -106,6 +113,9 @@ pub struct ResetPreview {
     pub debt: CoverageDebt,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action: Option<StalledAction>,
+    /// Retained independent reservations, including accepted batches behind gaps.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<StalledAction>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stall: Option<AutomationStall>,
     /// Head of the configured branch the consumer re-baselines at.
@@ -370,6 +380,9 @@ pub struct RecoveryPreview {
     pub debt: CoverageDebt,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action: Option<StalledAction>,
+    /// Retained independent reservations, including accepted batches behind gaps.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<StalledAction>,
     /// Planned or applied history reconciliation, absent for ordinary recovery.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub history_replay: Option<HistoryReplayRecord>,
@@ -393,6 +406,10 @@ impl RecoveryPreview {
 /// Why a recovery cannot run. Each variant names one deterministic refusal so
 /// operators and tests share the vocabulary.
 pub mod refusal {
+    /// Several reservations remain; select the batch to reissue explicitly.
+    pub const BATCH_REQUIRED: &str = "batch_required";
+    /// The selected batch is not retained by this consumer.
+    pub const UNKNOWN_BATCH: &str = "unknown_batch";
     /// This host holds no persisted state for the definition.
     pub const UNKNOWN_CONSUMER: &str = "unknown_consumer";
     /// The consumer is a state-member consumer, not a delivery consumer.

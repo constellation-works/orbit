@@ -2298,6 +2298,8 @@ pub(super) fn admitted_frozen_batch(
         tree: format!("{commit}-tree"),
     };
     let baseline = AutomationState {
+        reservations: vec![],
+        independent_review: false,
         members: None,
         consumer: consumer.clone(),
         epoch: "epoch".into(),

@@ -104,6 +104,7 @@ impl RoutineDispatch for FakeDispatch {
         _now: DateTime<Utc>,
     ) -> Result<AutomationDiagnostic, OrbitError> {
         Ok(AutomationDiagnostic {
+            coverage_gaps: vec![],
             reason: "debouncing".into(),
             state: None,
             receipts: Vec::new(),

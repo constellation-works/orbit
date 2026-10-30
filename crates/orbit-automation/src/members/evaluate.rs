@@ -84,6 +84,8 @@ pub fn evaluate(
 
             let (repository, head) = host.head(&trigger.branch)?;
             let state = AutomationState {
+                reservations: vec![],
+                independent_review: false,
                 members: Some(MemberState::default()),
                 consumer: consumer.into(),
                 epoch: epoch.into(),

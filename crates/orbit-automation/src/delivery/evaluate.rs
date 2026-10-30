@@ -57,6 +57,8 @@ fn evaluate_pass(
 
             let (repository, head) = host.head(&trigger.branch)?;
             let state = AutomationState {
+                reservations: vec![],
+                independent_review: false,
                 members: None,
                 consumer: consumer.into(),
                 epoch: epoch.into(),
@@ -94,6 +96,20 @@ fn evaluate_pass(
             );
         }
     };
+
+    let independent_review = host.independent_review_batches()
+        && trigger.coverage == CoverageClass::LandedCodeReviewV1
+        && super::recovery::recorded_coverage(&state) == Some(CoverageClass::LandedCodeReviewV1);
+    if state.independent_review || independent_review {
+        if !state.independent_review && !dry_run {
+            let mut next = state.clone();
+            next.independent_review = true;
+            state = commit(store, &state, next, None)?;
+        } else if dry_run {
+            state.independent_review = true;
+        }
+        return super::independent::evaluate_reserved(store, host, request, state);
+    }
 
     // Resolve minted claims and reconcile even when disabled or edited. A
     // crash can leave a task behind before its action id was checkpointed.
@@ -251,98 +267,8 @@ fn evaluate_pass(
         );
     }
 
-    // Freeze an oldest prefix. Unattributed neighbors remain explicit obligations.
-    let deliveries = state
-        .pending
-        .iter()
-        .take(trigger.max_items)
-        .cloned()
-        .collect::<Vec<_>>();
-
-    let through = if state.pending.len() > deliveries.len() {
-        deliveries
-            .last()
-            .ok_or_else(|| AutomationError::Deferred(DeferredReason::EmptyBatch))?
-            .after
-            .clone()
-    } else {
-        state.observed.clone()
-    };
-
-    let end = state
-        .pending_commits
-        .iter()
-        .position(|sha| sha == &through.commit)
-        .ok_or_else(|| AutomationError::Deferred(DeferredReason::DeliveryBoundaryMissing))?
-        + 1;
-
-    let commits = state.pending_commits[..end].to_vec();
-
-    if deliveries
-        .iter()
-        .any(|delivery| !delivery.commits.iter().all(|sha| commits.contains(sha)))
-    {
-        return Err(AutomationError::Deferred(
-            DeferredReason::DeliveryCrossesBoundary,
-        ));
-    }
-
-    // Excluded landings inside the range travel with the batch as readable
-    // context; they are not obligations and the evidence never lists them.
-    let exclusions = state
-        .excluded
-        .iter()
-        .filter(|excluded| {
-            excluded
-                .delivery
-                .commits
-                .iter()
-                .all(|sha| commits.contains(sha))
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-
-    let mut batch = CoverageBatch {
-        schema_version: 1,
-        id: String::new(),
-        consumer: consumer.into(),
-        epoch: epoch.into(),
-        repository: state.repository.clone(),
-        branch: state.branch.clone(),
-        coverage: trigger.coverage,
-        from_exclusive: state.covered.clone(),
-        through_inclusive: through,
-        commits,
-        deliveries,
-        exclusions,
-        created_at: now,
-        max_attempts: trigger.retries + 1,
-        retry_until: now + chrono::Duration::hours(24),
-    };
-
-    // The identity digest covers the batch before it carries an id; the frozen input
-    // digest then covers the identified batch that evidence must be checked against.
-    batch.id = input_digest(&batch)?;
-    let frozen_input_digest = input_digest(&batch)?;
-
-    if serde_json::to_vec(&batch)
-        .map_err(|e| AutomationError::Evidence(e.to_string()))?
-        .len()
-        > 1_048_576
-    {
+    let Some(attempt) = freeze_batch(&state, &request)? else {
         return diagnostic(store, consumer, "batch_too_large", Some(state));
-    }
-
-    let attempt = BatchAttempt {
-        action_key: format!("automation:{}:1", batch.id),
-        batch,
-        input_digest: frozen_input_digest,
-        attempt: 1,
-        action_id: None,
-        state: BatchState::Claimed,
-        reason: None,
-        retry_after: None,
-        reissue: None,
     };
 
     let mut next = state.clone();
@@ -398,4 +324,113 @@ fn admit_active(
     }
 
     commit(store, state, next, None).map(Admission::Admitted)
+}
+
+/// Freeze only the unreserved oldest suffix; existing batches are immutable.
+pub(super) fn freeze_batch(
+    state: &AutomationState,
+    request: &Evaluation<'_>,
+) -> Result<Option<BatchAttempt>, AutomationError> {
+    let Evaluation {
+        consumer,
+        epoch,
+        trigger,
+        now,
+        ..
+    } = *request;
+    // Freeze an oldest prefix. Unattributed neighbors remain explicit obligations.
+    let pending = state.unreserved_deliveries().collect::<Vec<_>>();
+    let deliveries = pending
+        .iter()
+        .take(trigger.max_items)
+        .map(|delivery| (*delivery).clone())
+        .collect::<Vec<_>>();
+
+    let through = if pending.len() > deliveries.len() {
+        deliveries
+            .last()
+            .ok_or_else(|| AutomationError::Deferred(DeferredReason::EmptyBatch))?
+            .after
+            .clone()
+    } else {
+        state.observed.clone()
+    };
+
+    let end = state
+        .pending_commits
+        .iter()
+        .position(|sha| sha == &through.commit)
+        .ok_or_else(|| AutomationError::Deferred(DeferredReason::DeliveryBoundaryMissing))?
+        + 1;
+
+    let commits = state.pending_commits[state.reserved_commit_count()..end].to_vec();
+
+    if deliveries
+        .iter()
+        .any(|delivery| !delivery.commits.iter().all(|sha| commits.contains(sha)))
+    {
+        return Err(AutomationError::Deferred(
+            DeferredReason::DeliveryCrossesBoundary,
+        ));
+    }
+
+    // Excluded landings inside the range travel with the batch as readable
+    // context; they are not obligations and the evidence never lists them.
+    let exclusions = state
+        .excluded
+        .iter()
+        .filter(|excluded| {
+            excluded
+                .delivery
+                .commits
+                .iter()
+                .all(|sha| commits.contains(sha))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
+    let mut batch = CoverageBatch {
+        schema_version: 1,
+        id: String::new(),
+        consumer: consumer.into(),
+        epoch: epoch.into(),
+        repository: state.repository.clone(),
+        branch: state.branch.clone(),
+        coverage: trigger.coverage,
+        from_exclusive: state.reserved_through().clone(),
+        through_inclusive: through,
+        commits,
+        deliveries,
+        exclusions,
+        created_at: now,
+        max_attempts: trigger.retries + 1,
+        retry_until: now + chrono::Duration::hours(24),
+    };
+
+    // The identity digest covers the batch before it carries an id; the frozen input
+    // digest then covers the identified batch that evidence must be checked against.
+    batch.id = input_digest(&batch)?;
+    let frozen_input_digest = input_digest(&batch)?;
+
+    if serde_json::to_vec(&batch)
+        .map_err(|e| AutomationError::Evidence(e.to_string()))?
+        .len()
+        > 1_048_576
+    {
+        return Ok(None);
+    }
+
+    let attempt = BatchAttempt {
+        action_key: format!("automation:{}:1", batch.id),
+        batch,
+        input_digest: frozen_input_digest,
+        attempt: 1,
+        action_id: None,
+        state: BatchState::Claimed,
+        reason: None,
+        retry_after: None,
+        reissue: None,
+    };
+
+    Ok(Some(attempt))
 }

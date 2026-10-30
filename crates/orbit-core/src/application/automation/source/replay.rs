@@ -56,7 +56,7 @@ impl<'a> Source<'a> {
         for boundary in
             [&state.covered, &state.baseline]
                 .into_iter()
-                .chain(state.active.iter().flat_map(|active| {
+                .chain(state.delivery_attempts().flat_map(|active| {
                     [
                         &active.batch.from_exclusive,
                         &active.batch.through_inclusive,
@@ -224,6 +224,7 @@ impl<'a> Source<'a> {
             }
         }
         probe.active = None;
+        probe.reservations.clear();
         let replay_through = mappings
             .last()
             .map(|mapping| mapping.canonical.clone())

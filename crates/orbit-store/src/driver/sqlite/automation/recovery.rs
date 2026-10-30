@@ -239,13 +239,30 @@ fn validate(
         return Err(invalid());
     }
 
-    match (&previous.active, &next.active, &record.reissued) {
-        (Some(settled), Some(claim), Some(reissued)) => {
-            validate_reissue(settled, claim, reissued, record)
-        }
-        (settled, claim, None) if settled == claim => Ok(()),
-        _ => Err(invalid()),
+    if previous.independent_review != next.independent_review {
+        return Err(invalid());
     }
+    if let Some(reissued) = &record.reissued {
+        let settled = previous
+            .delivery_attempts()
+            .find(|a| a.batch.id == reissued.batch_id)
+            .ok_or_else(invalid)?;
+        let claim = next
+            .delivery_attempts()
+            .find(|a| a.batch.id == reissued.batch_id)
+            .ok_or_else(invalid)?;
+        validate_reissue(settled, claim, reissued, record)?;
+        let mut expected = previous.clone();
+        *expected
+            .delivery_attempt_mut(&reissued.batch_id)
+            .ok_or_else(invalid)? = claim.clone();
+        if expected.active != next.active || expected.reservations != next.reservations {
+            return Err(invalid());
+        }
+    } else if previous.active != next.active || previous.reservations != next.reservations {
+        return Err(invalid());
+    }
+    Ok(())
 }
 
 fn validate_history_replay(
@@ -260,6 +277,8 @@ fn validate_history_replay(
         || previous.epoch != next.epoch
         || previous.trigger != next.trigger
         || previous.active != next.active
+        || previous.reservations != next.reservations
+        || previous.independent_review != next.independent_review
         || replay.captured_generation != previous.generation
         || replay.old_observed != previous.observed
         || replay.new_observed != next.observed

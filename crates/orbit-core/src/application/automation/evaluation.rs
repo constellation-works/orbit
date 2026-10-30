@@ -192,6 +192,9 @@ struct Host<'a> {
 }
 
 impl DeliveryHost for Host<'_> {
+    fn independent_review_batches(&self) -> bool {
+        matches!(self.action, Action::Task(_))
+    }
     fn admission_deferral(&self) -> Result<Option<String>, AutomationError> {
         if let Action::Task(definition) = self.action {
             return auto_task_admission_deferral(self.runtime, definition).map_err(Into::into);
@@ -308,7 +311,7 @@ impl DeliveryHost for Host<'_> {
             .automation_store()?
             .automation_state(&attempt.batch.consumer)?
             .ok_or_else(|| AutomationError::Deferred(DeferredReason::ClaimMissing))?;
-        if state.active.as_ref() != Some(attempt) {
+        if !state.delivery_attempts().any(|current| current == attempt) {
             return Err(AutomationError::Deferred(DeferredReason::ClaimSuperseded));
         }
 
@@ -361,9 +364,41 @@ pub(super) fn auto_task_admission_deferral(
     runtime: &OrbitRuntime,
     definition: &AutoTaskDefinition,
 ) -> Result<Option<String>, OrbitError> {
-    if definition.dedupe == orbit_types::workflow::DedupePolicy::SkipIfOpen
-        && runtime.open_auto_task_instance(definition)?.is_some()
+    if definition.dedupe != orbit_types::workflow::DedupePolicy::SkipIfOpen {
+        return Ok(None);
+    }
+    if matches!(&definition.schedule, AutoTaskSchedule::Deliveries { deliveries_landed }
+        if deliveries_landed.coverage == CoverageClass::LandedCodeReviewV1)
     {
+        // Batch identities dedupe by their action key. Preserve ordinary manual
+        // instance dedupe, including legacy scheduled tasks with no batch tag.
+        let consumer = consumer_key(runtime, "auto-task", &definition.name)?;
+        let state = runtime.automation_store()?.automation_state(&consumer)?;
+        let scheduled = state
+            .as_ref()
+            .map(|s| {
+                s.delivery_attempts()
+                    .filter_map(|a| a.action_id.as_deref())
+                    .collect::<std::collections::BTreeSet<_>>()
+            })
+            .unwrap_or_default();
+        for id in crate::application::auto_tasks::scheduler::open_auto_task_instances(
+            runtime,
+            &definition.name,
+        )? {
+            if scheduled.contains(id.as_str()) {
+                continue;
+            }
+            if !runtime
+                .get_task(&id)?
+                .tags
+                .iter()
+                .any(|tag| tag == "delivery-batch")
+            {
+                return Ok(Some("open_instance".into()));
+            }
+        }
+    } else if runtime.open_auto_task_instance(definition)?.is_some() {
         return Ok(Some("open_instance".into()));
     }
 

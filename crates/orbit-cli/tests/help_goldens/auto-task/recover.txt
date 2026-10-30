@@ -7,8 +7,11 @@ Arguments:
           Definition name
 
 Options:
+      --batch <BATCH_ID>
+          Select the immutable batch to inspect or reissue; required when several batches remain
+
       --adopt-settings
-          Adopt the definition's current settings, retaining every pending, unresolved and accepted fact. Refused when the repository, branch, owner or coverage class changed, or while an action is executing
+          Adopt the definition's current settings, retaining every pending, unresolved and accepted fact. Refused when the repository, branch, owner or coverage class changed, or while an action is executing for a single-active consumer
 
       --reissue-action
           Reissue the settled action that closed without accepted evidence, as a new task over its existing frozen obligations. The closed task is left exactly as it settled

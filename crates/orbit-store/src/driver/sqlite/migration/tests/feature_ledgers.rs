@@ -215,6 +215,8 @@ fn failed(member: StateMember, attempt: u32, run_id: &str) -> MemberAttempt {
 
 fn pilot_state(generation: u64, members: MemberState) -> AutomationState {
     AutomationState {
+        reservations: vec![],
+        independent_review: false,
         members: Some(members),
         consumer: "fixture/pilot".into(),
         epoch: "epoch".into(),

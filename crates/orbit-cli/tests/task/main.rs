@@ -40,6 +40,7 @@ mod crew_effort_admission;
 mod decision_cli;
 mod delivery_remote_source;
 mod friction_lifecycle_cli;
+mod independent_reviews;
 mod live_run_status;
 mod local_read_projections_cli;
 mod pilot_comments;

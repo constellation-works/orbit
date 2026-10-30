@@ -32,6 +32,8 @@ pub(super) fn mint(
         params.crew_source = Some(orbit_config::REVIEW_CREW_KEY.to_string());
     }
 
+    params.tags.push("delivery-batch".into());
+
     let invalid = |e: serde_json::Error| OrbitError::InvalidInput(e.to_string());
     let frozen_input = serde_json::to_string_pretty(attempt).map_err(invalid)?;
     let evidence_template = serde_json::to_string_pretty(
@@ -48,6 +50,18 @@ pub(super) fn mint(
     params.description.push_str(&format!(
         "\n\nEvidence template (replace action_id with this task ID and fill actual checks/findings):\n```json\n{evidence_template}\n```"
     ));
+
+    // Automatic retries also keep a readable chain to the prior executor's
+    // original partial artifacts and checks. Never copy an old verdict into
+    // the replacement action's evidence or mutate the predecessor's task.
+    if attempt.attempt > 1 {
+        let key = format!("automation:{}:{}", attempt.batch.id, attempt.attempt - 1);
+        if let Some(previous) = runtime.stores().tasks().automation_task_for_key(&key)? {
+            params.description.push_str(&format!(
+                "\n\nPrevious examination attempt: {}. Its original partial artifacts and completed checks remain available with their original provenance. Use them as context; this attempt still requires complete evidence from its own assigned executor.", previous.id
+            ));
+        }
+    }
 
     // A reissued attempt examines obligations an earlier action left unpaid, so
     // the new task names that action instead of appearing unrelated to it.
@@ -195,9 +209,8 @@ pub(crate) fn accepted_action_coverage(
         }
         for state in page {
             let accepted = match state
-                .active
-                .as_ref()
-                .filter(|attempt| attempt.action_id.as_deref() == Some(task_id))
+                .delivery_attempts()
+                .find(|attempt| attempt.action_id.as_deref() == Some(task_id))
             {
                 Some(attempt) => validated_evidence(runtime, attempt, now)?,
                 None => store

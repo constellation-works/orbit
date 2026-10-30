@@ -376,6 +376,18 @@ fn recover_summary(name: &str, preview: &RecoveryPreview) -> String {
         );
     }
 
+    for action in &preview.actions {
+        let _ = writeln!(
+            out,
+            "  batch: {} attempt {} ({:?}), {} obligations, reissuable={}",
+            action.batch_id,
+            action.attempt,
+            action.state,
+            action.obligations.len(),
+            action.reissuable
+        );
+    }
+
     if preview.applied.is_empty() {
         let _ = writeln!(out, "  applied: none (preview)");
     } else {
@@ -425,6 +437,14 @@ fn reset_summary(name: &str, preview: &ResetPreview) -> String {
             action.state,
             action.obligations.len(),
             action.commits
+        );
+    }
+
+    for action in &preview.actions {
+        let _ = writeln!(
+            out,
+            "  batch: {} attempt {} ({:?})",
+            action.batch_id, action.attempt, action.state
         );
     }
 

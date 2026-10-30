@@ -92,7 +92,21 @@ fn claimed(checkpointed_id: bool) -> (Fixture, orbit_core::OrbitRuntime, Automat
     if !checkpointed_id {
         attempt.action_id = None;
     }
-    assert!(store.automation_commit(&before, &claimed, None).unwrap());
+    // Inject the persisted crash window directly: an ordinary checkpoint must
+    // never forget a known action id. This fixture represents a task minted
+    // before the action-id acknowledgement reached the store.
+    let mut raw = serde_json::to_value(&claimed).unwrap();
+    if claimed.independent_review {
+        raw["epoch"] = json!({"version": 2, "identity": claimed.epoch});
+    }
+    runtime.sqlite_store().unwrap().with_transaction(|tx| {
+        let changed = tx.connection().execute(
+            "UPDATE automation_consumers SET generation=?1,state_json=?2 WHERE consumer=?3 AND generation=?4",
+            (claimed.generation, raw.to_string(), &claimed.consumer, before.generation),
+        ).map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+        assert_eq!(changed, 1);
+        Ok(())
+    }).unwrap();
     (fixture, runtime, claimed, action_id)
 }
 
@@ -165,7 +179,18 @@ fn terminal_claim_adopts_settings_and_doctor_reports_its_status() {
             !message.contains(&action_id),
             "doctor output must not expose internal task IDs per AGENTS.md: {message}"
         );
-        assert!(message.contains("orbit auto-task recover delivery-code-review --adopt-settings --reissue-action --reason"), "{message}");
+        assert!(
+            message.contains("orbit auto-task recover delivery-code-review"),
+            "{message}"
+        );
+        assert!(
+            message.contains("--adopt-settings") && message.contains("--reissue-action --reason"),
+            "{message}"
+        );
+        assert!(
+            message.contains("--batch"),
+            "a multi-batch recovery hint must select its unpaid reservation: {message}"
+        );
         assert!(!message.contains("active_execution"), "{message}");
         fixture.json(&[
             "auto-task",
@@ -209,6 +234,8 @@ fn archived_claim_reissues_the_same_obligations_as_a_new_task() {
             "auto-task",
             "recover",
             CONSUMER,
+            "--batch",
+            &before.active.as_ref().unwrap().batch.id,
             "--adopt-settings",
             "--reissue-action",
             "--reason",
@@ -312,7 +339,10 @@ fn unminted_retry_recovers_after_a_legacy_task_closed_and_settings_changed() {
                     "auto-task",
                     "recover",
                     CONSUMER,
+                    "--batch",
+                    &before.active.as_ref().unwrap().batch.id,
                     "--adopt-settings",
+                    "--reissue-action",
                     "--reason",
                     "must retain unknown liveness",
                 ])
@@ -359,6 +389,8 @@ fn unminted_retry_recovers_after_a_legacy_task_closed_and_settings_changed() {
             "auto-task",
             "recover",
             CONSUMER,
+            "--batch",
+            &before.active.as_ref().unwrap().batch.id,
             "--reissue-action",
             "--reason",
             "authorize another examination",
@@ -387,13 +419,13 @@ fn unminted_retry_recovers_after_a_legacy_task_closed_and_settings_changed() {
     }
 }
 
-fn scheduler_settles_closed_claims_and_adopts_but_refuses_open_tasks() {
+fn scheduler_adopts_live_settings_without_reissuing_and_settles_closed_claims() {
     for checkpointed_id in [true, false] {
         let (fixture, runtime, before, action_id) = claimed(checkpointed_id);
         let store = runtime.automation_store().unwrap();
         let receipts = store.automation_receipts(&before.consumer, 100).unwrap();
-        retune(&fixture, 30);
-        for status in ["proposed", "in-progress"] {
+        for (index, status) in ["proposed", "in-progress"].into_iter().enumerate() {
+            retune(&fixture, 30 + index as u32);
             if status == "in-progress" {
                 fixture.json(&[
                     "task", "update", &action_id, "--status", status, "--force", "--json",
@@ -402,22 +434,24 @@ fn scheduler_settles_closed_claims_and_adopts_but_refuses_open_tasks() {
             let preview = fixture.json(&["auto-task", "recover", CONSUMER, "--json"]);
             assert_eq!(preview["refusals"], json!(["active_execution"]));
             assert_eq!(preview["action"]["reissuable"], false);
-            fixture
-                .command(&[
-                    "auto-task",
-                    "recover",
-                    CONSUMER,
-                    "--adopt-settings",
-                    "--reason",
-                    "must not interrupt a live task",
-                ])
-                .assert()
-                .failure();
+            let before_adoption = store.automation_state(&before.consumer).unwrap().unwrap();
+            fixture.json(&[
+                "auto-task",
+                "recover",
+                CONSUMER,
+                "--adopt-settings",
+                "--reason",
+                "retain the live frozen examination while retuning future batches",
+                "--json",
+            ]);
+            let adopted = store.automation_state(&before.consumer).unwrap().unwrap();
+            assert_eq!(adopted.active, before_adoption.active);
+            assert_eq!(adopted.reservations, before_adoption.reservations);
             let definition = runtime.auto_task_show(CONSUMER).unwrap().unwrap();
             let diagnostic =
                 evaluate_auto_task(&runtime, &definition, !checkpointed_id, Utc::now()).unwrap();
-            assert_eq!(diagnostic.reason, "definition_changed");
-            assert_eq!(diagnostic.refusals, ["active_execution"]);
+            assert_eq!(diagnostic.reason, "batch_pending");
+            assert!(diagnostic.refusals.is_empty());
         }
         fixture
             .command(&["task", "archive", &action_id])
@@ -434,7 +468,7 @@ fn scheduler_settles_closed_claims_and_adopts_but_refuses_open_tasks() {
             .find(|report| report.name == CONSUMER)
             .unwrap();
         let diagnostic = report.automation.as_ref().unwrap();
-        assert_eq!(diagnostic.reason, "retry_backoff");
+        assert_eq!(diagnostic.reason, "batch_pending");
         let after = store.automation_state(&before.consumer).unwrap().unwrap();
         assert_ne!(after.epoch, before.epoch);
         assert_debt_unchanged(&before, &after);
@@ -520,5 +554,5 @@ fn claimed_recovery_contracts_1() {
     if !in_isolated_child("claimed_delivery_recovery::claimed_recovery_contracts_1") {
         return;
     }
-    scheduler_settles_closed_claims_and_adopts_but_refuses_open_tasks();
+    scheduler_adopts_live_settings_without_reissuing_and_settles_closed_claims();
 }

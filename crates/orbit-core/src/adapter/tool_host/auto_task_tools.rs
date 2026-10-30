@@ -439,6 +439,7 @@ fn mint(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
 fn recover(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitError> {
     let name = input.required_string("name")?;
     let request = RecoveryRequest {
+        batch_id: input.optional_string("batch_id")?,
         adopt_settings: input.optional_bool("adopt_settings")?.unwrap_or(false),
         reissue_action: input.optional_bool("reissue_action")?.unwrap_or(false),
         replay_history: input.optional_bool("replay_history")?.unwrap_or(false),

@@ -57,6 +57,8 @@ fn foreign_baseline(
     let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
     let trigger = super::delivery::trigger();
     let mut state = AutomationState {
+        reservations: vec![],
+        independent_review: false,
         members: None,
         consumer: CONSUMER.into(),
         epoch: "v1".into(),

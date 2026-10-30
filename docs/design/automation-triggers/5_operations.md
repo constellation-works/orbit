@@ -24,10 +24,12 @@ Within one clock tick, routine and auto-task consumers share the fetched head
 for the same repository, branch and Git object store, and share each commit's
 provider response (or failure). Independent clones fetch their own objects.
 The cache ends with the tick, and each observation retains its own command
-deadline. Exhausted or failed delivery batches report `needs_attention` before
-observation, in both preview and live evaluation, while keeping their retained
-debt unchanged until recovery. Reconciliation and definition adoption still
-precede that hold.
+deadline. Delivery review auto-tasks continue observing and scheduling disjoint
+ranges while earlier examinations are open, retrying, failed or exhausted.
+Each batch keeps its own task, retry budget, artifacts and receipt. Other delivery
+routines retain their single-active hold: failed or exhausted work reports
+`needs_attention` before observation. Reconciliation and compatible definition
+adoption precede scheduling in both paths.
 
 ## Configuration and migration
 
@@ -65,7 +67,7 @@ schedule:
     threshold: 3
     max_wait_minutes: 360
     coverage: landed_code_review_v1
-    max_items: 20
+    max_items: 5
     retries: 1
 # Retain the normal template, dedupe and attribution fields.
 ```
@@ -197,7 +199,35 @@ a two-second limit, a one-MiB output limit and a shared 30-second source budget.
 Provider lookup work stops early to leave time for classification. State admits
 at most 1,000 pending landings and 5,000 commits; backpressure stops new observation
 while already retained debt remains eligible for admission. A batch is at most
-one MiB. Missing objects and non-ancestral history fail closed.
+one MiB. Independent reviews also retain at most 64 frozen reservations,
+including accepted reservations behind an earlier gap. `reservation_capacity`
+pauses new reservations while source observation continues within the retained
+landing/commit bounds. This is a storage bound, not a completion dependency;
+normal global execution limits still apply. Missing objects and unprovable
+non-ancestral history fail closed for the affected source.
+
+`covered` is the contiguous proven boundary, not the most recent successful
+review. If B completes before A, inspection shows B `covered` with its immutable
+receipt and A still owed; the frontier remains before A. After A supplies valid
+coverage, reconciliation retires both without minting B again. Read scheduler
+health (`reason`, source stalls, capacity) separately from `coverage_gaps`, which
+lists unpaid retained batch identities even when later scheduling remains healthy.
+Task completion, partial examination and old-attempt clean verdicts never close
+the gap. Reissue links the original task and leaves its partial artifacts and
+checks available with provenance; the replacement executor must submit its own
+complete evidence for the new action and attempt.
+
+Legacy single-active consumers upgrade in place, retaining frozen inputs, pending,
+waived, excluded and unresolved facts and all receipt bytes. A twelve-delivery
+attempt-3 recovery remains twelve deliveries; configured `max_items: 5` caps only
+future batches. Independent state persists a versioned epoch envelope that older
+readers cannot decode, so rollback must use a compatible binary rather than an
+older writer that drops reservations. Member-state and other routine consumers
+retain their previous encoding and scheduling semantics in compatible binaries.
+Layout v4 (`independent-review-checkpoints`) records this breaking format boundary
+without a SQL schema change or eager debt rewrite. Restart recovery resolves
+every unacknowledged claim by its permanent action key; concurrent reservations
+and receipt acceptance use the existing generation/byte transaction fence.
 
 ## Evidence submission
 
@@ -442,15 +472,23 @@ orbit auto-task recover delivery-code-review --json
 The preview reports the consumer key, the recorded and configured epoch, the
 settings that differ by name, the retained debt (covered/observed boundaries,
 pending landings and commits, unresolved evidence, waived and excluded landings,
-accepted receipts), the frozen obligations of any stalled action, the refusals
+accepted receipts), the selected action and every retained reservation (`actions`),
+including each batch's immutable identity, task, attempt, state and obligations,
+the refusals
 that apply, and the audited recoveries already recorded.
+
+With several retained reservations, use `--batch <batch-id>` to select the action
+to inspect or reissue. Omission on a multi-batch reissue returns `batch_required`;
+a non-retained identity returns `unknown_batch`. A single retained batch remains
+unambiguous and needs no selector. Inspecting or recovering A never rewrites or
+cancels B, even while B executes or has already produced an accepted receipt.
 
 Adopt the retuned settings, then reissue an action that closed without accepted
 evidence, in one explicitly authorized request:
 
 ```sh
 orbit auto-task recover delivery-code-review \
-  --adopt-settings --reissue-action \
+  --batch <batch-id> --adopt-settings --reissue-action \
   --reason "adopt tonight's review threshold and re-examine the unpaid landing"
 ```
 
@@ -473,12 +511,14 @@ applied: `unknown_consumer`, `member_consumer`, `owned_elsewhere`,
 `ownership_unresolved`, `branch_changed`, `repository_changed`, `owner_changed`, `coverage_changed`,
 `coverage_unverifiable`, `active_execution`, `settings_unchanged`,
 `recovery_mode_conflict` (replay combined with adopt or reissue),
-`no_settled_action`, `action_evidenced`, `definition_changed` (a reissue that
+`batch_required`, `unknown_batch`, `no_settled_action`, `action_evidenced`, `definition_changed` (a reissue that
 does not also adopt the identity it would run under) or `missing_authorization`
 (no reason or actor). A change of workspace, owner machine, repository, branch
 or coverage class is never adopted: those change what the retained debt means,
-so settle the old consumer's debt and preview a new baseline instead. An action
-that is claimed or admitted and still live has to settle first. A claimed or admitted action whose task
+so settle the old consumer's debt and preview a new baseline instead. The selected action, when reissuing,
+has to settle first if it is claimed or admitted and still live. Compatible
+settings-only edits on independent reviews may proceed while frozen tasks run;
+they change future batches and leave every existing batch untouched. A claimed or admitted action whose task
 is already terminal without evidence its settlement would accept counts as
 settled: it is reissuable and does not refuse as `active_execution`, even
 before an evaluation has run. This includes a task minted before a crash left
@@ -631,7 +671,8 @@ orbit auto-task reset delivery-code-review \
 
 An apply writes one immutable record into the same `automation_recoveries`
 table — kind `reset`, carrying `by`/`at`/`reason`, the previous epoch and
-generation, the forgotten-debt inventory, the abandoned action and the new
+generation, the forgotten-debt inventory, every abandoned reservation (`abandoned_actions`)
+with the legacy oldest `abandoned_action`, and the new
 baseline — drops the consumer row in the same transaction, and deletes the
 `refs/orbit/automation/<consumer digest>/*` pins of the forgotten batches. The
 next evaluation seeds a fresh baseline at the configured branch head *with* its

@@ -609,11 +609,18 @@ const RECOVER: AutoTaskOperation = AutoTaskOperation {
     params: &[&[
         NAME_PARAM,
         both(
+            "batch_id",
+            ParamType::String,
+            "Immutable batch identity to inspect or reissue. Required for action reissue when several batches remain.",
+            CliArgKind::flag("batch"),
+            "Select the immutable batch to inspect or reissue; required when several batches remain",
+        ),
+        both(
             "adopt_settings",
             ParamType::Switch,
             "Adopt the definition's current settings, retaining every pending, unresolved and accepted fact.",
             CliArgKind::flag("adopt-settings"),
-            "Adopt the definition's current settings, retaining every pending, unresolved and accepted fact. Refused when the repository, branch, owner or coverage class changed, or while an action is executing",
+            "Adopt the definition's current settings, retaining every pending, unresolved and accepted fact. Refused when the repository, branch, owner or coverage class changed, or while an action is executing for a single-active consumer",
         ),
         both(
             "reissue_action",

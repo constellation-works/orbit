@@ -11,7 +11,7 @@ use crate::contracts::MigrationCompatibility;
 
 /// Highest workspace-layout version this binary knows how to produce.
 /// Bump together with a new `LAYOUT_MIGRATIONS` entry — never without one.
-pub const SUPPORTED_LAYOUT_VERSION: u32 = 3;
+pub const SUPPORTED_LAYOUT_VERSION: u32 = 4;
 
 /// One entry in the layout-migration registry.
 pub(crate) struct LayoutMigration {
@@ -62,6 +62,18 @@ pub(crate) const LAYOUT_MIGRATIONS: &[LayoutMigration] = &[
         // write.
         compat: MigrationCompatibility::Breaking,
         apply: remove_legacy_task_projections,
+    },
+    LayoutMigration {
+        version: 4,
+        name: "independent-review-checkpoints",
+        description: "adopt versioned independent review checkpoints; retain legacy frozen batches and require compatible readers and writers",
+        // Consumers migrate lazily under their existing generation fence. No
+        // obligation, receipt or artifact is rewritten by workspace open.
+        // Older binaries cannot represent multiple delivery reservations or
+        // read the persisted versioned epoch envelope. The per-checkpoint
+        // decoder also fences a long-lived writer with an already-open store.
+        compat: MigrationCompatibility::Breaking,
+        apply: apply_baseline_layout,
     },
 ];
 

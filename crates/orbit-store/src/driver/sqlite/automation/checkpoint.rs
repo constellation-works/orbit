@@ -5,7 +5,7 @@ use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::workflow::automation::AutomationState;
 use rusqlite::{Connection, OptionalExtension, params};
 
-use super::codec::{decode, encode};
+use super::codec::{decode_state, encode_state};
 
 /// Call inside the write transaction. Match the decoded snapshot, then fence
 /// on the bytes actually stored: legacy defaults and JSON formatting need not
@@ -24,7 +24,7 @@ pub(super) fn previous_json(
         .map_err(sqlite_store_error)?;
 
     match raw {
-        Some(raw) if decode::<AutomationState>(&raw)? == *previous => Ok(Some(raw)),
+        Some(raw) if decode_state(&raw)? == *previous => Ok(Some(raw)),
         _ => Ok(None),
     }
 }
@@ -45,7 +45,7 @@ pub(super) fn advance(
         "UPDATE automation_consumers SET generation=?1,state_json=?2 WHERE consumer=?3 AND generation=?4 AND state_json=?5",
         params![
             next.generation,
-            encode(next)?,
+            encode_state(next)?,
             previous.consumer,
             previous.generation,
             previous_json

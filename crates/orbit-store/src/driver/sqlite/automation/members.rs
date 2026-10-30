@@ -19,7 +19,11 @@ pub(super) fn validate(
 
     // A member checkpoint touches member state only; the delivery projection and
     // its cursors must come through untouched.
-    if previous.active.is_some()
+    if previous.independent_review
+        || next.independent_review
+        || !previous.reservations.is_empty()
+        || !next.reservations.is_empty()
+        || previous.active.is_some()
         || next.active.is_some()
         || previous.covered != next.covered
         || previous.observed != next.observed

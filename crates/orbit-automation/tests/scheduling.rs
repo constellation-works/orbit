@@ -48,6 +48,8 @@ mod definition_symlinks;
 mod delivery;
 #[path = "scheduling/delivery_adopt.rs"]
 mod delivery_adopt;
+#[path = "scheduling/delivery_independent.rs"]
+mod delivery_independent;
 #[path = "scheduling/delivery_recovery.rs"]
 mod delivery_recovery;
 #[path = "scheduling/failed_members.rs"]

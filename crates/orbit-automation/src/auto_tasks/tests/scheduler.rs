@@ -60,6 +60,7 @@ impl AutoTaskDispatch for TestDispatch {
         );
         self.delivery_evaluations.fetch_add(1, Ordering::SeqCst);
         Ok(AutomationDiagnostic {
+            coverage_gaps: vec![],
             reason: "delivery fixture evaluated".to_string(),
             state: None,
             receipts: Vec::new(),

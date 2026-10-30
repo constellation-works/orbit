@@ -15,13 +15,23 @@ pub(super) fn commit(
     waiver: &BatchWaiver,
 ) -> Result<bool, OrbitError> {
     let invalid = || OrbitError::InvalidInput("invalid batch waiver transition".into());
-    let active = previous.active.as_ref().ok_or_else(invalid)?;
+    let active = previous
+        .delivery_attempts()
+        .find(|a| a.batch.id == waiver.batch_id)
+        .ok_or_else(invalid)?;
 
     // Rebuild the only checkpoint this waiver may produce and require the caller
     // to have proposed exactly it.
     let mut expected = previous.clone();
     expected.generation = expected.generation.checked_add(1).ok_or_else(invalid)?;
-    expected.active = None;
+    if previous.independent_review {
+        expected
+            .delivery_attempt_mut(&waiver.batch_id)
+            .ok_or_else(invalid)?
+            .state = BatchState::Waived;
+    } else {
+        expected.active = None;
+    }
     expected.pending.retain(|delivery| {
         !active
             .batch

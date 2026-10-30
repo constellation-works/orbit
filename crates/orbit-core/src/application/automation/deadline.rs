@@ -49,17 +49,16 @@ pub(crate) fn expiring_frozen_batch_tasks(
                 ));
             }
             after = Some(state.consumer.clone());
-            let Some(attempt) = state.active else {
-                continue;
-            };
-            if attempt.state != BatchState::Admitted {
-                continue;
-            }
-            let deadline = attempt.deadline();
-            if let Some(task_id) = attempt.action_id
-                && deadline <= horizon
-            {
-                expiring.insert(task_id, deadline);
+            for attempt in state.delivery_attempts() {
+                if attempt.state != BatchState::Admitted {
+                    continue;
+                }
+                let deadline = attempt.deadline();
+                if let Some(task_id) = &attempt.action_id
+                    && deadline <= horizon
+                {
+                    expiring.insert(task_id.clone(), deadline);
+                }
             }
         }
     }

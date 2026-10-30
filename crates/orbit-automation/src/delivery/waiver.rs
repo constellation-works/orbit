@@ -33,8 +33,8 @@ pub fn waive(
         .ok_or_else(|| AutomationError::Evidence("consumer not found".into()))?;
 
     let active = previous
-        .active
-        .as_ref()
+        .delivery_attempts()
+        .find(|a| a.batch.id == request.batch_id)
         .ok_or_else(|| AutomationError::Evidence("no active batch".into()))?;
 
     if active.batch.id != request.batch_id
@@ -50,7 +50,13 @@ pub fn waive(
         .generation
         .checked_add(1)
         .ok_or_else(|| AutomationError::Deferred(DeferredReason::GenerationExhausted))?;
-    next.active = None;
+    if previous.independent_review {
+        if let Some(attempt) = next.delivery_attempt_mut(&request.batch_id) {
+            attempt.state = BatchState::Waived;
+        }
+    } else {
+        next.active = None;
+    }
     next.pending.retain(|delivery| {
         !active
             .batch

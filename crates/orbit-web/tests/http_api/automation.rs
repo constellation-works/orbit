@@ -22,6 +22,8 @@ fn state(fixture: &Fixture, kind: &str, name: &str) -> AutomationState {
         tree: "b".repeat(40),
     };
     AutomationState {
+        reservations: vec![],
+        independent_review: false,
         consumer: orbit_core::application::automation::consumer_key(&fixture.runtime, kind, name)
             .unwrap(),
         epoch: "retained-definition".into(),

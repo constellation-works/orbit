@@ -92,8 +92,11 @@ Existing multi-pin time routines continue their independent per-host behavior.
 
 Each pass captures `now`, effective definition revision, source head and scan
 ceiling. Proposed initial limits: 200 source records per workspace/pass, 10 remote
-evidence lookups, 50 batch members, one active batch per consumer, and a 30-second
-evaluation deadline. A batch is also capped at 1 MiB, and the pending commit set at
+evidence lookups, 50 batch members, and a 30-second
+evaluation deadline. Delivery review auto-tasks retain at most 64 ordered reservations,
+including accepted batches waiting behind coverage gaps; other delivery and
+state-member routines retain one active batch per consumer. A batch is also
+capped at 1 MiB, and the pending commit set at
 5,000 IDs;
 oversized indivisible deliveries defer with an explicit reason until an operator
 selects a supported larger-work path. Limits never silently shorten coverage.
@@ -235,9 +238,14 @@ positions; do not compare them numerically. `D` is a batch record, not a univers
 high-water mark. Baseline-excluded history is recorded as such, never labelled
 successfully covered.
 
-Observations accumulate while overlap, `skip_if_open`, capacity, missing grants,
-or debounce prevent dispatch. Pending membership is never appended to an active
-batch. At threshold freeze the oldest pending range, bounded by `max_items`;
+Observations accumulate while overlap, manual-instance `skip_if_open`, capacity,
+missing grants, or debounce prevent dispatch. Pending membership is never appended
+to an active batch. Review auto-tasks freeze the oldest **unreserved** range at
+threshold, bounded by `max_items`; their ordered reservations define a scheduled
+boundary independently of observed and contiguous-covered boundaries. An open,
+retrying, failed or exhausted earlier review never gates another disjoint range.
+No task dependency, approval dependency or per-review dispatch gate connects them.
+Other delivery routines retain the single-active rule. For every consumer,
 the threshold must be positive and at most `max_items`. Later arrivals belong to
 the next batch. A nonzero maximum wait optionally flushes a subthreshold batch;
 it starts at the oldest pending observation and never creates empty work.
@@ -245,7 +253,8 @@ it starts at the oldest pending observation and never creates empty work.
 For an auto-task, acknowledgement attaches the batch to the minted task. It may
 wait indefinitely for normal approval/admission; do not recreate it merely because
 it has not run. `skip_if_open` still includes manually minted open instances of
-the same definition. Manual mint stays unconditional and cursor-neutral and
+the same definition. Automatic review batches dedupe by their permanent action key,
+so `skip_if_open` never connects distinct frozen batch identities. Manual mint stays unconditional and cursor-neutral and
 gets no automatic batch claim; it cannot consume scheduled coverage implicitly.
 
 Successful process exit, task `done`, summary prose, or an empty findings list is
@@ -269,10 +278,40 @@ applicable execution recovery settles, within one durable batch budget. An open
 blocked task is the same action, not permission to mint a replacement. If a closed
 failed action needs replacement, record a new attempt under the same batch only
 after its predecessor is known stopped and policy authorizes retry. Exhaustion
-leaves `needs_attention`, not covered. A withdrawn/rejected task suppresses further
+leaves that batch `needs_attention`, not covered. For independent reviews,
+observation and scheduling of later ranges continue until the reservation or
+retained-observation bounds impose real backpressure. An accepted later receipt
+is stored atomically with that reservation's `covered` state; its original bytes,
+action and provenance remain immutable behind any earlier gap. Receipt acceptance
+does not move the contiguous cursor. Separate generation-fenced retirement closes
+only the proven consecutive prefix, including later accepted reservations without
+minting them again. Covered, exhausted and waived reservations behind a gap all
+count toward the 64-reservation bound. A withdrawn/rejected task suppresses further
 automatic attempts; an operator must choose retry, replacement, or a reasoned
 waiver. Waivers settle scheduling debt separately from successful coverage and
 remain visible gaps in coverage telemetry.
+
+Review checkpoint compatibility uses the existing `automation_consumers.state_json`
+and independent `automation_coverage` receipt rows; no SQL schema migration is
+needed. Layout v4 (`independent-review-checkpoints`) records the format boundary
+and refuses older binaries; consumer conversion remains lazy and generation-fenced,
+so workspace open rewrites no frozen obligation or receipt. `active` remains the oldest legacy attempt and `reservations` holds later
+attempts in source order. Enabling independent review scheduling copies no batch:
+a legacy 12-delivery attempt 3 retains its input digest, obligations, action key,
+retry authorization, and artifacts, while future reservations use the configured
+cap (the shipped review default is five). Pending, waived, before-PR-excluded and
+unresolved facts remain in the retained window until their original disposition
+permits retirement.
+
+Independent checkpoints encode the persisted epoch as the versioned object
+`{"version":2,"identity":"<epoch>"}`. Diagnostics still expose a string epoch.
+Older readers require that persisted field to be a string and refuse before
+creating or writing a lossy snapshot. Already-read older snapshots lose the
+transaction's generation/byte fence. Upgrades continue to read legacy string
+epochs; state-member and single-active routine encoding remains unchanged.
+Recovery preserves every non-target reservation and its receipt. Frozen source
+pins include every reservation's boundaries; ordinary member-pin garbage
+collection never traverses the deeper delivery-pin namespace.
 
 ## 5. Crash safety, concurrency, and minimal state
 
@@ -626,7 +665,7 @@ trigger:
   coverage: landed_code_review_v1
   exclude_valid_coverage: before_pr_code_review_v1
 batch:
-  max_items: 20
+  max_items: 5
   max_active: 1
 dedupe: skip_if_open
 template:
@@ -697,8 +736,8 @@ drift from task completion time. No OR/AND trigger language is proposed.
 | Sequence | Durable result |
 | --- | --- |
 | Enable QA at H0; D1, D2, D3 land, threshold three | Baseline is H0; observation retains three keys; freeze B1 through H3 and mint T1. C remains unset beyond baseline. |
-| D4 and D5 land while T1 waits/runs | O advances with durable pending members; B1 remains D1–D3. No second task while T1 is open. |
-| T1 fails, then an authorized attempt succeeds on B1 | Failed attempt advances no coverage. Accepted receipt advances C to H3 once; D4/D5 still pending. |
+| D4 and D5 land while T1 waits/runs | O advances; B1 remains D1–D3. For review auto-tasks, a due B2 freezes D4–D5 independently, while single-active routines wait. |
+| B2 completes before failed B1 is recovered | B2 retains its accepted receipt; C stays before B1. Targeted recovery preserves B2, and B1 acceptance later retires the proven prefix through B2 without another review. |
 | D6 arrives / max pending age expires | Freeze B2 for D4–D6 / D4–D5 respectively; never silently include them in B1's receipt. |
 | Crash after T1 creation before scheduler acknowledgement | Action-key lookup recovers T1. A second evaluator cannot mint T2 for B1. |
 | Pilot captures task fingerprint F1, user changes criteria to F2 | F1 apply is stale; F2 stays pending. Successful F2 selector write certifies its post-apply fingerprint and does not loop. |

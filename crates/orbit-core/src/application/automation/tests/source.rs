@@ -260,6 +260,8 @@ fn state_for<'a>(repo: &'a Path, old_tip: &str) -> (Source<'a>, AutomationState)
     let base = source.revision(&base_commit).expect("base revision");
     let observed = source.revision(old_tip).expect("observed revision");
     let state = AutomationState {
+        reservations: vec![],
+        independent_review: false,
         members: None,
         consumer: "consumer".into(),
         epoch: "epoch".into(),
@@ -573,7 +575,7 @@ fn admitted_replay_limit_completes_and_one_past_it_is_refused() {
         );
         let apply_request = RecoveryRequest {
             reason: "reconcile the content-preserving rebase".into(),
-            ..request
+            ..request.clone()
         };
         let applied = recovery::apply(
             store.as_ref(),

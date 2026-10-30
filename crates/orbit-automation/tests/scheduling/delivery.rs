@@ -80,6 +80,7 @@ pub(super) struct Host {
     /// The admitted action's task is terminal.
     pub(super) stopped: AtomicBool,
     pub(super) fail_admit: AtomicBool,
+    pub(super) independent: AtomicBool,
     pub(super) failed: AtomicBool,
     /// Repository identity the configured branch resolves to.
     pub(super) repository: Mutex<String>,
@@ -108,6 +109,7 @@ impl Host {
             raw_evidence: Mutex::new(None),
             stopped: AtomicBool::new(false),
             fail_admit: AtomicBool::new(false),
+            independent: AtomicBool::new(false),
             failed: AtomicBool::new(false),
             repository: Mutex::new("owner/repo".into()),
             adopts_settings: AtomicBool::new(true),
@@ -174,6 +176,9 @@ impl Host {
 }
 
 impl DeliveryHost for Host {
+    fn independent_review_batches(&self) -> bool {
+        self.independent.load(Ordering::SeqCst)
+    }
     fn head(&self, _: &str) -> Result<(String, SourceRevision), AutomationError> {
         Ok((self.repository.lock().unwrap().clone(), revision(0)))
     }

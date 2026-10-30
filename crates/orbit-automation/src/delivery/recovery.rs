@@ -15,6 +15,8 @@
 //! Nothing here covers, waives or discards debt. Coverage still requires valid
 //! evidence from the assigned executor of an admitted action.
 
+pub use super::recovery_batches::recovery_selection;
+use super::recovery_batches::{retained_actions, selected_attempt};
 use crate::{AutomationError, DeferredReason};
 use chrono::{DateTime, Utc};
 use orbit_store::contracts::AutomationStoreBackend;
@@ -133,10 +135,14 @@ pub fn apply(
         resolved_action_id: None,
         ..request.clone()
     };
+    let projected_request = RecoveryRequest {
+        batch_id: request.request.batch_id.clone(),
+        ..RecoveryRequest::default()
+    };
     project(
         store,
         &projection,
-        &RecoveryRequest::default(),
+        &projected_request,
         &next,
         applied,
         record.replayed_history.clone(),
@@ -155,6 +161,14 @@ fn load_inspected(
         return Err(AutomationError::Deferred(
             DeferredReason::ConcurrentEvaluation,
         ));
+    }
+    if request
+        .request
+        .batch_id
+        .as_ref()
+        .is_some_and(|id| !state.delivery_attempts().any(|a| &a.batch.id == id))
+    {
+        return Err(AutomationError::Refused(refusal::UNKNOWN_BATCH.into()));
     }
     Ok(state)
 }
@@ -247,9 +261,11 @@ fn reissue(
     request: &Recovery<'_>,
     next: &mut AutomationState,
 ) -> Result<ReissuedAction, AutomationError> {
+    let batch_id = selected_attempt(next, request.request)
+        .map(|a| a.batch.id.clone())
+        .ok_or_else(|| AutomationError::Refused(refusal::NO_SETTLED_ACTION.into()))?;
     let attempt = next
-        .active
-        .as_mut()
+        .delivery_attempt_mut(&batch_id)
         .ok_or_else(|| AutomationError::Refused(refusal::NO_SETTLED_ACTION.into()))?;
 
     let from_action_id = attempt
@@ -328,7 +344,19 @@ pub(super) fn refusals(
     }
 
     // Live execution is never interrupted; its action has to settle first.
-    if executing(state, request.action_terminal) {
+    if requested.reissue_action
+        && requested.batch_id.is_none()
+        && state.delivery_attempts().count() > 1
+    {
+        refuse(refusal::BATCH_REQUIRED);
+    }
+    let selected_state = recovery_selection(state, requested);
+    if (!(state.independent_review
+        && requested.adopt_settings
+        && !requested.reissue_action
+        && !requested.replay_history))
+        && executing(&selected_state, request.action_terminal)
+    {
         refuse(refusal::ACTIVE_EXECUTION);
     }
 
@@ -350,7 +378,7 @@ pub(super) fn refusals(
     }
 
     if requested.reissue_action {
-        match state.active.as_ref() {
+        match selected_attempt(state, requested) {
             Some(active) if settled(active, request.action_failed_without_evidence) => {
                 if store
                     .automation_receipt(&state.consumer, &active.batch.id)?
@@ -404,13 +432,10 @@ pub(super) fn debt(
 /// Whether the consumer's active attempt is still executing. A claim awaiting
 /// admission is; a minted action is unless the host proved it stopped.
 pub(super) fn executing(state: &AutomationState, action_terminal: bool) -> bool {
-    state
-        .active
-        .as_ref()
-        .is_some_and(|active| match active.state {
-            BatchState::Claimed | BatchState::Admitted => !action_terminal,
-            _ => false,
-        })
+    state.delivery_attempts().any(|active| match active.state {
+        BatchState::Claimed | BatchState::Admitted => !action_terminal,
+        _ => false,
+    })
 }
 
 /// Whether the attempt closed without accepted evidence: settled failed or
@@ -458,7 +483,8 @@ fn project(
     applied: Vec<String>,
     history_replay: Option<HistoryReplayRecord>,
 ) -> Result<RecoveryPreview, AutomationError> {
-    let mut action = stalled_action(store, state, request.action_failed_without_evidence)?;
+    let selected = recovery_selection(state, requested);
+    let mut action = stalled_action(store, &selected, request.action_failed_without_evidence)?;
     if let Some(action) = &mut action
         && action.action_id.is_none()
         && applied.is_empty()
@@ -482,6 +508,7 @@ fn project(
         },
         debt: debt(store, state)?,
         action,
+        actions: retained_actions(store, state)?,
         history_replay,
         refusals: refusals(store, request, requested, state)?,
         applied,

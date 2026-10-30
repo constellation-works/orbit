@@ -124,6 +124,7 @@ fn record(
                 state,
                 request.action_failed_without_evidence,
             )?,
+            abandoned_actions: super::recovery_batches::retained_actions(store, state)?,
             baseline: request.baseline.clone(),
             released_refs: request.released_refs.clone(),
             cleared_stall: state.stall.clone(),
@@ -181,6 +182,7 @@ fn project(
         epoch: state.epoch.clone(),
         debt: recovery::debt(store, state)?,
         action: recovery::stalled_action(store, state, request.action_failed_without_evidence)?,
+        actions: super::recovery_batches::retained_actions(store, state)?,
         stall: state.stall.clone(),
         baseline: request.baseline.clone(),
         refusals: if applied {

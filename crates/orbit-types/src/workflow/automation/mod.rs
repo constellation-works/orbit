@@ -23,4 +23,6 @@ pub use evidence::{
     evidence_template,
 };
 pub use ownership::{DeliveryAssociation, DeliveryOwnership, DirectLandingRequest, OwnerAuthority};
-pub use state::{AssociationLookupRetry, AutomationDiagnostic, AutomationState};
+pub use state::{
+    AssociationLookupRetry, AutomationDiagnostic, AutomationState, MAX_DELIVERY_RESERVATIONS,
+};

@@ -978,6 +978,8 @@ pub(crate) fn admit(
     use orbit_types::workflow::automation::AutomationState;
     let from = attempt.batch.from_exclusive.clone();
     let baseline = AutomationState {
+        reservations: vec![],
+        independent_review: false,
         members: None,
         consumer: attempt.batch.consumer.clone(),
         epoch: attempt.batch.epoch.clone(),

@@ -31,6 +31,9 @@ pub(crate) fn diagnostic(
     state: Option<AutomationState>,
 ) -> Result<AutomationDiagnostic, AutomationError> {
     Ok(AutomationDiagnostic {
+        coverage_gaps: state
+            .as_ref()
+            .map_or_else(Vec::new, AutomationState::delivery_coverage_gaps),
         reason: reason.into(),
         state,
         // Ownership is resolved by the host that owns registry facts; this

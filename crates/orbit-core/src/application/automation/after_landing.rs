@@ -593,8 +593,17 @@ pub fn after_landing_health(
         .into_iter()
         .find(|wedged| wedged.definition == AFTER_LANDING_CONSUMER)
     {
+        let batch_selector = if diagnostic
+            .state
+            .as_ref()
+            .is_some_and(|state| state.delivery_attempts().count() > 1)
+        {
+            format!("--batch {} ", wedged.batch_id)
+        } else {
+            String::new()
+        };
         health.problems.push(format!(
-            "wedged on a batch task ({}) that closed without accepted coverage evidence{}; recover with `orbit auto-task recover {AFTER_LANDING_CONSUMER} {}--reissue-action --reason \"re-examine the unpaid batch\"`",
+            "wedged on a batch task ({}) that closed without accepted coverage evidence{}; recover with `orbit auto-task recover {AFTER_LANDING_CONSUMER} {}{batch_selector}--reissue-action --reason \"re-examine the unpaid batch\"`",
             wedged.terminal_status,
             wedged
                 .reason
@@ -654,11 +663,12 @@ pub fn after_landing_health(
             diagnostic.reason
         ));
     }
-    health.last_batch_minted_at = diagnostic
-        .state
-        .as_ref()
-        .and_then(|state| state.active.as_ref())
-        .map(|active| active.batch.created_at);
+    health.last_batch_minted_at = diagnostic.state.as_ref().and_then(|state| {
+        state
+            .delivery_attempts()
+            .map(|active| active.batch.created_at)
+            .max()
+    });
     health.last_batch_covered_at = diagnostic
         .receipts
         .iter()
@@ -761,15 +771,29 @@ fn next_batch_due(
     trigger: &DeliveryTrigger,
     now: DateTime<Utc>,
 ) -> (String, Option<DateTime<Utc>>) {
-    let pending = state.pending.len();
+    let deliveries = if state.independent_review {
+        state.unreserved_deliveries().collect::<Vec<_>>()
+    } else {
+        state.pending.iter().collect::<Vec<_>>()
+    };
+    let pending = deliveries.len();
     let threshold = trigger.threshold;
-    if state.active.is_some() {
+    if state.independent_review
+        && state.delivery_attempts().count()
+            >= orbit_types::workflow::automation::MAX_DELIVERY_RESERVATIONS
+    {
+        return (
+            format!("at reservation capacity ({pending} unreserved deliveries)"),
+            None,
+        );
+    }
+    if !state.independent_review && state.active.is_some() {
         return (
             format!("after the batch in flight ({pending} pending)"),
             None,
         );
     }
-    let Some(oldest) = state.pending.first() else {
+    let Some(oldest) = deliveries.first() else {
         return (
             format!("after {threshold} landed deliveries (none pending)"),
             None,

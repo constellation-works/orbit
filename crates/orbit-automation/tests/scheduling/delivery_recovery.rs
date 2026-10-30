@@ -18,6 +18,7 @@ use std::sync::atomic::Ordering;
 
 fn request(adopt: bool, reissue: bool) -> RecoveryRequest {
     RecoveryRequest {
+        batch_id: None,
         adopt_settings: adopt,
         reissue_action: reissue,
         replay_history: false,

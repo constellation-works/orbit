@@ -6,5 +6,6 @@ mod codec;
 mod intents;
 mod members;
 mod recovery;
+mod reservations;
 mod transition;
 mod waivers;

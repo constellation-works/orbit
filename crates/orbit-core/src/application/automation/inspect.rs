@@ -185,6 +185,8 @@ pub fn unadmittable_delivery_definitions(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WedgedConsumer {
     pub definition: String,
+    /// Immutable reservation this stopped action belongs to.
+    pub batch_id: String,
     /// The stopped action: the task the consumer is still waiting on.
     pub action_id: String,
     /// The task's terminal status, or `deleted` when the recorded task is gone.
@@ -211,29 +213,35 @@ pub fn wedged_delivery_consumers(
         }
         let consumer = super::consumer_key(runtime, "auto-task", &definition.name)?;
         let state = store.automation_state(&consumer)?;
-        if !super::auto_task_action_liveness(runtime, &definition, state.as_ref(), now)
-            .failed_without_evidence
-        {
-            continue;
-        }
-        if let Some(active) = state.and_then(|state| state.active) {
-            let Some(action_id) = super::task::action_id(runtime, &active)? else {
-                continue;
-            };
-            let terminal_status = match runtime.get_task(&action_id) {
-                Ok(task) => task.status.to_string(),
-                Err(OrbitError::NotFound {
-                    kind: orbit_common::NotFoundKind::Task,
-                    ..
-                }) => "deleted".into(),
-                Err(error) => return Err(error),
-            };
-            wedged.push(WedgedConsumer {
-                definition: definition.name.clone(),
-                action_id,
-                terminal_status,
-                reason: active.reason,
-            });
+        if let Some(state) = state {
+            for active in state.delivery_attempts() {
+                let mut selected = state.clone();
+                selected.active = Some(active.clone());
+                selected.reservations.clear();
+                if !super::auto_task_action_liveness(runtime, &definition, Some(&selected), now)
+                    .failed_without_evidence
+                {
+                    continue;
+                }
+                let Some(action_id) = super::task::action_id(runtime, active)? else {
+                    continue;
+                };
+                let terminal_status = match runtime.get_task(&action_id) {
+                    Ok(task) => task.status.to_string(),
+                    Err(OrbitError::NotFound {
+                        kind: orbit_common::NotFoundKind::Task,
+                        ..
+                    }) => "deleted".into(),
+                    Err(error) => return Err(error),
+                };
+                wedged.push(WedgedConsumer {
+                    definition: definition.name.clone(),
+                    batch_id: active.batch.id.clone(),
+                    action_id,
+                    terminal_status,
+                    reason: active.reason.clone(),
+                });
+            }
         }
     }
 
@@ -289,7 +297,13 @@ fn inspect_auto_task_inner(
     let ownership = ownership::resolve(runtime, declared.owner_machine.as_deref());
     let trigger = ownership::with_resolved_owner(declared, &ownership);
     let epoch = ownership::auto_task_epoch(definition, &trigger)?;
-    let admission_deferred = definition.dedupe == DedupePolicy::SkipIfOpen && has_open_instance()?;
+    let admission_deferred = if trigger.coverage
+        == orbit_types::workflow::automation::CoverageClass::LandedCodeReviewV1
+    {
+        super::auto_task_admission_deferral(runtime, definition)?.is_some()
+    } else {
+        definition.dedupe == DedupePolicy::SkipIfOpen && has_open_instance()?
+    };
 
     inspect(
         runtime,
@@ -469,6 +483,9 @@ fn inspect(
     };
 
     Ok(AutomationDiagnostic {
+        coverage_gaps: state
+            .as_ref()
+            .map_or_else(Vec::new, AutomationState::delivery_coverage_gaps),
         reason,
         state,
         ownership: Some(ownership),
@@ -526,13 +543,31 @@ fn scheduling_reason(
         .active
         .as_ref()
         .filter(|active| active.action_id.is_none() && active.state == BatchState::Claimed);
-    let threshold_reached = state.pending.len() >= trigger.threshold;
-    let oldest_waited_out = state.pending.first().is_some_and(|oldest| {
+    let pending = if state.independent_review {
+        state.unreserved_deliveries().collect::<Vec<_>>()
+    } else {
+        state.pending.iter().collect::<Vec<_>>()
+    };
+    let threshold_reached = pending.len() >= trigger.threshold;
+    let oldest_waited_out = pending.first().is_some_and(|oldest| {
         now.signed_duration_since(oldest.landed_at).num_minutes()
             >= i64::from(trigger.max_wait_minutes)
     });
 
-    if active_is_settled {
+    if state.independent_review
+        && state.delivery_attempts().count()
+            >= orbit_types::workflow::automation::MAX_DELIVERY_RESERVATIONS
+    {
+        "reservation_capacity"
+    } else if state.independent_review && (threshold_reached || oldest_waited_out) {
+        if admission_deferred {
+            "open_instance"
+        } else if threshold_reached {
+            "threshold_reached"
+        } else {
+            "max_wait_reached"
+        }
+    } else if active_is_settled {
         "needs_attention"
     } else if claim_awaiting_admission
         .is_some_and(|active| active.attempt > 1 && now > active.deadline())

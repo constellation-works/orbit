@@ -8,7 +8,7 @@ use orbit_types::workflow::automation::recovery::RecoveryRecord;
 use orbit_types::workflow::automation::{AcceptedCoverage, AutomationState};
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
-use super::codec::{decode, encode};
+use super::codec::{decode, decode_state, encode, encode_state};
 use super::transition::validate_transition;
 use super::{checkpoint, intents, recovery, waivers};
 
@@ -107,7 +107,7 @@ impl AutomationStoreBackend for Store {
                 )
                 .optional()
                 .map_err(sqlite_store_error)?;
-            raw.as_deref().map(decode).transpose()
+            raw.as_deref().map(decode_state).transpose()
         })
     }
 
@@ -120,6 +120,7 @@ impl AutomationStoreBackend for Store {
             || state.baseline != state.observed
             || state.baseline != state.covered
             || state.active.is_some()
+            || !state.reservations.is_empty()
             || state.stall.is_some()
             || !state.pending.is_empty()
             || !state.waived.is_empty()
@@ -134,7 +135,7 @@ impl AutomationStoreBackend for Store {
             tx.connection()
                 .execute(
                     "INSERT OR IGNORE INTO automation_consumers VALUES (?1,0,?2)",
-                    params![state.consumer, encode(state)?],
+                    params![state.consumer, encode_state(state)?],
                 )
                 .map(|n| n == 1)
                 .map_err(sqlite_store_error)
@@ -161,7 +162,11 @@ impl AutomationStoreBackend for Store {
                 let batch_json = if let Some(members) = &previous.members {
                     encode(&serde_json::json!({"state_member": members.active}))?
                 } else {
-                    encode(&previous.active)?
+                    encode(
+                        &previous
+                            .delivery_attempts()
+                            .find(|attempt| attempt.batch.id == receipt.batch_id),
+                    )?
                 };
 
                 conn.execute(
@@ -209,7 +214,7 @@ impl AutomationStoreBackend for Store {
                 .map_err(sqlite_store_error)?;
             rows.map(|row| {
                 let (consumer, raw) = row.map_err(sqlite_store_error)?;
-                let state: AutomationState = decode(&raw)?;
+                let state: AutomationState = decode_state(&raw)?;
                 if state.consumer != consumer {
                     return Err(OrbitError::Store(
                         "persisted automation consumer key does not match its state".into(),

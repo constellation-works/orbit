@@ -49,9 +49,12 @@ pub fn recover_auto_task(
     let by = runtime.actor().resolve_write_label(None, None)?;
     let store = runtime.automation_store()?;
     let state = store.automation_state(&consumer)?;
+    let selected = state
+        .as_ref()
+        .map(|state| recovery::recovery_selection(state, request));
     let action_liveness =
-        super::auto_task_action_liveness(runtime, definition, state.as_ref(), now);
-    let resolved_action_id = state
+        super::auto_task_action_liveness(runtime, definition, selected.as_ref(), now);
+    let resolved_action_id = selected
         .as_ref()
         .and_then(|state| state.active.as_ref())
         .filter(|active| {

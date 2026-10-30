@@ -37,13 +37,34 @@ pub(super) fn reconcile(
     state: AutomationState,
     now: DateTime<Utc>,
 ) -> Result<AutomationState, AutomationError> {
-    let Some(active) = &state.active else {
+    let Some(batch_id) = state
+        .active
+        .as_ref()
+        .map(|attempt| attempt.batch.id.clone())
+    else {
+        return Ok(state);
+    };
+    reconcile_batch(store, host, state, &batch_id, now)
+}
+
+/// Settle one reservation without making another batch depend on it.
+pub(super) fn reconcile_batch(
+    store: &dyn AutomationStoreBackend,
+    host: &dyn DeliveryHost,
+    state: AutomationState,
+    batch_id: &str,
+    now: DateTime<Utc>,
+) -> Result<AutomationState, AutomationError> {
+    let Some(active) = state
+        .delivery_attempts()
+        .find(|attempt| attempt.batch.id == batch_id)
+    else {
         return Ok(state);
     };
 
     if matches!(
         active.state,
-        BatchState::Exhausted | BatchState::Failed | BatchState::Waived
+        BatchState::Exhausted | BatchState::Failed | BatchState::Waived | BatchState::Covered
     ) {
         return Ok(state);
     }
@@ -60,19 +81,28 @@ pub(super) fn reconcile(
                     return commit(
                         store,
                         &state,
-                        settle_failed(&state, true, error.to_string(), now),
+                        settle_failed(&state, batch_id, true, error.to_string(), now),
                         None,
                     );
                 }
                 Err(error) => {
                     let mut next = state.clone();
-                    if let Some(attempt) = &mut next.active {
+                    if let Some(attempt) = next.delivery_attempt_mut(batch_id) {
                         attempt.reason = Some(error.to_string());
                     }
 
                     return commit(store, &state, next, None);
                 }
             };
+
+            if state.independent_review {
+                let mut next = state.clone();
+                if let Some(attempt) = next.delivery_attempt_mut(batch_id) {
+                    attempt.state = BatchState::Covered;
+                    attempt.reason = None;
+                }
+                return commit(store, &state, next, Some(&receipt));
+            }
 
             // Accepted evidence retires the batch: its commits and every fact keyed to
             // them leave the pending window, and the covered cursor advances.
@@ -111,7 +141,7 @@ pub(super) fn reconcile(
         ActionOutcome::Failed { retryable, reason } => commit(
             store,
             &state,
-            settle_failed(&state, retryable, reason, now),
+            settle_failed(&state, batch_id, retryable, reason, now),
             None,
         ),
     }
@@ -122,12 +152,13 @@ pub(super) fn reconcile(
 /// batch as exhausted or failed for an operator. Coverage never advances.
 fn settle_failed(
     state: &AutomationState,
+    batch_id: &str,
     retryable: bool,
     reason: String,
     now: DateTime<Utc>,
 ) -> AutomationState {
     let mut next = state.clone();
-    if let Some(attempt) = &mut next.active {
+    if let Some(attempt) = next.delivery_attempt_mut(batch_id) {
         attempt.reason = Some(reason);
 
         let retry_budget_remains = retryable
@@ -163,6 +194,24 @@ pub fn action_liveness(
     state: &AutomationState,
     now: DateTime<Utc>,
 ) -> Result<ActionLiveness, AutomationError> {
+    if state.independent_review && !state.reservations.is_empty() {
+        let mut combined = ActionLiveness {
+            terminal: true,
+            failed_without_evidence: false,
+        };
+        for attempt in state
+            .delivery_attempts()
+            .filter(|a| matches!(a.state, BatchState::Claimed | BatchState::Admitted))
+        {
+            let mut selected = state.clone();
+            selected.active = Some(attempt.clone());
+            selected.reservations.clear();
+            let liveness = action_liveness(host, &selected, now)?;
+            combined.terminal &= liveness.terminal;
+            combined.failed_without_evidence |= liveness.failed_without_evidence;
+        }
+        return Ok(combined);
+    }
     let Some(active) = state
         .active
         .as_ref()
