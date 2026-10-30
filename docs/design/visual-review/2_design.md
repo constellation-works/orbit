@@ -408,8 +408,9 @@ whose `sha256` differs from the digest read at admission is refused as `mock_cha
 - **Size.** Each image must stay under the 1 MiB artifact limit
   ([task artifacts §5a](../task-artifacts/2_design.md#5a-image-artifacts-presentation-and-retrieval)).
   Viewport captures of the dashboard are well under it (the ORB-19304 shots were 57–192 KB as
-  PNG). The driver encodes PNG first; over the limit, lossless WebP; still over, WebP at
-  quality 90 with `lossy: true`. If quality 90 still exceeds the limit, the driver records an
+  PNG). The driver encodes PNG first; over the limit, WebP at quality 1; still over, WebP at
+  quality 0.9. Chromium's canvas encoder is lossy at every quality, so both WebP encodings
+  record `lossy: true`. If quality 0.9 still exceeds the limit, the driver records an
   `image_over_budget` error for that mock and names no capture images in `capture.json`, so no
   over-limit bytes are attached. The capture step preserves completed stability, differing
   region, off-loopback and colour-scheme findings in `visual/checks.json`; `visual_checks`
