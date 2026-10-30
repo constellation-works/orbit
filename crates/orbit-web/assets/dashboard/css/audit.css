@@ -465,6 +465,9 @@ td.codebase-empty { padding: 16px 14px; }
 .audit-summary-card .card-body {
   padding: 0;
 }
+.audit-summary-card.lifecycle-failure-card .card-body {
+  padding: 10px 12px;
+}
 .summary-table {
   width: 100%;
   table-layout: fixed;
