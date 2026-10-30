@@ -42,8 +42,14 @@
 //! → orbit-runtime → `orbit-core` → orbit-cmd / orbit-web / orbit-cli
 
 #[cfg(test)]
+#[path = "../tests/support/admission.rs"]
+mod admission_test_support;
+#[cfg(test)]
 #[path = "../tests/support/git.rs"]
 mod git_test_support;
+#[cfg(test)]
+#[path = "../tests/support/task_params.rs"]
+mod task_params_test_support;
 
 // A bare `cargo test` from a managed-run shell must match one from a clean shell.
 #[cfg(test)]

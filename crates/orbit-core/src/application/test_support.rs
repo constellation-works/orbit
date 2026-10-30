@@ -3,8 +3,7 @@ use std::path::PathBuf;
 
 use chrono::Utc;
 use orbit_store::contracts::{
-    AdmissionReceipt, AdmissionRequest, AdmissionRunContext, AdmissionShipContract,
-    AdmissionTaskSummary, DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA, ExecutionClaim,
+    AdmissionReceipt, AdmissionRequest, AdmissionTaskSummary, ExecutionClaim,
 };
 use orbit_types::workflow::{ExecutorDef, ExecutorSandboxKind, ExecutorType};
 use serde_json::json;
@@ -12,22 +11,7 @@ use tempfile::tempdir;
 
 use crate::OrbitRuntime;
 
-/// Supply required wire fields and let serde default unrelated capabilities.
-/// Callers keep their review settings explicit with struct update syntax.
-pub(crate) fn admission_request(
-    request_id: String,
-    run_context: AdmissionRunContext,
-    ship: AdmissionShipContract,
-) -> AdmissionRequest {
-    serde_json::from_value(json!({
-        "request_id": request_id,
-        "caller_version": "fixture",
-        "caller_schema": DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
-        "run_context": run_context,
-        "ship": ship,
-    }))
-    .expect("admission request fixture matches the wire contract")
-}
+pub(crate) use crate::admission_test_support::admission_request;
 
 /// A claimed receipt with no diagnostics; optional capability/evidence fields
 /// use their wire defaults. Claim identity, phase and task stay with the caller.

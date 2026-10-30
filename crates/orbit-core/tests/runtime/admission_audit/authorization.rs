@@ -13,13 +13,13 @@ use orbit_engine::RuntimeHost;
 use std::collections::BTreeSet;
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::TaskCreateParams;
 use orbit_tools::ToolContext;
 use orbit_types::policy::Role;
-use orbit_types::task::{TaskPriority, TaskStatus, TaskType};
+use orbit_types::task::TaskStatus;
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 use serde_json::json;
 
+use crate::task_params_test_support::task_create_params;
 use orbit_core::OrbitRuntime;
 
 fn context_with(capabilities: [McpCapability; 1]) -> ToolContext {
@@ -34,44 +34,11 @@ fn context_with(capabilities: [McpCapability; 1]) -> ToolContext {
 
 fn seed_task(runtime: &OrbitRuntime) -> String {
     crate::admission_audit::store_support::tasks(runtime)
-        .create_task(TaskCreateParams {
-            granted_tools: Vec::new(),
-            requires_labels: Vec::new(),
-            actor: "test".to_string(),
-            parent_id: None,
-            title: "Governed operation fixture".to_string(),
-            description: "Exercise the capability chokepoint".to_string(),
-            acceptance_criteria: Vec::new(),
-            dependencies: Vec::new(),
-            relations: Vec::new(),
-            tags: Vec::new(),
-            required_tools: Vec::new(),
-            plan: String::new(),
-            execution_summary: String::new(),
-            context_files: Vec::new(),
-            repo_root: None,
-            created_by: Some("test".to_string()),
-            planned_by: None,
-            implemented_by: None,
-            status: TaskStatus::Backlog,
-            priority: TaskPriority::Medium,
-            complexity: None,
-            task_type: TaskType::Chore,
-            external_refs: Vec::new(),
-            source_task_id: None,
-            crew: None,
-            crew_source: None,
-            orchestrator: None,
-            orchestrator_model: None,
-            orchestrator_model_source: None,
-            created_by_model: None,
-            origin: None,
-            rule_fingerprint: None,
-            comments: Vec::new(),
-            context_creation: Vec::new(),
-            creation_decision: None,
-            not_before: None,
-        })
+        .create_task(task_create_params(
+            "Governed operation fixture",
+            "Exercise the capability chokepoint",
+            TaskStatus::Backlog,
+        ))
         .expect("create task")
         .id
 }
