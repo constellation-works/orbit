@@ -11,12 +11,15 @@ use std::collections::BTreeMap;
 
 use super::*;
 
+use crate::admission_test_support::{
+    admission_request, admission_review_contract, admission_ship_contract,
+};
 use orbit_automation::review::{combined_task_meaning_digest, task_meaning_digest};
 use orbit_store::TaskCommitBoundary;
 use orbit_store::contracts::{
     AdmissionIdentity, AdmissionLookup, AdmissionOrdering, AdmissionRequest,
     AdmissionReviewContract, AdmissionRunContext, AdmissionShipContract, ClaimEvidence,
-    DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA, ExecutionLocation, HandoffReviewObservation,
+    ExecutionLocation, HandoffReviewObservation,
 };
 use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
 use orbit_types::identity::lower_hex;
@@ -183,22 +186,14 @@ impl ReviewedHandoff {
         // The claim a gate-running leaf's pull admits under the owner's
         // captured review contract.
         let ship = AdmissionShipContract {
-            mode: "pr".into(),
-            base_branch: "main".into(),
-            landing_branch: "main".into(),
             before_pr: timing == ReviewTiming::BeforePr,
             before_landing: timing == ReviewTiming::BeforeLanding,
-            completion: "review".into(),
-            authorization_reference: None,
             review: Some(AdmissionReviewContract {
-                contract_version: REVIEW_CONTRACT_VERSION,
                 crew: Some("reviewer".into()),
-                budget: ReviewBudget::default(),
                 required_validation_commands: Some(commands.clone()),
-                baseline_commands: Vec::new(),
-                host_evidence: Vec::new(),
-                selective_before_landing: None,
+                ..admission_review_contract()
             }),
+            ..admission_ship_contract()
         };
         let boundary = TaskCommitBoundary::new(
             owner.sqlite_store().unwrap(),
@@ -207,24 +202,18 @@ impl ReviewedHandoff {
         )
         .unwrap();
         let request = AdmissionRequest {
-            labels: Vec::new(),
-            request_id: "reviewed-pull".into(),
-            caller_version: "test".into(),
-            caller_schema: DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
-            caller_fingerprint: None,
-            caller_before_pr: false,
             review_gate: true,
-            selective_review: false,
-            run_context: AdmissionRunContext {
-                run_id: "drain".into(),
-                job_name: "workspace_pull_pipeline".into(),
-                machine_name: None,
-            },
-            ship: ship.clone(),
-            crews: None,
-            os: None,
-            browser_kit: false,
-            admissible: None,
+            // The owner admits only its own version, passed to `admit_task` below.
+            caller_version: "test".into(),
+            ..admission_request(
+                "reviewed-pull".into(),
+                AdmissionRunContext {
+                    run_id: "drain".into(),
+                    job_name: "workspace_pull_pipeline".into(),
+                    machine_name: None,
+                },
+                ship.clone(),
+            )
         };
         let AdmissionLookup::Found { receipt, .. } = boundary
             .admit_task(

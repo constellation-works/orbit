@@ -12,8 +12,12 @@
 // Integration fixtures unwrap setup invariants.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+#[path = "../support/admission.rs"]
+mod admission_test_support;
 #[path = "../support/git.rs"]
 mod git_test_support;
+#[path = "../support/task_params.rs"]
+mod task_params_test_support;
 
 orbit_common::isolate_test_process!();
 

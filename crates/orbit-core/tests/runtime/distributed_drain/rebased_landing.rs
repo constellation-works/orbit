@@ -6,13 +6,15 @@
 
 use super::before_pr::{ReviewedHandoff, revision};
 use super::*;
+use crate::admission_test_support::{
+    admission_request, admission_review_contract, admission_ship_contract,
+};
 
 use orbit_automation::review::REBASED_CLEAN_ASSURANCE;
 use orbit_store::TaskCommitBoundary;
 use orbit_store::contracts::{
     AdmissionIdentity, AdmissionLookup, AdmissionOrdering, AdmissionRequest,
-    AdmissionReviewContract, AdmissionRunContext, AdmissionShipContract,
-    DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA, ExecutionLocation,
+    AdmissionReviewContract, AdmissionRunContext, AdmissionShipContract, ExecutionLocation,
 };
 use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
 use orbit_types::task::{
@@ -20,7 +22,6 @@ use orbit_types::task::{
     TaskEnvelopeV2,
 };
 use orbit_types::workflow::automation::AutomationState;
-use orbit_types::workflow::{REVIEW_CONTRACT_VERSION, ReviewBudget};
 
 /// Land an unrelated change on `main` as pull request #41 after the review
 /// settled, so the reviewed base is no longer the landing base.
@@ -1222,22 +1223,13 @@ fn light_base_update(tag: LightTag, outside: bool) {
 
     let captured_review = tag.captured_review();
     let ship = AdmissionShipContract {
-        mode: "pr".into(),
-        base_branch: "main".into(),
-        landing_branch: "main".into(),
         before_pr: captured_review,
-        before_landing: false,
-        completion: "review".into(),
-        authorization_reference: None,
         review: captured_review.then(|| AdmissionReviewContract {
-            contract_version: REVIEW_CONTRACT_VERSION,
             crew: Some("reviewer".into()),
-            budget: ReviewBudget::default(),
             required_validation_commands: Some(commands.clone()),
-            baseline_commands: Vec::new(),
-            host_evidence: Vec::new(),
-            selective_before_landing: None,
+            ..admission_review_contract()
         }),
+        ..admission_ship_contract()
     };
     let boundary = TaskCommitBoundary::new(
         owner.sqlite_store().unwrap(),
@@ -1246,24 +1238,18 @@ fn light_base_update(tag: LightTag, outside: bool) {
     )
     .unwrap();
     let request = AdmissionRequest {
-        labels: Vec::new(),
-        request_id: format!("light-{path}"),
-        caller_version: "test".into(),
-        caller_schema: DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
-        caller_fingerprint: None,
-        caller_before_pr: false,
         review_gate: captured_review,
-        selective_review: false,
-        run_context: AdmissionRunContext {
-            run_id: "drain".into(),
-            job_name: "workspace_pull_pipeline".into(),
-            machine_name: None,
-        },
-        ship: ship.clone(),
-        crews: None,
-        os: None,
-        browser_kit: false,
-        admissible: None,
+        // The owner admits only its own version, passed to `admit_task` below.
+        caller_version: "test".into(),
+        ..admission_request(
+            format!("light-{path}"),
+            AdmissionRunContext {
+                run_id: "drain".into(),
+                job_name: "workspace_pull_pipeline".into(),
+                machine_name: None,
+            },
+            ship.clone(),
+        )
     };
     let AdmissionLookup::Found { receipt, .. } = boundary
         .admit_task(

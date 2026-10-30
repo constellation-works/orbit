@@ -15,7 +15,7 @@ use orbit_store::contracts::{
 };
 use orbit_store::contracts::{TaskCreateParams, TaskReservationReleaseReason};
 use orbit_tools::{DrainOwnerTransport, OwnerCoordinator};
-use orbit_types::task::{TaskComplexity, TaskPriority, TaskStatus, TaskType};
+use orbit_types::task::{TaskComplexity, TaskStatus, TaskType};
 use orbit_types::tool::ToolSessionContext;
 use orbit_types::workflow::{ChildDispatch, JobRun, JobRunState, PipelineState};
 use serde_json::{Value, json};
@@ -30,6 +30,7 @@ use crate::OrbitRuntime;
 use crate::application::task::TaskRecords;
 use crate::application::test_support::{admission_receipt, admission_request};
 use crate::application::tests::run_isolated_test;
+use crate::task_params_test_support::task_create_params;
 
 #[test]
 fn graceful_cancel_initialization_preserves_worker_checkpoint_and_merges_control() {
@@ -247,42 +248,15 @@ fn in_progress_task(runtime: &OrbitRuntime, run: &JobRun) -> String {
         .stores()
         .task_records()
         .create(TaskCreateParams {
-            granted_tools: Vec::new(),
-            requires_labels: Vec::new(),
-            actor: "test".into(),
-            parent_id: None,
-            title: "cancel candidate".into(),
-            description: "candidate should remain available".into(),
-            acceptance_criteria: Vec::new(),
-            dependencies: Vec::new(),
-            relations: Vec::new(),
-            tags: Vec::new(),
-            required_tools: Vec::new(),
             plan: "Resume the candidate after cancellation".into(),
-            execution_summary: String::new(),
             context_files: vec!["file:src/candidate.rs".into()],
-            repo_root: None,
-            created_by: Some("test".into()),
-            planned_by: None,
-            implemented_by: None,
-            status: TaskStatus::Backlog,
-            priority: TaskPriority::Medium,
             complexity: Some(TaskComplexity::Low),
             task_type: TaskType::Bug,
-            external_refs: Vec::new(),
-            source_task_id: None,
-            crew: None,
-            crew_source: None,
-            orchestrator: None,
-            orchestrator_model: None,
-            orchestrator_model_source: None,
-            created_by_model: None,
-            origin: None,
-            rule_fingerprint: None,
-            comments: Vec::new(),
-            context_creation: Vec::new(),
-            creation_decision: None,
-            not_before: None,
+            ..task_create_params(
+                "cancel candidate",
+                "candidate should remain available",
+                TaskStatus::Backlog,
+            )
         })
         .expect("create task");
     runtime
