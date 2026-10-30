@@ -5,7 +5,7 @@ use orbit_core::application::contracts::{ClaimedLeafStage, DrainClaimedLeaf};
 use orbit_core::application::job::{
     RunFailureCause, RunFailureContextProfile, RunFailureRead, agent_invoke_result,
 };
-use orbit_core::runtime::audit::run::RunProviderProcess;
+use orbit_core::runtime::audit::run::{RunProviderProcess, RunScriptExecution};
 use orbit_core::{CatalogReferenceLayer, JobRun, OrbitError, OrbitRuntime};
 use orbit_types::workflow::{JobRunState, PipelineState};
 use serde_json::{Value, json};
@@ -30,7 +30,7 @@ const SHIPPED_CATALOG_LAYER: &str = "shipped";
 
 #[derive(Args)]
 #[command(
-    after_help = "JSON: {\"run\":<job-run>,\"pull_claim\":…,\"crew_window\":…,\"catalog_layers\":[…],\"pipeline_state\":…,\"steps\":[…],\"steps_source\":\"record|audit\",\"provider_processes\":[…]}, or {\"run_id\",\"job_id\",\"step\",\"step_output\"} with -s.\nThe State: line is `.run.state`. Table step numbers are one-based; JSON `step_index` is zero-based and durations are milliseconds.\n\nExamples:\n  orbit run show\n  orbit run show jrun-20260426-0631\n  orbit run show jrun-20260426-0631 -s implement_one --json"
+    after_help = "JSON: {\"run\":<job-run>,\"pull_claim\":…,\"crew_window\":…,\"catalog_layers\":[…],\"pipeline_state\":…,\"steps\":[…],\"steps_source\":\"record|audit\",\"provider_processes\":[…],\"script_executions\":[…]}, or {\"run_id\",\"job_id\",\"step\",\"step_output\"} with -s.\nThe State: line is `.run.state`. Table step numbers are one-based; JSON `step_index` is zero-based and durations are milliseconds.\n\nExamples:\n  orbit run show\n  orbit run show jrun-20260426-0631\n  orbit run show jrun-20260426-0631 -s implement_one --json"
 )]
 pub struct RunShowArgs {
     /// Run ID to inspect. Defaults to the most recently scheduled run globally.
@@ -106,6 +106,7 @@ pub(crate) fn run_show_payload(
     // [ORB-12113].
     let audit = runtime.collect_run_audit_view(&run.run_id)?;
     let provider_processes = audit.provider_processes;
+    let script_executions = audit.script_executions;
     let recovery = runtime.collect_run_recovery_attempts(&run.run_id)
         .unwrap_or_else(|error| {
             tracing::warn!(target: "orbit.cli.run", run_id = %run.run_id, %error, "recovery attempts unreadable");
@@ -215,6 +216,11 @@ pub(crate) fn run_show_payload(
         "provider_processes": provider_processes
             .iter()
             .map(RunProviderProcess::to_json)
+            .collect::<Vec<_>>(),
+        // Every script-step attempt, refusals included.
+        "script_executions": script_executions
+            .iter()
+            .map(RunScriptExecution::to_json)
             .collect::<Vec<_>>(),
     });
 
@@ -360,6 +366,13 @@ pub(crate) fn run_show_payload(
     }
     header.push_str(&catalog_layer_lines(&catalog_layers, verbose));
     header.push_str(&live_provider_process_lines(&provider_processes));
+    for execution in &script_executions {
+        header.push_str(&format!(
+            "\n{} {}",
+            crate::output::color::bold("Script:"),
+            execution.describe()
+        ));
+    }
     header.push_str(&agent_invocation_lines(&doc["run"]["agent_invocation"]));
     header.push_str(&super::security_summary::security_alert_sweep_lines(
         &run,

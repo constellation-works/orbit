@@ -22,6 +22,7 @@
 
 mod linux;
 mod macos;
+mod script;
 mod supervise;
 
 use std::ffi::OsStr;
@@ -32,6 +33,11 @@ use orbit_common::OrbitError;
 
 pub use linux::compile_linux_build_argv;
 pub use macos::compile_macos_build_profile;
+pub use script::{
+    SCRIPT_LOG_CAP_BYTES, SCRIPT_SANDBOX_MOUNT, SCRIPT_SCRATCH_DIRS, SCRIPT_STDOUT_CAP_BYTES,
+    SCRIPT_TERMINATION_GRACE, ScriptRunEnd, ScriptSandboxRequest, ScriptSandboxRun,
+    ScriptSandboxSpec, compile_linux_script_argv, probe_script_sandbox, run_script_sandboxed,
+};
 pub use supervise::{BuildLog, PLUGIN_BUILD_LOG_CAP_BYTES};
 
 /// The size the build directory may reach before the phase is killed (§3.4).
@@ -176,9 +182,9 @@ pub fn run_build_phase(
 
 /// Credential denies apply even when a credential lives under the fixed
 /// system runtime rather than one of the declared toolchain roots.
-fn credential_denies(spec: &BuildSandboxSpec<'_>) -> Vec<(PathBuf, bool)> {
+fn credential_denies(home: Option<&OsStr>) -> Vec<(PathBuf, bool)> {
     let cargo_home = std::env::var_os("CARGO_HOME");
-    crate::credential_paths::credential_read_denies(spec.home, cargo_home.as_deref())
+    crate::credential_paths::credential_read_denies(home, cargo_home.as_deref())
         .into_iter()
         .map(|deny| (deny.path, deny.file))
         .collect()

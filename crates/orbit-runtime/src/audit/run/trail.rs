@@ -366,6 +366,8 @@ const RUN_AUDIT_PAGE_SIZE: usize = 8;
 pub struct RunAuditView {
     pub steps: Vec<RunAuditStep>,
     pub provider_processes: Vec<RunProviderProcess>,
+    /// Every script-step attempt, refusals included, oldest first.
+    pub script_executions: Vec<super::RunScriptExecution>,
 }
 
 impl RuntimeKernel {
@@ -424,11 +426,13 @@ impl RuntimeKernel {
     {
         let events = self.collect_run_audit_events(run_id)?;
         let steps = audit_steps_from_events(&events);
+        let script_executions = super::scripts::script_executions_from_events(run_id, &events);
         let provider_processes =
             provider_processes_from_events(run_id, events, &step_index_by_id(&steps), probe);
         Ok(RunAuditView {
             steps,
             provider_processes,
+            script_executions,
         })
     }
 

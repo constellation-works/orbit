@@ -134,7 +134,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Condition Triggers](./design/condition-triggers/1_scope.md) | Review this scope; then file phase 1 (CEL schema, load-time checking, automation explain) | claude |
 | [Conflict Budget](./design/conflict-budget/1_scope.md) | Settle the open questions (sum vs max, where weights live), then file phase 1 | claude |
 | [Crew Ladder](./design/crew-ladder/1_scope.md) | Daniel reviews this scope; then file phase 1 (ladder config, shadow trials and the ladder report) | claude |
-| [Script Steps](./design/script-steps/1_scope.md) | Phase 1 landed (script manifests, `target: script:` parsing, the grant store and `orbit script grant`, with nothing executing yet); next is phase 2, Linux execution | claude |
+| [Script Steps](./design/script-steps/1_scope.md) | Phases 1 and 2 landed (manifests, grants, and Linux execution under `linux-bwrap-script-v1` with `script.execution` audit and `orbit script history`); next is phase 3, files and macOS | claude |
 | [Symbol Risk Index](./design/symbol-risk-index/1_scope.md) | Daniel reviews this scope and 2_design.md; implementation tasks are filed after acceptance | claude |
 | [Ux Rules](./design/ux-rules/1_scope.md) | Phases 1-3 filed as ORB-19974..19976; build before the visual-review mock phases | claude |
 | [Visual Review](./design/visual-review/1_scope.md) | UX rules ORB-19974/19975 first (view manifest, browser settings); then phases 1-6 as ORB-19977..19982 | claude |

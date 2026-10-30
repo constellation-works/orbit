@@ -178,8 +178,9 @@ pub use activity_v2::{
 };
 pub use audit_envelope::{
     AUDIT_ENVELOPE_SCHEMA_VERSION, BranchOutcome, StepRecoveryDecisionRecord,
-    V2_DENIAL_EVENT_TYPES, V2_EVENT_TYPE_FS_CALL_DENIED, V2_EVENT_TYPE_STEP_DENIED,
-    V2_EVENT_TYPE_TOOL_DENIED, V2AuditEnvelope, V2AuditEvent, V2AuditEventKind,
+    V2_DENIAL_EVENT_TYPES, V2_EVENT_TYPE_FS_CALL_DENIED, V2_EVENT_TYPE_SCRIPT_EXECUTION,
+    V2_EVENT_TYPE_STEP_DENIED, V2_EVENT_TYPE_TOOL_DENIED, V2AuditEnvelope, V2AuditEvent,
+    V2AuditEventKind,
 };
 pub use job_v2::{
     BackoffStrategy, FanInSpec, FanOutBlock, JobKind, JobStage, JobTaskDelivery, JobV2, JobV2Step,
@@ -189,10 +190,11 @@ pub use job_v2::{
 pub use retired::{RetiredFeatureError, validate_job_retired_sessions};
 pub use schema_header::SchemaHeader;
 pub use script::{
-    SCRIPT_GRANT_DIGEST_DOMAIN, SCRIPT_MANIFEST_SCHEMA_VERSION, ScriptFileInput, ScriptFileOutputs,
+    SCRIPT_GRANT_DIGEST_DOMAIN, SCRIPT_MANIFEST_SCHEMA_VERSION, SCRIPT_PROFILE_LINUX,
+    SCRIPT_STDOUT_CAP_BYTES, ScriptExecutionRecord, ScriptFileInput, ScriptFileOutputs,
     ScriptFiles, ScriptGrant, ScriptGrantLimits, ScriptHostRole, ScriptNetwork, ScriptRequests,
-    ScriptSpec, ScriptValidationError, is_valid_script_name, script_content_digest,
-    script_grant_id, script_interpreter_from_shebang, script_sha256_hex,
+    ScriptSpec, ScriptValidationError, is_valid_script_name, script_content_digest, script_failure,
+    script_grant_id, script_interpreter_from_shebang, script_refusal, script_sha256_hex,
     validate_script_arg_template, validate_script_interpreter, validate_script_spec,
 };
 pub use tool_allowlist::{

@@ -563,6 +563,12 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
     fn resolve_cli_executor(&self, provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
         NullRuntimeHost::resolve_cli_executor(self, provider)
     }
+    fn run_script_step(
+        &self,
+        request: &crate::context::ScriptStepRequest,
+    ) -> crate::context::ScriptStepRun {
+        NullRuntimeHost::run_script_step(self, request)
+    }
     fn resolve_local_shell_executor(
         &self,
         executor: &str,

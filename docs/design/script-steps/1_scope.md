@@ -1,11 +1,11 @@
 ---
 title: "Scope: Script steps"
 owner: claude
-last_updated: 2026-10-27
+last_updated: 2026-10-29
 last_validated: 2026-10-27
 status: Draft
 stage: designing
-next: "Phase 1 landed (script manifests, `target: script:` parsing, the grant store and `orbit script grant`, with nothing executing yet); next is phase 2, Linux execution"
+next: "Phases 1 and 2 landed (manifests, grants, and Linux execution under `linux-bwrap-script-v1` with `script.execution` audit and `orbit script history`); next is phase 3, files and macOS"
 feature: script-steps
 doc_role: scope
 type: design
@@ -15,17 +15,20 @@ tags: [script-steps, activity-job, routines, sandbox, grants, policy-sandbox]
 
 # Scope: Script steps
 
-Status: proposed; phase 1 (Phasing) has landed — the `Script` manifest and its
-loader, `target: script:` parsing with the `script_steps_unavailable` dispatch
-refusal, the `script_grant` table and witness, `orbit script
-grant|revoke|list|show`, the governed rows and doctor findings. Nothing
-executes yet. This doc is the design deliverable of [ORB-19294]. It reverses the removal recorded in
+Status: proposed; phases 1 and 2 (Phasing) have landed. Phase 1 added the `Script`
+manifest and its loader, `target: script:` parsing, the `script_grant` table and
+witness, `orbit script grant|revoke|list|show`, the governed rows and doctor
+findings. Phase 2 ([ORB-19985]) runs a granted step on Linux under
+`linux-bwrap-script-v1` (no network, `env_pass` or `files.inputs` yet), with the
+`script.execution` audit, `orbit run show` and `orbit script history`; other hosts
+refuse with `script_sandbox_unavailable`. This doc is the design deliverable of [ORB-19294]. It reverses the removal recorded in
 [The v2 shell activity surface is removed, not sandboxed](../activity-job/4_decisions.md#the-v2-shell-activity-surface-is-removed-not-sandboxed)
 ([ORB-00374]) by taking the alternative that decision recorded and set aside:
 "retrofit the sandbox/policy/cwd pipeline". It also narrows the reach of
 [Routine targets are catalog references only](../routines/4_decisions.md#routine-targets-are-catalog-references-only--no-inline-command-payloads):
 routines still name only `job:<name>`, and a job may now contain a step that names a
-granted script. Neither decision is superseded until phase 2 ships; both link here.
+granted script. Phase 2 recorded the superseding decision,
+[Granted script steps run under the script profile](../activity-job/4_decisions.md#granted-script-steps-run-under-the-script-profile).
 
 Bearing: Orbit already has these pieces, read from source at `a5b5408ea` (the `local_shell`
 bullet was rechecked at `d10fae79b`).
@@ -1047,6 +1050,7 @@ A script that rewrites itself during a run changes nothing for that run (§2,
 ## Task References
 
 - [ORB-19294] — designs script steps (this doc).
+- [ORB-19985] — phase 2: Linux execution under `linux-bwrap-script-v1`, `script.execution` audit and `orbit script history`.
 - [ORB-00374] — removed the v2 `shell` activity instead of sandboxing it; this doc takes its retrofit alternative.
 - [ORB-00363] — found that the shell allowlist came from the YAML it guarded.
 - [ORB-11294] — restored `local_shell` as a deterministic action; the Bearing and

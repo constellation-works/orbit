@@ -3,7 +3,7 @@ summary: "Activity / Job — Decisions"
 type: design
 title: "Activity / Job — Decisions"
 owner: codex
-last_updated: 2026-10-27
+last_updated: 2026-10-29
 last_validated: 2026-10-14
 status: Draft
 feature: activity-job
@@ -902,7 +902,7 @@ Use `orbit run ship` as the only public shipment command. Omitted task IDs run b
 
 **Recorded:** 2026-08-01 19:14:39.899572Z · [ORB-00374], [ORB-00363], [ORB-10479]
 
-**Reopened by:** [Scope: Script steps](../script-steps/1_scope.md) ([ORB-19294]) proposes taking this entry's recorded alternative, retrofitting the sandbox, policy and cwd confinement, for operator-granted, digest-bound `target: script:<name>` job steps. `type: shell` and inline command text stay load errors. This entry stands until that design's execution phase ships and records the superseding decision.
+**Superseded by:** [Granted script steps run under the script profile](#granted-script-steps-run-under-the-script-profile) ([ORB-19985]) takes this entry's recorded alternative for operator-granted, digest-bound `target: script:<name>` job steps. `type: shell` and inline command text stay load errors.
 
 **Context.** The v2 `shell` activity (`ActivityV2Spec::Shell`) dispatched `Command::new(program)` with no OS sandbox, no cwd confinement, and no policy consultation — unlike the `backend: cli` agent path. Its only guard was a `program ∈ allowed_programs` check where both fields came from the same workspace-supplied YAML, so the allowlist was a tautology ([ORB-00363]). The real alternatives were to retrofit the sandbox/policy/cwd pipeline onto `run_shell`, or to remove the surface entirely.
 
@@ -1721,6 +1721,37 @@ A gate's 14400-second wait on its delivery child expired while the child was sti
 - `Cost:` the stopped step is the first top-level step whose output the child had not recorded. A step skipped by `when:` records nothing either, so it can name an earlier step than the one running; a resume then redoes work rather than skipping it.
 - `Cost:` a cancel that fails leaves the child live, the one case where a terminal gate outlives its child. The parent says so in its error and reports `child_live: true`, and the gate's terminal cleanup still releases its reservation.
 
+## Granted script steps run under the script profile
+
+**Recorded:** 2026-10-29 · [ORB-19985], [ORB-19983], [ORB-19294]
+**Supersedes:** [The v2 shell activity surface is removed, not sandboxed](#the-v2-shell-activity-surface-is-removed-not-sandboxed), for `target: script:<name>` job steps only
+**Paths:** `crates/orbit-exec/src/build_sandbox/script.rs`, `crates/orbit-core/src/application/job/script_step.rs`, `crates/orbit-engine/src/activity_job/job_executor/script.rs`, `crates/orbit-runtime/src/audit/run/scripts.rs`
+
+### Context
+
+ORB-00374 removed the v2 `shell` activity because it spawned workspace-named programs with no sandbox, no cwd confinement and an allowlist the same YAML supplied. It recorded the alternative, retrofitting a sandbox and policy, and the cost: the `Ok(success = false)` audit-message path lost its only coverage. [Scope: Script steps](../script-steps/1_scope.md) designs that alternative for routine chores. Phase 1 ([ORB-19983]) added manifests, `target: script:` parsing and host-local grants bound to a content digest, with dispatch refusing every script step.
+
+### Decision
+
+1. A `target: script:<name>` step runs through a new `RuntimeHost::run_script_step` capability. Core re-reads the manifest and entry from the run's worktree (or the workspace root, read-only), snapshots both, and refuses before spawning when the grant is missing, expired, stale or narrower than the request, the interpreter it recorded moved, a pull follower holds an owner-only grant, the cwd is unusable, or the host cannot apply the profile. Each refusal is a non-retryable `DispatchError::ScriptRefused` carrying its typed code.
+2. The snapshot runs under `linux-bwrap-script-v1`: a Bubblewrap constructed root with every namespace unshared (no network beyond the namespace's own loopback), the build profile's runtime table, the cwd (a run worktree read-write, the workspace root read-only), its Git metadata read-only, granted roots, and a scratch directory at `/orbit-script`. `.orbit/`, the global root and the credential paths are never mounted. A nested-sandbox start refuses with `script_sandbox_unavailable`. The script gets its own `orbit-script-*` systemd scope where one can be created; `strict` worker containment refuses without it.
+3. Stdin is the input validated against `input_schema_json`. Exit 0 must answer with one JSON document within 1 MiB matching `output_schema_json`, or the step fails without retry (`script_output_invalid`). A nonzero exit, a signal, a timeout (`SIGTERM`, 10 s, `SIGKILL`) or a scratch breach is `Ok(success = false)` with `{exit_code, signal, timed_out}` as output, retried per the step's `retry`.
+4. Every attempt, refusals included, writes one `script.execution` audit event with the script name, digests, grant, redacted argv, cwd mode, profile, exit, duration and the capped, redacted log blob. `orbit run show` lists them and `orbit script history <name>` reads them across runs.
+5. `network: https|any`, `env_pass` and `files.inputs` are refused with `script_sandbox_unavailable` until their phases ship. macOS refuses every script step.
+
+### Rejected alternatives
+
+- *Run the script in the worker's own process tree with Landlock only.* No mount or pid namespace, so neither a read-deny of the host nor a kill-everything timeout.
+- *Resolve the interpreter on the worker's `PATH` at run time.* The grant records the canonical path the operator approved; a different `PATH` must not change what runs.
+- *Map a nonzero exit to `Err` as `local_shell` does.* A chore's nonzero exit is a result, not an executor fault, and the retry loop treats both alike.
+
+### Consequences
+
+- A workspace can run a reviewed program again, but only the bytes an operator granted, in a sandbox that denies the store, the global root and credentials. Editing the script in a worktree makes the next run refuse with `grant_stale` and both digests.
+- The `Ok(success = false)` leaf is back, with its audit-message path covered at the engine boundary: the message names the exit or signal and the log tail.
+- `Cost:` loopback services on the host (a dashboard on `127.0.0.1`) are unreachable from a `network: none` script, because its network namespace holds only its own loopback.
+- `Cost:` on a host where systemd cannot create the per-script scope, `warn` and `off` containment run the script in the worker's cgroup with no limits of its own.
+
 ## Task References
 
 - [T20260418-2018] — add `JobV2` DAG constructs (`parallel`, `fan_out`, `loop`, `retry`, `when`).
@@ -1821,6 +1852,7 @@ A gate's 14400-second wait on its delivery child expired while the child was sti
 - [ORB-13315] — add deny mode (`tool_disallow_list`) beside the tool allowlist with an explicit policy envelope; allowlists stay for custom jobs.
 - [ORB-13897] — final recovery: the `final_recovery` activity, its typed decision contract and deterministic applier, the `workflow.final_recovery_crews` pool, and the `step_failure_recovery` resume fix.
 - [ORB-13898] — final-recovery backstop: `blocked_task_recovery_pipeline` and the owner's sweep trigger for tasks blocked outside delivery pipelines.
+- [ORB-19985] — run granted script steps on Linux under `linux-bwrap-script-v1`, record each attempt as `script.execution`, and supersede ORB-00374's removal for script steps.
 - [ORB-14685] — backstop lane contract: offer only the decisions the backstop applies and name the failed run's retained candidate.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

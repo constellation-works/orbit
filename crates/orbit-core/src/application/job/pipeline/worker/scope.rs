@@ -59,6 +59,7 @@ pub(crate) const WORKER_CONTAINMENT_UNAVAILABLE_ERROR_CODE: &str = "worker_conta
 /// counters from a cgroup carrying it, so a worker that fell back to its
 /// parent's service cgroup never blames sibling work on its own run.
 const SCOPE_UNIT_PREFIX: &str = "orbit-worker-";
+const SCRIPT_SCOPE_UNIT_PREFIX: &str = "orbit-script-";
 const SCOPE_UNIT_SUFFIX: &str = ".scope";
 const SYSTEMD_RUN: &str = "systemd-run";
 /// The kernel OOM preference every worker launches with, well above the
@@ -293,6 +294,65 @@ pub(crate) fn scoped_worker_command(base: &Command, unit: &str, limits: &WorkerL
     }
     command.stdin(Stdio::null());
     command
+}
+
+/// The `systemd-run` prefix that gives one script step its own transient
+/// scope, `orbit-script-<run>-<step>-<nonce>.scope`, under the machine's
+/// worker limits, or why there is none. `Err` is a strict refusal: under
+/// `machine.worker_containment = "strict"` a script without its scope never
+/// starts; `warn` and `off` run it in the worker's cgroup instead.
+pub(crate) fn script_scope_launcher(
+    run_id: &str,
+    step_id: &str,
+    settings: &WorkerContainmentSettings,
+) -> Result<ScriptScopeLauncher, String> {
+    let inherited = std::env::var_os(STRICT_WORKER_CONTAINMENT_ENV);
+    let strict =
+        super::start::effective_strict_containment(settings.strict, false, inherited.as_deref());
+    let Some(limits) = WorkerLimits::from_settings(settings) else {
+        if strict {
+            return Err("machine.worker_containment=off".into());
+        }
+        return Ok(ScriptScopeLauncher::Uncontained {
+            reason: "machine.worker_containment is off".into(),
+        });
+    };
+    if let Err(reason) = user_scope_availability() {
+        if strict {
+            return Err(reason);
+        }
+        return Ok(ScriptScopeLauncher::Uncontained { reason });
+    }
+    let unit = scope_unit_name(&format!("{run_id}-{step_id}")).replacen(
+        SCOPE_UNIT_PREFIX,
+        SCRIPT_SCOPE_UNIT_PREFIX,
+        1,
+    );
+    let mut argv = vec![
+        SYSTEMD_RUN.to_string(),
+        "--user".into(),
+        "--scope".into(),
+        "--quiet".into(),
+        "--collect".into(),
+        format!("--unit={unit}"),
+    ];
+    argv.extend(
+        limits
+            .properties()
+            .into_iter()
+            .map(|property| format!("--property={property}")),
+    );
+    argv.push("--".into());
+    Ok(ScriptScopeLauncher::Scoped { unit, argv })
+}
+
+/// One script step's scope, as [`script_scope_launcher`] found it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ScriptScopeLauncher {
+    /// Run the sandbox under `argv`, which execs it in place.
+    Scoped { unit: String, argv: Vec<String> },
+    /// No scope of its own; the script shares the worker's cgroup.
+    Uncontained { reason: String },
 }
 
 /// Whether this process can create transient scopes in a user manager, probed

@@ -297,10 +297,10 @@ pub struct JobV2Step {
 /// sees `Target` after `resolve_job_target_refs` runs at
 /// load time. An `activity:` `TargetRef` that survives into dispatch is a
 /// caller bug — the job executor should never have to look up an activity
-/// by name. A `script:` ref is the one deliberate exception in script
-/// steps phase 1: resolution validates it against the workspace's script
-/// catalog and retains the ref, and dispatch refuses it with
-/// `script_steps_unavailable` because nothing executes yet.
+/// by name. A `script:` ref is the one deliberate exception: resolution
+/// validates it against the workspace's script catalog and retains the
+/// ref, and dispatch hands it to the host, which checks the grant and runs
+/// the script under the script profile.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 // The resolved Target carries the activity snapshot inline in persisted job
 // steps. Boxing it would churn every executor reader for a size heuristic;

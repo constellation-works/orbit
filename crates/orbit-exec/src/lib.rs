@@ -68,8 +68,11 @@ mod validation_env;
 pub use build_sandbox::{
     BUILD_FETCH_PHASE_SUPPORTED, BuildLog, BuildPhaseEnd, BuildPhaseNetwork, BuildPhaseRequest,
     BuildSandboxProbe, BuildSandboxSpec, PLUGIN_BUILD_DIR_CAP_BYTES, PLUGIN_BUILD_FETCH_PORT,
-    PLUGIN_BUILD_LOG_CAP_BYTES, compile_linux_build_argv, compile_macos_build_profile,
-    probe_build_sandbox, run_build_phase,
+    PLUGIN_BUILD_LOG_CAP_BYTES, SCRIPT_LOG_CAP_BYTES, SCRIPT_SANDBOX_MOUNT, SCRIPT_SCRATCH_DIRS,
+    SCRIPT_STDOUT_CAP_BYTES, SCRIPT_TERMINATION_GRACE, ScriptRunEnd, ScriptSandboxRequest,
+    ScriptSandboxRun, ScriptSandboxSpec, compile_linux_build_argv, compile_linux_script_argv,
+    compile_macos_build_profile, probe_build_sandbox, probe_script_sandbox, run_build_phase,
+    run_script_sandboxed,
 };
 pub use credential_paths::default_credential_read_denies;
 pub use linux_landlock::{

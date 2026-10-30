@@ -696,6 +696,25 @@ pub trait NullRuntimeHost: Send + Sync {
         Err(unsupported_dispatch_capability(provider))
     }
 
+    fn run_script_step(
+        &self,
+        request: &crate::context::ScriptStepRequest,
+    ) -> crate::context::ScriptStepRun {
+        crate::context::ScriptStepRun::Refused {
+            code: orbit_types::workflow::activity_job::script_refusal::SANDBOX_UNAVAILABLE,
+            message: "this host runs no script steps".to_string(),
+            record: Box::new(orbit_types::workflow::activity_job::ScriptExecutionRecord {
+                script: request.script.clone(),
+                outcome: "refused".to_string(),
+                refusal_code: Some(
+                    orbit_types::workflow::activity_job::script_refusal::SANDBOX_UNAVAILABLE
+                        .to_string(),
+                ),
+                ..Default::default()
+            }),
+        }
+    }
+
     fn resolve_local_shell_executor(
         &self,
         _executor: &str,

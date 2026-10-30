@@ -30,7 +30,29 @@ pub fn compile_linux_build_argv(
         args.push("--share-net".into());
     }
     args.extend(["--proc", "/proc", "--dev", "/dev"].map(String::from));
+    push_runtime_table(&mut args, spec.readable);
+    push_credential_denies(&mut args, spec.home);
+    args.extend([
+        "--bind".into(),
+        display(spec.build_dir),
+        display(spec.build_dir),
+        // Everything but the build directory is read-only, including the
+        // directories Bubblewrap created in its root to hold the binds.
+        "--remount-ro".into(),
+        "/".into(),
+        "--chdir".into(),
+        display(cwd),
+        "--".into(),
+    ]);
+    args.extend(argv.iter().cloned());
+    args
+}
 
+/// The host runtime table (`/usr`, the loader, resolver and CA files) and
+/// the extra `readable` roots, each bound read-only; a path outside them
+/// does not exist inside the sandbox. Shared by the build and script
+/// profiles, so both see the same constructed root.
+pub(super) fn push_runtime_table(args: &mut Vec<String>, readable: &[PathBuf]) {
     let mut bound: Vec<PathBuf> = Vec::new();
     // `/dev` is Bubblewrap's own minimal device tree; the runtime table's
     // device entries are already in it.
@@ -53,7 +75,7 @@ pub fn compile_linux_build_argv(
             }
             continue;
         }
-        push_ro_bind(&mut args, path);
+        push_ro_bind(args, path);
         bound.push(path.to_path_buf());
     }
     let system_files = RUNTIME_FILES
@@ -65,15 +87,19 @@ pub fn compile_linux_build_argv(
         // A resolver file is often a link into `/run`; the bind follows it so
         // the sandbox gets the content without the rest of `/run`.
         if path.is_file() && !is_under(path, &bound) {
-            push_ro_bind(&mut args, path);
+            push_ro_bind(args, path);
         }
     }
-    for root in spec.readable {
+    for root in readable {
         if !is_under(root, &bound) && root.exists() {
-            push_ro_bind(&mut args, root);
+            push_ro_bind(args, root);
         }
     }
-    for (path, file) in super::credential_denies(spec) {
+}
+
+/// The credential denies, after every bind so they win over all of them.
+pub(super) fn push_credential_denies(args: &mut Vec<String>, home: Option<&std::ffi::OsStr>) {
+    for (path, file) in super::credential_denies(home) {
         // Unlike existing credential files, future browser keys must also
         // stay hidden. Bubblewrap creates this empty mount in the build
         // namespace, or refuses startup if it cannot apply the mask.
@@ -91,23 +117,9 @@ pub fn compile_linux_build_argv(
             ]);
         }
     }
-    args.extend([
-        "--bind".into(),
-        display(spec.build_dir),
-        display(spec.build_dir),
-        // Everything but the build directory is read-only, including the
-        // directories Bubblewrap created in its root to hold the binds.
-        "--remount-ro".into(),
-        "/".into(),
-        "--chdir".into(),
-        display(cwd),
-        "--".into(),
-    ]);
-    args.extend(argv.iter().cloned());
-    args
 }
 
-fn push_ro_bind(args: &mut Vec<String>, path: &Path) {
+pub(super) fn push_ro_bind(args: &mut Vec<String>, path: &Path) {
     args.extend(["--ro-bind".into(), display(path), display(path)]);
 }
 
@@ -115,7 +127,7 @@ fn is_under(path: &Path, roots: &[PathBuf]) -> bool {
     roots.iter().any(|root| path.starts_with(root))
 }
 
-fn display(path: &Path) -> String {
+pub(super) fn display(path: &Path) -> String {
     path.display().to_string()
 }
 

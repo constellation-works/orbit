@@ -614,8 +614,40 @@ carries the same findings. `orbit script revoke <name>` withdraws a
 grant.
 
 Routines never name a script directly — wrap it in a one-step job and
-target `job:<name>` — and `type: shell` remains a load error. Script
-execution is not available yet: a valid script step loads, then refuses
-at dispatch with `script_steps_unavailable`, and nothing is spawned.
-An older Orbit binary meeting `target: script:` reports a load error
-and runs nothing.
+target `job:<name>` — and `type: shell` remains a load error. An older
+Orbit binary meeting `target: script:` reports a load error and runs
+nothing.
+
+**Running a script step (Linux).** At dispatch Orbit re-reads the
+manifest and entry from the run's worktree (or the workspace root, then
+read-only), snapshots them, and checks the grant before anything is
+spawned. A missing or expired grant (`grant_missing`), a changed script
+(`grant_stale`, with both digests), a request beyond the grant
+(`grant_insufficient`), a moved interpreter (`interpreter_changed`), a
+host without the sandbox or a start inside another sandbox
+(`script_sandbox_unavailable`), an unusable worktree or root
+(`script_root_unavailable`) and a pull follower without a `--follower`
+grant (`script_follower_refused`) each fail the step without retry.
+
+The script runs under the `linux-bwrap-script-v1` Bubblewrap profile:
+it sees the host runtime (`/usr`, the loader, resolver and CA files),
+its interpreter, the snapshot, its cwd (a run worktree read-write, the
+workspace root read-only), the cwd's Git metadata read-only, its
+granted roots and a scratch directory at `/orbit-script` (`HOME`,
+`TMPDIR`, `in/`, `out/`). `.orbit/`, the global Orbit root and the
+credential paths under `HOME` are never visible. It has its own network
+namespace with only its own loopback, so neither the network nor
+services listening on the host's `127.0.0.1` are reachable. `network:
+https|any`, `env_pass` and `files.inputs` are refused for now.
+
+The step's rendered input is validated against `input_schema_json` and
+written to stdin. On exit 0, stdout (at most 1 MiB) must be one JSON
+document matching `output_schema_json` and becomes the step's output;
+empty stdout with no schema gives `{}`, and anything else fails the step
+without retry (`script_output_invalid`). A nonzero exit, a signal, a
+timeout (`script_timeout`: `SIGTERM`, then `SIGKILL` after 10 s) or a
+scratch breach is an ordinary failed attempt with `{exit_code, signal,
+timed_out}` as output, retried per the step's `retry`. Every attempt,
+refusals included, is listed by `orbit run show` and `orbit script
+history <name>` with the script's digest, grant, argv, exit, duration
+and its capped, redacted log.

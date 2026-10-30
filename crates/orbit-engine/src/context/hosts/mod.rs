@@ -11,6 +11,7 @@ mod revalidation;
 mod review;
 mod runtime_host;
 mod scratch_gc;
+mod script_step;
 mod steering;
 mod task_update;
 mod worktree_gc;
@@ -36,6 +37,7 @@ pub use review::{
 };
 pub use runtime_host::RuntimeHost;
 pub use scratch_gc::{ScratchGcEntry, ScratchGcReport};
+pub use script_step::{ScriptStepEnd, ScriptStepRan, ScriptStepRequest, ScriptStepRun};
 pub use steering::{SteeringGateReading, SteeringRoundAdmission};
 pub use task_update::{ResolvedActivityTools, TaskActivityUpdate, TaskAutomationUpdate};
 pub use worktree_gc::WorktreeGcTaskLookup;

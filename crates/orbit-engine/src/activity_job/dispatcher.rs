@@ -323,14 +323,29 @@ pub enum DispatchError {
         reason: String,
     },
 
-    /// A `target: script:<name>` step reached dispatch. Script manifests,
-    /// grants and load-time validation exist, but no phase of this build
-    /// executes a script yet, so the step refuses without spawning
-    /// anything. Non-retryable: another attempt meets the same refusal.
-    #[error(
-        "script_steps_unavailable: step `{step_id}` targets script `{script}`, but script execution is not available yet; nothing was spawned"
-    )]
-    ScriptStepsUnavailable { step_id: String, script: String },
+    /// A `target: script:<name>` step refused before anything was spawned:
+    /// no grant, a stale grant, a request beyond the grant, a changed
+    /// interpreter, a follower without a follower grant, a host without the
+    /// script profile, an unusable root or an invalid input. `code` is one
+    /// of `orbit_types::workflow::activity_job::script_refusal`.
+    /// Non-retryable: another attempt meets the same refusal.
+    #[error("{code}: step `{step_id}` script `{script}`: {message}; nothing was spawned")]
+    ScriptRefused {
+        code: &'static str,
+        step_id: String,
+        script: String,
+        message: String,
+    },
+
+    /// A script exited 0 but its stdout is not one JSON document within
+    /// the cap that passes the manifest's `output_schema_json`. Not
+    /// retried: the same bytes give the same answer.
+    #[error("script_output_invalid: step `{step_id}` script `{script}`: {message}")]
+    ScriptOutputInvalid {
+        step_id: String,
+        script: String,
+        message: String,
+    },
 
     /// Job validation rejected the spec at load time.
     #[error("job validation failed: {0}")]
@@ -391,7 +406,8 @@ impl DispatchError {
                 | DispatchError::ReviewEvidenceHold(_)
                 | DispatchError::ForgeUnavailableHold(_)
                 | DispatchError::ChildRunCancelled { .. }
-                | DispatchError::ScriptStepsUnavailable { .. }
+                | DispatchError::ScriptRefused { .. }
+                | DispatchError::ScriptOutputInvalid { .. }
                 | DispatchError::ProtocolSkew(_)
         )
     }
@@ -405,7 +421,10 @@ impl DispatchError {
         let text = || self.to_string();
         match self {
             DispatchError::WorktreeIntegrity { code, .. } => code,
-            DispatchError::ScriptStepsUnavailable { .. } => "script_steps_unavailable",
+            DispatchError::ScriptRefused { code, .. } => code,
+            DispatchError::ScriptOutputInvalid { .. } => {
+                orbit_types::workflow::activity_job::script_failure::OUTPUT_INVALID
+            }
             DispatchError::RecoverableVcsConflict(_) => "recoverable_vcs_conflict",
             DispatchError::TaskCompletionLiveRun { .. } => "task_completion_live_run",
             DispatchError::ImageInputUnavailable { .. } => wf::IMAGE_INPUT_UNAVAILABLE_ERROR_CODE,

@@ -353,6 +353,12 @@ impl Commands {
                         RuntimeNeed::Required,
                         true,
                     ),
+                    ScriptSubcommand::History(args) => (
+                        "history",
+                        Some(args.name.as_str()),
+                        RuntimeNeed::ReadOnly,
+                        false,
+                    ),
                 };
                 CommandOperation::new(
                     runtime_need,

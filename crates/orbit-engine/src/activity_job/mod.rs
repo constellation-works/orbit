@@ -38,4 +38,7 @@ pub use catalog::{
     load_activity_catalog_asset, resolve_job_target_refs, resolve_job_target_refs_with_scripts,
     validate_catalog_activity_tools,
 };
-pub use script_catalog::{ScriptAsset, ScriptLoadError, V2ScriptCatalog, load_script_asset};
+pub use script_catalog::{
+    ScriptArgError, ScriptAsset, ScriptLoadError, ScriptSnapshot, V2ScriptCatalog,
+    load_script_asset, load_script_snapshot, render_script_args,
+};

@@ -680,8 +680,8 @@ pub fn resolve_job_target_refs(
 /// validated the manifest and resolved its entry inside the workspace),
 /// and a missing script is a load error naming the manifest file it
 /// would live at. A resolved script ref is *retained* as a `TargetRef`:
-/// in phase 1 nothing executes, and dispatch refuses the retained ref
-/// with `script_steps_unavailable`. Phase 2 gives it a resolved body.
+/// the host re-reads and snapshots the script, checks its grant and runs
+/// it at dispatch, so a script edited after load is still caught.
 pub fn resolve_job_target_refs_with_scripts(
     job: &mut JobV2,
     catalog: &V2ActivityCatalog,
