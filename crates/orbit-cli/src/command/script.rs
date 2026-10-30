@@ -1,13 +1,12 @@
 //! `orbit script` — grant and inspect the workspace scripts a job step
 //! may name with `target: script:<name>`.
 //!
-//! Script execution is not available yet: a script step loads, then
-//! refuses at dispatch. What exists is the consent surface — manifests
-//! under `.orbit/resources/scripts/`, an operator grant bound to the
-//! manifest and entry digests, and the staleness reporting that shows
-//! when either file changed after granting. Grant and revoke are
-//! governed operator-only operations; an agent session can list and
-//! show, never grant the code it can edit.
+//! The consent surface: manifests under `.orbit/resources/scripts/`, an
+//! operator grant bound to the manifest and entry digests, the staleness
+//! reporting that shows when either file changed after granting, and the
+//! history of what ran. Grant and revoke are governed operator-only
+//! operations; an agent session can list, show and read history, never
+//! grant the code it can edit.
 
 use std::path::PathBuf;
 
@@ -29,8 +28,8 @@ use crate::output::table::{Column, Table};
                   `entry` names a program file in the workspace. A job step names it\n\
                   as `target: script:<name>`. Grants are host-local consent bound to\n\
                   the manifest and entry digests: editing either file makes the grant\n\
-                  stale until an operator grants again. Script execution is not\n\
-                  available yet; a script step currently refuses at dispatch."
+                  stale until an operator grants again. A granted script step runs on\n\
+                  Linux under a sandbox with no network; other hosts refuse it."
 )]
 pub struct ScriptCommand {
     #[command(subcommand)]
@@ -47,6 +46,8 @@ pub enum ScriptSubcommand {
     Grant(ScriptGrantArgs),
     /// Revoke one script's grant on this host
     Revoke(ScriptRevokeArgs),
+    /// List recent attempts of one script, refusals included
+    History(ScriptHistoryArgs),
 }
 
 impl Execute for ScriptCommand {
@@ -56,6 +57,7 @@ impl Execute for ScriptCommand {
             ScriptSubcommand::Show(args) => args.execute(runtime),
             ScriptSubcommand::Grant(args) => args.execute(runtime),
             ScriptSubcommand::Revoke(args) => args.execute(runtime),
+            ScriptSubcommand::History(args) => args.execute(runtime),
         }
     }
 }
@@ -239,7 +241,6 @@ impl ScriptGrantArgs {
                 "supersedes the earlier grant at digest {previous_digest}\n"
             ));
         }
-        text.push_str("script execution is not available yet; a script step refuses at dispatch\n");
         Ok(Payload::detail(doc, text).into())
     }
 }
@@ -260,6 +261,43 @@ impl ScriptRevokeArgs {
         }
         let doc = json!({"name": self.name, "revoked": true});
         Ok(Payload::detail(doc, format!("revoked script grant: {}\n", self.name)).into())
+    }
+}
+
+#[derive(Args)]
+pub struct ScriptHistoryArgs {
+    /// Script name.
+    pub name: String,
+
+    /// Most attempts to list, newest first.
+    #[arg(long, default_value_t = 20)]
+    pub limit: usize,
+}
+
+impl ScriptHistoryArgs {
+    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+        let executions = runtime.script_execution_history(&self.name, self.limit)?;
+        let records: Vec<Value> = executions
+            .iter()
+            .map(|execution| execution.to_json())
+            .collect();
+        let mut table = Table::new(vec![
+            Column::new("WHEN").fixed(),
+            Column::new("RUN").fixed(),
+            Column::new("ATTEMPT"),
+        ])
+        .empty_message("no recorded attempts of this script in this workspace");
+        for execution in &executions {
+            table.add_row(vec![
+                execution
+                    .timestamp
+                    .map(|at| at.to_rfc3339())
+                    .unwrap_or_else(|| "-".to_string()),
+                execution.run_id.clone(),
+                execution.describe(),
+            ]);
+        }
+        Ok(Payload::list(records, table).into())
     }
 }
 

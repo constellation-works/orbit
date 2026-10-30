@@ -92,7 +92,7 @@ pub fn compile_macos_build_profile(spec: &BuildSandboxSpec<'_>) -> String {
     profile.push_str("(allow file-write-data (literal \"/dev/null\") (literal \"/dev/tty\"))\n");
 
     // Last-match-wins: the credential denies sit after every allow.
-    for (path, file) in super::credential_denies(spec) {
+    for (path, file) in super::credential_denies(spec.home) {
         let filter = if file {
             format!("(literal \"{}\")", sbpl_escape(&physical(&path)))
         } else {

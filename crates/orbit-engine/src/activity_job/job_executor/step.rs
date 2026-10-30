@@ -247,22 +247,14 @@ pub(super) fn run_step_body(
 ) -> Result<StepOutcome, DispatchError> {
     match &step.body {
         JobV2StepBody::Target(t) => run_target(step, t, ctx),
-        // A resolved `script:` ref is retained as a TargetRef (phase 1):
-        // it loads, then refuses here without spawning anything. An
-        // unresolved script ref meets the same refusal rather than the
-        // unresolved-activity error, because no build can execute it yet.
+        // A resolved `script:` ref is retained as a TargetRef: the load
+        // validated its manifest, and each attempt checks the grant against
+        // a fresh snapshot of the bytes before the host runs them.
         JobV2StepBody::TargetRef(r)
             if r.target
                 .starts_with(orbit_types::workflow::activity_job::SCRIPT_REF_PREFIX) =>
         {
-            Err(DispatchError::ScriptStepsUnavailable {
-                step_id: step.id.clone(),
-                script: r
-                    .target
-                    .strip_prefix(orbit_types::workflow::activity_job::SCRIPT_REF_PREFIX)
-                    .unwrap_or(&r.target)
-                    .to_string(),
-            })
+            run_script_target(step, r, ctx)
         }
         JobV2StepBody::TargetRef(r) => Err(DispatchError::JobValidation(format!(
             "step `{}`: target ref `{}` was not resolved — caller must run \

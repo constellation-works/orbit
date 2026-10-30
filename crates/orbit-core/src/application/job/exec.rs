@@ -361,9 +361,9 @@ impl OrbitRuntime {
         // pass, so retired-feature rejection sees concrete specs. The
         // workspace's script catalog rides along so a `target:
         // script:<name>` step loads (its manifest is validated and its
-        // entry resolved inside the workspace) and then refuses at
-        // dispatch with `script_steps_unavailable`; a missing or invalid
-        // manifest fails this load, naming the manifest file.
+        // entry resolved inside the workspace) and runs at dispatch once
+        // its grant checks out; a missing or invalid manifest fails this
+        // load, naming the manifest file.
         let catalog = self
             .v2_activity_catalog()
             .map_err(|err| OrbitError::InvalidInput(format!("build activity catalog: {err}")))?;

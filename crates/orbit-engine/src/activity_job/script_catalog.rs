@@ -1,5 +1,5 @@
-//! Script manifest loading for `target: script:<name>` (script steps
-//! phase 1: catalog and grants, nothing executing).
+//! Script manifest loading for `target: script:<name>`, and the argument
+//! rendering a script step runs with.
 //!
 //! A script is a manifest at `<scripts_dir>/<name>.yaml` (`schemaVersion:
 //! 1`, `kind: Script`) whose `spec.entry` names the program file by a
@@ -14,6 +14,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use serde_json::Value;
 use thiserror::Error;
 
 use orbit_types::resource::{ResourceKind, ResourceMetadata};
@@ -101,6 +102,25 @@ pub fn load_script_asset(
     manifest_path: &Path,
     workspace_root: &Path,
 ) -> Result<ScriptAsset, ScriptLoadError> {
+    load_script_snapshot(manifest_path, workspace_root).map(|snapshot| snapshot.asset)
+}
+
+/// A loaded manifest plus the exact manifest and entry bytes its digests
+/// were computed over. A script step writes these bytes, and only these,
+/// into its sandbox, so a write to either file after the grant check
+/// changes nothing for the run that checked it.
+#[derive(Debug, Clone)]
+pub struct ScriptSnapshot {
+    pub asset: ScriptAsset,
+    pub manifest_bytes: Vec<u8>,
+    pub entry_bytes: Vec<u8>,
+}
+
+/// [`load_script_asset`], keeping the bytes each file was read as.
+pub fn load_script_snapshot(
+    manifest_path: &Path,
+    workspace_root: &Path,
+) -> Result<ScriptSnapshot, ScriptLoadError> {
     let manifest_bytes =
         std::fs::read(manifest_path).map_err(|source| ScriptLoadError::ReadManifest {
             path: manifest_path.to_path_buf(),
@@ -171,16 +191,94 @@ pub fn load_script_asset(
     let manifest_digest = script_sha256_hex(&manifest_bytes);
     let digest =
         orbit_types::workflow::activity_job::script_content_digest(&manifest_bytes, &entry_bytes);
-    Ok(ScriptAsset {
-        name,
-        spec,
-        manifest_path: manifest_path.to_path_buf(),
-        entry_path,
-        interpreter,
-        digest,
-        manifest_digest,
-        entry_digest,
+    Ok(ScriptSnapshot {
+        asset: ScriptAsset {
+            name,
+            spec,
+            manifest_path: manifest_path.to_path_buf(),
+            entry_path,
+            interpreter,
+            digest,
+            manifest_digest,
+            entry_digest,
+        },
+        manifest_bytes,
+        entry_bytes,
     })
+}
+
+/// Why a templated script argument did not render.
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum ScriptArgError {
+    #[error("script argument `{argument}`: template `{{{{ {expression} }}}}` {reason}")]
+    Template {
+        argument: String,
+        expression: String,
+        reason: String,
+    },
+    #[error(
+        "script argument `{argument}` renders to `{value}`, which starts with `-`; give the template a literal prefix (such as `--label={{{{ input.label }}}}`) so input cannot become an option"
+    )]
+    OptionInjection { argument: String, value: String },
+}
+
+/// Render a manifest's `args` against the step input (§1). Each element
+/// renders to exactly one argv element: every `{{ input.<path> }}` must
+/// name a string, number or boolean in the input, a value is never split
+/// or globbed, and an element whose rendered text starts with `-` because
+/// of a template at its very start is refused.
+pub fn render_script_args(args: &[String], input: &Value) -> Result<Vec<String>, ScriptArgError> {
+    args.iter()
+        .map(|argument| render_script_arg(argument, input))
+        .collect()
+}
+
+fn render_script_arg(argument: &str, input: &Value) -> Result<String, ScriptArgError> {
+    let mut rendered = String::new();
+    let mut rest = argument;
+    let mut leading_template = false;
+    while let Some(open) = rest.find("{{") {
+        rendered.push_str(&rest[..open]);
+        let after_open = &rest[open + 2..];
+        let Some(close) = after_open.find("}}") else {
+            break;
+        };
+        let expression = after_open[..close].trim();
+        let template_error = |reason: &str| ScriptArgError::Template {
+            argument: argument.to_string(),
+            expression: expression.to_string(),
+            reason: reason.to_string(),
+        };
+        if rendered.is_empty() {
+            leading_template = true;
+        }
+        let Some(path) = expression.strip_prefix("input.") else {
+            return Err(template_error("must read `input.<field>`"));
+        };
+        let mut value = input;
+        for segment in path.split('.') {
+            value = value
+                .get(segment)
+                .ok_or_else(|| template_error("names no value in the step input"))?;
+        }
+        match value {
+            Value::String(text) => rendered.push_str(text),
+            Value::Number(number) => rendered.push_str(&number.to_string()),
+            Value::Bool(flag) => rendered.push_str(if *flag { "true" } else { "false" }),
+            _ => {
+                return Err(template_error("must render to a string, number or boolean"));
+            }
+        }
+        rest = &after_open[close + 2..];
+    }
+    rendered.push_str(rest);
+    if leading_template && rendered.starts_with('-') {
+        return Err(ScriptArgError::OptionInjection {
+            argument: argument.to_string(),
+            value: rendered,
+        });
+    }
+    Ok(rendered)
 }
 
 /// Resolve `entry` physically beneath `workspace_root`, outside `.git/`

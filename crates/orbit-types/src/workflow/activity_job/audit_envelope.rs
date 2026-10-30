@@ -11,6 +11,8 @@ pub const AUDIT_ENVELOPE_SCHEMA_VERSION: u32 = 1;
 pub const V2_EVENT_TYPE_FS_CALL_DENIED: &str = "fs.call.denied";
 pub const V2_EVENT_TYPE_TOOL_DENIED: &str = "tool.denied";
 pub const V2_EVENT_TYPE_STEP_DENIED: &str = "step.denied";
+/// Event type of one script step attempt (`script_execution` body).
+pub const V2_EVENT_TYPE_SCRIPT_EXECUTION: &str = "script.execution";
 pub const V2_DENIAL_EVENT_TYPES: &[&str] = &[
     V2_EVENT_TYPE_FS_CALL_DENIED,
     V2_EVENT_TYPE_TOOL_DENIED,
@@ -423,6 +425,15 @@ pub enum V2AuditEventKind {
         harness_version: Option<String>,
         timed_out: bool,
     },
+    /// One attempt of a `target: script:<name>` step: what the grant
+    /// authorized, what the script profile ran and how it ended, or the
+    /// refusal that stopped it before anything was spawned. `orbit run
+    /// show` and `orbit script history` read these.
+    ScriptExecution {
+        step_id: String,
+        #[serde(flatten)]
+        record: Box<super::script::ScriptExecutionRecord>,
+    },
     /// [ORB-10367] A telemetry write failed (e.g. persisting an invocation
     /// trace). The run continues — telemetry is observability, not
     /// correctness — but the failure is recorded on the run so the gap in
@@ -482,6 +493,7 @@ impl V2AuditEventKind {
             }
             V2AuditEventKind::CliInvocationFinished { .. } => "cli.invocation.finished",
             V2AuditEventKind::CliInvocationBuildBudget { .. } => "cli.invocation.build_budget",
+            V2AuditEventKind::ScriptExecution { .. } => V2_EVENT_TYPE_SCRIPT_EXECUTION,
             V2AuditEventKind::TelemetryPersistFailed { .. } => "telemetry.persist_failed",
         }
     }

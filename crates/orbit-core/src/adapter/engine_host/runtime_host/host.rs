@@ -70,6 +70,13 @@ impl RuntimeHost for OrbitRuntime {
         crate::runtime::RuntimeKernel::register_worker_process(self, pid)
     }
 
+    fn run_script_step(
+        &self,
+        request: &orbit_engine::ScriptStepRequest,
+    ) -> orbit_engine::ScriptStepRun {
+        crate::application::job::script_step::run_script_step(self, request)
+    }
+
     fn worker_invocation(&self) -> Option<orbit_types::tool::WorkerInvocation> {
         crate::runtime::RuntimeKernel::worker_invocation(self).cloned()
     }

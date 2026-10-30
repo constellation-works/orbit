@@ -27,7 +27,8 @@ pub fn resolve_job_catalog_refs_for_execution(
 
 /// [`resolve_job_catalog_refs_for_execution`] for a caller that loaded the
 /// workspace's script catalog, so `target: script:<name>` steps resolve
-/// (and then refuse at dispatch) instead of failing to load.
+/// (and are granted and run by the host at dispatch) instead of failing to
+/// load.
 pub fn resolve_job_catalog_refs_with_scripts_for_execution(
     job: &mut JobV2,
     catalog: &V2ActivityCatalog,

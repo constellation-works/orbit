@@ -96,16 +96,66 @@ impl BuildLog {
 /// Spawn `command` (the sandbox wrapper) and supervise it. `guard` holds what
 /// the wrapper needs until it ends (a ruleset descriptor).
 pub(super) fn run<G>(
-    mut command: Command,
+    command: Command,
     guard: G,
     request: &BuildPhaseRequest<'_>,
     log: &mut BuildLog,
 ) -> Result<BuildPhaseEnd, OrbitError> {
+    let phase = Phase {
+        env: request.env,
+        cwd: request.cwd,
+        timeout: request.timeout,
+        size_root: request.sandbox.build_dir,
+        size_cap: request.build_dir_cap_bytes,
+        stdin: None,
+        stdout_cap: None,
+        grace: crate::supervision::TERMINATION_GRACE_PERIOD,
+    };
+    Ok(run_phase(command, guard, &phase, log)?.end)
+}
+
+/// One supervised sandbox start: the wrapper's environment and working
+/// directory, the bounds that kill its process group, and its stdio.
+pub(super) struct Phase<'a> {
+    pub(super) env: &'a [(String, String)],
+    pub(super) cwd: &'a Path,
+    pub(super) timeout: Duration,
+    /// The directory whose size is bounded, polled every second.
+    pub(super) size_root: &'a Path,
+    pub(super) size_cap: u64,
+    /// Bytes written to the child's stdin, then closed; `None` is no stdin.
+    pub(super) stdin: Option<Vec<u8>>,
+    /// Keep stdout apart from the log, up to this many bytes; `None` sends
+    /// stdout to the log only.
+    pub(super) stdout_cap: Option<usize>,
+    /// How long a stopped group gets between `SIGTERM` and `SIGKILL`.
+    pub(super) grace: Duration,
+}
+
+/// What one supervised start produced.
+pub(super) struct PhaseRun {
+    pub(super) end: BuildPhaseEnd,
+    /// The stdout kept apart from the log (empty without `stdout_cap`).
+    pub(super) stdout: Vec<u8>,
+    /// Stdout went past `stdout_cap`; what is kept is its head.
+    pub(super) stdout_over_cap: bool,
+}
+
+pub(super) fn run_phase<G>(
+    mut command: Command,
+    guard: G,
+    request: &Phase<'_>,
+    log: &mut BuildLog,
+) -> Result<PhaseRun, OrbitError> {
     command
         .env_clear()
         .envs(request.env.iter().map(|(key, value)| (key, value)))
         .current_dir(request.cwd)
-        .stdin(Stdio::null())
+        .stdin(if request.stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     #[cfg(unix)]
@@ -138,20 +188,30 @@ pub(super) fn run<G>(
     // output and Orbit's notes. Restore it even if supervision returns an error.
     let shared = Arc::new(Mutex::new(std::mem::take(log)));
     let mut check_size = || {
-        tree_exceeds(request.sandbox.build_dir, request.build_dir_cap_bytes).then_some(
-            ProcessStopCause::Requested {
-                reason: BUILD_DIR_CAP_REASON,
-            },
-        )
+        tree_exceeds(request.size_root, request.size_cap).then_some(ProcessStopCause::Requested {
+            reason: BUILD_DIR_CAP_REASON,
+        })
+    };
+    let stdout: Box<dyn OutputSink> = match request.stdout_cap {
+        Some(cap) => Box::new(CappedStdoutSink {
+            log: Arc::clone(&shared),
+            kept: Vec::new(),
+            cap,
+            over_cap: false,
+        }),
+        None => Box::new(BuildLogSink(Arc::clone(&shared))),
     };
     let outcome = child.supervise(Supervision {
-        stdin: Stdin::Null,
-        stdout: Stream::Sink(Box::new(BuildLogSink(Arc::clone(&shared)))),
+        stdin: match &request.stdin {
+            Some(bytes) => Stdin::Payload(bytes.clone()),
+            None => Stdin::Null,
+        },
+        stdout: Stream::Sink(stdout),
         stderr: Stream::Sink(Box::new(BuildLogSink(Arc::clone(&shared)))),
         timeout: Some(request.timeout),
         clock: None,
         extendable_deadline: None,
-        termination: Termination::Grace(crate::supervision::TERMINATION_GRACE_PERIOD),
+        termination: Termination::Grace(request.grace),
         cancelled: None,
         intercept_signals: false,
         drain_budget: DRAIN_GRACE,
@@ -185,12 +245,53 @@ pub(super) fn run<G>(
     };
     // A phase can finish between polls. Do not accept a build whose
     // directory is already over the cap.
-    if matches!(end, BuildPhaseEnd::Exited(_))
-        && tree_exceeds(request.sandbox.build_dir, request.build_dir_cap_bytes)
+    if matches!(end, BuildPhaseEnd::Exited(_)) && tree_exceeds(request.size_root, request.size_cap)
     {
         end = BuildPhaseEnd::BuildDirCapExceeded;
     }
-    Ok(end)
+    // The capped stdout sink marks an overflow with a trailing byte past
+    // the cap, so the head it kept stays exactly the bytes the child wrote.
+    let mut stdout = outcome.stdout;
+    let stdout_over_cap = request.stdout_cap.is_some_and(|cap| stdout.len() > cap);
+    if let Some(cap) = request.stdout_cap {
+        stdout.truncate(cap);
+    }
+    Ok(PhaseRun {
+        end,
+        stdout,
+        stdout_over_cap,
+    })
+}
+
+/// Stdout of a script: every byte also goes to the shared log, and the
+/// first `cap` bytes are kept apart as the script's answer. One byte past
+/// the cap is kept to mark an overflow; the child keeps running and its
+/// pipe stays open.
+struct CappedStdoutSink {
+    log: Arc<Mutex<BuildLog>>,
+    kept: Vec<u8>,
+    cap: usize,
+    over_cap: bool,
+}
+
+impl OutputSink for CappedStdoutSink {
+    fn push(&mut self, bytes: &[u8]) -> SinkVerdict {
+        self.log
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .push(bytes);
+        if !self.over_cap {
+            let room = (self.cap + 1).saturating_sub(self.kept.len());
+            let taken = room.min(bytes.len());
+            self.kept.extend_from_slice(&bytes[..taken]);
+            self.over_cap = self.kept.len() > self.cap;
+        }
+        SinkVerdict::Continue
+    }
+
+    fn finish(self: Box<Self>) -> Vec<u8> {
+        self.kept
+    }
 }
 
 /// Each stream shares one log; reaching its cap elides output without

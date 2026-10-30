@@ -60,7 +60,7 @@ pub use activity_job::{
     RETIRED_BACKEND_MIGRATION, RETIRED_PROVIDER_IDS, RETIRED_PROVIDER_MIGRATION,
     RetiredAgentBackend, RetiredFeatureError, RetrySpec, SchemaHeader, SteeringGateSpec, TargetRef,
     TargetStep, ToolAllowlistError, V2_DENIAL_EVENT_TYPES, V2_EVENT_TYPE_FS_CALL_DENIED,
-    V2_EVENT_TYPE_STEP_DENIED, V2_EVENT_TYPE_TOOL_DENIED,
+    V2_EVENT_TYPE_SCRIPT_EXECUTION, V2_EVENT_TYPE_STEP_DENIED, V2_EVENT_TYPE_TOOL_DENIED,
     V2_INTENTIONALLY_EMPTY_TOOL_WILDCARD_ROOTS, V2_TOOL_WILDCARD_ROOTS, V2AuditEnvelope,
     V2AuditEvent, V2AuditEventKind, activity_tool_policy_deprecation, admit_provider_sandbox_mode,
     check_retired_backend_value, format_provider_sandbox, is_least_restrictive_provider_sandbox,

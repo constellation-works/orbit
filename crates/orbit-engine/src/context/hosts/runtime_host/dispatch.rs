@@ -36,6 +36,18 @@ macro_rules! dispatch_methods {
             provider: &str,
         ) -> Result<ResolvedCliExecutor, DispatchError>;
 
+        /// Run one attempt of a `target: script:<name>` step under the script
+        /// profile: check the operator's grant against a snapshot of the
+        /// manifest and entry bytes, then spawn that snapshot sandboxed. A
+        /// refusal (no grant, a stale grant, a request beyond the grant, a
+        /// follower without a follower grant, a host without the profile)
+        /// spawns nothing. A host without the capability refuses every step
+        /// with `script_sandbox_unavailable`.
+        fn run_script_step(
+            &self,
+            request: &crate::context::ScriptStepRequest,
+        ) -> crate::context::ScriptStepRun;
+
         /// Resolve the registered `local_shell` executor definition backing a
         /// deterministic shell step [ORB-11294].
         ///

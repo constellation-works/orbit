@@ -1,20 +1,29 @@
-//! Script steps phase 1 at the public catalog/dispatch boundary: a
-//! `target: script:<name>` step load-validates its manifest (missing,
-//! escaping entry and inline-code interpreter flags all fail naming the
-//! manifest file), resolves, and then refuses at dispatch with
-//! `script_steps_unavailable` without spawning anything.
+//! Script steps at the public catalog/dispatch boundary: a `target:
+//! script:<name>` step load-validates its manifest (missing, escaping entry
+//! and inline-code interpreter flags all fail naming the manifest file),
+//! resolves, and at dispatch hands the attempt to its host. A host refusal
+//! fails the step without retry; a nonzero exit is a failed attempt the
+//! step's `retry` repeats; exit 0 must answer with JSON. Every attempt
+//! leaves one `script.execution` audit entry.
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use orbit_agent::loop_engine::InMemorySink;
 use orbit_engine::activity_job::{
     V2ActivityCatalog, V2ScriptCatalog, load_job_asset, load_script_asset, resolve_job_target_refs,
     resolve_job_target_refs_with_scripts,
 };
-use orbit_engine::{V2AuditWriter, execute_job_with_resume};
-use serde_json::json;
+use orbit_engine::{
+    ScriptStepEnd, ScriptStepRan, ScriptStepRequest, ScriptStepRun, V2AuditWriter, V2SqliteSink,
+    execute_job_with_resume,
+};
+use orbit_store::V2AuditEventFilter;
+use orbit_types::workflow::activity_job::{
+    ScriptExecutionRecord, V2_EVENT_TYPE_SCRIPT_EXECUTION, script_failure, script_refusal,
+};
+use serde_json::{Value, json};
 
 struct Fixture {
     root: tempfile::TempDir,
@@ -198,29 +207,127 @@ fn an_inline_code_field_in_the_manifest_fails_to_load() {
     );
 }
 
+/// A job writer whose envelopes land in an in-memory store the test reads.
+fn audited_writer(
+    run_id: &str,
+) -> (
+    Arc<V2AuditWriter>,
+    Arc<orbit_store::Store>,
+    tempfile::TempDir,
+) {
+    let audit_root = tempfile::tempdir().unwrap();
+    let blob_dir = audit_root.path().join("blobs");
+    fs::create_dir_all(&blob_dir).unwrap();
+    let store = Arc::new(orbit_store::Store::open_in_memory().expect("open sqlite sink"));
+    let envelope = Arc::new(V2SqliteSink::for_audit_root(
+        Arc::clone(&store) as Arc<dyn orbit_store::contracts::V2AuditStoreBackend>,
+        "ws_scripts",
+        run_id,
+        "test-agent",
+        None,
+        audit_root.path(),
+    ));
+    let writer = Arc::new(
+        V2AuditWriter::new(run_id, "test-agent", Arc::new(InMemorySink::new(blob_dir)))
+            .with_envelope_sink(envelope),
+    );
+    (writer, store, audit_root)
+}
+
+/// Every `script.execution` payload, oldest first.
+fn script_executions(store: &orbit_store::Store) -> Vec<Value> {
+    let mut rows = store
+        .list_v2_audit_events(&V2AuditEventFilter {
+            workspace_id: "ws_scripts".to_string(),
+            event_type: Some(V2_EVENT_TYPE_SCRIPT_EXECUTION.to_string()),
+            oldest_first: true,
+            ..Default::default()
+        })
+        .expect("read script executions");
+    rows.sort_by_key(|row| row.id);
+    rows.iter()
+        .map(|row| serde_json::from_str(&row.payload_json).expect("payload is JSON"))
+        .collect()
+}
+
+fn resolved_script_job(fixture: &Fixture, retry: Option<Value>) -> orbit_types::workflow::JobV2 {
+    let mut step = json!({"id": "package", "target": "script:package"});
+    if let Some(retry) = retry {
+        step["retry"] = retry;
+    }
+    let asset = json!({
+        "schemaVersion": 2,
+        "kind": "Job",
+        "metadata": {"name": "script_fixture"},
+        "spec": {"state": "enabled", "steps": [step]},
+    });
+    let mut job = load_job_asset(&asset.to_string()).unwrap().spec;
+    resolve_job_target_refs_with_scripts(&mut job, &V2ActivityCatalog::new(), &fixture.catalog())
+        .expect("valid script step resolves");
+    job
+}
+
+/// A host that answers every attempt with the same scripted run.
+struct ScriptedRunHost {
+    end: ScriptStepEnd,
+    stdout: &'static str,
+    log: &'static str,
+    requests: Mutex<Vec<ScriptStepRequest>>,
+}
+
+impl ScriptedRunHost {
+    fn new(end: ScriptStepEnd, stdout: &'static str, log: &'static str) -> Self {
+        Self {
+            end,
+            stdout,
+            log,
+            requests: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn attempts(&self) -> usize {
+        self.requests.lock().unwrap().len()
+    }
+}
+
+impl orbit_engine::test_support::NullRuntimeHost for ScriptedRunHost {
+    fn run_script_step(&self, request: &ScriptStepRequest) -> ScriptStepRun {
+        self.requests.lock().unwrap().push(request.clone());
+        ScriptStepRun::Ran(Box::new(ScriptStepRan {
+            end: self.end,
+            stdout: self.stdout.as_bytes().to_vec(),
+            stdout_over_cap: false,
+            output_schema: Value::Null,
+            log: self.log.as_bytes().to_vec(),
+            record: ScriptExecutionRecord {
+                script: request.script.clone(),
+                digest: "d".repeat(64),
+                grant_id: Some("grant-1".to_string()),
+                argv: vec!["/usr/bin/bash".to_string()],
+                duration_ms: Some(7),
+                ..ScriptExecutionRecord::default()
+            },
+        }))
+    }
+}
+
+const FAST_RETRY: &str = r#"{"max_attempts": 2, "initial_backoff_ms": 1, "backoff_cap_ms": 1}"#;
+
 #[test]
-fn a_valid_script_step_resolves_and_refuses_at_dispatch_spawning_nothing() {
+fn a_host_without_the_script_profile_refuses_before_spawn_and_records_the_refusal() {
     let fixture = Fixture::new();
     fixture.package_script();
-    let catalog = fixture.catalog();
-    let mut job = script_job();
-    resolve_job_target_refs_with_scripts(&mut job, &V2ActivityCatalog::new(), &catalog)
-        .expect("valid script step resolves");
+    let job = resolved_script_job(&fixture, Some(serde_json::from_str(FAST_RETRY).unwrap()));
 
     #[derive(Default)]
     struct NullHost;
     impl orbit_engine::test_support::NullRuntimeHost for NullHost {}
 
-    let blobs = tempfile::tempdir().unwrap();
-    let audit = Arc::new(V2AuditWriter::new(
-        "jrun-script-steps",
-        "test-agent",
-        Arc::new(InMemorySink::new(blobs.path().join("blobs"))),
-    ));
+    let (audit, store, _audit_root) = audited_writer("jrun-script-refused");
     let error = execute_job_with_resume(
         &job,
         json!({"label": "v1"}),
-        "jrun-script-steps",
+        "jrun-script-refused",
         audit,
         &NullHost,
         None,
@@ -229,16 +336,121 @@ fn a_valid_script_step_resolves_and_refuses_at_dispatch_spawning_nothing() {
     assert!(
         matches!(
             error,
-            orbit_engine::DispatchError::ScriptStepsUnavailable { ref script, .. }
-                if script == "package"
+            orbit_engine::DispatchError::ScriptRefused { code, ref script, .. }
+                if code == script_refusal::SANDBOX_UNAVAILABLE && script == "package"
         ),
-        "dispatch refuses with the typed script_steps_unavailable error: {error:?}"
+        "dispatch refuses with the typed script_sandbox_unavailable error: {error:?}"
     );
-    assert_eq!(error.failure_code(), "script_steps_unavailable");
+    assert_eq!(error.failure_code(), script_refusal::SANDBOX_UNAVAILABLE);
     assert!(error.is_non_retryable());
     assert!(
         !fixture.workspace().join("spawned-marker").exists(),
         "nothing was spawned: the entry's marker file must not exist"
+    );
+    let executions = script_executions(&store);
+    assert_eq!(
+        executions.len(),
+        1,
+        "one refused attempt, no retry: {executions:?}"
+    );
+    assert_eq!(executions[0]["outcome"], "refused");
+    assert_eq!(
+        executions[0]["refusal_code"],
+        script_refusal::SANDBOX_UNAVAILABLE
+    );
+    assert_eq!(executions[0]["step_id"], "package");
+}
+
+/// The `Ok(success = false)` leaf ORB-00374 removed with its audit-message
+/// coverage: a nonzero exit is retried per the step's `retry`, and the
+/// failure message names the exit and the log tail.
+#[test]
+fn a_nonzero_exit_is_a_failed_attempt_the_step_retry_repeats() {
+    let fixture = Fixture::new();
+    fixture.package_script();
+    let job = resolved_script_job(&fixture, Some(serde_json::from_str(FAST_RETRY).unwrap()));
+    let host = ScriptedRunHost::new(ScriptStepEnd::Exited(3), "", "packing\nboom: disk full\n");
+    let (audit, store, _audit_root) = audited_writer("jrun-script-exit");
+    let outcome = execute_job_with_resume(
+        &job,
+        json!({"label": "v1"}),
+        "jrun-script-exit",
+        audit,
+        &host,
+        None,
+    )
+    .expect("a nonzero exit is an outcome, not a dispatch error");
+    assert!(!outcome.success, "{outcome:?}");
+    assert_eq!(host.attempts(), 2, "the step's retry repeats the attempt");
+    let message = outcome.message.unwrap_or_default();
+    assert!(
+        message.contains("exited 3") && message.contains("boom: disk full"),
+        "the failure names the exit and the log tail: {message}"
+    );
+    let executions = script_executions(&store);
+    assert_eq!(executions.len(), 2, "one entry per attempt: {executions:?}");
+    for execution in &executions {
+        assert_eq!(execution["exit_code"], 3);
+        assert_eq!(execution["grant_id"], "grant-1");
+        assert!(execution["log_blob_ref"].is_string(), "{execution}");
+    }
+}
+
+#[test]
+fn exit_zero_json_becomes_the_step_output() {
+    let fixture = Fixture::new();
+    fixture.package_script();
+    let job = resolved_script_job(&fixture, None);
+    let host = ScriptedRunHost::new(
+        ScriptStepEnd::Exited(0),
+        "{\"archive\": \"site.tgz\"}\n",
+        "",
+    );
+    let (audit, store, _audit_root) = audited_writer("jrun-script-ok");
+    let outcome = execute_job_with_resume(
+        &job,
+        json!({"label": "v1"}),
+        "jrun-script-ok",
+        audit,
+        &host,
+        None,
+    )
+    .expect("the script step succeeds");
+    assert!(outcome.success, "{outcome:?}");
+    assert_eq!(
+        outcome.pipeline["package"]["archive"], "site.tgz",
+        "{}",
+        outcome.pipeline
+    );
+    assert_eq!(
+        host.requests.lock().unwrap()[0].input,
+        json!({"label": "v1"})
+    );
+    assert_eq!(script_executions(&store)[0]["exit_code"], 0);
+}
+
+#[test]
+fn exit_zero_with_invalid_output_fails_without_retry() {
+    let fixture = Fixture::new();
+    fixture.package_script();
+    let job = resolved_script_job(&fixture, Some(serde_json::from_str(FAST_RETRY).unwrap()));
+    let host = ScriptedRunHost::new(ScriptStepEnd::Exited(0), "packed ok\n", "");
+    let (audit, store, _audit_root) = audited_writer("jrun-script-invalid");
+    let error = execute_job_with_resume(
+        &job,
+        json!({"label": "v1"}),
+        "jrun-script-invalid",
+        audit,
+        &host,
+        None,
+    )
+    .expect_err("invalid output fails the step");
+    assert_eq!(error.failure_code(), script_failure::OUTPUT_INVALID);
+    assert!(error.is_non_retryable());
+    assert_eq!(host.attempts(), 1, "invalid output is not retried");
+    assert_eq!(
+        script_executions(&store)[0]["failure_code"],
+        script_failure::OUTPUT_INVALID
     );
 }
 
