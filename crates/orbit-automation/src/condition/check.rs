@@ -264,6 +264,13 @@ fn task_prefilter(when: &CheckedExpression) -> Result<TaskPrefilter, String> {
                 .into(),
         );
     }
+    if statuses.as_ref().is_some_and(BTreeSet::is_empty) {
+        return Err(
+            "the task status conjuncts contradict each other: no status satisfies them all, \
+             so no task can match"
+                .into(),
+        );
+    }
     Ok(TaskPrefilter {
         statuses: statuses.unwrap_or_default().into_iter().collect(),
         tags: tags.into_iter().collect(),
