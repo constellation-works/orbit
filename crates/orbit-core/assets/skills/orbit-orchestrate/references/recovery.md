@@ -30,7 +30,7 @@ relation in the same task update. Preserve all existing relations and append
 `{"type":"covered_by","target":"<covering task id>"}` or
 `{"type":"covered_by","target":"github-pr:https://github.com/OWNER/REPO/pull/NUMBER"}`.
 `github-pr:NUMBER` uses the checkout's GitHub repository. This is durable
-operator coverage of the exact failure key: later sweeps report `covered`
+operator coverage of the evidenced cause: later sweeps report `covered`
 with the archived owner and cover, and create no pilot candidate. A compiler
 error's key includes the checkout, so the hold also follows the same complete
 diagnostic set (paths and messages, ignoring line and column) to later
@@ -43,11 +43,22 @@ releases the key. After a merged cover's commit is in the failing checkout,
 the sweep files a new repair and names that cover as a fix that did not hold;
 older checkouts stay covered while waiting for the fix.
 
-A plain archive or rejection without `covered_by` suppresses the exact key
-(and, for compiler errors, the same diagnostic set at later checkouts) for
-`ci_failure.operator_suppression_hours` (default 6) from the operator's
-status decision. Its report entry is `withheld`, reason `operator_archived`,
-with the owner and expiry. After expiry a current failure can file again.
+A plain archive or rejection without `covered_by` suppresses an equivalent
+evidenced cause (and, for compiler errors, the same diagnostic set at later
+checkouts) for `ci_failure.operator_suppression_hours` (default 6) from the
+recorded status decision. A historical job/step key alone does not establish
+equivalence: a different retained diagnostic can file a new repair. When the
+cause cannot be established, `archive_identity_unavailable` holds filing
+within the same window; a finding with a cover stays held for reconciliation
+without attributing the uncertain cause to that cover.
+Such entries name only a `candidate_owner`, with no confirmed `owner` or
+`cover`; a hold for cover reconciliation has no expiry.
+The report entry is `withheld`, with the owner, expiry and `archive_actor`.
+Its reason is `operator_archived` for a human status decision,
+`automation_archived` for automation (including task-pilot's automatic
+`verified_no_diff` archival), or `archive_provenance_unavailable` when no
+status actor was retained. Later metadata edits do not change that actor or
+restart the window. After expiry a current failure can file again.
 Matching normalized failing-test signatures across jobs share one task with
 all job names and source identities; different signatures remain separate.
 Read `file.withheld` and its matching audit entries alongside

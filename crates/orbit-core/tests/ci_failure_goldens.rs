@@ -1,5 +1,7 @@
 //! Captured CI log shapes through the deterministic task-filing boundary.
 #![allow(missing_docs, clippy::unwrap_used, clippy::expect_used)]
+#[path = "ci_failure_goldens/archive.rs"]
+mod archive;
 #[path = "support/git.rs"]
 mod git_test_support;
 orbit_common::isolate_test_process!();
@@ -219,6 +221,7 @@ fn assert_archive_suppresses(
         assert_eq!(withheld["pilot_candidate_count"], 0);
         assert_eq!(withheld["withheld"][0]["outcome"], "withheld");
         assert_eq!(withheld["withheld"][0]["reason"], "operator_archived");
+        assert_eq!(withheld["withheld"][0]["archive_actor"], "human:fixture");
         assert_eq!(withheld["withheld"][0]["owner"], owner);
         if same_key {
             assert_eq!(
@@ -1232,7 +1235,12 @@ fn ci_equal_test_signatures_share_one_task_across_job_and_step_wrappers() {
     archive_owner(&legacy_runtime, &legacy.id, TaskStatus::Archived, None);
     let legacy_hold = file(&legacy_runtime, vec![failure(log, 3, &legacy_commits[2])]);
     assert_eq!(legacy_hold["filed_count"], 0, "{legacy_hold}");
-    assert_eq!(legacy_hold["withheld"][0]["owner"], legacy.id);
+    assert_eq!(legacy_hold["withheld"][0]["candidate_owner"], legacy.id);
+    assert_eq!(
+        legacy_hold["withheld"][0]["reason"],
+        "archive_identity_unavailable"
+    );
+    assert!(legacy_hold["withheld"][0]["owner"].is_null());
     assert_eq!(
         legacy_hold["withheld"][0]["failure_key"],
         filed["filed"][0]["failure_key"]

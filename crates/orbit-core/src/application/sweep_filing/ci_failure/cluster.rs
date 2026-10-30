@@ -12,7 +12,7 @@ use super::filing::{
     MAX_LISTED_RUNS,
 };
 use super::grouping::{failure_test_names, tested_commit};
-use super::identity::CiTaskIdentities;
+use super::identity::{CauseCheckedLookup, CiTaskIdentities};
 use super::log_signature::{
     FailedStepExcerpt, compiler_diagnostic_set, relevant_log_query_errors,
     render_failed_step_excerpt, specific_command_from_log, specific_error_anchors,
@@ -74,6 +74,11 @@ impl FailureCluster {
         lookup: &L,
         identities: &CiTaskIdentities<'_>,
     ) -> Result<Option<DuplicateTaskMatch>, OrbitError> {
+        let lookup = &CauseCheckedLookup {
+            inner: lookup,
+            cluster: self,
+            identities,
+        };
         if let Some(found) = find_covering_task(lookup, &self.duplicate_candidate())? {
             return Ok(Some(found));
         }
