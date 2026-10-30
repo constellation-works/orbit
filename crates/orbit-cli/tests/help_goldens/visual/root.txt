@@ -1,0 +1,17 @@
+Capture the working tree beside a task's mocks for comparison
+
+Usage: orbit visual [OPTIONS] <COMMAND>
+
+Commands:
+  capture  Capture the working tree beside each of a task's mocks
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header

@@ -115,6 +115,7 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
             "orbit.task.revoke_handoff",
             "orbit.task.show",
             "orbit.task.update",
+            "orbit.visual.capture",
             "orbit.workflow.auto",
             "orbit.workflow.run.list",
             "orbit.workflow.run.resume",

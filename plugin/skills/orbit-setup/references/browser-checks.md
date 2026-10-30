@@ -75,7 +75,7 @@ reference (UI tag) covers the tag itself.
 ```text
 ~/.local/chromium-deps/
   env.sh          # what a check sources
-  kit/            # npm project holding the pinned playwright package
+  kit/            # npm project holding the pinned playwright and pngjs packages
   browsers/       # chromium_headless_shell-<rev>, ffmpeg-<rev>
   orbit-kit.json  # the last passing verify: Playwright version and revision
   verify/         # the smoke test's screenshot
@@ -135,8 +135,10 @@ headless shell with `ldd` and closes any gap one of three ways:
   that this host could otherwise start wait because its kit is not verified.
   It names them; a task whose `os:` tags exclude this host is not counted.
 
-`verify` serves a page on loopback, screenshots it into `verify/smoke.png`
-and records the pass in `orbit-kit.json`. Starting verification clears any
+`verify` serves a page on loopback, screenshots it into `verify/smoke.png`,
+decodes that screenshot with the kit's pinned `pngjs` (the pixel-compare
+helper `orbit visual capture` uses), and records the pass in
+`orbit-kit.json`. Starting verification clears any
 earlier pass: a timeout, failed spawn or failed smoke test leaves workers
 without the kit until verification succeeds again. A failed smoke test
 prints the likely cause:

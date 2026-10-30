@@ -20,6 +20,7 @@ mod orchestrator_tools;
 mod pipeline_tools;
 mod search_tools;
 mod task;
+mod visual_tools;
 pub(crate) mod worker_tools;
 mod workflow_tools;
 mod workspace_claim_tools;

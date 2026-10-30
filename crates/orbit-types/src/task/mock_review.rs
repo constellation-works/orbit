@@ -46,13 +46,26 @@ pub fn is_mock_artifact(path: &str) -> bool {
         && path.contains('/')
 }
 
-/// One app of a view manifest: only the fields mock validation reads.
+/// One app of a view manifest. Mock validation reads `themes`; the
+/// capture driver (§4) also reads how to serve the app.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct ManifestApp {
     pub themes: Vec<String>,
+    /// Command that serves the app for one fixture (`{fixture}` is
+    /// replaced); it must print `ORBIT_VISUAL_URL=<loopback URL>`.
+    #[serde(default)]
+    pub setup: Vec<String>,
+    /// Seconds `setup` may take before capture gives up on the app.
+    #[serde(default)]
+    pub setup_timeout_s: Option<u64>,
+    /// A single-theme app whose light and dark captures must match (§7).
+    #[serde(default)]
+    pub color_scheme_invariant: bool,
 }
 
-/// One view of a view manifest: only the fields mock validation reads.
+/// One view of a view manifest. Mock validation reads `id`, `app`,
+/// `responsive` and `states`; the capture driver (§4) also reads how to
+/// reach and render the view.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct ManifestView {
     pub id: String,
@@ -61,6 +74,25 @@ pub struct ManifestView {
     pub responsive: bool,
     #[serde(default = "default_states")]
     pub states: Vec<String>,
+    /// Human name shown in prompts and reports.
+    #[serde(default)]
+    pub title: String,
+    /// Path or hash appended to the setup URL (`{name}` placeholders come
+    /// from the setup command's `ORBIT_VISUAL_<NAME>=` lines).
+    #[serde(default)]
+    pub route: String,
+    /// Fixture name passed to the app's `setup`.
+    #[serde(default)]
+    pub fixture: String,
+    /// Selector that must be visible before capture.
+    #[serde(default)]
+    pub ready: String,
+    /// Selector to capture instead of the viewport, for a one-panel view.
+    #[serde(default)]
+    pub clip: Option<String>,
+    /// Selectors painted a flat colour before capture.
+    #[serde(default)]
+    pub mask: Vec<String>,
 }
 
 fn default_responsive() -> bool {

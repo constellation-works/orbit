@@ -130,7 +130,90 @@ impl crate::OrbitRuntime {
         }
         Ok((capable, unable))
     }
+
+    /// Whether `crew` can read images it produces itself mid-run, as a
+    /// `verify-mock-ui` implementer's self-check requires (visual-review
+    /// §5.3): its provider has a CLI runtime, its executor declares
+    /// `image_input` with mode `native_read` (its own file-read tool
+    /// presents image files to the model), and the crew does not set
+    /// `vision = false`. An `attach_args` lane receives images only at
+    /// launch, so it cannot read self-check output and counts as without
+    /// vision for implementation (§9.1).
+    pub(crate) fn can_read_images(&self, crew: &Crew) -> Result<bool, OrbitError> {
+        if !crew.vision {
+            return Ok(false);
+        }
+        let provider = crew.assignment.provider.as_str();
+        if !Provider::parse(provider).is_ok_and(Provider::has_cli_runtime) {
+            return Ok(false);
+        }
+        let installed = self.get_executor_def(provider)?;
+        Ok(
+            crate::application::executor::declared_image_input(installed.as_ref(), provider)
+                .is_some_and(|declared| {
+                    declared.mode == orbit_types::workflow::ImageInputMode::NativeRead
+                }),
+        )
+    }
+
+    /// `candidates` split into the crews that can read images and the rest.
+    pub(super) fn partition_image_reading(
+        &self,
+        candidates: Vec<CrewCandidate>,
+    ) -> Result<(Vec<CrewCandidate>, Vec<CrewCandidate>), OrbitError> {
+        let mut capable = Vec::new();
+        let mut unable = Vec::new();
+        for candidate in candidates {
+            if self.can_read_images(&candidate.crew)? {
+                capable.push(candidate);
+            } else {
+                unable.push(candidate);
+            }
+        }
+        Ok((capable, unable))
+    }
+
+    /// The draw candidates of a `verify-mock-ui` implementer (§5.3): the
+    /// image-capable members of `candidates` while the pool has one, with
+    /// `source` naming the filter; otherwise the unfiltered pool with
+    /// `source` carrying [`IMPLEMENTER_WITHOUT_VISION`], which the caller
+    /// also records on the run. A task without the tag draws unchanged.
+    pub(super) fn image_capable_implementer_candidates(
+        &self,
+        tags: &[String],
+        candidates: Vec<CrewCandidate>,
+        source: String,
+    ) -> Result<(Vec<CrewCandidate>, String, bool), OrbitError> {
+        if !orbit_types::task::has_verify_mock_ui_tag(tags) {
+            return Ok((candidates, source, false));
+        }
+        let (capable, unable) = self.partition_image_reading(candidates.clone())?;
+        if capable.is_empty() {
+            return Ok((
+                candidates,
+                format!("{source}; {IMPLEMENTER_WITHOUT_VISION}"),
+                true,
+            ));
+        }
+        if unable.is_empty() {
+            return Ok((capable, source, false));
+        }
+        let skipped = unable
+            .iter()
+            .map(|candidate| candidate.crew.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        Ok((
+            capable,
+            format!("{source}; image-capable implementer (verify-mock-ui), skipped: {skipped}"),
+            false,
+        ))
+    }
 }
+
+/// Recorded on a `verify-mock-ui` run whose implementer was drawn from a
+/// pool with no image-capable crew (visual-review §5.3).
+pub(crate) const IMPLEMENTER_WITHOUT_VISION: &str = "implementer_without_vision";
 
 pub(super) fn sole_candidate(crew: Crew) -> CrewCandidate {
     CrewCandidate { crew, weight: 1 }

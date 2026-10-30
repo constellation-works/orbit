@@ -3313,6 +3313,40 @@
     ]
   },
   {
+    "name": "orbit.visual.capture",
+    "description": "Render the current working tree (uncommitted changes included) for each of a task's `mocks/` artifacts and write, per mock, `mock.png`, `capture.png` and `side-by-side.png` plus one `rules.json` with the workspace's UI rule results for those captures, under the output directory. Each mock name gives the view, state, theme and width, resolved against the view manifests configured in `visual_review.manifests`, whose fixture serves the app. This is the implementer's self-check: it attaches nothing and records nothing on the task, and its output is not evidence of record. Needs a verified browser kit on the host and a configured manifest; without either it fails naming what is missing. A mock whose view never renders is reported per mock as `render_timeout`, and one whose app's setup fails as `setup_failed`.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "id",
+        "description": "Task ID whose `mocks/` artifacts name the views to capture.",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "mock",
+        "description": "Capture only this one mock artifact (its full `mocks/…` path) instead of every mock of the task.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "out",
+        "description": "Directory the captures are written under, one subdirectory per mock. Defaults to `.orbit/tmp/visual/<task-id>` in the checkout.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "model",
+        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized.",
+        "param_type": "string",
+        "required": false
+      }
+    ]
+  },
+  {
     "name": "orbit.workflow.auto",
     "description": "Observe workspace auto-drain readiness, start a bounded window, stop admissions while preserving admitted workers (or, with force, stop those workers too), or resize a running drain's worker limit. Resize keeps the run ID, deadline, completion authorization and dispatched children; a lower limit only stops new admissions and cancels nothing. Requires trusted operator authority and an explicit workspace. Start is not retry-safe: reconcile readiness and runs after a lost reply before another submission.",
     "enabled": true,

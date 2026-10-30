@@ -1729,6 +1729,17 @@
   },
   {
     "surface": "tool",
+    "operation": "orbit.visual.capture",
+    "required_any": [],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
     "operation": "orbit.workflow.auto",
     "required_any": [
       "operator"
