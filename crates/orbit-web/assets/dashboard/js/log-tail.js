@@ -149,8 +149,8 @@ function applyDockMode() {
     btn.setAttribute("aria-selected", on ? "true" : "false");
     btn.tabIndex = on ? 0 : -1;
   }
-  // Each tab's first card sits at its own depth (Locks held follows the
-  // hidden Auto-drain column), so the dock re-levels on every switch.
+  // CSS keeps every tab's first card at the same depth below the shared
+  // chrome. Reassert alignment without anchoring it to drain-only notices.
   alignTasksDock();
 }
 
