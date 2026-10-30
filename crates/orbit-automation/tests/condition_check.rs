@@ -123,6 +123,41 @@ fn board_presence_test_matches_direct_read_on_healthy_facts() {
 }
 
 #[test]
+fn board_status_map_reads_require_stored_status_spellings() {
+    for when in [
+        "board.by_status.typo == 0",
+        "board.by_status['typo'] == 0",
+        "has(board.by_status.typo)",
+    ] {
+        let error = match check_condition(&workspace_condition(when), ConditionCarrier::Routine) {
+            Ok(_) => panic!("accepted unknown board status key: {when}"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error.clause, "trigger.condition.when",
+            "unknown status key was reported against the wrong clause: {when}"
+        );
+        assert!(
+            error.position.is_some(),
+            "unknown status key had no source position: {when}"
+        );
+        assert!(
+            error.message.contains("unknown task status 'typo'"),
+            "unknown status key had no status-spelling error: {when}: {error}"
+        );
+    }
+
+    for when in [
+        "board.by_status.in_progress == 0",
+        "board.by_status['in_progress'] == 0",
+        "has(board.by_status.in_progress)",
+    ] {
+        check_condition(&workspace_condition(when), ConditionCarrier::Routine)
+            .unwrap_or_else(|error| panic!("refused stored status key in {when}: {error}"));
+    }
+}
+
+#[test]
 fn duration_negation_is_refused_at_load() {
     // cel 0.15 has no duration negation overload, so the checker must refuse
     // unary '-' on a duration at load instead of accepting an expression that
