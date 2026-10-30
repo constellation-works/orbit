@@ -37,7 +37,8 @@ use orbit_store::contracts::{
 use orbit_types::record::OrbitEvent;
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{
-    JobRun, JobRunState, PipelineState, RunStateUpdate, TaskCancellationPolicy,
+    JobRun, JobRunState, PipelineState, RunCancellationProvenance, RunStateUpdate,
+    TaskCancellationPolicy,
 };
 use serde_json::json;
 
@@ -178,9 +179,12 @@ impl OrbitRuntime {
                 request.source.into(),
                 request.reason.map(Into::into),
             );
+            let provenance =
+                RunCancellationProvenance::new(request.actor, request.source, request.reason);
             state.task_cancellation_policy = Some(TaskCancellationPolicy {
                 block: request.block_task,
-                note: cancellation_note(request.actor, request.reason),
+                note: cancellation_note(&provenance.actor, provenance.reason.as_deref()),
+                provenance: Some(provenance),
             });
             Ok(())
         };

@@ -23,13 +23,83 @@ pub struct DrainCancelRequest {
 /// Task disposition chosen by an operator cancellation. Kept in the run's
 /// durable state before the owner is signalled so whichever process wins run
 /// finalization applies the same task outcome and preserves the cancel note.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct TaskCancellationPolicy {
     /// `true` preserves the legacy `blocked` transition; `false` returns the
     /// task to `backlog` so its candidate can be resumed later.
     pub block: bool,
     /// Actor and optional reason captured for the task history entry.
     pub note: String,
+    /// Structured cancellation data, including provenance recovered from legacy notes.
+    #[serde(skip_serializing_if = "skip_legacy_provenance")]
+    pub provenance: Option<RunCancellationProvenance>,
+}
+
+/// The actor, source and reason supplied when a run was cancelled.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RunCancellationProvenance {
+    pub actor: String,
+    pub source: Option<String>,
+    pub reason: Option<String>,
+    #[serde(skip)]
+    legacy: bool,
+}
+
+impl RunCancellationProvenance {
+    /// Capture the original cancellation request.
+    pub fn new(actor: &str, source: &str, reason: Option<&str>) -> Self {
+        Self {
+            actor: actor.into(),
+            source: Some(source.into()),
+            reason: reason.map(str::to_owned),
+            legacy: false,
+        }
+    }
+}
+
+fn skip_legacy_provenance(value: &Option<RunCancellationProvenance>) -> bool {
+    value.as_ref().is_none_or(|provenance| provenance.legacy)
+}
+
+impl<'de> Deserialize<'de> for TaskCancellationPolicy {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct StoredPolicy {
+            block: bool,
+            note: String,
+            provenance: Option<RunCancellationProvenance>,
+        }
+        let stored = StoredPolicy::deserialize(deserializer)?;
+        let provenance = stored
+            .provenance
+            .or_else(|| decode_legacy_cancellation_note(&stored.note));
+        Ok(Self {
+            block: stored.block,
+            note: stored.note,
+            provenance,
+        })
+    }
+}
+
+/// Decode the pre-provenance policy shape at its storage boundary.
+fn decode_legacy_cancellation_note(note: &str) -> Option<RunCancellationProvenance> {
+    let rest = note.trim().strip_prefix("run cancelled by ")?;
+    let (actor, reason) = rest
+        .split_once(": ")
+        .map_or((rest, None), |(actor, reason)| (actor, Some(reason)));
+    let actor = actor.trim();
+    if actor.is_empty() {
+        return None;
+    }
+    Some(RunCancellationProvenance {
+        actor: actor.to_owned(),
+        source: None,
+        reason: reason
+            .map(str::trim)
+            .filter(|reason| !reason.is_empty())
+            .map(str::to_owned),
+        legacy: true,
+    })
 }
 
 /// A live operator adjustment to a bounded drain's worker ceiling [ORB-11253].

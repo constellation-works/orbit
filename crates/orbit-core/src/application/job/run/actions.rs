@@ -17,8 +17,8 @@ use orbit_types::workflow::activity_job::{
     AUDIT_ENVELOPE_SCHEMA_VERSION, V2AuditEnvelope, V2AuditEvent, V2AuditEventKind,
 };
 use orbit_types::workflow::{
-    ChildCancellation, ChildCancellationPolicy, JobRun, JobRunState, PipelineState, RunStateUpdate,
-    TaskCancellationPolicy,
+    ChildCancellation, ChildCancellationPolicy, JobRun, JobRunState, PipelineState,
+    RunCancellationProvenance, RunStateUpdate, TaskCancellationPolicy,
 };
 use serde_json::Value;
 
@@ -209,11 +209,13 @@ impl OrbitRuntime {
             reason,
             request.block_task,
         )?;
+        let provenance = RunCancellationProvenance::new(request.actor, request.source, reason);
         self.persist_task_cancellation_policy(
             &run,
             TaskCancellationPolicy {
                 block: request.block_task,
-                note: cancellation_note(request.actor, reason),
+                note: cancellation_note(&provenance.actor, provenance.reason.as_deref()),
+                provenance: Some(provenance),
             },
         )?;
         let signal_attempted = run.state == JobRunState::Running && run.pid.is_some();
