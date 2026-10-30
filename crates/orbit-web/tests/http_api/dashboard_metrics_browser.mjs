@@ -320,7 +320,9 @@ try {
   page.on('console', message => {
     if (message.type() === 'error' && !/EventSource|Failed to load resource/.test(message.text())) errors.push(message.text());
   });
-  await page.goto(`${origin}#analytics/metrics`);
+  // The count trends open on Cumulative or Per day; the per-bucket assertions below
+  // ask for Per bucket through the hash, as a shared link would.
+  await page.goto(`${origin}#analytics/metrics?completed_view=bucket&defects_view=bucket&diff_view=bucket&tokens_view=bucket`);
   const body = page.locator('#metrics-body');
   await body.locator('.mx-sc').first().waitFor();
   await page.evaluate(async () => { await document.fonts.ready; });

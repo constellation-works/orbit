@@ -141,9 +141,10 @@ fn defect_trend(
     runtime: &OrbitRuntime,
     range: &DiagnosticsRange,
 ) -> Result<Value, orbit_core::OrbitError> {
-    let filings = runtime.task_defect_filings(TrendWindow::read_since(range))?;
-    let window = TrendWindow::new(range, filings.first().map(|filing| filing.filed_at));
+    let filings = runtime.task_defect_filings(TrendWindow::read_since_with_day_lead(range))?;
+    let window = TrendWindow::with_day_lead(range, filings.first().map(|filing| filing.filed_at));
     let mut buckets = vec![Counts::default(); window.bucket_count()];
+    let mut lead = vec![Counts::default(); window.lead_count()];
     let mut current = Counts::default();
     let mut previous = Counts::default();
     for filing in &filings {
@@ -152,6 +153,9 @@ fn defect_trend(
             current.record(&filing.regression_from_types, &filing.tags);
         } else if window.in_previous(filing.filed_at) {
             previous.record(&filing.regression_from_types, &filing.tags);
+        }
+        if let Some(index) = window.lead_bucket_of(filing.filed_at) {
+            lead[index].record(&filing.regression_from_types, &filing.tags);
         }
     }
     let buckets: Vec<Value> = buckets
@@ -168,6 +172,7 @@ fn defect_trend(
         "lineages": LINEAGES,
         "origins": ORIGINS,
         "buckets": buckets,
+        "lead_buckets": lead.iter().map(Counts::to_json).collect::<Vec<_>>(),
         "current": current.to_json(),
         "previous": window.previous.map(|_| previous.to_json()),
     }))

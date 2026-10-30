@@ -167,13 +167,16 @@ impl Cell {
 
 struct Series {
     points: Vec<Cell>,
+    /// Deliveries in the lead buckets before the window, for the per-day view.
+    lead_points: Vec<Cell>,
     total: Cell,
 }
 
 impl Series {
-    fn new(buckets: usize) -> Self {
+    fn new(buckets: usize, lead: usize) -> Self {
         Self {
             points: vec![Cell::default(); buckets],
+            lead_points: vec![Cell::default(); lead],
             total: Cell::default(),
         }
     }
@@ -183,11 +186,16 @@ impl Series {
         self.total.rows.push(row);
     }
 
+    fn record_lead(&mut self, index: usize, row: [i64; 7]) {
+        self.lead_points[index].rows.push(row);
+    }
+
     fn to_json(&self, key: &str, crews: &[String]) -> Value {
         json!({
             "key": key,
             "crews": crews,
             "points": self.points.iter().map(Cell::to_json).collect::<Vec<_>>(),
+            "lead_points": self.lead_points.iter().map(Cell::to_json).collect::<Vec<_>>(),
             "total": self.total.to_json(),
         })
     }
@@ -198,9 +206,10 @@ fn diff_stats_trend(
     range: &DiagnosticsRange,
     complexities: Option<&BTreeSet<&'static str>>,
 ) -> Result<Value, orbit_core::OrbitError> {
-    let rows = runtime.landed_diff_stats(TrendWindow::read_since(range))?;
-    let window = TrendWindow::new(range, rows.first().map(|row| row.landed_at));
+    let rows = runtime.landed_diff_stats(TrendWindow::read_since_with_day_lead(range))?;
+    let window = TrendWindow::with_day_lead(range, rows.first().map(|row| row.landed_at));
     let bucket_count = window.bucket_count();
+    let lead_count = window.lead_count();
     let mut complexity_counts: BTreeMap<&str, u64> = BTreeMap::new();
     let mut in_window = Vec::new();
     for row in &rows {
@@ -234,12 +243,12 @@ fn diff_stats_trend(
         .map(|(crew, _)| (*crew).to_string())
         .collect();
 
-    let mut overall = Series::new(bucket_count);
+    let mut overall = Series::new(bucket_count, lead_count);
     let mut by_crew: BTreeMap<&str, Series> = drawn
         .iter()
-        .map(|crew| (*crew, Series::new(bucket_count)))
+        .map(|crew| (*crew, Series::new(bucket_count, lead_count)))
         .collect();
-    let mut other = Series::new(bucket_count);
+    let mut other = Series::new(bucket_count, lead_count);
     for (index, row) in &in_window {
         let values = measures(row);
         overall.record(*index, values);
@@ -248,6 +257,24 @@ fn diff_stats_trend(
             .get_mut(crew)
             .unwrap_or(&mut other)
             .record(*index, values);
+    }
+    for row in &rows {
+        let Some(index) = window.lead_bucket_of(row.landed_at) else {
+            continue;
+        };
+        if complexities.is_some_and(|selected| {
+            !selected.contains(complexity_bucket(row.complexity.as_deref()))
+        }) {
+            continue;
+        }
+        let values = measures(row);
+        overall.record_lead(index, values);
+        let crew = row.crew.as_deref().unwrap_or(UNKNOWN_CREW);
+        if let Some(series) = by_crew.get_mut(crew) {
+            series.record_lead(index, values);
+        } else if folded.iter().any(|name| name == crew) {
+            other.record_lead(index, values);
+        }
     }
     let mut crews: Vec<Value> = drawn
         .iter()

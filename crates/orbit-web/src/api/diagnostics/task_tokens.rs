@@ -227,6 +227,7 @@ impl Cell {
         };
         json!({
             "n": n,
+            "sum": self.tokens.iter().map(|tokens| u128::from(*tokens)).sum::<u128>() as f64,
             "mean": mean,
             "median": median,
             "thin": n > 0 && n < MIN_TASKS,
@@ -238,7 +239,19 @@ impl Cell {
 
 struct Series {
     points: Vec<Cell>,
+    /// Tasks in the lead buckets before the window, for the per-day view.
+    lead_points: Vec<Cell>,
     total: Cell,
+}
+
+impl Series {
+    fn new(buckets: usize, lead: usize) -> Self {
+        Self {
+            points: vec![Cell::default(); buckets],
+            lead_points: vec![Cell::default(); lead],
+            total: Cell::default(),
+        }
+    }
 }
 
 fn task_token_trend(
@@ -247,27 +260,39 @@ fn task_token_trend(
     filters: &Filters,
 ) -> Result<Value, orbit_core::OrbitError> {
     let transitions: Vec<_> = runtime
-        .task_terminal_transitions(TrendWindow::read_since(range))?
+        .task_terminal_transitions(TrendWindow::read_since_with_day_lead(range))?
         .into_iter()
         .filter(|row| !filters.done_only || row.status == TaskStatus::Done)
         .collect();
-    let window = TrendWindow::new(range, transitions.first().map(|row| row.at));
+    let window = TrendWindow::with_day_lead(range, transitions.first().map(|row| row.at));
+    let wanted = |complexity: &str| {
+        filters
+            .complexities
+            .as_ref()
+            .is_none_or(|selected| selected.contains(complexity))
+    };
     let in_window: Vec<_> = transitions
         .iter()
         .filter_map(|row| window.bucket_of(row.at).map(|index| (index, row)))
-        .filter(|(_, row)| {
-            filters
-                .complexities
-                .as_ref()
-                .is_none_or(|selected| selected.contains(row.complexity.as_str()))
-        })
+        .filter(|(_, row)| wanted(row.complexity.as_str()))
         .collect();
+    // A window with no tasks draws nothing, so its lead is never read.
+    let lead_rows: Vec<_> = if in_window.is_empty() {
+        Vec::new()
+    } else {
+        transitions
+            .iter()
+            .filter_map(|row| window.lead_bucket_of(row.at).map(|index| (index, row)))
+            .filter(|(_, row)| wanted(row.complexity.as_str()))
+            .collect()
+    };
     // No linked invocation predates its task, so the oldest task in the
     // window bounds the invocation read, with a day's slack for clock skew
     // between the hosts that stamp the two; an owner that omits `created_at`
     // forces a full read.
     let spend_since = in_window
         .iter()
+        .chain(&lead_rows)
         .map(|(_, row)| row.created_at)
         .collect::<Option<Vec<_>>>()
         .and_then(|created| created.into_iter().min())
@@ -284,6 +309,7 @@ fn task_token_trend(
         &["with", "without"]
     };
     let bucket_count = window.bucket_count();
+    let lead_count = window.lead_count();
     let mut series: BTreeMap<(String, &str), Series> = BTreeMap::new();
     let standing = STANDING_SERIES.iter().filter(|complexity| {
         filters
@@ -295,10 +321,7 @@ fn task_token_trend(
         for cohort in cohorts {
             series.insert(
                 (complexity.to_string(), cohort),
-                Series {
-                    points: vec![Cell::default(); bucket_count],
-                    total: Cell::default(),
-                },
+                Series::new(bucket_count, lead_count),
             );
         }
     }
@@ -339,13 +362,40 @@ fn task_token_trend(
         }));
         let entry = series
             .entry((row.complexity.clone(), cohort))
-            .or_insert_with(|| Series {
-                points: vec![Cell::default(); bucket_count],
-                total: Cell::default(),
-            });
+            .or_insert_with(|| Series::new(bucket_count, lead_count));
         entry.points[*index].record(contribution);
         entry.total.record(contribution);
         overall.record(contribution);
+    }
+    for (index, row) in &lead_rows {
+        let task = totals.get(&row.task_id);
+        let implement_model = task.and_then(|task| task.implement_model.as_deref());
+        if filters
+            .model
+            .as_deref()
+            .is_some_and(|wanted| implement_model != Some(wanted))
+        {
+            continue;
+        }
+        let cohort = if filters.tags.is_empty() {
+            "all"
+        } else if row.tags.iter().any(|tag| filters.tags.contains(tag)) {
+            "with"
+        } else {
+            "without"
+        };
+        let contribution = Contribution::of(task.map(|task| {
+            if filters.implement_only {
+                &task.implement
+            } else {
+                &task.all
+            }
+        }));
+        series
+            .entry((row.complexity.clone(), cohort))
+            .or_insert_with(|| Series::new(bucket_count, lead_count))
+            .lead_points[*index]
+            .record(contribution);
     }
 
     let mut series: Vec<_> = series.into_iter().collect();
@@ -364,6 +414,7 @@ fn task_token_trend(
                 "complexity": complexity,
                 "cohort": cohort,
                 "points": series.points.iter().map(Cell::to_json).collect::<Vec<_>>(),
+                "lead_points": series.lead_points.iter().map(Cell::to_json).collect::<Vec<_>>(),
                 "total": series.total.to_json(),
             })
         })

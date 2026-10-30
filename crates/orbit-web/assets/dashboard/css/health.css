@@ -617,6 +617,8 @@ td .rel-rate { font-size: 12px; }
 }
 .mx-sc:hover, .mx-sc.on { border-color: #2e343c; }
 .mx-sc.off { opacity: 0.42; }
+.mx-sc-static { cursor: default; }
+.mx-sc-static:hover { border-color: var(--hair); }
 .mx-sc-label { display: flex; align-items: center; gap: 8px; color: #c9d0d9; font: 13px var(--font-sans); }
 .mx-sc-tag { color: var(--fg-mute); font: 11px var(--font-mono); }
 .mx-sc-value { color: var(--fg); font: 600 26px var(--font-mono); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
