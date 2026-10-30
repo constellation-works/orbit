@@ -2,15 +2,15 @@
 
 use orbit_common::storage::blob_store::BlobStore;
 use orbit_core::{OrbitRuntime, V2AuditEventFilter};
-use serde_json::Value;
-use std::collections::HashMap;
 
-pub(super) fn v2_audit_values(
+/// Payloads of up to `limit` of the newest v2 envelope events in
+/// `[since, until]`, oldest first.
+pub(super) fn v2_audit_payloads(
     runtime: &OrbitRuntime,
     since: Option<chrono::DateTime<chrono::Utc>>,
     until: Option<chrono::DateTime<chrono::Utc>>,
     limit: usize,
-) -> Result<Vec<Value>, orbit_core::OrbitError> {
+) -> Result<Vec<String>, orbit_core::OrbitError> {
     let rows = OrbitRuntime::list_v2_audit_events(
         runtime,
         V2AuditEventFilter {
@@ -22,23 +22,7 @@ pub(super) fn v2_audit_values(
             ..Default::default()
         },
     )?;
-    Ok(rows
-        .into_iter()
-        .rev()
-        .filter_map(|row| serde_json::from_str::<Value>(&row.payload_json).ok())
-        .collect())
-}
-
-pub(super) fn events_by_id(events: &[Value]) -> HashMap<&str, &Value> {
-    events
-        .iter()
-        .filter_map(|event| {
-            event
-                .get("event_id")
-                .and_then(Value::as_str)
-                .map(|event_id| (event_id, event))
-        })
-        .collect()
+    Ok(rows.into_iter().rev().map(|row| row.payload_json).collect())
 }
 
 pub(super) fn audit_blob_store(runtime: &OrbitRuntime) -> BlobStore {

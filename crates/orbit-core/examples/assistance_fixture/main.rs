@@ -1097,7 +1097,9 @@ fn fixture_config_and_compatibility(root: &Path) -> FixtureResult {
     assert!(config.set_value("assistance", "{}").is_err());
     let path = root.join("compat.db");
     let store = Store::open(&path)?;
-    // Reconstruct exactly the v71 prefix: v72 through v74 add independent tables.
+    // Reconstruct exactly the v71 prefix: v72 through v74 add independent tables,
+    // v75 adds an independent counter table with triggers, and v76 adds an
+    // index on a table this prefix still has.
     // Keep the old connection open across the real Store::open migration.
     {
         let connection = store.connection();
@@ -1109,8 +1111,9 @@ fn fixture_config_and_compatibility(root: &Path) -> FixtureResult {
         )?;
         let mut compat: Value = serde_json::from_str(&compat)?;
         compat["version"] = json!(71);
-        conn.execute_batch("DROP TABLE script_grant; DROP TABLE worker_resource_limits; DROP TABLE assistance_slots; DROP TABLE assistance_attempts; DROP TABLE assistance_work; DROP TABLE assistance_budgets;
-            DELETE FROM schema_meta WHERE key='migration.v0074'; DELETE FROM schema_meta WHERE key='migration.v0073'; DELETE FROM schema_meta WHERE key='migration.v0072'; CREATE TABLE old_writer_fixture(value TEXT);")?;
+        conn.execute_batch("DROP TRIGGER IF EXISTS delivery_runs_stamp_run_insert; DROP TRIGGER IF EXISTS delivery_runs_stamp_run_delete; DROP TRIGGER IF EXISTS delivery_runs_stamp_run_update; DROP TRIGGER IF EXISTS delivery_runs_stamp_minute_insert; DROP TRIGGER IF EXISTS delivery_runs_stamp_minute_delete; DROP TRIGGER IF EXISTS delivery_runs_stamp_minute_rekey; DROP TABLE IF EXISTS delivery_runs_stamp; DROP TABLE script_grant; DROP TABLE worker_resource_limits; DROP TABLE assistance_slots; DROP TABLE assistance_attempts; DROP TABLE assistance_work; DROP TABLE assistance_budgets;
+            DROP INDEX IF EXISTS idx_job_run_steps_activity_window;
+            DELETE FROM schema_meta WHERE key='migration.v0076'; DELETE FROM schema_meta WHERE key='migration.v0075'; DELETE FROM schema_meta WHERE key='migration.v0074'; DELETE FROM schema_meta WHERE key='migration.v0073'; DELETE FROM schema_meta WHERE key='migration.v0072'; CREATE TABLE old_writer_fixture(value TEXT);")?;
         conn.execute(
             "UPDATE schema_meta SET value=?1 WHERE key='migration.compat'",
             [compat.to_string()],
@@ -1118,7 +1121,7 @@ fn fixture_config_and_compatibility(root: &Path) -> FixtureResult {
     }
     assert_eq!(store.schema_version()?, 71);
     let upgraded = Store::open(&path)?;
-    assert_eq!(upgraded.schema_version()?, 74);
+    assert_eq!(upgraded.schema_version()?, 76);
     let connection = store.connection();
     let conn = connection.lock().map_err(|_| "connection lock")?;
     let database = orbit_store::maintenance::migration::LedgeredDatabase {
@@ -1128,7 +1131,7 @@ fn fixture_config_and_compatibility(root: &Path) -> FixtureResult {
         stamp: None,
     };
     let compatible =
-        orbit_store::maintenance::migration::evaluate_newer_database(&conn, &database, 74, 71)?;
+        orbit_store::maintenance::migration::evaluate_newer_database(&conn, &database, 76, 71)?;
     assert!(compatible.writable);
     conn.execute_batch("INSERT INTO old_writer_fixture VALUES ('compatible');")?;
     assert_eq!(

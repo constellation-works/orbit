@@ -498,6 +498,10 @@ fn legacy_db_adopts_versioned_ledger() {
                 "migration.v0075".to_string(),
                 "delivery_runs_stamp".to_string(),
             ),
+            (
+                "migration.v0076".to_string(),
+                "job_run_step_activity_window_index".to_string(),
+            ),
         ]
     );
 }
