@@ -519,7 +519,7 @@ pub fn visual_review_summary_with_review(
         capture.mocks.len()
     );
     if failed > 0 {
-        line.push_str(&format!(", {failed} failed to render"));
+        line.push_str(&format!(", {failed} without a capture"));
     }
     if !capture.over_budget.is_empty() {
         line.push_str(&format!(", {} over budget", capture.over_budget.len()));

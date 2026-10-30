@@ -45,35 +45,46 @@ const outDir = process.argv[1];
 const driver = await import(pathToFileURL(process.argv[2]).href);
 const mockFile = path.join(outDir, "mock.png");
 await writeFile(mockFile, Buffer.alloc(128, 2));
-const makeBrowser = (captureBytes, sideBySideBytes) => ({
-  newContext: async () => {
-    const page = {
-      on() {},
-      route: async () => {},
-      clock: { install: async () => {}, pauseAt: async () => {}, runFor: async () => {} },
-      addInitScript: async () => {},
-      goto: async () => {},
-      addStyleTag: async () => {},
-      locator() { return { first() { return this; }, waitFor: async () => {} }; },
-      waitForLoadState: async () => {},
-      evaluate: async (_fn, args) => {
-        if (args?.quality !== undefined) {
-          return `data:image/webp;base64,${Buffer.alloc(2048, 7).toString("base64")}`;
-        }
-        if (args?.mockUrl) return { width: 100, height: 100 };
-        return undefined;
-      },
-      screenshot: async (options = {}) => {
-        const bytes = Buffer.alloc(options.path ? sideBySideBytes : captureBytes, 1);
-        if (options.path) await writeFile(options.path, bytes);
-        return bytes;
-      },
-      setContent: async () => {},
-      setViewportSize: async () => {},
-    };
-    return { newPage: async () => page, close: async () => {} };
-  },
-});
+const makeBrowser = (captureBytes, sideBySideBytes) => {
+  let screenshotCount = 0;
+  return {
+    newContext: async () => {
+      const page = {
+        on() {},
+        route: async (_pattern, handler) => {
+          await handler({
+            request: () => ({ url: () => "https://external.invalid/data" }),
+            abort: async () => {},
+          });
+        },
+        clock: { install: async () => {}, pauseAt: async () => {}, runFor: async () => {} },
+        addInitScript: async () => {},
+        goto: async () => {},
+        addStyleTag: async () => {},
+        locator() { return { first() { return this; }, waitFor: async () => {} }; },
+        waitForLoadState: async () => {},
+        evaluate: async (_fn, args) => {
+          if (args?.quality !== undefined) {
+            return `data:image/webp;base64,${Buffer.alloc(2048, 7).toString("base64")}`;
+          }
+          if (args?.mockUrl) return { width: 100, height: 100 };
+          return undefined;
+        },
+        screenshot: async (options = {}) => {
+          if (options.path) {
+            const bytes = Buffer.alloc(sideBySideBytes, 1);
+            await writeFile(options.path, bytes);
+            return bytes;
+          }
+          return Buffer.alloc(captureBytes, ++screenshotCount);
+        },
+        setContent: async () => {},
+        setViewportSize: async () => {},
+      };
+      return { newPage: async () => page, close: async () => {} };
+    },
+  };
+};
 const cases = [
   { name: "capture", captureBytes: 2048, sideBySideBytes: 512 },
   { name: "side-by-side", captureBytes: 512, sideBySideBytes: 2048 },
@@ -83,7 +94,7 @@ for (const testCase of cases) {
   const name = testCase.name;
   const request = {
     out_dir: path.join(outDir, name),
-    captures_per_mock: 1,
+    captures_per_mock: 2,
     frozen_instant: "2026-01-01T12:00:00.000Z",
     max_image_bytes: 1024,
   };
@@ -91,19 +102,38 @@ for (const testCase of cases) {
     artifact: `mocks/${name}.png`, name, view: "example", state: "default",
     theme: "dark", width: 1440, mock_ext: "png", mock_file: mockFile,
     view_def: { fixture: "fixture", route: "/", ready: "body", responsive: true },
-    app_def: { name: "example" },
+    app_def: { name: "example", color_scheme_invariant: true },
   };
+  const ruleResults = [];
   const entry = await driver.captureMock({
     browser: makeBrowser(testCase.captureBytes, testCase.sideBySideBytes),
-    PNG: {}, request, mock, server: { baseUrl: "http://127.0.0.1:1234", placeholders: {} },
-    ruleModules: [], ruleResults: [],
+    PNG: {
+      sync: {
+        read: (bytes) => ({
+          width: 1,
+          height: 1,
+          data: Uint8Array.from([bytes[0], 0, 0, 255]),
+        }),
+      },
+    },
+    request, mock, server: { baseUrl: "http://127.0.0.1:1234", placeholders: {} },
+    ruleModules: [{
+      rule: { id: "ui.capture-diagnostic", targets: { views: "*" } },
+      check: async () => ({ rule: "ui.capture-diagnostic", status: "pass" }),
+    }],
+    ruleResults,
   });
   const captureJson = JSON.parse(JSON.stringify({ mocks: [entry] }));
   const reported = captureJson.mocks[0];
   rows.push({
-    error: reported.error,
+    error_code: reported.error?.code,
     claims_capture: Object.hasOwn(reported, "capture"),
     claims_side_by_side: Object.hasOwn(reported, "side_by_side"),
+    stability: reported.stability,
+    diff_region: reported.diff_region,
+    off_loopback_requests: reported.off_loopback_requests,
+    color_scheme_leak: reported.color_scheme_leak,
+    rule_results: ruleResults,
   });
 }
 process.stdout.write(JSON.stringify(rows));
@@ -230,27 +260,25 @@ fn images_over_the_limit_are_reported_without_capture_paths() {
         String::from_utf8_lossy(&output.stderr)
     );
     let rows: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(
-        rows,
-        json!([
-            {
-                "error": {
-                    "code": "image_over_budget",
-                    "message": "capture image remains over the 1024-byte artifact limit after WebP encoding"
-                },
-                "claims_capture": false,
-                "claims_side_by_side": false
-            },
-            {
-                "error": {
-                    "code": "image_over_budget",
-                    "message": "side-by-side image remains over the 1024-byte artifact limit after WebP encoding"
-                },
-                "claims_capture": false,
-                "claims_side_by_side": false
-            }
-        ])
-    );
+    let rows = rows.as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    for (label, row) in ["capture", "side-by-side"].into_iter().zip(rows) {
+        assert_eq!(row["error_code"], "image_over_budget", "{label}");
+        assert_eq!(row["claims_capture"], false, "{label}");
+        assert_eq!(row["claims_side_by_side"], false, "{label}");
+        assert_eq!(row["stability"], "unstable", "{label}");
+        assert_eq!(row["diff_region"], json!([0, 0, 1, 1]), "{label}");
+        assert_eq!(
+            row["off_loopback_requests"],
+            json!(["https://external.invalid/data"]),
+            "{label}"
+        );
+        assert_eq!(row["color_scheme_leak"], true, "{label}");
+        assert_eq!(
+            row["rule_results"][0]["rule"], "ui.capture-diagnostic",
+            "{label}"
+        );
+    }
 }
 
 #[test]

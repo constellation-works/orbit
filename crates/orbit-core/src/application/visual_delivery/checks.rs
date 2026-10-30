@@ -1,11 +1,11 @@
 //! `visual_checks`: the deterministic checks (§7) over the capture of
 //! record. The workspace's UI rules ran on each capture's live page inside
 //! the driver; this step reads their results and adds the capture checks
-//! (`render_timeout`, `setup_failed`, `off_loopback_request`,
+//! (`render_timeout`, `setup_failed`, `image_over_budget`, `off_loopback_request`,
 //! `color_scheme_leak`, `unstable_view`). In this phase every finding is
 //! recorded in `visual/checks.json`; nothing blocks and nothing is filed.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use orbit_common::OrbitError;
@@ -18,6 +18,7 @@ use serde_json::{Value, json};
 
 use super::{attach_system_artifacts, json_artifact, read_record};
 use crate::OrbitRuntime;
+use crate::application::visual_capture::VisualCaptureMock;
 
 pub(crate) fn visual_checks_step(
     runtime: &OrbitRuntime,
@@ -67,6 +68,31 @@ fn check_task(runtime: &OrbitRuntime, capture: &Value) -> Result<Value, OrbitErr
             )
         };
     let mut findings = capture_findings(&record);
+    let image_budget_mocks: BTreeSet<&str> = record
+        .mocks
+        .iter()
+        .filter(|mock| {
+            mock.error
+                .as_ref()
+                .is_some_and(|error| error.code == "image_over_budget")
+        })
+        .map(|mock| mock.artifact.as_str())
+        .collect();
+    if !image_budget_mocks.is_empty()
+        && let Some((earlier_checks, _)) =
+            read_record::<VisualChecksRecord>(runtime, task_id, VISUAL_CHECKS_ARTIFACT)?
+        && earlier_checks.candidate_sha == record.candidate_sha
+    {
+        findings.extend(earlier_checks.findings.into_iter().filter(|finding| {
+            matches!(
+                finding.check.as_str(),
+                "check:off_loopback_request" | "check:color_scheme_leak" | "check:unstable_view"
+            ) && finding
+                .mock
+                .as_deref()
+                .is_some_and(|mock| image_budget_mocks.contains(mock))
+        }));
+    }
     findings.extend(rule_findings);
     let checks = VisualChecksRecord {
         schema_version: 1,
@@ -95,19 +121,31 @@ fn capture_findings(record: &VisualCaptureRecord) -> Vec<VisualCheckFinding> {
     let mut findings = Vec::new();
     for mock in &record.mocks {
         if let Some(error) = &mock.error
-            && matches!(error.code.as_str(), "render_timeout" | "setup_failed")
+            && matches!(
+                error.code.as_str(),
+                "render_timeout" | "setup_failed" | "image_over_budget"
+            )
         {
+            let (severity, title, against) = match error.code.as_str() {
+                "setup_failed" => (
+                    "high",
+                    "The app's setup failed before the view rendered",
+                    "change",
+                ),
+                "image_over_budget" => (
+                    "medium",
+                    "The captured images exceeded the artifact size limit",
+                    "change",
+                ),
+                _ => ("high", "The view did not reach its ready state", "change"),
+            };
             findings.push(finding(
                 &error.code,
                 &mock.artifact,
-                "high",
-                if error.code == "setup_failed" {
-                    "The app's setup failed before the view rendered"
-                } else {
-                    "The view did not reach its ready state"
-                },
+                severity,
+                title,
                 &error.message,
-                "change",
+                against,
                 None,
             ));
         }
@@ -147,6 +185,60 @@ fn capture_findings(record: &VisualCaptureRecord) -> Vec<VisualCheckFinding> {
                  ready selector needs fixing in the view manifest",
                 "manifest",
                 capture.diff_region,
+            ));
+        }
+    }
+    findings
+}
+
+/// Findings from completed checks on driver mocks that could not attach images.
+pub(super) fn image_budget_diagnostic_findings(
+    mocks: &[VisualCaptureMock],
+) -> Vec<VisualCheckFinding> {
+    let mut findings = Vec::new();
+    for mock in mocks {
+        if !mock
+            .error
+            .as_ref()
+            .is_some_and(|error| error.code == "image_over_budget")
+        {
+            continue;
+        }
+        if let Some(requests) = mock.off_loopback_requests.as_ref()
+            && !requests.is_empty()
+        {
+            findings.push(finding(
+                "off_loopback_request",
+                &mock.artifact,
+                "medium",
+                "The view requested an address off loopback",
+                &requests.join(", "),
+                "change",
+                None,
+            ));
+        }
+        if mock.color_scheme_leak == Some(true) {
+            findings.push(finding(
+                "color_scheme_leak",
+                &mock.artifact,
+                "medium",
+                "The view rendered differently under the opposite colour preference",
+                "the app declares `color_scheme_invariant`, but its capture changed when the \
+                 browser preferred the other scheme",
+                "change",
+                None,
+            ));
+        }
+        if mock.stability.as_deref() == Some("unstable") {
+            findings.push(finding(
+                "unstable_view",
+                &mock.artifact,
+                "low",
+                "The view rendered differently on repeated captures",
+                "three captures in fresh contexts did not agree; the view's fixture, mask or \
+                 ready selector needs fixing in the view manifest",
+                "manifest",
+                mock.diff_region,
             ));
         }
     }

@@ -14,9 +14,10 @@ use orbit_common::fs::io::create_private_dir_all;
 use orbit_common::process::run_bounded;
 use orbit_engine::DispatchError;
 use orbit_types::task::{
-    ResolvedMock, TaskArtifact, VISUAL_CAPTURE_ARTIFACT, VISUAL_MAX_IMAGE_BYTES, ViewManifestSet,
-    VisualCaptureError, VisualCaptureImage, VisualCaptureOutcome, VisualCaptureRecord,
-    VisualCapturedMock, VisualKitPin, VisualNotEstablished, VisualReviewContract, mock_sha256_hex,
+    ResolvedMock, TaskArtifact, VISUAL_CAPTURE_ARTIFACT, VISUAL_CHECKS_ARTIFACT,
+    VISUAL_MAX_IMAGE_BYTES, ViewManifestSet, VisualCaptureError, VisualCaptureImage,
+    VisualCaptureOutcome, VisualCaptureRecord, VisualCapturedMock, VisualCheckFinding,
+    VisualChecksRecord, VisualKitPin, VisualNotEstablished, VisualReviewContract, mock_sha256_hex,
     visual_review_summary,
 };
 use serde_json::{Value, json};
@@ -184,6 +185,7 @@ fn capture_task(
         not_established: Vec::new(),
     };
     let mut images = Vec::new();
+    let mut check_findings = Vec::new();
     let kit = match unreadable {
         Some(detail) => Err(VisualNotEstablished {
             reason: "capture_failed".to_string(),
@@ -210,6 +212,7 @@ fn capture_task(
                     record.frozen_instant = Some(FROZEN_INSTANT.to_string());
                     record.mocks = captured.mocks;
                     images = captured.images;
+                    check_findings = captured.check_findings;
                     if record.mocks.iter().any(|mock| mock.capture.is_some()) {
                         record.outcome = VisualCaptureOutcome::Captured;
                     } else if !record.mocks.is_empty()
@@ -240,9 +243,22 @@ fn capture_task(
     }
     let capture_artifact = json_artifact(VISUAL_CAPTURE_ARTIFACT, &record)?;
     let capture_sha256 = mock_sha256_hex(&capture_artifact.content);
+    // Preserve diagnostics from error-only driver entries until visual_checks
+    // merges them with the capture findings and rule results.
+    let checks = VisualChecksRecord {
+        schema_version: 1,
+        mode: record.mode,
+        candidate_sha: record.candidate_sha.clone(),
+        blocking: false,
+        findings: check_findings,
+        rule_results: BTreeMap::new(),
+        rules_unavailable: None,
+    };
+    let checks_artifact = json_artifact(VISUAL_CHECKS_ARTIFACT, &checks)?;
     // Images first: the record names only images already attached.
     attach_system_artifacts(runtime, task_id, images)?;
     attach_system_artifacts(runtime, task_id, vec![capture_artifact])?;
+    attach_system_artifacts(runtime, task_id, vec![checks_artifact])?;
     Ok(Some(TaskCapture {
         task_id: task_id.to_string(),
         record,
@@ -272,6 +288,7 @@ struct CapturedMocks {
     kit: VisualKitPin,
     mocks: Vec<VisualCapturedMock>,
     images: Vec<TaskArtifact>,
+    check_findings: Vec<VisualCheckFinding>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -351,6 +368,8 @@ fn capture_mocks(
     let kit = kit_pin(driver.as_ref(), inspection);
     let mut captured = Vec::new();
     let mut images = Vec::new();
+    let entries = driver.map(|driver| driver.mocks).unwrap_or_default();
+    let check_findings = super::checks::image_budget_diagnostic_findings(&entries);
     for mock in missing {
         captured.push(VisualCapturedMock {
             artifact: mock.artifact.clone(),
@@ -366,7 +385,7 @@ fn capture_mocks(
             }),
         });
     }
-    for entry in driver.map(|driver| driver.mocks).unwrap_or_default() {
+    for entry in entries {
         let digest = stored_digest
             .get(&entry.artifact)
             .cloned()
@@ -402,6 +421,7 @@ fn capture_mocks(
         kit,
         mocks: captured,
         images,
+        check_findings,
     })
 }
 
