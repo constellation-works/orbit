@@ -544,6 +544,7 @@ fn complete_evidence(attempt: &BatchAttempt) -> CoverageEvidence {
         observation: "examined the commits named by the batch".into(),
     }];
     for examination in &mut evidence.delivery_examinations {
+        examination.completed = true;
         examination.examined_paths = vec!["fixture.txt".into()];
         examination.rationale = format!(
             "{} rewrites fixture.txt in full and nothing reads its old contents",
@@ -1167,4 +1168,211 @@ fn remote_delivery_contracts_2() {
         tracing::info!(case = name, "Recovery contract row");
         check();
     }
+}
+
+#[test]
+fn review_workload_measures_renames_generated_lines_and_binary_holds() {
+    if !in_isolated_child(
+        "delivery_remote_source::review_workload_measures_renames_generated_lines_and_binary_holds",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let runtime = baselined_remote_consumer(&fixture);
+    let published = publisher(&fixture);
+    git_at(
+        &published,
+        &fixture.home,
+        &["mv", "fixture.txt", "generated.txt"],
+    );
+    fs::write(published.join("generated.txt"), "one\ntwo\nthree\n").unwrap();
+    git_at(&published, &fixture.home, &["add", "."]);
+    git_at(
+        &published,
+        &fixture.home,
+        &["commit", "-m", "Squash-merge #42"],
+    );
+    let sha = git_at(&published, &fixture.home, &["rev-parse", "HEAD"]);
+    git_at(
+        &published,
+        &fixture.home,
+        &["push", "-q", "origin", &format!("HEAD:refs/heads/{BRANCH}")],
+    );
+    install_pull(&fixture, &sha, 42);
+    let diagnostic = with_pull_lookup(&fixture, || evaluate_consumer(&runtime)).unwrap();
+    let work = diagnostic
+        .state
+        .unwrap()
+        .active
+        .unwrap()
+        .batch
+        .review_work
+        .unwrap();
+    assert_eq!(work.workload.files, 2, "renames account for both paths");
+    assert_eq!(
+        work.workload.lines, 4,
+        "generated contents and deleted baseline count in full"
+    );
+    assert_eq!(
+        work.charges[0].points, 8,
+        "unattributed work has conservative hard cost"
+    );
+
+    let fixture = Fixture::new();
+    let runtime = baselined_remote_consumer(&fixture);
+    let published = publisher(&fixture);
+    fs::write(published.join("binary.bin"), b"\0binary\0").unwrap();
+    git_at(&published, &fixture.home, &["add", "."]);
+    git_at(
+        &published,
+        &fixture.home,
+        &["commit", "-m", "Squash-merge #42"],
+    );
+    let sha = git_at(&published, &fixture.home, &["rev-parse", "HEAD"]);
+    git_at(
+        &published,
+        &fixture.home,
+        &["push", "-q", "origin", &format!("HEAD:refs/heads/{BRANCH}")],
+    );
+    install_pull(&fixture, &sha, 42);
+    let diagnostic = with_pull_lookup(&fixture, || evaluate_consumer(&runtime)).unwrap();
+    assert!(
+        diagnostic
+            .reason
+            .contains("binary_changes_require_larger_review_budget"),
+        "{diagnostic:#?}"
+    );
+    let state = diagnostic.state.unwrap();
+    assert!(state.active.is_none());
+    assert_eq!(state.covered, state.baseline);
+    assert_eq!(state.pending.len(), 1);
+    let mut larger = trigger(60);
+    larger["review_budget"] = json!({"max_lines": 4000});
+    fixture.json(&[
+        "auto-task",
+        "update",
+        CONSUMER,
+        "--deliveries-landed",
+        &larger.to_string(),
+        "--json",
+    ]);
+    let admitted = with_pull_lookup(&fixture, || evaluate_consumer(&runtime))
+        .unwrap()
+        .state
+        .unwrap()
+        .active
+        .unwrap();
+    let work = admitted.batch.review_work.unwrap();
+    assert_eq!(work.workload.binary_files, 1);
+    assert_eq!(work.charged_lines, 2001);
+    assert_eq!(work.budget.max_lines, 4000);
+    assert_eq!(admitted.batch.from_exclusive, state.covered);
+}
+
+#[test]
+fn authorized_partial_review_survives_operator_reissue_with_original_witness() {
+    if !in_isolated_child(
+        "delivery_remote_source::authorized_partial_review_survives_operator_reissue_with_original_witness",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let (runtime, first, run_id) = admitted_action(&fixture, 0, REVIEW_CONSUMER);
+    let action = first.action_id.clone().unwrap();
+    let mut partial = complete_evidence(&first);
+    partial.examination_complete = false;
+    put_coverage(&fixture, &runtime, &action, &run_id, &partial);
+    // Stop without a scheduler pass or an agent summary: final coverage is
+    // refused but explicitly completed examination can still be retained.
+    RuntimeHost::apply_task_automation_update(
+        &runtime,
+        &action,
+        TaskAutomationUpdate {
+            status: Some(orbit_types::task::TaskStatus::Done),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let definition = runtime.auto_task_show(REVIEW_CONSUMER).unwrap().unwrap();
+    let request = orbit_types::workflow::automation::recovery::RecoveryRequest {
+        adopt_settings: false,
+        reissue_action: true,
+        replay_history: false,
+        reason: "continue completed examination with a new executor".into(),
+    };
+    orbit_core::application::automation::recover_auto_task(
+        &runtime,
+        &definition,
+        &request,
+        Utc::now(),
+    )
+    .unwrap();
+    let reissued = named_consumer_state(&runtime, REVIEW_CONSUMER)
+        .active
+        .unwrap();
+    assert_eq!(reissued.progress.len(), 1);
+    assert_eq!(reissued.progress[0].action_id, action);
+    assert_eq!(
+        reissued.progress[0].submission.as_ref().unwrap().run_id,
+        run_id
+    );
+    assert_eq!(
+        reissued.progress[0].evidence,
+        serde_json::to_vec(&partial).unwrap()
+    );
+    let second = with_pull_lookup(&fixture, || {
+        evaluate_auto_task(&runtime, &definition, false, Utc::now())
+    })
+    .unwrap()
+    .state
+    .unwrap()
+    .active
+    .unwrap();
+    let second_id = second.action_id.clone().unwrap();
+    let minted = runtime.get_task(&second_id).unwrap();
+    assert!(minted.description.contains("source_digest"));
+    let run = RuntimeHost::insert_job_run(
+        &runtime,
+        "delivery-evidence",
+        1,
+        Utc::now(),
+        Some(json!({"task_id":second_id})),
+        None,
+    )
+    .unwrap();
+    RuntimeHost::apply_task_automation_update(
+        &runtime,
+        &second_id,
+        TaskAutomationUpdate {
+            job_run_id: Some(run.run_id.clone()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    persist_agent_summary(&runtime, &second_id);
+    let mut final_evidence = evidence_template(&second);
+    final_evidence.examination_complete = true;
+    assert!(
+        final_evidence.delivery_examinations[0]
+            .source_digest
+            .is_some()
+    );
+    put_coverage(&fixture, &runtime, &second_id, &run.run_id, &final_evidence);
+    let settled = with_pull_lookup(&fixture, || {
+        evaluate_auto_task(&runtime, &definition, false, Utc::now())
+    })
+    .unwrap();
+    assert_eq!(settled.receipts.len(), 1);
+    assert_eq!(
+        settled.state.unwrap().covered,
+        first.batch.through_inclusive
+    );
+    assert_eq!(
+        runtime
+            .get_task_artifact(&action, "automation-coverage.json")
+            .unwrap()
+            .unwrap()
+            .content,
+        serde_json::to_vec(&partial).unwrap()
+    );
 }

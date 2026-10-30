@@ -265,6 +265,7 @@ fn clock_tick_leaves_two_parked_consumers_with_24_obligations_untouched() {
             .collect();
         state.active = Some(BatchAttempt {
             batch: CoverageBatch {
+                review_work: None,
                 schema_version: 1,
                 id: format!("parked-{name}"),
                 consumer: key.clone(),
@@ -289,6 +290,7 @@ fn clock_tick_leaves_two_parked_consumers_with_24_obligations_untouched() {
             reason: Some("operator recovery required".into()),
             retry_after: None,
             reissue: None,
+            progress: vec![],
         });
         let raw = serde_json::to_string(&state).unwrap();
         runtime

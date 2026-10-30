@@ -645,6 +645,7 @@ fn auto_task_waive_batch_reports_an_unregistered_required_tool_as_a_warning() {
         let mut state = store.automation_state(&consumer).unwrap().unwrap();
         state.active = Some(BatchAttempt {
             batch: CoverageBatch {
+                review_work: None,
                 schema_version: 1,
                 id: batch_id.into(),
                 consumer: consumer.clone(),
@@ -669,6 +670,7 @@ fn auto_task_waive_batch_reports_an_unregistered_required_tool_as_a_warning() {
             reason: Some("fixture failure".into()),
             retry_after: None,
             reissue: None,
+            progress: vec![],
         });
         let raw = serde_json::to_string(&state).unwrap();
         runtime
@@ -1092,6 +1094,7 @@ fn auto_task_cli_reset_recover_and_doctor_treat_a_closed_action_as_settled() {
     let action_id = review["id"].as_str().unwrap().to_string();
     let now = Utc::now();
     let batch = CoverageBatch {
+        review_work: None,
         schema_version: 1,
         id: "fixture-batch".into(),
         consumer: consumer.clone(),
@@ -1122,6 +1125,7 @@ fn auto_task_cli_reset_recover_and_doctor_treat_a_closed_action_as_settled() {
         reason: None,
         retry_after: None,
         reissue: None,
+        progress: vec![],
     });
     assert!(
         store
@@ -1627,4 +1631,86 @@ fn retired_coverage_and_closed_actions() {
         check();
         orbit_common::test_env::record_scenario_pass(name);
     }
+}
+
+#[test]
+fn review_budget_configuration_roundtrips_and_rejects_invalid_limits() {
+    if crate::isolated_test::run_in_child(
+        "auto_task_lifecycle_cli::review_budget_configuration_roundtrips_and_rejects_invalid_limits",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let shipped = fixture.json(&["auto-task", "show", "delivery-code-review", "--json"]);
+    assert_eq!(
+        shipped["effective_review_budget"],
+        serde_json::json!({"max_points":8,"low":1,"medium":4,"hard":8,"max_files":20,"max_lines":2000,"binary_line_charge":2001}),
+        "the count-only overfill incident requires supported conservative seeded review defaults"
+    );
+    let trigger = serde_json::json!({"branch":"main","threshold":1,"max_wait_minutes":60,"coverage":"landed_code_review_v1","max_items":20});
+    fixture.json(&[
+        "auto-task",
+        "add",
+        "--name",
+        "budget-review",
+        "--title",
+        "Budget review",
+        "--deliveries-landed",
+        &trigger.to_string(),
+        "--json",
+    ]);
+    let shown = fixture.json(&["auto-task", "show", "budget-review", "--json"]);
+    assert_eq!(shown["effective_review_budget"]["max_points"], 8);
+    assert_eq!(shown["effective_review_budget"]["hard"], 8);
+    let mut configured = trigger.clone();
+    configured["review_budget"] = serde_json::json!({"max_points":12,"low":2,"medium":3,"hard":6,"max_files":30,"max_lines":3000,"binary_line_charge":2001});
+    fixture.json(&[
+        "auto-task",
+        "update",
+        "budget-review",
+        "--deliveries-landed",
+        &configured.to_string(),
+        "--json",
+    ]);
+    assert_eq!(
+        fixture.json(&["auto-task", "show", "budget-review", "--json"])["schedule"]["deliveries_landed"]
+            ["review_budget"],
+        configured["review_budget"]
+    );
+    for key in [
+        "max_points",
+        "low",
+        "medium",
+        "hard",
+        "max_files",
+        "max_lines",
+        "binary_line_charge",
+    ] {
+        for invalid in [
+            serde_json::json!(0),
+            serde_json::json!(-1),
+            serde_json::json!(1_000_001),
+            serde_json::json!(4_294_967_296u64),
+            serde_json::json!(1.5),
+            serde_json::json!("bad"),
+        ] {
+            let mut refused = configured.clone();
+            refused["review_budget"][key] = invalid;
+            fixture
+                .command(&[
+                    "auto-task",
+                    "update",
+                    "budget-review",
+                    "--deliveries-landed",
+                    &refused.to_string(),
+                    "--json",
+                ])
+                .assert()
+                .failure();
+        }
+    }
+    assert_eq!(
+        fixture.json(&["auto-task", "show", "budget-review", "--json"])["effective_review_budget"],
+        configured["review_budget"]
+    );
 }

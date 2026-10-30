@@ -50,6 +50,8 @@ mod delivery;
 mod delivery_adopt;
 #[path = "scheduling/delivery_recovery.rs"]
 mod delivery_recovery;
+#[path = "scheduling/delivery_work.rs"]
+mod delivery_work;
 #[path = "scheduling/failed_members.rs"]
 mod failed_members;
 #[path = "scheduling/member_consumers.rs"]

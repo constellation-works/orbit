@@ -8,6 +8,7 @@ mod replay;
 mod revision;
 #[cfg(feature = "test-support")]
 pub(crate) mod test_support;
+mod workload;
 
 pub(super) use clock::BudgetClock;
 #[cfg(feature = "test-support")]

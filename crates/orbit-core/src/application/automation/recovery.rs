@@ -110,6 +110,30 @@ pub fn recover_auto_task(
         ensure_replay_head(&source, &trigger.branch, &replay.record.captured_head)?;
     }
 
+    let mut operation = operation;
+    if request.reissue_action
+        && recovery::preview(store.as_ref(), &operation)
+            .map_err(automation_error_to_orbit)?
+            .refusals
+            .is_empty()
+        && let Some(state) = state.as_ref()
+        && let Some(active) = state.active.as_ref()
+        && let orbit_automation::delivery::ActionOutcome::Evidence(facts) =
+            super::task::outcome(runtime, &source, active).map_err(automation_error_to_orbit)?
+    {
+        // Invalid/provisional bytes contribute nothing, but cannot prevent an
+        // otherwise authorized reissue of the same immutable obligations.
+        match orbit_automation::delivery::progress::retain_completed_progress(
+            store.as_ref(),
+            state,
+            &facts,
+            now,
+        ) {
+            Ok(retained) => operation.expected_generation = Some(retained.generation),
+            Err(orbit_automation::AutomationError::Evidence(_)) => {}
+            Err(error) => return Err(automation_error_to_orbit(error)),
+        }
+    }
     recovery::apply(store.as_ref(), &operation).map_err(automation_error_to_orbit)
 }
 

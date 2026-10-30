@@ -9,11 +9,13 @@ mod digest;
 mod evaluate;
 pub mod evidence;
 mod observe;
+pub mod progress;
 mod reconcile;
 pub mod recovery;
 pub mod reset;
 pub mod stall;
 mod waiver;
+mod workload;
 
 pub(crate) use digest::json_definition_epoch;
 pub use digest::{definition_epoch, digest, input_digest};
@@ -107,6 +109,27 @@ pub trait DeliveryHost {
     fn observe(&self, branch: &str, state: &AutomationState)
     -> Result<SourcePage, AutomationError>;
 
+    /// Current task assessments, in the frozen delivery's task order. Unknown
+    /// assessments hold review admission rather than receive a free charge.
+    fn review_complexities(
+        &self,
+        _delivery: &Delivery,
+    ) -> Result<Vec<orbit_types::task::TaskComplexity>, AutomationError> {
+        Ok(vec![])
+    }
+
+    /// Exact first-parent workload including all context, without exclusions.
+    fn review_workload(
+        &self,
+        _from: &SourceRevision,
+        _through: &SourceRevision,
+    ) -> Result<ReviewWorkload, AutomationError> {
+        Err(AutomationError::Refused(
+            "review_workload_unavailable: source adapter must measure the exact Git revisions"
+                .into(),
+        ))
+    }
+
     /// Canonical action admission must resolve the same durable key on replay.
     fn admit(&self, attempt: &BatchAttempt) -> Result<String, AutomationError>;
 
@@ -122,7 +145,7 @@ pub trait DeliveryHost {
 /// Core's authoritative observation of an admitted task/job.
 pub enum ActionOutcome {
     Pending,
-    Evidence(evidence::EvidenceFacts),
+    Evidence(Box<evidence::EvidenceFacts>),
     /// Only returned after proving the action stopped. Unknown liveness is Pending.
     Failed {
         retryable: bool,

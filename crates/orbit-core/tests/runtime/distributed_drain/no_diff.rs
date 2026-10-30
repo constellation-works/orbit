@@ -124,6 +124,7 @@ fn claimed_coverage_is_authenticated_by_the_owners_claim_journal_after_landing()
         method: "read the delivery diff".into(),
         observation: "adds one empty function".into(),
     }];
+    coverage.delivery_examinations[0].completed = true;
     coverage.delivery_examinations[0].examined_paths = vec!["src/reviewed.rs".into()];
     coverage.delivery_examinations[0].rationale =
         "The delivery adds an empty function that nothing calls yet.".into();

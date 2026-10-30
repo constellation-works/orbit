@@ -238,6 +238,36 @@ fn evaluate_pass(
         return diagnostic(store, consumer, &reason, Some(state));
     }
 
+    // Preview and admission use identical accounting. Existing active batches
+    // above never pass this selection again.
+    let (deliveries, through, review_work) =
+        if trigger.coverage == CoverageClass::LandedCodeReviewV1 {
+            match super::workload::select_review_prefix(host, &state, trigger)? {
+                Ok(selection) => (
+                    selection.deliveries,
+                    selection.through,
+                    Some(selection.accounting),
+                ),
+                Err(reason) => return diagnostic(store, consumer, &reason, Some(state)),
+            }
+        } else {
+            let deliveries = state
+                .pending
+                .iter()
+                .take(trigger.max_items)
+                .cloned()
+                .collect::<Vec<_>>();
+            let through = if state.pending.len() > deliveries.len() {
+                deliveries
+                    .last()
+                    .ok_or_else(|| AutomationError::Deferred(DeferredReason::EmptyBatch))?
+                    .after
+                    .clone()
+            } else {
+                state.observed.clone()
+            };
+            (deliveries, through, None)
+        };
     if dry_run {
         return diagnostic(
             store,
@@ -250,24 +280,6 @@ fn evaluate_pass(
             Some(state),
         );
     }
-
-    // Freeze an oldest prefix. Unattributed neighbors remain explicit obligations.
-    let deliveries = state
-        .pending
-        .iter()
-        .take(trigger.max_items)
-        .cloned()
-        .collect::<Vec<_>>();
-
-    let through = if state.pending.len() > deliveries.len() {
-        deliveries
-            .last()
-            .ok_or_else(|| AutomationError::Deferred(DeferredReason::EmptyBatch))?
-            .after
-            .clone()
-    } else {
-        state.observed.clone()
-    };
 
     let end = state
         .pending_commits
@@ -303,6 +315,7 @@ fn evaluate_pass(
         .collect::<Vec<_>>();
 
     let mut batch = CoverageBatch {
+        review_work,
         schema_version: 1,
         id: String::new(),
         consumer: consumer.into(),
@@ -343,6 +356,7 @@ fn evaluate_pass(
         reason: None,
         retry_after: None,
         reissue: None,
+        progress: vec![],
     };
 
     let mut next = state.clone();

@@ -9,6 +9,8 @@ use super::{CoverageClass, Delivery, ExcludedDelivery, SourceRevision};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CoverageBatch {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_work: Option<super::FrozenReviewWork>,
     pub schema_version: u32,
     pub id: String,
     pub consumer: String,
@@ -57,6 +59,9 @@ pub struct BatchAttempt {
     /// recovery reissued a settled action over this same frozen batch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reissue: Option<ActionReissue>,
+    /// Append-only completed evidence, retained across retries and reissues.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub progress: Vec<super::CompletedReviewProgress>,
 }
 
 impl BatchAttempt {

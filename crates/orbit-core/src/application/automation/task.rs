@@ -15,7 +15,7 @@ use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::task::{DERIVED_EXECUTION_SUMMARY_PREFIX, Task};
 use orbit_types::workflow::automation::*;
 use orbit_types::workflow::{AutoTaskDefinition, JobRunState};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) fn mint(
     runtime: &OrbitRuntime,
@@ -116,33 +116,32 @@ fn task_outcome(
         let provenance = manifest.iter().find(|file| file.path == COVERAGE_ARTIFACT);
 
         if let Some(provenance) = provenance {
-            let owner = evidence_owner(runtime, &task, &provenance.sha256)?;
+            let submission: Option<EvidenceSubmission> = runtime
+                .get_task_artifact(id, EVIDENCE_AUTHORITY_ARTIFACT)?
+                .and_then(|artifact| serde_json::from_slice(&artifact.content).ok());
+            let owner = match &submission {
+                Some(submission) => {
+                    submission_owner(runtime, &task, submission, &provenance.sha256)?
+                }
+                None => None,
+            };
             let verified = source_verified(source, &attempt.batch)?;
-            // Commit ids alone can be produced without reading anything. A
-            // closed review whose agent wrote no summary is that stamp; an
-            // open one may still write it.
-            if settling && agent_summary_missing(&task) {
-                return Ok(if stopped {
-                    ActionOutcome::Failed {
-                        retryable: true,
-                        reason: REVIEW_WITHOUT_EXECUTION_SUMMARY.into(),
-                    }
-                } else {
-                    ActionOutcome::Pending
-                });
-            }
-            return Ok(ActionOutcome::Evidence(EvidenceFacts {
+            return Ok(ActionOutcome::Evidence(Box::new(EvidenceFacts {
                 bytes: artifact.content,
                 reference: format!("task:{id}/artifacts/{COVERAGE_ARTIFACT}"),
                 submitted_by: owner
                     .clone()
                     .unwrap_or_else(|| provenance.created_by.clone()),
                 artifact_digest: provenance.sha256.clone(),
+                verified_progress: verified_progress(runtime, attempt, true)?,
+                submission,
+                finalization_refusal: (settling && agent_summary_missing(&task))
+                    .then(|| REVIEW_WITHOUT_EXECUTION_SUMMARY.into()),
                 authorized: owner.is_some(),
                 source_verified: verified,
                 action_stopped: stopped,
                 changed_paths: changed_paths(source, &attempt.batch, verified)?,
-            }));
+            })));
         }
     }
 
@@ -297,16 +296,19 @@ pub(super) fn job_outcome(
             let bytes =
                 serde_json::to_vec(value).map_err(|e| AutomationError::Evidence(e.to_string()))?;
             let verified = source_verified(source, &attempt.batch)?;
-            return Ok(ActionOutcome::Evidence(EvidenceFacts {
+            return Ok(ActionOutcome::Evidence(Box::new(EvidenceFacts {
                 artifact_digest: digest(&bytes),
                 bytes,
                 reference: format!("run:{id}/step:{}", step.step_index),
                 submitted_by: format!("run:{id}"),
+                verified_progress: verified_progress(runtime, attempt, false)?,
+                submission: None,
+                finalization_refusal: None,
                 authorized: true,
                 source_verified: verified,
                 action_stopped: stopped,
                 changed_paths: changed_paths(source, &attempt.batch, verified)?,
-            }));
+            })));
         }
     }
 
@@ -355,21 +357,13 @@ fn agent_summary_missing(task: &Task) -> bool {
     summary.is_empty() || summary.starts_with(DERIVED_EXECUTION_SUMMARY_PREFIX)
 }
 
-/// Who submitted the coverage bytes with `artifact_digest`, as the
-/// Store-authored witness proves, or `None` when the witness does not bind
-/// those bytes to this task's assigned run.
-fn evidence_owner(
+/// The original Store-authored witness proves the exact assigned executor.
+fn submission_owner(
     runtime: &OrbitRuntime,
     task: &Task,
+    submission: &EvidenceSubmission,
     artifact_digest: &str,
 ) -> Result<Option<String>, AutomationError> {
-    let Some(artifact) = runtime.get_task_artifact(&task.id, EVIDENCE_AUTHORITY_ARTIFACT)? else {
-        return Ok(None);
-    };
-    let Ok(submission) = serde_json::from_slice::<EvidenceSubmission>(&artifact.content) else {
-        return Ok(None);
-    };
-
     // The submission has to name this task, this artifact and this task's run.
     if submission.action_id != task.id
         || submission.evidence_digest != artifact_digest
@@ -431,4 +425,84 @@ fn claimed_owner(
     let admitted =
         state.claim.task_id == task.id && state.claim.executed_on.machine_id == claimed.machine_id;
     Ok((bound && admitted).then(|| format!("run:{}/{run_id}", claimed.machine_id)))
+}
+
+/// Authenticate saved witnesses without requiring a mutable artifact to still
+/// contain the old bytes. The snapshot itself is append-only server state.
+fn verified_progress(
+    runtime: &OrbitRuntime,
+    attempt: &BatchAttempt,
+    task_action: bool,
+) -> Result<BTreeSet<String>, AutomationError> {
+    let mut verified = BTreeSet::new();
+    for snapshot in &attempt.progress {
+        let key = format!("automation:{}:{}", attempt.batch.id, snapshot.attempt);
+        let authorized = if task_action {
+            let task = runtime.stores().tasks().automation_task_for_key(&key)?;
+            match (task, &snapshot.submission) {
+                (Some(task), Some(submission))
+                    if task.id == snapshot.action_id
+                        && snapshot.reference
+                            == format!(
+                                "task:{}/artifacts/{COVERAGE_ARTIFACT}",
+                                snapshot.action_id
+                            ) =>
+                {
+                    submission_owner(runtime, &task, submission, &snapshot.evidence_digest)?
+                        .as_deref()
+                        == Some(snapshot.submitted_by.as_str())
+                }
+                _ => false,
+            }
+        } else {
+            let run = runtime.show_job_run(&snapshot.action_id)?;
+            let bound = run
+                .input
+                .as_ref()
+                .and_then(|input| input.get("automation"))
+                .is_some_and(|input| {
+                    input.get("action_key").and_then(serde_json::Value::as_str)
+                        == Some(key.as_str())
+                        && input
+                            .get("input_digest")
+                            .and_then(serde_json::Value::as_str)
+                            == Some(attempt.input_digest.as_str())
+                });
+            bound
+                && snapshot.submitted_by == format!("run:{}", snapshot.action_id)
+                && run.steps.iter().any(|step| {
+                    let reference = format!("run:{}/step:{}", snapshot.action_id, step.step_index);
+                    reference == snapshot.reference
+                        && step
+                            .agent_response_json
+                            .as_ref()
+                            .and_then(|response| response.get("coverage_evidence"))
+                            .and_then(|value| serde_json::to_vec(value).ok())
+                            .is_some_and(|bytes| {
+                                bytes == snapshot.evidence
+                                    && digest(&bytes) == snapshot.evidence_digest
+                            })
+                })
+        };
+        if authorized {
+            verified.insert(snapshot.evidence_digest.clone());
+        }
+    }
+    Ok(verified)
+}
+
+/// Verify saved completed portions before either a task or a job receives
+/// them as continuation input. The current source budget still applies.
+pub(super) fn validate_saved_review_progress(
+    runtime: &OrbitRuntime,
+    source: &Source<'_>,
+    attempt: &BatchAttempt,
+    task_action: bool,
+) -> Result<(), AutomationError> {
+    if attempt.progress.is_empty() {
+        return Ok(());
+    }
+    let paths = source.delivery_changed_paths(&attempt.batch)?;
+    let verified = verified_progress(runtime, attempt, task_action)?;
+    orbit_automation::delivery::progress::validate_progress(attempt, &paths, &verified).map(|_| ())
 }

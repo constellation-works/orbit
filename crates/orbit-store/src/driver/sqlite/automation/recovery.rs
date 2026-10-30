@@ -461,7 +461,8 @@ fn validate_reissue(
     // A claimed or admitted attempt is replaceable only once Automation proved its
     // action stopped without acceptable evidence; Store cannot see task
     // liveness, so it fences the batch identity, not that proof.
-    if settled.batch != claim.batch
+    if settled.progress != claim.progress
+        || settled.batch != claim.batch
         || settled.input_digest != claim.input_digest
         || !matches!(
             settled.state,

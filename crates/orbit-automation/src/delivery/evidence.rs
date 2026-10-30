@@ -16,6 +16,11 @@ pub struct EvidenceFacts {
     pub submitted_by: String,
     pub artifact_digest: String,
     pub authorized: bool,
+    /// Core re-authenticated these immutable prior snapshots against their
+    /// original assigned runs/claims or canonical job results.
+    pub verified_progress: BTreeSet<String>,
+    pub submission: Option<EvidenceSubmission>,
+    pub finalization_refusal: Option<String>,
     pub source_verified: bool,
     /// Core proved the action stopped (its task is terminal, its run ended),
     /// so these bytes are final: invalid evidence settles the attempt rather
@@ -31,6 +36,71 @@ pub fn validate(
     facts: &EvidenceFacts,
     now: DateTime<Utc>,
 ) -> Result<AcceptedCoverage, AutomationError> {
+    let invalid = |reason: &str| AutomationError::Evidence(reason.into());
+    let evidence = validate_submission(attempt, facts)?;
+    if let Some(reason) = &facts.finalization_refusal {
+        return Err(invalid(reason));
+    }
+    let batch = &attempt.batch;
+    let evidence_digest = digest(&facts.bytes);
+    super::progress::validate_carried(
+        attempt,
+        &evidence,
+        &facts.changed_paths,
+        &facts.verified_progress,
+    )?;
+
+    if !evidence.examination_complete
+        || evidence.examined_commits != batch.commits
+        || evidence.examined_deliveries
+            != batch
+                .deliveries
+                .iter()
+                .map(|d| d.key.clone())
+                .collect::<Vec<_>>()
+    {
+        return Err(invalid("incomplete_examination"));
+    }
+
+    if evidence.checks.is_empty()
+        || evidence.checks.iter().any(|check| {
+            check.subject.trim().is_empty()
+                || check.method.trim().is_empty()
+                || check.observation.trim().is_empty()
+        })
+    {
+        return Err(invalid("missing_checks"));
+    }
+
+    if evidence.schema_version == COVERAGE_EVIDENCE_SCHEMA_VERSION
+        && evidence
+            .delivery_examinations
+            .iter()
+            .any(|entry| !entry.completed || !entry.skipped_paths.is_empty())
+    {
+        return Err(invalid("incomplete_delivery_examination"));
+    }
+
+    validate_deliveries(batch, &evidence.delivery_examinations, &facts.changed_paths)
+        .map_err(invalid)?;
+
+    Ok(AcceptedCoverage {
+        batch_id: batch.id.clone(),
+        action_id: evidence.action_id,
+        input_digest: attempt.input_digest.clone(),
+        evidence_digest,
+        evidence: facts.bytes.clone(),
+        evidence_reference: facts.reference.clone(),
+        submitted_by: facts.submitted_by.clone(),
+        accepted_at: now,
+    })
+}
+
+/// Validate current writer and immutable input before considering any progress.
+pub(super) fn validate_submission(
+    attempt: &BatchAttempt,
+    facts: &EvidenceFacts,
+) -> Result<CoverageEvidence, AutomationError> {
     let invalid = |reason: &str| AutomationError::Evidence(reason.into());
 
     if !facts.authorized {
@@ -61,7 +131,12 @@ pub fn validate(
     // The evidence must name the exact batch and attempt whose input it was frozen against.
     // Version 1 named commits only, which a reviewer can produce without
     // reading anything; receipts accepted under it stay settled.
-    if evidence.schema_version != COVERAGE_EVIDENCE_SCHEMA_VERSION {
+    if !matches!(
+        evidence.schema_version,
+        2 | COVERAGE_EVIDENCE_SCHEMA_VERSION
+    ) || (batch.review_work.is_some()
+        && evidence.schema_version != COVERAGE_EVIDENCE_SCHEMA_VERSION)
+    {
         return Err(invalid("unsupported_schema_version"));
     }
 
@@ -82,47 +157,13 @@ pub fn validate(
         return Err(invalid("revision_mismatch"));
     }
 
-    if !evidence.examination_complete
-        || evidence.examined_commits != batch.commits
-        || evidence.examined_deliveries
-            != batch
-                .deliveries
-                .iter()
-                .map(|d| d.key.clone())
-                .collect::<Vec<_>>()
-    {
-        return Err(invalid("incomplete_examination"));
-    }
-
-    if evidence.checks.is_empty()
-        || evidence.checks.iter().any(|check| {
-            check.subject.trim().is_empty()
-                || check.method.trim().is_empty()
-                || check.observation.trim().is_empty()
-        })
-    {
-        return Err(invalid("missing_checks"));
-    }
-
-    validate_deliveries(batch, &evidence.delivery_examinations, &facts.changed_paths)
-        .map_err(invalid)?;
-
-    Ok(AcceptedCoverage {
-        batch_id: batch.id.clone(),
-        action_id: evidence.action_id,
-        input_digest: attempt.input_digest.clone(),
-        evidence_digest,
-        evidence: facts.bytes.clone(),
-        evidence_reference: facts.reference.clone(),
-        submitted_by: facts.submitted_by.clone(),
-        accepted_at: now,
-    })
+    Ok(evidence)
 }
 
 /// Each frozen delivery needs exactly one examination whose examined and
 /// skipped paths together are its changed paths, with a typed verdict and a
 /// rationale of its own.
-fn validate_deliveries(
+pub(super) fn validate_deliveries(
     batch: &CoverageBatch,
     examinations: &[DeliveryExamination],
     changed_paths: &BTreeMap<String, Vec<String>>,

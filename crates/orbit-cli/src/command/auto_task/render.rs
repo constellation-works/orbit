@@ -291,11 +291,22 @@ fn settings_fields(settings: &Value) -> Vec<&'static str> {
 /// A one-line schedule summary.
 fn schedule_summary(schedule: &Value) -> String {
     if let Some(trigger) = schedule.get("deliveries_landed") {
+        let budget = serde_json::from_value::<orbit_types::workflow::automation::DeliveryTrigger>(
+            trigger.clone(),
+        )
+        .map(|trigger| trigger.effective_review_budget())
+        .unwrap_or_default();
         format!(
-            "deliveries={} branch={} coverage={}",
+            "deliveries={} branch={} coverage={} review_points={} weights(low/medium/hard)={}/{}/{} files={} lines={}",
             trigger["threshold"],
             text(trigger, "branch"),
-            text(trigger, "coverage")
+            text(trigger, "coverage"),
+            budget.max_points,
+            budget.low,
+            budget.medium,
+            budget.hard,
+            budget.max_files,
+            budget.max_lines
         )
     } else if let Some(cron) = schedule.get("cron") {
         format!("cron={}", cron.as_str().unwrap_or_default())

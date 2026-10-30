@@ -2736,3 +2736,16 @@ If **either file** contains `review_policy = "after-landing"`, even if another l
 | `workflow.validation_env.login_shell`, `interactive` | Become `workflow.validation_env.shell_probe`: `login_shell = false` is `off`, `interactive = false` is `login`, otherwise `interactive`. |
 | `workflow.auto_ship` | Ignored: the ship sweep it opted into was removed; dispatch with `orbit run auto` drains or `orbit run ship`. Delete the key. |
 | `scoring.enabled` | Ignored: the agent-family scoreboard was retired and nothing records scoreboard metrics. Delete the `[scoring]` table. Recognised until 2026-11-12; after that it is an unknown key. |
+
+## After-landing review work limits
+
+Delivery auto-task triggers accept a `review_budget` object through the
+existing `--deliveries-landed` JSON and auto-task definition/tool routes.
+Defaults: `max_points=8`, `low=1`, `medium=4`, `hard=8`, `max_files=20`,
+`max_lines=2000`, `binary_line_charge=2001`. Binary paths pay this conservative
+line-equivalent charge and require an explicit larger review by default. All values are positive integers bounded at 1,000,000.
+Count and age trigger due work; these limits independently bound each new
+frozen batch. Inspection includes effective accounting on the active batch.
+See [review work budgets and continuation](design/automation-triggers/5_operations.md#review-work-budgets-and-continuation)
+for assessment holds, exact file/line units, oversized work and immutable retry
+progress. Existing batches and receipts are never retroactively rebudgeted.

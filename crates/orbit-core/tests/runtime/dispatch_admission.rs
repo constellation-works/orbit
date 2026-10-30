@@ -2326,6 +2326,7 @@ pub(super) fn admitted_frozen_batch(
     admitted.pending_commits = vec!["landing".into()];
     admitted.active = Some(BatchAttempt {
         batch: CoverageBatch {
+            review_work: None,
             schema_version: 1,
             id: format!("batch-{name}"),
             consumer,
@@ -2350,6 +2351,7 @@ pub(super) fn admitted_frozen_batch(
         reason: None,
         retry_after: None,
         reissue: None,
+        progress: vec![],
     });
     assert!(store.automation_commit(&baseline, &admitted, None).unwrap());
 }

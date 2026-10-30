@@ -201,9 +201,15 @@ fn a_derived_summary_leaves_the_batch_owed() {
         evaluate_auto_task(&runtime, &definition, false, Utc::now())
     })
     .expect("evaluate the open review");
+    let retained = named_consumer_state(&runtime, REVIEW_CONSUMER)
+        .active
+        .unwrap();
+    assert_eq!(retained.batch, before.active.as_ref().unwrap().batch);
+    assert_eq!(retained.attempt, 1);
     assert_eq!(
-        named_consumer_state(&runtime, REVIEW_CONSUMER).active,
-        before.active
+        retained.progress.len(),
+        1,
+        "explicit completion survives while final settlement waits for the agent summary"
     );
 
     fixture.json(&[

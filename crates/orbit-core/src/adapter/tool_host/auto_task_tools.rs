@@ -283,6 +283,12 @@ fn show(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
     let (definition_root, definition_path) = runtime
         .auto_task_read_source(&name)?
         .ok_or_else(|| runtime.auto_task_missing(&name, true))?;
+    if let Some(trigger) = value.pointer("/schedule/deliveries_landed") {
+        let trigger: orbit_types::workflow::automation::DeliveryTrigger =
+            serde_json::from_value(trigger.clone())
+                .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
+        value["effective_review_budget"] = json!(trigger.effective_review_budget());
+    }
     value["definition_source"] = json!({
         "root": definition_root,
         "path": definition_path,

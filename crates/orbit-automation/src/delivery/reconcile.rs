@@ -51,6 +51,13 @@ pub(super) fn reconcile(
     match host.outcome(active)? {
         ActionOutcome::Pending => Ok(state),
         ActionOutcome::Evidence(facts) => {
+            let mut with_progress = state.clone();
+            if let Ok(Some(snapshot)) =
+                super::progress::capture_completed_progress(active, &facts, now)
+                && let Some(attempt) = &mut with_progress.active
+            {
+                attempt.progress.push(snapshot);
+            }
             let receipt = match evidence::validate(active, &facts, now) {
                 Ok(receipt) => receipt,
                 // A stopped action can never replace its evidence, so waiting
@@ -60,14 +67,27 @@ pub(super) fn reconcile(
                     return commit(
                         store,
                         &state,
-                        settle_failed(&state, true, error.to_string(), now),
+                        settle_failed(
+                            &with_progress,
+                            true,
+                            facts
+                                .finalization_refusal
+                                .clone()
+                                .unwrap_or_else(|| error.to_string()),
+                            now,
+                        ),
                         None,
                     );
                 }
                 Err(error) => {
-                    let mut next = state.clone();
+                    let mut next = with_progress;
                     if let Some(attempt) = &mut next.active {
-                        attempt.reason = Some(error.to_string());
+                        attempt.reason = Some(
+                            facts
+                                .finalization_refusal
+                                .clone()
+                                .unwrap_or_else(|| error.to_string()),
+                        );
                     }
 
                     return commit(store, &state, next, None);

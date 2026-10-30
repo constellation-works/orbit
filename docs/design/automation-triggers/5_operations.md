@@ -67,6 +67,14 @@ schedule:
     coverage: landed_code_review_v1
     max_items: 20
     retries: 1
+    review_budget:
+      max_points: 8
+      low: 1
+      medium: 4
+      hard: 8
+      max_files: 20
+      max_lines: 2000
+      binary_line_charge: 2001
 # Retain the normal template, dedupe and attribution fields.
 ```
 
@@ -210,11 +218,12 @@ replace the action ID placeholder with the current task ID, and attach:
 orbit tool run orbit.task.artifact.put --input '{"id":"<assigned task>","source_path":".orbit/tmp/automation-coverage.json","path":"automation-coverage.json","model":"codex"}'
 ```
 
-The version-2 schema has these required fields:
+The version-3 schema has these required fields (legacy version-2 final
+evidence is accepted only for batches frozen without review-work accounting):
 
 | Fields | Required meaning |
 | --- | --- |
-| `schema_version`, `batch_id`, `consumer`, `epoch`, `input_digest` | Exact frozen identity; version is 2. |
+| `schema_version`, `batch_id`, `consumer`, `epoch`, `input_digest` | Exact frozen identity; version is 3. |
 | `action_id`, `attempt`, `coverage` | This admitted action and examination class. |
 | `from_exclusive`, `through_inclusive` | Exact objects, each with `commit` and `tree`. |
 | `examined_commits`, `examined_deliveries` | Complete ordered arrays of commit-SHA and delivery-key strings from the input, not frozen objects. |
@@ -228,6 +237,8 @@ the reviewer read:
 
 | Field | Required meaning |
 | --- | --- |
+| `completed` | Explicitly true only after examining every changed path; absent/false is provisional. |
+| `source_digest` | On carried entries, the exact server-captured prior evidence digest. |
 | `examined_paths` | Changed paths of the delivery that were read. |
 | `skipped_paths` | Changed paths not read, each `{path, reason}` with a nonblank reason. |
 | `verdict` | `"clean"`, or `{"findings": [<finding task IDs>]}` with at least one ID. |
@@ -235,7 +246,8 @@ the reviewer read:
 
 Examined and skipped paths together must be exactly the paths `git diff
 --name-only --no-renames <before.commit> <after.commit>` lists for that
-delivery, which the owner reads from the verified source at settlement. A
+delivery, which the owner reads from the verified source at settlement.
+Version-3 completion requires no skipped paths. A
 missing, duplicated or extra path, or a missing entry, is refused with a typed
 reason (`missing_delivery_examination`, `duplicate_delivery_examination`,
 `examined_paths_mismatch`, `skipped_path_without_reason`, `invalid_verdict`,
@@ -245,7 +257,8 @@ can write without reading anything: settlement refuses new version-1 bytes as
 settled and still read.
 
 A review task must also carry its agent's own execution summary. While the
-task is open, evidence waits for it; once the task closes with no summary, or
+task is open, final settlement waits for it (completed partial examination can
+still be retained); once the task closes with no summary, or
 only the summary Orbit derived from its evidence at delivery, the attempt
 settles as `review_closed_without_execution_summary`: coverage stays owed and
 the retry budget applies. `orbit auto-task show` reports the reason on the
@@ -1042,3 +1055,83 @@ part of this implementation.
   workspace namespace.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
+
+
+### Review work budgets and continuation
+
+`deliveries_landed.review_budget` is persisted through ordinary auto-task
+add/update, `--deliveries-landed` JSON and the auto-task tools. Its omitted
+fields default to `max_points: 8`, `low: 1`, `medium: 4`, `hard: 8`,
+`max_files: 20`, `max_lines: 2000`, `binary_line_charge: 2001`. Every value must be an integer in
+1..=1,000,000; zero, negative, fractional, unknown and overflowing values
+are refused. `low` is the task API's spelling of easy. Inspection exposes
+configured values and the active batch's `review_work` accounting.
+
+Count (`threshold`) and age (`max_wait_minutes`) still decide when work is
+due; `max_items` remains an additional ceiling. Review freezes the oldest
+contiguous prefix that fits all ceilings, never skipping a heavy next
+landing to pack later easy ones. At defaults this permits one hard, two
+medium, medium plus four low, or eight low deliveries in pending order.
+One delivery counts once even when it contains several commits or tasks;
+it pays the maximum configured charge of all its tasks. Xhard pays twice
+hard. Missing/unassessed task complexity produces
+`review_assessment_required`: assess every task before retrying. Unattributed
+landings conservatively pay the maximum configured low/medium/hard weight
+(hard at defaults). Unreadable metadata refuses admission.
+
+File count is the union of paths changed across the exact frozen
+first-parent range. Lines are additions plus deletions summed over each
+first-parent change, including changes later reverted. Excluded deliveries
+and unattributed context neighbors still contribute actual size. Generated
+files have no discount. Rename detection and text conversion are disabled:
+a rename pays for both paths and both textual contents. Binary files are
+counted explicitly and pay `binary_line_charge` line equivalents per path in
+addition to actual textual lines. This defaults to 2,001, above the ordinary
+2,000-line ceiling: binary work holds until an operator deliberately configures
+a larger-work review budget. The frozen `charged_lines` exposes this conservative
+estimate separately from measured textual `workload.lines`; it never claims
+binary size was measurable as text or counts unknown work as free. The default 20-file/2,000-line
+ceilings admit the recent 13-file/883-line landing while separating the
+incident's 27-file/5,485-line batch. An individual 2,566-line rewrite requires
+a deliberately larger review, rather than an automatic budget waiver.
+
+Use `orbit auto-task show <name> --preview --json` to inspect admission holds
+against current metadata and Git facts; ordinary inspection includes active
+frozen accounting and the effective configured policy.
+
+`review_work_oversize` names the first unpaid delivery, measured workload,
+limiting ceiling and action. Its pending debt and covered cursor remain
+unchanged. For oversized textual work, configure a larger `review_budget`
+through `orbit auto-task update <name> --deliveries-landed '<full trigger
+JSON>'`; ordinary settings adoption (or `orbit auto-task recover <name>
+--adopt-settings --reason '<reason>'`) then retries the same oldest debt
+before freezing it. The same larger-work route admits binary obligations only
+when their explicit line-equivalent charge fits the new ceiling. Select a
+suitable specialist crew through the existing template/purpose-pool settings;
+completion still requires every path, with no waiver or cursor jump.
+A smaller prefix can finish first; an indivisible oversized first delivery
+is held visibly rather than truncated. No existing active batch is resized.
+
+New batches bind policy version, effective weights/ceilings, each delivery's
+assessments/charge/workload, entire-range workload and stop reason into their
+identity and input digest. Later edits affect future batches only. Historical
+batches and accepted receipts retain their original serialized contract.
+Older executables that refuse the new configuration/evidence fields must be
+upgraded before writing new work; do not strip those fields to bypass refusal.
+Version-2 final evidence remains accepted under its original rules; it cannot
+supply partial progress because it cannot distinguish provisional entries.
+
+Version-3 evidence adds explicit `completed` per delivery (default false).
+Only complete, unskipped, exact-path examinations with concrete checks are
+captured in append-only server checkpoints. The saved bytes, source artifact,
+original executor witness, action, attempt, findings and checks remain immutable.
+Retries and operator reissues carry this progress in frozen input and populate
+the new evidence template with exact `source_digest` references and remaining
+provisional obligations. A different assigned crew can finish those obligations
+without repeating completed examination or filing its findings again.
+
+Settlement re-authenticates prior task/run or claim witnesses and canonical
+job evidence, validates every digest/revision/consumer/epoch/batch, and rejects
+altered entries or lost checks/findings. The current writer still needs its
+own authority and must complete every frozen obligation. Partial progress
+never advances coverage or resets retry counts, deadlines or backoff.

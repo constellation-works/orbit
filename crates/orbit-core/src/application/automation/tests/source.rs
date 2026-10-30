@@ -464,6 +464,7 @@ fn admitted_replay_limit_completes_and_one_past_it_is_refused() {
         let (source, mut state) =
             state_for(history.root.path(), history.old.last().expect("old tip"));
         let trigger = DeliveryTrigger {
+            review_budget: None,
             owner_machine: Some("fixture-machine".into()),
             branch: "main".into(),
             threshold: 1,
@@ -680,6 +681,7 @@ fn replay_moves_a_retained_exclusion_onto_its_canonical_commit() {
     let history = diverged(2, 2);
     let (source, mut state) = state_for(history.root.path(), &history.old[1]);
     let trigger = DeliveryTrigger {
+        review_budget: None,
         owner_machine: Some("fixture-machine".into()),
         branch: "main".into(),
         threshold: 2,
@@ -912,6 +914,7 @@ fn recorded_associations_survive_observation_and_missing_identities_back_off() {
     let (source, mut state) = state_for(history.root.path(), history.old.last().unwrap());
     let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
     let trigger = DeliveryTrigger {
+        review_budget: None,
         owner_machine: None,
         branch: "main".into(),
         threshold: 50,

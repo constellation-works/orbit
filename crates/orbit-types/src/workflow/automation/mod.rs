@@ -8,6 +8,9 @@ mod delivery;
 mod evidence;
 mod ownership;
 mod state;
+mod workload;
+
+pub use workload::{DeliveryReviewBudget, DeliveryReviewCharge, FrozenReviewWork, ReviewWorkload};
 
 pub use batch::{
     ActionReissue, BatchAttempt, BatchState, BatchWaiver, CoverageBatch, WaiveBatchRequest,
@@ -18,9 +21,9 @@ pub use delivery::{
 };
 pub use evidence::{
     AcceptedCoverage, COVERAGE_ARTIFACT, COVERAGE_EVIDENCE_SCHEMA_VERSION, ClaimedSubmission,
-    CoverageEvidence, CoverageReceiptSummary, DeliveryExamination, DeliveryVerdict,
-    EVIDENCE_AUTHORITY_ARTIFACT, EvidenceSubmission, ExaminationCheck, SkippedPath,
-    evidence_template,
+    CompletedReviewProgress, CoverageEvidence, CoverageReceiptSummary, DeliveryExamination,
+    DeliveryVerdict, EVIDENCE_AUTHORITY_ARTIFACT, EvidenceSubmission, ExaminationCheck,
+    SkippedPath, evidence_template,
 };
 pub use ownership::{DeliveryAssociation, DeliveryOwnership, DirectLandingRequest, OwnerAuthority};
 pub use state::{AssociationLookupRetry, AutomationDiagnostic, AutomationState};

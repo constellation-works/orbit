@@ -299,6 +299,34 @@ impl DeliveryHost for Host<'_> {
         Ok(page)
     }
 
+    fn review_complexities(
+        &self,
+        delivery: &Delivery,
+    ) -> Result<Vec<orbit_types::task::TaskComplexity>, AutomationError> {
+        delivery
+            .task_ids
+            .iter()
+            .map(|id| match self.runtime.get_task(id) {
+                Ok(task) => Ok(task
+                    .complexity
+                    .unwrap_or(orbit_types::task::TaskComplexity::Unassessed)),
+                Err(OrbitError::NotFound {
+                    kind: orbit_common::NotFoundKind::Task,
+                    ..
+                }) => Ok(orbit_types::task::TaskComplexity::Unassessed),
+                Err(error) => Err(error.into()),
+            })
+            .collect()
+    }
+
+    fn review_workload(
+        &self,
+        from: &SourceRevision,
+        through: &SourceRevision,
+    ) -> Result<ReviewWorkload, AutomationError> {
+        self.source.review_workload(from, through)
+    }
+
     fn admit(&self, attempt: &BatchAttempt) -> Result<String, AutomationError> {
         self.runtime.ensure_coordination_task_write_permitted()?;
 
@@ -313,6 +341,12 @@ impl DeliveryHost for Host<'_> {
         }
 
         self.source.retain_batch(&attempt.batch)?;
+        task::validate_saved_review_progress(
+            self.runtime,
+            &self.source,
+            attempt,
+            matches!(self.action, Action::Task(_)),
+        )?;
 
         match self.action {
             Action::Task(definition) => {

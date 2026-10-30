@@ -261,6 +261,7 @@ fn a_delivery_routine_settles_held_and_timed_out_jobs_without_retrying() {
         // Freeze and admit through the real stores, without starting a worker
         // or a provider. Two attempts leave budget to expose accidental retries.
         let batch = CoverageBatch {
+            review_work: None,
             schema_version: 1,
             id: digest(b"delivery settlement"),
             consumer: state.consumer.clone(),
@@ -287,6 +288,7 @@ fn a_delivery_routine_settles_held_and_timed_out_jobs_without_retrying() {
             reason: None,
             retry_after: None,
             reissue: None,
+            progress: vec![],
         };
         let KeyedJobRunAdmission::Admitted(run) = workspace
             .jobs

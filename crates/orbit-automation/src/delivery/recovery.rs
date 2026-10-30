@@ -768,6 +768,10 @@ pub(super) fn changes(state: &AutomationState, request: &Recovery<'_>) -> Vec<St
         ),
         ("max_items", recorded.max_items != configured.max_items),
         ("retries", recorded.retries != configured.retries),
+        (
+            "review_budget",
+            recorded.review_budget != configured.review_budget,
+        ),
     ] {
         if differs {
             changes.push(name.to_string());

@@ -47,6 +47,7 @@ fn baseline() -> AutomationState {
         consumer: "fixture/legacy".into(),
         epoch: "epoch".into(),
         trigger: Some(DeliveryTrigger {
+            review_budget: None,
             owner_machine: None,
             branch: "fixture-branch".into(),
             threshold: 1,
@@ -96,6 +97,7 @@ fn failed_batch(state: &mut AutomationState) {
     state.observed = after.clone();
     state.active = Some(BatchAttempt {
         batch: CoverageBatch {
+            review_work: None,
             schema_version: 1,
             id: "batch".into(),
             consumer: state.consumer.clone(),
@@ -120,6 +122,7 @@ fn failed_batch(state: &mut AutomationState) {
         reason: Some("fixture-failure".into()),
         retry_after: None,
         reissue: None,
+        progress: vec![],
     });
 }
 
@@ -344,7 +347,9 @@ fn consumer_writes_accept_legacy_json_and_refuse_stale_snapshots() {
 
 #[test]
 fn concurrent_action_key_admission_initializes_one_run_and_resolves_without_writes() {
-    if automation_isolated("concurrent_action_key_admission_initializes_one_run_and_resolves_without_writes") {
+    if automation_isolated(
+        "concurrent_action_key_admission_initializes_one_run_and_resolves_without_writes",
+    ) {
         return;
     }
     use orbit_store::contracts::KeyedJobRunAdmission;

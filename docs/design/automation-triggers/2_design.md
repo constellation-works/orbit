@@ -237,7 +237,8 @@ successfully covered.
 
 Observations accumulate while overlap, `skip_if_open`, capacity, missing grants,
 or debounce prevent dispatch. Pending membership is never appended to an active
-batch. At threshold freeze the oldest pending range, bounded by `max_items`;
+batch. At threshold freeze the oldest pending range, bounded by `max_items` and,
+for review, the configured point and exact Git file/line workload ceilings;
 the threshold must be positive and at most `max_items`. Later arrivals belong to
 the next batch. A nonzero maximum wait optionally flushes a subthreshold batch;
 it starts at the oldest pending observation and never creates empty work.
@@ -255,7 +256,8 @@ coverage. Review with verified findings can count as examined while finding task
 remain open; QA counts exercised obligations, not a promise that defects are fixed.
 Unavailable validation is incomplete, with skipped obligations exposed. For v1
 code batches accept all required range obligations together; partial progress is
-saved as evidence but retries retain the full range. Pilot and triage can accept
+saved as evidence and schema-v3 completed examinations can be carried through
+retries while the full range remains owed until final settlement. Pilot and triage can accept
 independent per-member results, retrying only unresolved members.
 
 Delivery retries are opt-in (default zero), with five-minute backoff and a frozen
@@ -836,3 +838,22 @@ to change; implementation scope and defaults still require approval.
 - [ORB-15191] — bounds how long multi-slot admission waits for a task pilot to prepare empty-context backlog work.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
+
+
+### Review work budgets and continuation
+
+After-landing review adds a separately configurable work budget to count/age
+triggering: defaults are eight points (low=1, medium=4, hard=8), twenty paths
+and two thousand added-plus-deleted textual lines. The evaluator freezes an
+oldest contiguous prefix with its exact Git workload, effective policy and
+per-delivery charges in the batch digest. Missing assessment and indivisible
+oversize work hold admission visibly; active legacy batches retain their
+original input. See [operational configuration and units](5_operations.md#review-work-budgets-and-continuation).
+
+Schema-v3 evidence explicitly distinguishes completed per-delivery examination
+from provisional verdicts. Authorized exact-path completion is captured as
+append-only immutable bytes and original executor witnesses in the existing
+consumer checkpoint. Retries/reissues receive these verified portions and
+remaining obligations. Final coverage still requires the entire frozen range,
+current writer authority and a valid original-writer chain for carried entries;
+no action/attempt identity is rewritten and no retry budget is reset.

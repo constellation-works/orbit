@@ -10,6 +10,14 @@ schedule:
     coverage: landed_code_review_v1
     max_items: 20
     retries: 1
+    review_budget:
+      max_points: 8
+      low: 1
+      medium: 4
+      hard: 8
+      max_files: 20
+      max_lines: 2000
+      binary_line_charge: 2001
 template:
   title: Review a frozen delivery batch
   description: |-
@@ -107,7 +115,7 @@ template:
     with the frozen delivery key and the changed paths from the frozen input;
     settlement refuses a placeholder copied as a value:
     ```json
-    {"delivery_examinations":[{"delivery":"<frozen delivery key>","examined_paths":["<changed path you read>"],"skipped_paths":[{"path":"<changed path you did not read>","reason":"<why it was not read>"}],"verdict":"clean","rationale":"<at least 40 characters, specific to this delivery>"}]}
+    {"delivery_examinations":[{"delivery":"<frozen delivery key>","completed":false,"examined_paths":["<changed path you read>"],"skipped_paths":[{"path":"<changed path you did not read>","reason":"<why it was not read>"}],"verdict":"clean","rationale":"<at least 40 characters, specific to this delivery>"}]}
     ```
     Verdict findings are task-ID strings, for example
     `{"findings":["<finding task ID>"]}`, not task objects.
@@ -115,6 +123,16 @@ template:
     the error, correct that field using the assigned evidence template, and
     re-put the corrected file inside this run. Do not change the version or
     frozen identity to bypass a refusal.
+    Schema v3 distinguishes provisional entries from completed examination.
+    Set each delivery's completed=true only after reading every changed path;
+    skipped_paths must then be empty. Persist partial automation-coverage.json
+    before stopping, with examination_complete=false and completed=true only
+    for fully examined deliveries. A clean verdict alone is provisional.
+    On retry the frozen input's progress contains immutable prior bytes and
+    provenance; the evidence template includes their completed entries with
+    source_digest references, checks and findings. Preserve these entries and
+    references exactly, read only the remaining obligations, retain earlier
+    duplicate-check evidence, and do not refile confirmed findings.
     Set examination_complete only after all obligations are examined.
     Persist an execution summary of what you examined with `orbit.task.update`:
     a review whose agent records none leaves its batch owed, even with valid

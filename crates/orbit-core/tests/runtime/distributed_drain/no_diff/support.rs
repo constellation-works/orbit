@@ -932,6 +932,7 @@ pub(crate) fn reviewed_batch(
     );
     BatchAttempt {
         batch: CoverageBatch {
+            review_work: None,
             schema_version: 1,
             id: "batch-reviewed".into(),
             consumer,
@@ -968,6 +969,7 @@ pub(crate) fn reviewed_batch(
         reason: None,
         retry_after: None,
         reissue: None,
+        progress: vec![],
     }
 }
 /// Record `attempt` as its consumer's admitted action on the owner.

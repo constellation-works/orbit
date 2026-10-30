@@ -5,10 +5,10 @@ use serde::{Deserialize, Serialize};
 
 use super::{BatchAttempt, CoverageClass, SourceRevision};
 
-/// The [`CoverageEvidence`] schema settlement accepts. Version 1 named the
-/// examined commits and deliveries only; it still decodes, so receipts
-/// accepted under it keep reading, but settlement refuses new version-1 bytes.
-pub const COVERAGE_EVIDENCE_SCHEMA_VERSION: u32 = 2;
+/// Current evidence schema. V3 adds explicit completed examinations and
+/// immutable progress references. V2 final evidence still settles legacy
+/// batches; v1 still decodes for historical receipts but cannot settle anew.
+pub const COVERAGE_EVIDENCE_SCHEMA_VERSION: u32 = 3;
 
 /// Worker-submitted structured evidence, attached through orbit.task.artifact.put.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,6 +50,14 @@ pub struct ExaminationCheck {
 pub struct DeliveryExamination {
     /// The frozen delivery's key.
     pub delivery: String,
+    /// Explicit completion; absent/false entries are provisional. Only v3
+    /// evidence can contribute durable partial progress.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub completed: bool,
+    /// Digest of the immutable, server-verified earlier evidence containing
+    /// this exact examination. Never changes that artifact's action/attempt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_digest: Option<String>,
     /// Paths of the delivery's `before..after` diff the reviewer read.
     pub examined_paths: Vec<String>,
     /// Paths of that diff deliberately not read, each with its reason.
@@ -116,7 +124,7 @@ pub struct ClaimedSubmission {
 /// Shape supplied with a frozen batch. Workers fill each delivery's
 /// examination, the checks and findings, and attest completion.
 pub fn evidence_template(attempt: &BatchAttempt) -> CoverageEvidence {
-    CoverageEvidence {
+    let mut template = CoverageEvidence {
         schema_version: COVERAGE_EVIDENCE_SCHEMA_VERSION,
         batch_id: attempt.batch.id.clone(),
         consumer: attempt.batch.consumer.clone(),
@@ -144,6 +152,8 @@ pub fn evidence_template(attempt: &BatchAttempt) -> CoverageEvidence {
             .iter()
             .map(|d| DeliveryExamination {
                 delivery: d.key.clone(),
+                completed: false,
+                source_digest: None,
                 examined_paths: vec![],
                 skipped_paths: vec![],
                 verdict: DeliveryVerdict::Clean,
@@ -152,7 +162,36 @@ pub fn evidence_template(attempt: &BatchAttempt) -> CoverageEvidence {
             .collect(),
         checks: vec![],
         findings: vec![],
+    };
+    // Verified state supplies immutable provenance. The runtime validates it
+    // again before admission; template construction never grants authority.
+    for progress in &attempt.progress {
+        if let Ok(prior) = serde_json::from_slice::<CoverageEvidence>(&progress.evidence) {
+            for mut examination in prior.delivery_examinations {
+                if progress.deliveries.contains(&examination.delivery) {
+                    examination.source_digest = Some(progress.evidence_digest.clone());
+                    if let Some(entry) = template
+                        .delivery_examinations
+                        .iter_mut()
+                        .find(|entry| entry.delivery == examination.delivery)
+                    {
+                        *entry = examination;
+                    }
+                }
+            }
+            for finding in prior.findings {
+                if !template.findings.contains(&finding) {
+                    template.findings.push(finding);
+                }
+            }
+            for check in prior.checks {
+                if !template.checks.contains(&check) {
+                    template.checks.push(check);
+                }
+            }
+        }
     }
+    template
 }
 
 /// Task artifact carrying an action's [`CoverageEvidence`]. The artifact Store
@@ -187,4 +226,24 @@ impl From<AcceptedCoverage> for CoverageReceiptSummary {
             accepted_at: receipt.accepted_at,
         }
     }
+}
+
+/// Server-captured immutable bytes of authorized completed examination.
+/// Stored through the existing generation-fenced consumer checkpoint, never
+/// accepted from a worker's evidence as a new grant of authority.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompletedReviewProgress {
+    pub action_id: String,
+    pub attempt: u32,
+    pub evidence_digest: String,
+    pub evidence: Vec<u8>,
+    pub reference: String,
+    pub submitted_by: String,
+    /// Original Store-authored task witness; job-only evidence uses its
+    /// persisted canonical step result instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub submission: Option<EvidenceSubmission>,
+    pub captured_at: DateTime<Utc>,
+    pub deliveries: Vec<String>,
 }

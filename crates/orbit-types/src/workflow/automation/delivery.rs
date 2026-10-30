@@ -53,6 +53,10 @@ pub struct DeliveryTrigger {
     pub max_items: usize,
     #[serde(default)]
     pub retries: u32,
+    /// Omitted review policies use the conservative defaults. Historical batch
+    /// input is never recomputed from this setting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_budget: Option<super::DeliveryReviewBudget>,
 }
 
 fn default_batch_size() -> usize {
@@ -75,7 +79,14 @@ impl DeliveryTrigger {
             ));
         }
 
+        if let Some(budget) = &self.review_budget {
+            budget.validate()?;
+        }
         Ok(())
+    }
+
+    pub fn effective_review_budget(&self) -> super::DeliveryReviewBudget {
+        self.review_budget.clone().unwrap_or_default()
     }
 }
 

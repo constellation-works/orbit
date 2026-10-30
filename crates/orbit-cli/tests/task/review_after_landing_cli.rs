@@ -600,6 +600,7 @@ fn doctor_fails_while_the_after_landing_consumer_cannot_review_landed_work() {
     admitted.pending_commits = vec![landed.commit.clone()];
     admitted.active = Some(BatchAttempt {
         batch: CoverageBatch {
+            review_work: None,
             schema_version: 1,
             id: "fixture-batch".into(),
             consumer: consumer.clone(),
@@ -624,6 +625,7 @@ fn doctor_fails_while_the_after_landing_consumer_cannot_review_landed_work() {
         reason: None,
         retry_after: None,
         reissue: None,
+        progress: vec![],
     });
     assert!(
         store

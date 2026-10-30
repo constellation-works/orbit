@@ -35,6 +35,7 @@ pub(super) fn now() -> chrono::DateTime<Utc> {
 
 pub(super) fn trigger() -> DeliveryTrigger {
     DeliveryTrigger {
+        review_budget: None,
         owner_machine: Some("fixture-machine".into()),
         branch: "agent-main".into(),
         threshold: 2,
@@ -72,6 +73,8 @@ fn changed_paths(delivery: &Delivery) -> Vec<String> {
 
 pub(super) struct Host {
     pub(super) page: Mutex<SourcePage>,
+    pub(super) complexities: Mutex<BTreeMap<String, Vec<orbit_types::task::TaskComplexity>>>,
+    pub(super) workloads: Mutex<BTreeMap<String, ReviewWorkload>>,
     pub(super) actions: Mutex<BTreeMap<String, String>>,
     pub(super) evidence: Mutex<Option<CoverageEvidence>>,
     /// Raw artifact bytes submitted instead of `evidence`, such as a file
@@ -92,6 +95,8 @@ pub(super) struct Host {
 impl Host {
     pub(super) fn new() -> Self {
         Self {
+            complexities: Mutex::new(BTreeMap::new()),
+            workloads: Mutex::new(BTreeMap::new()),
             page: Mutex::new(SourcePage {
                 from: revision(0),
                 through: revision(0),
@@ -133,7 +138,7 @@ impl Host {
     pub(super) fn evidence(&self, attempt: &BatchAttempt) {
         let batch = &attempt.batch;
         *self.evidence.lock().unwrap() = Some(CoverageEvidence {
-            schema_version: COVERAGE_EVIDENCE_SCHEMA_VERSION,
+            schema_version: if batch.review_work.is_some() { 3 } else { 2 },
             batch_id: batch.id.clone(),
             consumer: batch.consumer.clone(),
             epoch: batch.epoch.clone(),
@@ -151,11 +156,21 @@ impl Host {
                 .iter()
                 .map(|d| DeliveryExamination {
                     delivery: d.key.clone(),
-                    examined_paths: vec![format!("src/{}.rs", d.after.commit)],
-                    skipped_paths: vec![SkippedPath {
-                        path: "Cargo.lock".into(),
-                        reason: "generated lockfile".into(),
-                    }],
+                    completed: batch.review_work.is_some(),
+                    source_digest: None,
+                    examined_paths: if batch.review_work.is_some() {
+                        changed_paths(d)
+                    } else {
+                        vec![format!("src/{}.rs", d.after.commit)]
+                    },
+                    skipped_paths: if batch.review_work.is_some() {
+                        vec![]
+                    } else {
+                        vec![SkippedPath {
+                            path: "Cargo.lock".into(),
+                            reason: "generated lockfile".into(),
+                        }]
+                    },
                     verdict: DeliveryVerdict::Clean,
                     rationale: format!(
                         "{} keeps its error paths typed and its tests exercise them",
@@ -174,6 +189,43 @@ impl Host {
 }
 
 impl DeliveryHost for Host {
+    fn review_complexities(
+        &self,
+        delivery: &Delivery,
+    ) -> Result<Vec<orbit_types::task::TaskComplexity>, AutomationError> {
+        Ok(self
+            .complexities
+            .lock()
+            .unwrap()
+            .get(&delivery.key)
+            .cloned()
+            .unwrap_or_else(|| {
+                vec![orbit_types::task::TaskComplexity::Low; delivery.task_ids.len()]
+            }))
+    }
+    fn review_workload(
+        &self,
+        from: &SourceRevision,
+        through: &SourceRevision,
+    ) -> Result<ReviewWorkload, AutomationError> {
+        if let Some(workload) = self
+            .workloads
+            .lock()
+            .unwrap()
+            .get(&format!("{}..{}", from.commit, through.commit))
+            .cloned()
+        {
+            return Ok(workload);
+        }
+        let n = |revision: &SourceRevision| revision.commit[1..].parse::<u32>().unwrap();
+        let count = n(through) - n(from);
+        Ok(ReviewWorkload {
+            files: count,
+            lines: u64::from(count) * 10,
+            binary_files: 0,
+        })
+    }
+
     fn head(&self, _: &str) -> Result<(String, SourceRevision), AutomationError> {
         Ok((self.repository.lock().unwrap().clone(), revision(0)))
     }
@@ -228,11 +280,18 @@ impl DeliveryHost for Host {
             (None, Some(e)) => serde_json::to_vec(e).unwrap(),
             (None, None) => return Ok(ActionOutcome::Pending),
         };
-        Ok(ActionOutcome::Evidence(EvidenceFacts {
+        Ok(ActionOutcome::Evidence(Box::new(EvidenceFacts {
             artifact_digest: delivery::digest(&bytes),
             bytes,
             reference: "task:action/artifacts/automation-coverage.json".into(),
             submitted_by: "authorized-run".into(),
+            verified_progress: attempt
+                .progress
+                .iter()
+                .map(|snapshot| snapshot.evidence_digest.clone())
+                .collect(),
+            submission: None,
+            finalization_refusal: None,
             authorized: true,
             source_verified: true,
             action_stopped: self.stopped.load(Ordering::SeqCst),
@@ -242,7 +301,7 @@ impl DeliveryHost for Host {
                 .iter()
                 .map(|d| (d.key.clone(), changed_paths(d)))
                 .collect(),
-        }))
+        })))
     }
 }
 
@@ -409,6 +468,9 @@ fn adversarial_evidence_cannot_manufacture_coverage() {
         bytes,
         reference: "artifact".into(),
         submitted_by: "run".into(),
+        verified_progress: Default::default(),
+        submission: None,
+        finalization_refusal: None,
         authorized: false,
         source_verified: true,
         action_stopped: false,
@@ -552,4 +614,74 @@ fn a_stopped_action_with_malformed_evidence_settles_and_spends_its_retry_budget(
     assert_eq!(state.active.unwrap().state, BatchState::Exhausted);
     assert_eq!(state.covered, revision(0));
     assert!(exhausted.receipts.is_empty());
+}
+
+#[test]
+fn review_default_budget_does_not_freeze_nine_easy_deliveries() {
+    let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
+    let host = Host::new();
+    let mut trigger = trigger();
+    trigger.coverage = CoverageClass::LandedCodeReviewV1;
+    trigger.max_items = 20;
+    assert_eq!(
+        evaluate(store.as_ref(), &host, &trigger, true).reason,
+        "baselined"
+    );
+    host.page(0, 9);
+    let state = evaluate(store.as_ref(), &host, &trigger, true)
+        .state
+        .unwrap();
+    let batch = state.active.unwrap().batch;
+    assert_eq!(
+        batch.deliveries.len(),
+        8,
+        "a review must respect the default work budget"
+    );
+    assert_eq!(batch.through_inclusive, revision(8));
+    assert_eq!(
+        state.pending.len(),
+        9,
+        "unselected delivery remains durable debt"
+    );
+}
+
+#[test]
+fn explicitly_completed_wire_evidence_survives_an_incomplete_review_attempt() {
+    let (store, host, trigger) = setup();
+    host.page(0, 2);
+    let first = evaluate(store.as_ref(), &host, &trigger, true)
+        .state
+        .unwrap()
+        .active
+        .unwrap();
+    host.evidence(&first);
+    let mut wire = serde_json::to_value(host.evidence.lock().unwrap().as_ref().unwrap()).unwrap();
+    wire["schema_version"] = serde_json::json!(3);
+    wire["examination_complete"] = serde_json::json!(false);
+    wire["delivery_examinations"][0]["completed"] = serde_json::json!(true);
+    wire["delivery_examinations"][0]["examined_paths"] =
+        serde_json::json!(["src/c1.rs", "Cargo.lock"]);
+    wire["delivery_examinations"][0]["skipped_paths"] = serde_json::json!([]);
+    wire["delivery_examinations"][1]["completed"] = serde_json::json!(false);
+    let original = serde_json::to_vec(&wire).unwrap();
+    *host.raw_evidence.lock().unwrap() = Some(original.clone());
+    host.stopped.store(true, Ordering::SeqCst);
+    host.page(2, 2);
+    let state = evaluate(store.as_ref(), &host, &trigger, true)
+        .state
+        .unwrap();
+    assert_eq!(state.covered, revision(0));
+    let wire = serde_json::to_value(state.active.unwrap()).unwrap();
+    let progress = wire["progress"]
+        .as_array()
+        .expect("completed examination must survive the failed batch-wide attempt");
+    assert_eq!(progress.len(), 1);
+    assert_eq!(
+        progress[0]["deliveries"],
+        serde_json::json!([first.batch.deliveries[0].key])
+    );
+    assert_eq!(
+        progress[0]["evidence"],
+        serde_json::to_value(original).unwrap()
+    );
 }

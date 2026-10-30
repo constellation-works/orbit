@@ -43,6 +43,11 @@ pub(super) fn validate_transition(
             if old.batch != new.batch
                 || old.input_digest != new.input_digest
                 || old.reissue != new.reissue
+                || !new.progress.starts_with(&old.progress)
+                || new.progress[old.progress.len()..].iter().any(|snapshot| {
+                    snapshot.attempt != old.attempt
+                        || old.action_id.as_deref() != Some(snapshot.action_id.as_str())
+                })
                 || new.attempt < old.attempt
             {
                 return Err(invalid());
@@ -142,7 +147,8 @@ pub(super) fn validate_transition(
             && let Some(active) = &next.active
         {
             let batch = &active.batch;
-            if batch.consumer != next.consumer
+            if !active.progress.is_empty()
+                || batch.consumer != next.consumer
                 || batch.epoch != next.epoch
                 || batch.repository != next.repository
                 || batch.branch != next.branch
