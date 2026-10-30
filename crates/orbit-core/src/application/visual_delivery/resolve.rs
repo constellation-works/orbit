@@ -355,7 +355,11 @@ fn resolve_task(
             ));
         }
     }
-    if contract.reviewer && (record.outcome != "reviewed" || !record.not_established.is_empty()) {
+    // Preparation records the experiment-resolved reviewer setting, which
+    // can differ from the workspace setting frozen in the contract.
+    if !matches!(record.outcome.as_str(), "reviewed" | "reviewer_disabled")
+        || !record.not_established.is_empty()
+    {
         return Ok(missing("the comparison review is not established"));
     }
     let head = candidate_head(workspace)?;
