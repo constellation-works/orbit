@@ -220,6 +220,11 @@ impl OrbitRuntime {
                                 "proposal approval cannot be combined with field edits",
                             ));
                         }
+                        // A desktop edit carries no tags or artifacts, so the stored
+                        // ones are the state this approval leaves for the mock check.
+                        if task.status == TaskStatus::Proposed && target == TaskStatus::Backlog {
+                            self.ensure_backlog_mock_admission(&task, None)?;
+                        }
                         status = Some(target);
                     }
                     if let Some(v) = &f.title {
