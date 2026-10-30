@@ -168,10 +168,11 @@ fn job_explain_blocks(value: &Value) -> Vec<Block> {
     let definition = &value["definition"];
     let expiry = &value["expire_when"];
     let mut blocks = vec![Block::text(format!(
-        "job {} ({}), {}\nExpire when: {} ({})\nPinned revision: {}",
+        "job {} ({}), {}, schemaVersion {}\nExpire when: {} ({})\nPinned revision: {}",
         text(&definition["name"]),
         text(&definition["path"]),
         text(&value["state"]),
+        text(&value["schema_version"]),
         text(&expiry["source"]),
         match expiry["at"].as_str() {
             Some(at) => format!("at {at}"),

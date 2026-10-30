@@ -12,6 +12,17 @@ pub const SCRIPT_REF_PREFIX: &str = script::SCRIPT_REF_PREFIX;
 /// defined and explained; no binary runs them yet.
 pub const AUTO_TASK_REF_PREFIX: &str = "auto-task:";
 
+/// The `schemaVersion` every activity and every job without the auto-task
+/// step extension declares.
+pub const ASSET_SCHEMA_VERSION: u32 = 2;
+
+/// The `schemaVersion` a job using the auto-task step extension must declare,
+/// and no activity may: a binary that predates the extension refuses the
+/// whole file as an unsupported version instead of dropping the fields it
+/// does not know ([ORB-20237]). A job keeps the version its file declares,
+/// whether or not any of the extension's fields remain.
+pub const AUTO_TASK_JOB_SCHEMA_VERSION: u32 = 3;
+
 pub mod activity_roles;
 pub mod activity_v2;
 pub mod audit_envelope;

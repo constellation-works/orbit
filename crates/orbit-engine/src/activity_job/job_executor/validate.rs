@@ -188,7 +188,9 @@ fn refuse_auto_task_steps(job: &JobV2) -> Result<(), DispatchError> {
             step.id,
             step.auto_task_name().unwrap_or_default()
         ),
-        None if job.expire_when.is_some() => "the job declares `expire_when`".to_string(),
+        None if job.is_auto_task_job() => {
+            "the job declares schemaVersion 3, `expire_when` or a step wait field".to_string()
+        }
         None => return Ok(()),
     };
     Err(DispatchError::JobValidation(format!(

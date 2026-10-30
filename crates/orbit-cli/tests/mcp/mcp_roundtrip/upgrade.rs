@@ -105,7 +105,10 @@ fn audit_count(workspace: &McpWorkspace, tool: &str) -> i64 {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn new_review_record_contract_refuses_a_live_old_client_before_mutation() {
-    for old_contract in ["review", "selective"] {
+    // Each old client lacks one breaking contract: the review feature schema,
+    // layout 4 (selective review contracts) or layout 5 (schemaVersion 3
+    // auto-task jobs, ORB-20237).
+    for old_contract in ["review", "selective", "auto-task-job-schema"] {
         let workspace = McpWorkspace::init();
         let initialized = orbit_ok(
             McpWorkspace::orbit_command(&workspace.work, &workspace.home).args(["task", "list"]),
@@ -126,10 +129,11 @@ fn new_review_record_contract_refuses_a_live_old_client_before_mutation() {
         if old_contract == "review" {
             old_identity.features.insert("review".into(), 3);
         } else {
-            assert_eq!(latest.workspace_layout.version, 4);
-            old_identity.workspace_layout.version = 3;
-            old_identity.workspace_layout.writer_floor = 3;
-            old_identity.workspace_layout.reader_floor = 3;
+            assert_eq!(latest.workspace_layout.version, 5);
+            let old_layout = if old_contract == "selective" { 3 } else { 4 };
+            old_identity.workspace_layout.version = old_layout;
+            old_identity.workspace_layout.writer_floor = old_layout;
+            old_identity.workspace_layout.reader_floor = old_layout;
         }
 
         // Hold the authority as a process compiled with the pre-change review

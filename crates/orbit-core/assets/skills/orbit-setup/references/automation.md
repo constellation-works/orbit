@@ -358,8 +358,11 @@ A job may also name an auto-task as a step (`target: auto-task:<name>`) with
 CEL `wait_until`, `expire_when` and `reuse_when` fields. These steps are
 checked when the job loads and explained by `orbit automation explain
 job:<name>`, but cannot run yet: such a job must stay `state: disabled`, and
-submitting it is refused. The keys are in the website's Activity and job YAML
-reference, Auto-task steps.
+submitting it is refused. It declares `schemaVersion: 3`, and keeps those
+restrictions until its author declares 2 again; the same fields under
+`schemaVersion: 2` fail to load, even when null, so an older Orbit refuses the
+file instead of dropping its waits. The keys are in the website's Activity and job
+YAML reference, Auto-task steps.
 
 ## Routines a plugin seeds
 

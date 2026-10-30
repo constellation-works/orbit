@@ -53,6 +53,7 @@ pub fn job_catalog_to_json_with_last_run(
 ) -> Value {
     let mut value = json!({
         "job_id": job.job_id.clone(),
+        "schema_version": job.spec.schema_version,
         "kind": job.kind().to_string(),
         "state": job.state().to_string(),
         "default_input": job.spec.default_input,

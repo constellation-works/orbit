@@ -19,13 +19,13 @@ This document describes the shipped Activity / Job substrate across `orbit-types
 
 ## 1. Asset Shape and Header-First Loading
 
-Activity / Job assets are `schemaVersion: 2` YAML envelopes with:
+Activity / Job assets are `schemaVersion: 2` YAML envelopes, except that a job using the [auto-task step extension](./specs/auto-task-step.md) is `schemaVersion: 3`. Each envelope has:
 
 - `kind: Activity` or `kind: Job`
 - `metadata.name`
 - typed `spec`
 
-The loader in `crates/orbit-engine/src/activity_job/asset_loader.rs` checks the schema header before accepting the typed `ActivityV2` or `JobV2` envelope. Its fast path parses YAML once into an untyped document, checks the header and retired `role` declarations, then deserializes the typed body from that document. When that path cannot judge the document, it falls back to separate parses from the original text to preserve compatibility, error messages, and source positions. The envelope shape arrived in [T20260418-2010]. `schemaVersion: 1` is retired after [T20260419-2156], and `kind` mismatches are structural errors, so an activity cannot dispatch as a job or vice versa.
+The loader in `crates/orbit-engine/src/activity_job/asset_loader.rs` checks the schema header before accepting the typed `ActivityV2` or `JobV2` envelope. Its fast path parses YAML once into an untyped document, checks the header and retired `role` declarations, then deserializes the typed body from that document. When that path cannot judge the document, it falls back to separate parses from the original text to preserve compatibility, error messages, and source positions. The envelope shape arrived in [T20260418-2010]. `schemaVersion: 1` is retired after [T20260419-2156], and `kind` mismatches are structural errors, so an activity cannot dispatch as a job or vice versa. [ORB-20237] A job using an `auto-task:` target, a step wait field or a job `expire_when`, at any nesting, declares `schemaVersion: 3`, so an older loader refuses it as an unsupported version instead of dropping its fields. Under 2 the loader refuses any of those keys by presence, null or nested, in both the fast path and the fallback; it refuses 3 on an activity. `JobV2.schema_version` carries the declared version (omitted when 2) instead of inferring it, and every 3 job stays disabled and unrunnable in phase 1 even with no extension field left. Breaking layout migration 5 (`auto-task-job-schema`) fences older binaries and live clients from a workspace this binary has opened ([Auto-task jobs declare schemaVersion 3](./4_decisions.md#auto-task-jobs-declare-schemaversion-3)).
 
 ---
 
@@ -1805,6 +1805,7 @@ Read-only history does not need the same dependencies as live execution: retired
 
 ## Task References
 
+- **[ORB-20237]** — A job using the auto-task step extension declares `schemaVersion: 3`, carried explicitly on `JobV2`; breaking layout migration 5 fences older clients.
 - **[ORB-19635]** — A verified implementer `finding-invalid.json` rejects its review finding at `commit`; no promotion or completion step runs for it.
 - **[ORB-14247]** — A `no-diff-expected` task does not hold context locks. An unexpected diff still commits, and `sync_base` remains the conflict boundary.
 

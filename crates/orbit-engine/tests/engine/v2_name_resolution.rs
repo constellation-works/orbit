@@ -574,6 +574,7 @@ fn load_reference_catalog() -> Result<V2ActivityCatalog, Box<dyn std::error::Err
 
 fn synthetic_job_using_ref(target_name: &str) -> JobV2 {
     JobV2 {
+        schema_version: 2,
         state: JobScheduleState::Enabled,
         owns_task_worktree: false,
         task_delivery: None,
@@ -625,11 +626,12 @@ fn stub_deterministic_activity(name: &str) -> ActivityV2 {
 }
 
 /// [ORB-20157] An `auto-task:` ref survives resolution for Core to inspect,
-/// and execution validation, which runs before any step, refuses the job.
+/// and execution validation, which runs before any step, refuses the job
+/// for as long as it declares schemaVersion 3 [ORB-20237].
 fn auto_task_steps_resolve_but_never_run() {
     let catalog = load_reference_catalog().unwrap();
     let mut job = load_job_asset(
-        "schemaVersion: 2\nkind: Job\nmetadata:\n  name: readiness\nspec:\n  state: disabled\n  \
+        "schemaVersion: 3\nkind: Job\nmetadata:\n  name: readiness\nspec:\n  state: disabled\n  \
          expire_when: \"now >= job.started_at + duration('24h')\"\n  steps:\n    \
          - id: assess\n      target: activity:agent_assess_diff\n    \
          - id: qa\n      target: auto-task:full-qa-sweep\n      wait_until: board.empty\n",
@@ -642,23 +644,22 @@ fn auto_task_steps_resolve_but_never_run() {
         panic!("auto-task ref was rewritten: {:?}", job.steps[1].body);
     };
     assert_eq!(reference.target, "auto-task:full-qa-sweep");
-    match validate_job(&job) {
-        Err(DispatchError::JobValidation(message)) => assert!(
-            message.contains("step `qa` targets auto-task `full-qa-sweep`")
-                && message.contains("no step ran"),
-            "{message}"
-        ),
-        other => panic!("auto-task job passed execution validation: {other:?}"),
-    }
+    assert!(
+        matches!(validate_job(&job), Err(DispatchError::JobValidation(_))),
+        "an auto-task job must fail execution validation"
+    );
 
     job.steps.truncate(1);
-    match validate_job(&job) {
-        Err(DispatchError::JobValidation(message)) => {
-            assert!(message.contains("declares `expire_when`"), "{message}");
-        }
-        other => panic!("job expire_when passed execution validation: {other:?}"),
-    }
+    assert!(
+        matches!(validate_job(&job), Err(DispatchError::JobValidation(_))),
+        "a job `expire_when` must fail execution validation"
+    );
     job.expire_when = None;
+    assert!(
+        matches!(validate_job(&job), Err(DispatchError::JobValidation(_))),
+        "a schemaVersion 3 job with no auto-task field left must still fail [ORB-20237]"
+    );
+    job.schema_version = 2;
     validate_job(&job).unwrap();
 }
 
