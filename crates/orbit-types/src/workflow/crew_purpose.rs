@@ -41,6 +41,9 @@ pub enum CrewPurpose {
     /// Read-only exploration an implement or review-repair run delegates
     /// through `orbit.agent.invoke`.
     Explorer,
+    /// The mock comparison reviewer and its in-line verifier. Only crews
+    /// whose executor declares `image_input` are drawn.
+    VisualReview,
 }
 
 /// Names [`CrewPurpose::SweepTasks`] had as three purposes, which tasks
@@ -50,7 +53,7 @@ const LEGACY_SWEEP_PURPOSE_NAMES: &[&str] =
 
 impl CrewPurpose {
     /// Every purpose, in the order `orbit config show` lists them.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::TaskPilot,
         Self::FailureRecovery,
         Self::FinalRecovery,
@@ -59,6 +62,7 @@ impl CrewPurpose {
         Self::BaselineRedRepair,
         Self::SweepTasks,
         Self::Explorer,
+        Self::VisualReview,
     ];
 
     /// The purpose's stable name, as `workflow.purpose_crews.<name>` and the
@@ -73,6 +77,7 @@ impl CrewPurpose {
             Self::BaselineRedRepair => "baseline_red_repair",
             Self::SweepTasks => "sweep_tasks",
             Self::Explorer => "explorer",
+            Self::VisualReview => "visual_review",
         }
     }
 
@@ -98,6 +103,7 @@ impl CrewPurpose {
             Self::BaselineRedRepair => "workflow.purpose_crews.baseline_red_repair",
             Self::SweepTasks => "workflow.purpose_crews.sweep_tasks",
             Self::Explorer => "workflow.purpose_crews.explorer",
+            Self::VisualReview => "workflow.purpose_crews.visual_review",
         }
     }
 
@@ -125,7 +131,7 @@ impl CrewPurpose {
             // An explorer is a cheap crew by intent; with no pool there is no
             // explorer, and agent callers are refused.
             Self::FinalRecovery | Self::Review | Self::Explorer => None,
-            Self::BaselineRedRepair | Self::SweepTasks => {
+            Self::BaselineRedRepair | Self::SweepTasks | Self::VisualReview => {
                 Some("the task's complexity pool, then workflow.default_crew")
             }
         }

@@ -1177,6 +1177,13 @@
       "path": null,
       "shadowed_by": []
     },
+    "workflow.purpose_crews.visual_review": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
     "workflow.regression_risk.enabled": {
       "scope": "built-in",
       "state": "default",

@@ -11,14 +11,17 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
 use orbit_types::task::{
-    VISUAL_CAPTURE_ARTIFACT, VISUAL_CHECKS_ARTIFACT, VISUAL_SETTLE_ARTIFACT, VisualCaptureOutcome,
-    VisualCaptureRecord, VisualChecksRecord, VisualReviewContract, VisualSettleOutcome,
-    VisualSettleRecord, VisualSettleRefusal, mock_sha256_hex, visual_review_summary,
+    VISUAL_CAPTURE_ARTIFACT, VISUAL_CHECKS_ARTIFACT, VISUAL_REVIEW_ARTIFACT, VISUAL_REVIEW_PURPOSE,
+    VISUAL_SETTLE_ARTIFACT, VisualCaptureOutcome, VisualCaptureRecord, VisualChecksRecord,
+    VisualDeviationRecord, VisualFindingVerdict, VisualReviewBudgetRecord, VisualReviewContract,
+    VisualReviewFinding, VisualReviewRecord, VisualSettleOutcome, VisualSettleRecord,
+    VisualSettleRefusal, VisualVerdictKind, mock_sha256_hex, visual_review_summary_with_review,
 };
 use orbit_types::workflow::DeliveryRefusal;
 use serde_json::{Value, json};
 
 use super::contract::MockDigestSource;
+use super::verify::{catalog_of, collect_result_objects, visual_verdicts_by_finding};
 use super::{attach_system_artifacts, json_artifact, read_record, required_string};
 use crate::OrbitRuntime;
 
@@ -37,7 +40,7 @@ pub(crate) fn visual_settle_step(
     let mut settled = Vec::new();
     let mut held = Vec::new();
     for capture in &captures {
-        let (entry, hold) = settle_task(runtime, workspace, capture)
+        let (entry, hold) = settle_task(runtime, workspace, capture, input)
             .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
         if let Some(hold) = hold {
             held.push(hold);
@@ -71,6 +74,7 @@ fn settle_task(
     runtime: &OrbitRuntime,
     workspace: &Path,
     capture: &Value,
+    input: &Value,
 ) -> Result<(Value, Option<String>), OrbitError> {
     let task_id = capture
         .get("task_id")
@@ -171,7 +175,20 @@ fn settle_task(
         task_id,
         vec![json_artifact(VISUAL_SETTLE_ARTIFACT, &settle)?],
     )?;
-    let summary = visual_review_summary(&record, checks.as_ref(), Some(&settle));
+    // The comparison review of record (§11): findings with their
+    // verdicts and verified severities. Shadow only — recorded under
+    // purpose `visual_review`, never filed, never blocking and never
+    // given to the code reviewer.
+    let review = review_record(workspace, &record, task_id, input)?;
+    if let Some(review) = &review {
+        attach_system_artifacts(
+            runtime,
+            task_id,
+            vec![json_artifact(VISUAL_REVIEW_ARTIFACT, review)?],
+        )?;
+    }
+    let summary =
+        visual_review_summary_with_review(&record, checks.as_ref(), Some(&settle), review.as_ref());
     let hold = held.then(|| format!("{task_id}: {summary}"));
     Ok((
         json!({
@@ -183,10 +200,240 @@ fn settle_task(
             },
             "held": held,
             "settle_artifact": VISUAL_SETTLE_ARTIFACT,
+            "review_artifact": review.is_some().then_some(VISUAL_REVIEW_ARTIFACT),
             "summary": summary,
         }),
         hold,
     ))
+}
+
+/// `visual/review.json` for one task, from the verify-prepare records
+/// and the verifier fan-outs this step was given. `None` when the
+/// pipeline ran no review preparation for it (an older job shape).
+fn review_record(
+    workspace: &Path,
+    capture: &VisualCaptureRecord,
+    task_id: &str,
+    input: &Value,
+) -> Result<Option<VisualReviewRecord>, OrbitError> {
+    let Some(prepared) = input.get("verified") else {
+        return Ok(None);
+    };
+    let Some(record) = prepared
+        .get("records")
+        .and_then(Value::as_array)
+        .and_then(|records| {
+            records
+                .iter()
+                .find(|record| record.get("task_id").and_then(Value::as_str) == Some(task_id))
+        })
+    else {
+        return Ok(None);
+    };
+    let catalog = catalog_of(record);
+    let initial = input.get("verify_results").cloned().unwrap_or(Value::Null);
+    let escalated = input
+        .get("escalation_results")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let initial_verdicts = visual_verdicts_by_finding(&initial, &catalog, workspace);
+    let escalation_verdicts = visual_verdicts_by_finding(&escalated, &catalog, workspace);
+    let initial_crews = partition_crews(prepared);
+    let escalation_crews = input
+        .get("escalation_prepared")
+        .map(partition_crews)
+        .unwrap_or_default();
+    let mut findings: Vec<VisualReviewFinding> = record
+        .get("findings")
+        .and_then(Value::as_array)
+        .map(|findings| {
+            findings
+                .iter()
+                .filter_map(|finding| serde_json::from_value(finding.clone()).ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    for finding in &mut findings {
+        let initial = initial_verdicts.get(&finding.finding_id);
+        let escalation = escalation_verdicts.get(&finding.finding_id);
+        // One escalation on low confidence; a low-confidence verdict
+        // that no escalation decided leaves the finding unverified.
+        let (deciding, crew, escalated) = match (initial, escalation) {
+            (Some(verdict), _) if verdict.confidence != "low" => {
+                (Some(verdict), initial_crews.get(&finding.finding_id), false)
+            }
+            (_, Some(verdict)) if verdict.confidence != "low" => (
+                Some(verdict),
+                escalation_crews.get(&finding.finding_id),
+                true,
+            ),
+            _ => (None, None, escalation.is_some()),
+        };
+        if let Some(verdict) = deciding {
+            if verdict.verdict == VisualVerdictKind::Confirmed {
+                finding.verified_severity.clone_from(&verdict.severity);
+                finding.severity_source = Some("verified".to_string());
+            }
+            finding.verdict = VisualFindingVerdict {
+                verdict: verdict.verdict,
+                crew: crew.cloned(),
+                confidence: Some(verdict.confidence.clone()),
+                severity: verdict.severity.clone(),
+                escalated,
+                reasoning: verdict.reasoning.clone(),
+                deviation_rejected: verdict.deviation_rejected,
+            };
+        } else if initial.is_some() || escalation.is_some() {
+            finding.verdict = VisualFindingVerdict {
+                verdict: VisualVerdictKind::Unverified,
+                crew: None,
+                confidence: Some("low".to_string()),
+                severity: None,
+                escalated,
+                reasoning: "the only verdicts returned were low confidence".to_string(),
+                deviation_rejected: false,
+            };
+        }
+    }
+    let deviations = deviation_records(record, &findings);
+    let budget: VisualReviewBudgetRecord = record
+        .get("budget")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|error| OrbitError::Execution(format!("visual budget record: {error}")))?
+        .unwrap_or(VisualReviewBudgetRecord {
+            max_mocks: 0,
+            max_images: 0,
+            max_image_tokens: 0,
+            max_findings: 0,
+            images_shown: 0,
+            estimated_image_tokens: 0,
+            shown: Vec::new(),
+            not_shown: Vec::new(),
+        });
+    let mut verifier_crews: Vec<String> = findings
+        .iter()
+        .filter_map(|finding| finding.verdict.crew.clone())
+        .collect();
+    verifier_crews.sort();
+    verifier_crews.dedup();
+    Ok(Some(VisualReviewRecord {
+        schema_version: 1,
+        purpose: VISUAL_REVIEW_PURPOSE.to_string(),
+        mode: capture.mode,
+        task_id: task_id.to_string(),
+        candidate_sha: capture.candidate_sha.clone(),
+        recorded_at: chrono::Utc::now().to_rfc3339(),
+        outcome: record
+            .get("outcome")
+            .and_then(Value::as_str)
+            .unwrap_or("reviewed")
+            .to_string(),
+        not_established: record
+            .get("not_established")
+            .cloned()
+            .and_then(|value| serde_json::from_value(value).ok())
+            .unwrap_or_default(),
+        reviewer_crew: record
+            .get("reviewer_crew")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        verifier_crews,
+        budget,
+        findings,
+        invalid_evidence_dropped: u32::try_from(
+            record
+                .get("invalid_evidence_dropped")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+        )
+        .unwrap_or(u32::MAX),
+        over_max_findings_dropped: u32::try_from(
+            record
+                .get("over_max_findings_dropped")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+        )
+        .unwrap_or(u32::MAX),
+        deviations,
+        recorded_only: true,
+    }))
+}
+
+/// The crew each finding's partition named, by finding id.
+fn partition_crews(prepared: &Value) -> std::collections::BTreeMap<String, String> {
+    let mut crews = std::collections::BTreeMap::new();
+    for partition in collect_result_objects(prepared.get("partitions"), "findings") {
+        let Some(crew) = partition.get("crew").and_then(Value::as_str) else {
+            continue;
+        };
+        if let Some(findings) = partition.get("findings").and_then(Value::as_array) {
+            for finding in findings {
+                if let Some(id) = finding.get("finding_id").and_then(Value::as_str) {
+                    crews.insert(id.to_string(), crew.to_string());
+                }
+            }
+        }
+    }
+    crews
+}
+
+/// Each declared deviation with the verdict its touching findings
+/// imply (§2.5): `rejected` when a CONFIRMED finding rejected its
+/// basis, `accepted` when a touching finding was REJECTED, else
+/// `unjudged`.
+fn deviation_records(
+    record: &Value,
+    findings: &[VisualReviewFinding],
+) -> Vec<VisualDeviationRecord> {
+    record
+        .get("deviations")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|deviation| {
+            let mock = deviation.get("mock")?.as_str()?.to_string();
+            let touching: Vec<&VisualReviewFinding> = findings
+                .iter()
+                .filter(|finding| finding.mock == mock)
+                .collect();
+            let status = if touching.iter().any(|finding| {
+                finding.verdict.deviation_rejected
+                    && finding.verdict.verdict == VisualVerdictKind::Confirmed
+            }) {
+                "rejected"
+            } else if touching
+                .iter()
+                .any(|finding| finding.verdict.verdict == VisualVerdictKind::Rejected)
+            {
+                "accepted"
+            } else {
+                "unjudged"
+            };
+            Some(VisualDeviationRecord {
+                mock,
+                element: deviation
+                    .get("element")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                region: deviation.get("region").and_then(super::verify::region_of),
+                reason: deviation
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                basis: deviation
+                    .get("basis")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                status: status.to_string(),
+            })
+        })
+        .collect()
 }
 
 /// The contract the capture ran: the claim's receipt on a leaf, the frozen

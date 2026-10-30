@@ -72,7 +72,7 @@ A verifier returns one **report** per task:
 | `task_id` | string | Matches a task of the partition. |
 | `verdict` | `CONFIRMED` \| `REJECTED` | Required. |
 | `confidence` | `high` \| `medium` \| `low` | Required. |
-| `evidence` | `[{location, note}]` | Each `location` is `path:line`: a relative path without `..` or empty segments, and a 1-based line. The file must exist at the pinned revision, and the line must not be past its end. |
+| `evidence` | `[{location, note}]` | Each `location` is `path:line`: a relative path without `..` or empty segments, and a 1-based line. The file must exist at the pinned revision, and the line must not be past its end. Visual review's in-line verifier extends this one way ([visual-review §11.2](../visual-review/2_design.md#112-verification)): a location may instead be an image region, `<image>#<x>,<y>,<w>,<h>`, where the image is in that delivery's `visual/capture.json` and the box is inside it; `visual_settle` checks it against the capture, as apply checks a line against the pinned revision. |
 | `reasoning` | string | Non-empty. |
 | `reproduction` | string? | Optional. |
 | `severity` | `critical` \| `high` \| `medium` \| `low` \| `nit` | Required for CONFIRMED. |

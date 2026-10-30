@@ -335,6 +335,12 @@ pub(crate) fn run_deterministic(
         CoreDeterministicAction::VisualChecks => {
             crate::application::visual_delivery::visual_checks_step(runtime, action, input)
         }
+        CoreDeterministicAction::VisualReviewPrepare => {
+            crate::application::visual_delivery::visual_review_prepare_step(runtime, action, input)
+        }
+        CoreDeterministicAction::VisualVerifyPrepare => {
+            crate::application::visual_delivery::visual_verify_prepare_step(runtime, action, input)
+        }
         CoreDeterministicAction::VisualSettle => {
             crate::application::visual_delivery::visual_settle_step(runtime, action, input)
         }

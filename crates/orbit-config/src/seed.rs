@@ -390,7 +390,7 @@ fn render_purpose_crews(pools: &[Vec<&'static str>; 4], crews: &BTreeMap<String,
     }
     let mut rendered =
         String::from("# Crew pools by purpose of work, written like the pools above.\n");
-    let keys: [(&str, &[&str], &str); 9] = [
+    let keys: [(&str, &[&str], &str); 10] = [
         ("task_pilot", low, ""),
         ("auto_fix", low, ""),
         ("failure_recovery", medium, ""),
@@ -408,6 +408,11 @@ fn render_purpose_crews(pools: &[Vec<&'static str>; 4], crews: &BTreeMap<String,
         ),
         ("sweep_tasks", &[], "  # [] uses the task's complexity pool"),
         ("explorer", &[], "  # [] offers no read-only explorers"),
+        (
+            "visual_review",
+            &[],
+            "  # [] uses the task's complexity pool, image-capable crews only",
+        ),
     ];
     for (key, pool, note) in keys {
         rendered.push_str(&format!(

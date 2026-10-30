@@ -274,6 +274,9 @@ pub(super) fn task_facts(
         landed_at,
         records,
         reviews,
+        // Filled by the scan from `visual/review.json`; the per-task
+        // facts pass reads no artifacts.
+        visual_review: None,
         filed,
         warnings,
     }

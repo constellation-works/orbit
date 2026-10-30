@@ -381,6 +381,153 @@ spec:
       default_input:
         capture: "{{ steps.visual_capture.output }}"
 
+    # Mock comparison review and in-line verification, in shadow: prepare
+    # assembles each shown mock with its capture under the image budgets
+    # and draws an image-capable reviewer, verifier and escalation crew;
+    # the reviewer answers the eight comparison questions; verify-prepare
+    # drops invalid evidence and partitions the findings (check findings
+    # included) five per verifier invocation; one escalation round
+    # re-verifies low-confidence verdicts. `visual_settle` records the
+    # outcome in `visual/review.json` under purpose `visual_review`.
+    # Shadow only: nothing here is filed, blocks, or reaches the code
+    # reviewer below, whose inputs do not name any visual step.
+    # Preparers always run and return empty collections when capture does not
+    # apply. Conditions may only read outputs whose producer always runs;
+    # empty fan-outs establish the collected aliases without invoking agents.
+    - id: visual_review_prepare
+      target: activity:visual_review_prepare
+      default_input:
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        capture: "{{ steps.visual_capture.output }}"
+
+    - id: visual_review_empty
+      when: "{{ steps.visual_review_prepare.output.review_count }} == 0"
+      fan_out:
+        items: "[]"
+        max_workers: 1
+        worker:
+          id: empty_visual_reviewer
+          target: activity:visual_review
+      fan_in:
+        join: { mode: all }
+        collect: visual_review_results
+        errors: visual_review_errors
+
+    - id: visual_reviewers
+      when: "{{ steps.visual_review_prepare.output.review_count }} != 0"
+      fan_out:
+        items: "{{ steps.visual_review_prepare.output.reviews }}"
+        max_workers: 3
+        worker:
+          id: visual_reviewer
+          target: activity:visual_review
+          default_input:
+            task_id: "{{ item.task_id }}"
+            candidate_sha: "{{ item.candidate_sha }}"
+            workspace_path: "{{ item.workspace_path }}"
+            crew: "{{ item.crew }}"
+            image_input: "{{ item.image_input }}"
+            staged_images: "{{ item.staged_images }}"
+            shown: "{{ item.shown }}"
+            not_shown: "{{ item.not_shown }}"
+            max_findings: "{{ item.max_findings }}"
+            task: "{{ item.task }}"
+            deviations: "{{ item.deviations }}"
+            check_findings: "{{ item.check_findings }}"
+            design_rules: "{{ item.design_rules }}"
+            catalog: "{{ item.catalog }}"
+      fan_in:
+        join: { mode: any }
+        collect: visual_review_results
+        errors: visual_review_errors
+
+    - id: visual_verify_prepare
+      target: activity:visual_verify_prepare
+      default_input:
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        prepared: "{{ steps.visual_review_prepare.output }}"
+        review_results: "{{ steps.visual_review_results.output }}"
+
+    - id: visual_verify_empty
+      when: "{{ steps.visual_verify_prepare.output.partition_count }} == 0"
+      fan_out:
+        items: "[]"
+        max_workers: 1
+        worker:
+          id: empty_visual_verifier
+          target: activity:visual_verify
+      fan_in:
+        join: { mode: all }
+        collect: visual_verify_results
+        errors: visual_verify_errors
+
+    - id: visual_verifiers
+      when: "{{ steps.visual_verify_prepare.output.partition_count }} != 0"
+      fan_out:
+        items: "{{ steps.visual_verify_prepare.output.partitions }}"
+        max_workers: 5
+        worker:
+          id: visual_verifier
+          target: activity:visual_verify
+          default_input:
+            task_id: "{{ item.task_id }}"
+            partition_index: "{{ item.partition_index }}"
+            escalation: "{{ item.escalation }}"
+            workspace_path: "{{ item.workspace_path }}"
+            crew: "{{ item.crew }}"
+            image_input: "{{ item.image_input }}"
+            staged_images: "{{ item.staged_images }}"
+            findings: "{{ item.findings }}"
+            catalog: "{{ item.catalog }}"
+      fan_in:
+        join: { mode: any }
+        collect: visual_verify_results
+        errors: visual_verify_errors
+
+    - id: visual_verify_escalations
+      target: activity:visual_verify_prepare
+      default_input:
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        prepared: "{{ steps.visual_verify_prepare.output }}"
+        verify_results: "{{ steps.visual_verify_results.output }}"
+        round: escalation
+
+    - id: visual_verify_escalation_empty
+      when: "{{ steps.visual_verify_escalations.output.partition_count }} == 0"
+      fan_out:
+        items: "[]"
+        max_workers: 1
+        worker:
+          id: empty_visual_escalation_verifier
+          target: activity:visual_verify
+      fan_in:
+        join: { mode: all }
+        collect: visual_escalation_results
+        errors: visual_escalation_errors
+
+    - id: visual_escalation_verifiers
+      when: "{{ steps.visual_verify_escalations.output.partition_count }} != 0"
+      fan_out:
+        items: "{{ steps.visual_verify_escalations.output.partitions }}"
+        max_workers: 5
+        worker:
+          id: visual_escalation_verifier
+          target: activity:visual_verify
+          default_input:
+            task_id: "{{ item.task_id }}"
+            partition_index: "{{ item.partition_index }}"
+            escalation: "{{ item.escalation }}"
+            workspace_path: "{{ item.workspace_path }}"
+            crew: "{{ item.crew }}"
+            image_input: "{{ item.image_input }}"
+            staged_images: "{{ item.staged_images }}"
+            findings: "{{ item.findings }}"
+            catalog: "{{ item.catalog }}"
+      fan_in:
+        join: { mode: any }
+        collect: visual_escalation_results
+        errors: visual_escalation_errors
+
     - id: visual_settle
       when: "{{ steps.visual_capture.output.applies }} == true"
       target: activity:visual_settle
@@ -388,6 +535,10 @@ spec:
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         capture: "{{ steps.visual_capture.output }}"
         checks: "{{ steps.visual_checks.output }}"
+        verified: "{{ steps.visual_verify_prepare.output }}"
+        verify_results: "{{ steps.visual_verify_results.output }}"
+        escalation_prepared: "{{ steps.visual_verify_escalations.output }}"
+        escalation_results: "{{ steps.visual_escalation_results.output }}"
 
     - id: push
       stage: { id: publish, label: Publish }

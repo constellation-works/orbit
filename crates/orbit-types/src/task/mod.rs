@@ -24,6 +24,7 @@ mod show_fields;
 mod tags_changed;
 mod ui_requirement;
 mod visual_capture;
+mod visual_review;
 mod work_class;
 pub use error::TaskError;
 
@@ -153,7 +154,17 @@ pub use visual_capture::{
     VisualChecksRecord, VisualKitPin, VisualManifestCapture, VisualManifestRef, VisualMockDigest,
     VisualMockDigestRecord, VisualNotEstablished, VisualReviewContract, VisualReviewMode,
     VisualSettleOutcome, VisualSettleRecord, VisualSettleRefusal, is_visual_artifact,
-    visual_capture_mismatches, visual_review_summary,
+    visual_capture_mismatches, visual_review_summary, visual_review_summary_with_review,
+};
+pub use visual_review::{
+    DEFAULT_VISUAL_MAX_FINDINGS, DEFAULT_VISUAL_MAX_IMAGE_TOKENS, DEFAULT_VISUAL_MAX_IMAGES,
+    VISUAL_IMAGE_TOKEN_CONSTANT, VISUAL_NO_VISION_CREW, VISUAL_REVIEW_ARTIFACT,
+    VISUAL_REVIEW_PURPOSE, VISUAL_VERIFY_BATCH_SIZE, VisualBudgetMock, VisualBudgetSelection,
+    VisualDeviationRecord, VisualEvidence, VisualFindingVerdict, VisualImageCatalog,
+    VisualNotShownMock, VisualReviewBudgetRecord, VisualReviewFinding, VisualReviewRecord,
+    VisualShownForm, VisualShownMock, VisualVerdictKind, parse_visual_region_location,
+    select_visual_budget, validate_visual_evidence, validate_visual_region_location,
+    visual_image_catalog, visual_image_dimensions, visual_image_tokens, visual_region_inside,
 };
 pub use work_class::{
     CHANGE_WORK_CLASS, NO_DIFF_WORK_CLASS, auto_task_template, is_no_diff_expected, work_class,

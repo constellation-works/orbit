@@ -165,7 +165,10 @@ impl VerdictSource {
     }
 }
 
-/// One cited location: `path:line` at the verified revision, and why it matters.
+/// One cited location: `path:line` at the verified revision, or — the
+/// visual review extension (visual-review design §11.2) — an image
+/// region `<image>#<x>,<y>,<w>,<h>` in a delivery's capture, and why
+/// it matters.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FindingEvidence {
     pub location: String,
@@ -199,6 +202,23 @@ impl FindingEvidence {
             ));
         }
         Ok((path, line))
+    }
+
+    /// The image and `[x, y, w, h]` region `location` names when it is
+    /// a visual evidence location (§11.2), else `None`. Whether the
+    /// image is in a delivery's capture and the region inside it is
+    /// the caller's check against that delivery's catalog
+    /// (`validate_visual_region_location`).
+    pub(crate) fn visual_region(&self) -> Option<(String, [u32; 4])> {
+        orbit_types::task::parse_visual_region_location(&self.location)
+    }
+
+    /// Whether `location` is either evidence form this schema admits.
+    fn well_formed(&self) -> Result<(), String> {
+        if self.visual_region().is_some() {
+            return Ok(());
+        }
+        self.path_and_line().map(|_| ())
     }
 }
 
@@ -234,19 +254,23 @@ pub struct VerifierReport {
 
 impl VerifierReport {
     /// The structural contract of a verdict. A CONFIRMED verdict cites at
-    /// least one `path:line` and rates severity; a REJECTED one names its
-    /// reason, with the fixing commit or the duplicate task it needs.
+    /// least one evidence location — `path:line`, or an image region for
+    /// a visual finding (§11.2) — and rates severity; a REJECTED one
+    /// names its reason, with the fixing commit or the duplicate task it
+    /// needs.
     pub(crate) fn validate(&self) -> Result<(), String> {
         if self.reasoning.trim().is_empty() {
             return Err("reasoning must not be empty".into());
         }
         for evidence in &self.evidence {
-            evidence.path_and_line()?;
+            evidence.well_formed()?;
         }
         match self.verdict {
             FindingVerdict::Confirmed => {
                 if self.evidence.is_empty() {
-                    return Err("a CONFIRMED verdict must cite `path:line` evidence".into());
+                    return Err(
+                        "a CONFIRMED verdict must cite `path:line` or image-region evidence".into(),
+                    );
                 }
                 if self.severity.is_none() {
                     return Err("a CONFIRMED verdict must rate severity".into());

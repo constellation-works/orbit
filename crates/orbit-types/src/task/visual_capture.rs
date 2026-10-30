@@ -12,7 +12,27 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use super::visual_review::{
+    DEFAULT_VISUAL_MAX_FINDINGS, DEFAULT_VISUAL_MAX_IMAGE_TOKENS, DEFAULT_VISUAL_MAX_IMAGES,
+    VisualReviewRecord, VisualVerdictKind,
+};
 use super::{MockDigest, has_verify_mock_ui_tag};
+
+fn default_visual_reviewer() -> bool {
+    true
+}
+
+fn default_visual_max_images() -> u32 {
+    DEFAULT_VISUAL_MAX_IMAGES
+}
+
+fn default_visual_max_image_tokens() -> u64 {
+    DEFAULT_VISUAL_MAX_IMAGE_TOKENS
+}
+
+fn default_visual_max_findings() -> u32 {
+    DEFAULT_VISUAL_MAX_FINDINGS
+}
 
 /// Prefix reserved for Orbit's system writer (§4.5): an agent or operator
 /// write under it is refused.
@@ -138,6 +158,20 @@ pub struct VisualReviewContract {
     pub mode: VisualReviewMode,
     pub default_width: u32,
     pub max_mocks: u32,
+    /// `visual_review.reviewer`: run the comparison reviewer and its
+    /// verifier. Contracts captured before the reviewer existed run it.
+    #[serde(default = "default_visual_reviewer")]
+    pub reviewer: bool,
+    /// `visual_review.max_images`: images per review invocation.
+    #[serde(default = "default_visual_max_images")]
+    pub max_images: u32,
+    /// `visual_review.max_image_tokens`: estimated image tokens per
+    /// review invocation.
+    #[serde(default = "default_visual_max_image_tokens")]
+    pub max_image_tokens: u64,
+    /// `visual_review.max_findings`: findings accepted from one review.
+    #[serde(default = "default_visual_max_findings")]
+    pub max_findings: u32,
     pub require_established: bool,
     pub manifests: Vec<VisualManifestCapture>,
     /// Mock digests frozen at admission, in artifact order.
@@ -424,6 +458,19 @@ pub fn visual_review_summary(
     checks: Option<&VisualChecksRecord>,
     settle: Option<&VisualSettleRecord>,
 ) -> String {
+    visual_review_summary_with_review(capture, checks, settle, None)
+}
+
+/// [`visual_review_summary`] with the comparison review's outcome
+/// appended when one was recorded: findings by verdict, or why the
+/// review is not established. Findings are recorded only in shadow.
+#[must_use]
+pub fn visual_review_summary_with_review(
+    capture: &VisualCaptureRecord,
+    checks: Option<&VisualChecksRecord>,
+    settle: Option<&VisualSettleRecord>,
+    review: Option<&VisualReviewRecord>,
+) -> String {
     let mode = capture.mode.as_str();
     if let Some(settle) = settle
         && settle.outcome == VisualSettleOutcome::Refused
@@ -492,6 +539,53 @@ pub fn visual_review_summary(
             ));
         }
         None => line.push_str("; checks: not run"),
+    }
+    if let Some(review) = review {
+        match review.outcome.as_str() {
+            "not_established" => {
+                let reasons = review
+                    .not_established
+                    .iter()
+                    .map(|reason| reason.reason.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                line.push_str(&format!(
+                    "; review: not established: {}",
+                    if reasons.is_empty() {
+                        "unknown"
+                    } else {
+                        &reasons
+                    }
+                ));
+            }
+            "reviewer_disabled" => line.push_str("; review: disabled"),
+            "no_stable_captures" => line.push_str("; review: no stable captures"),
+            _ => {
+                let (confirmed, rejected, unverified) = review.verdict_counts();
+                line.push_str(&format!(
+                    "; review: {} finding(s) ({} {}, {} {}, {} {}), recorded only",
+                    review.findings.len(),
+                    confirmed,
+                    VisualVerdictKind::Confirmed.as_str(),
+                    rejected,
+                    VisualVerdictKind::Rejected.as_str(),
+                    unverified,
+                    VisualVerdictKind::Unverified.as_str(),
+                ));
+                if review.invalid_evidence_dropped > 0 {
+                    line.push_str(&format!(
+                        ", {} dropped as invalid_evidence",
+                        review.invalid_evidence_dropped
+                    ));
+                }
+                if !review.budget.not_shown.is_empty() {
+                    line.push_str(&format!(
+                        ", {} mock(s) not shown",
+                        review.budget.not_shown.len()
+                    ));
+                }
+            }
+        }
     }
     line
 }
