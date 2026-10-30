@@ -604,6 +604,23 @@ function armCards(experiment, readout, primary, color) {
 // difference from control and the bar its 95% interval. Metrics have
 // different units, so each metric's rows share their own scale, symmetric
 // around zero, and print their numbers; no axis spans two metrics.
+// Every axis points the same way: better is to the right. A lower-is-better
+// metric is drawn mirrored, while its printed numbers stay the signed arm
+// minus control. The dot and bar take the verdict's colour, not the arm's.
+const FOREST_VERDICTS = {
+  better: "better at 95%",
+  worse: "worse at 95%",
+  unclear: "interval includes zero",
+};
+
+// `oriented` is the interval with better as positive.
+function forestVerdict(oriented) {
+  if (!oriented) return "unclear";
+  if (oriented[0] > 0) return "better";
+  if (oriented[1] < 0) return "worse";
+  return "unclear";
+}
+
 function forestCard(readout, color) {
   const metrics = (readout.metrics || []).filter((metric) => metric.measured
     && (metric.differences || []).some((diff) => num(diff.overall?.estimate) != null));
@@ -619,7 +636,9 @@ function forestCard(readout, color) {
     const bounds = metric.differences.flatMap((diff) => [diff.overall?.estimate, ...(diff.overall?.interval || [])])
       .map(num).filter((n) => n != null).map(Math.abs);
     const extent = Math.max(...bounds, 0) * 1.1 || 1;
-    const x = (value) => `${(((value + extent) / (2 * extent)) * 100).toFixed(2)}%`;
+    const sign = metric.better === "lower" ? -1 : 1;
+    const x = (value) => `${(((sign * value + extent) / (2 * extent)) * 100).toFixed(2)}%`;
+    const direction = metric.better === "lower" ? "lower is better" : "higher is better";
     const tags = [
       metric.metric === primaryName ? "primary" : null,
       guardNames.has(metric.metric) ? "guardrail" : null,
@@ -630,18 +649,22 @@ function forestCard(readout, color) {
       const colorClass = armColor(color(diff.arm));
       const text = estimate == null ? "—" : fmtValue(estimate, metric.unit, { diff: true });
       const range = fmtInterval(interval, metric.unit, { diff: true });
+      const bounds = Array.isArray(interval) ? interval.map(num) : null;
+      const oriented = bounds && bounds.every((n) => n != null)
+        ? bounds.map((n) => sign * n).sort((a, b) => a - b) : null;
+      const verdict = forestVerdict(oriented);
       const plot = el("span", { class: "ex-forest-plot", "aria-hidden": "true" }, [
         el("span", { class: "ex-forest-zero", style: { left: "50%" } }),
-        Array.isArray(interval) ? el("span", {
-          class: `ex-forest-ci ${colorClass}`,
-          style: { left: x(Math.min(interval[0], interval[1])), width: `${((Math.abs(interval[1] - interval[0]) / (2 * extent)) * 100).toFixed(2)}%` },
+        oriented ? el("span", {
+          class: `ex-forest-ci ex-forest-${verdict}`,
+          style: { left: x(sign * oriented[0]), width: `${(((oriented[1] - oriented[0]) / (2 * extent)) * 100).toFixed(2)}%` },
         }) : null,
-        estimate != null ? el("span", { class: `ex-forest-dot ${colorClass}`, style: { left: x(estimate) } }) : null,
+        estimate != null ? el("span", { class: `ex-forest-dot ex-forest-${verdict}`, style: { left: x(estimate) } }) : null,
       ]);
       return el("div", {
         class: "ex-forest-row",
         role: "listitem",
-        title: `${metricLabel(metric.metric)}, ${diff.arm} minus control: ${text}${range ? ` (95% ${range})` : ""}`,
+        title: `${metricLabel(metric.metric)} (${direction}), ${diff.arm} minus control: ${text}${range ? ` (95% ${range})` : ""}; ${FOREST_VERDICTS[verdict]}`,
       }, [
         el("span", { class: "ex-forest-arm" }, [swatch(colorClass), el("span", { text: diff.arm })]),
         plot,
@@ -655,17 +678,26 @@ function forestCard(readout, color) {
       el("div", { class: "ex-forest-metric" }, [
         el("span", { class: "ex-forest-name", text: metricLabel(metric.metric) }),
         ...tags.map((tag) => el("span", { class: "mx-sc-tag", text: tag })),
-        el("span", { class: "ex-forest-better", text: metric.better === "lower" ? "← better" : "better →" }),
       ]),
       el("div", { class: "ex-forest-rows", role: "list" }, rows),
     ]);
   });
   return card("Difference from control", [
     el("p", { class: "mx-blurb" }, [
-      "Arm minus control, post-stratified by complexity, with 95% intervals. Each metric has its own scale around zero. ",
-      infoHint("A bar that crosses the zero line is a difference the sample cannot tell from none. The 95% intervals are post-stratified bootstrap intervals of the difference for mean and rate metrics alike. Wilson intervals apply to a single arm's rate estimate."),
+      "Arm minus control, post-stratified by complexity, with 95% intervals. Each metric has its own scale around zero, and better is always to the right. ",
+      infoHint("Lower-is-better metrics such as cost and tokens are drawn mirrored so that better points right; their numbers stay the signed arm minus control, so a cost cut prints negative. Green is better and red worse at 95%; grey is a bar that crosses the zero line, a difference the sample cannot tell from none. The 95% intervals are post-stratified bootstrap intervals of the difference for mean and rate metrics alike. Wilson intervals apply to a single arm's rate estimate."),
     ]),
-    el("div", { class: "ex-forest" }, groups),
+    el("div", { class: "ex-forest" }, [
+      el("div", { class: "ex-forest-axis", "aria-hidden": "true" }, [
+        el("span"),
+        el("span", { class: "ex-forest-axis-plot" }, [
+          el("span", { text: "← worse" }),
+          el("span", { class: "ex-forest-axis-better", text: "better →" }),
+        ]),
+        el("span"),
+      ]),
+      ...groups,
+    ]),
     unmeasured.length ? el("p", { class: "ex-note", text: `Not measured yet: ${unmeasured.join(", ")}.` }) : null,
   ], { className: "mx-wide" });
 }
