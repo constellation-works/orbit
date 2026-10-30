@@ -52,6 +52,7 @@ pub const SHIPPED_DEFAULT_AUTO_TASKS: &[&str] = &[
     "backlog-hygiene",
     "ci-budget-watch",
     "code-health-sweep",
+    "crew-ladder-review",
     "delivery-code-review",
     "dependency-freshness",
     "code-review",
