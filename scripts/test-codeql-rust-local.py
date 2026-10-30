@@ -855,9 +855,17 @@ os.execv({real_mv!r}, sys.argv)
         for index in range(3):
             stderr = (self.root / f"run-{index}.stderr").open("w")
             self.addCleanup(stderr.close)
-            runs.append((subprocess.Popen(["bash", str(self.script), "--fresh", "fixture.ql"], cwd=self.root,
-                                          env=env, stdout=subprocess.DEVNULL, stderr=stderr),
-                         self.root / f"run-{index}.stderr"))
+            process = subprocess.Popen(["bash", str(self.script), "--fresh", "fixture.ql"], cwd=self.root,
+                                       env=env, stdout=subprocess.DEVNULL, stderr=stderr,
+                                       process_group=0)
+            try:
+                anchor = spawn_group_anchor(process)
+            except Exception:
+                process.kill()
+                process.wait(timeout=180)
+                raise
+            self.addCleanup(stop_group, process, anchor)
+            runs.append((process, self.root / f"run-{index}.stderr"))
 
         def starts():
             lines = events.read_text().splitlines() if events.exists() else []
