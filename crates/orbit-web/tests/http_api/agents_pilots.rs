@@ -155,6 +155,13 @@ fn pilots_attribute_assessments_to_recorded_activity() {
                     );
                 }
                 fixture.runtime.write_run_state(&run_id, &state).unwrap();
+                let task = add_with_status(
+                    &fixture,
+                    &format!("piloted {index}"),
+                    &[],
+                    vec![],
+                    TaskStatus::Done,
+                );
                 // The latest task-pilot invocation, even with no model, wins over
                 // older evidence. Other activities on the run must not supply it.
                 for (activity, model) in [
@@ -173,18 +180,11 @@ fn pilots_attribute_assessments_to_recorded_activity() {
                             agent: "fixture".into(),
                             provider: None,
                             model: model.map(str::to_string),
-                            task_ids: Vec::new(),
+                            task_ids: vec![task.clone()],
                             trace: Default::default(),
                         })
                         .unwrap();
                 }
-                let task = add_with_status(
-                    &fixture,
-                    &format!("piloted {index}"),
-                    &[],
-                    vec![],
-                    TaskStatus::Done,
-                );
                 pilot_receipt(
                     &fixture,
                     &task,

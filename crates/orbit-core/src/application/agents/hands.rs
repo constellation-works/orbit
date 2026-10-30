@@ -5,7 +5,7 @@
 //! Every hand comes from a record Orbit wrote, never from an agent message:
 //!
 //! - **piloted**: each task-pilot receipt the apply boundary sealed, with the
-//!   crew and model its pilot run recorded;
+//!   frozen activity crew draw and producing invocation model;
 //! - **reviewed**: each review gate settlement comment, with the reviewer it
 //!   names and its verdict, and the attempt's run from the lineage ledger of
 //!   the task's latest gate certificate (older lineages carry no run);
@@ -34,7 +34,7 @@ use super::facts::{FindingState, settlement};
 use super::records::is_operator_requeue;
 use super::roles::pilot_warnings;
 use crate::OrbitRuntime;
-use crate::application::codebase::actor_kind;
+use crate::application::codebase::{PilotRuns, actor_kind};
 use crate::application::task::BLOCKED_TASK_TRIAGED_EVENT;
 
 /// A hand's verb on the task.
@@ -138,18 +138,34 @@ impl OrbitRuntime {
     }
 
     fn piloted_hands(&self, row: &TaskRow) -> Vec<Hand> {
-        pilot_warnings::settle(&row.task, &row.history, &row.comments)
-            .assessments
+        let assessments =
+            pilot_warnings::settle(&row.task, &row.history, &row.comments).assessments;
+        if assessments.is_empty() {
+            return Vec::new();
+        }
+        let runs = PilotRuns::load_for_receipts(
+            self,
+            assessments
+                .iter()
+                .map(|assessment| assessment.run_id.as_deref()),
+        );
+        let now = Utc::now();
+        assessments
             .into_iter()
             .map(|assessment| {
                 let mut hand = Hand::new(PILOTED, assessment.at);
-                if let Some(run_id) = assessment.run_id {
-                    if let Some(run) = self.readable_run(&run_id) {
-                        hand.crew = run.resolved_crew;
-                        hand.model = run.crew_model;
-                    }
-                    hand.run_id = Some(run_id);
+                if let Some(run) = runs.attribute(
+                    self,
+                    row.task.id.as_str(),
+                    assessment.run_id.as_deref(),
+                    assessment.at,
+                    &assessment.operation_id,
+                    now,
+                ) {
+                    hand.crew = run.crew;
+                    hand.model = run.model;
                 }
+                hand.run_id = assessment.run_id;
                 hand
             })
             .collect()
@@ -288,13 +304,6 @@ impl OrbitRuntime {
             .filter(|record| record.activity_id.contains("recover"))
             .max_by_key(|record| record.ts)
             .and_then(|record| record.model)
-    }
-
-    fn readable_run(&self, run_id: &str) -> Option<orbit_types::workflow::JobRun> {
-        self.get_job_run_backend(run_id).unwrap_or_else(|error| {
-            tracing::warn!(run_id, %error, "handled by: job run unreadable");
-            None
-        })
     }
 }
 
