@@ -72,7 +72,11 @@ becomes just the first definition.
   and prints each skip reason on stderr. The bounded view and the dashboard
   show `scheduled`, `waiting`, `never_observed`, `disabled` or `unavailable`.
   A definition owned elsewhere, an unreadable cursor file or a schedule that
-  cannot be projected reads `unavailable` on its own row only.
+  cannot be projected reads `unavailable` on its own row only. The bounded
+  list also reports up to 20 redacted, bounded `load_errors` with file paths
+  and reasons, plus `load_errors_total` and `load_errors_truncated`; these
+  diagnostics are independent of item pagination and `cursor_state_error`.
+  If no definition loads and any fails, the list fails closed.
 - **Dedupe & provenance** — each minted task carries an `auto-task:<name>` tag;
   `skip_if_open` uses that tag to avoid firing while a prior instance is open.
 - **Manual mint** — `orbit auto-task mint <name>` mints one task from a
