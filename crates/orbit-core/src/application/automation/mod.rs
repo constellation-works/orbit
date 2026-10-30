@@ -4,9 +4,11 @@ use crate::OrbitRuntime;
 use orbit_common::OrbitError;
 
 mod after_landing;
+mod board_port;
 mod deadline;
 mod direct;
 mod evaluation;
+mod explain;
 pub(crate) mod incidents;
 mod inspect;
 mod job_port;
@@ -30,11 +32,13 @@ pub(crate) use after_landing::review_crew_overrides_definition;
 pub use after_landing::{
     AfterLandingHealth, AfterLandingSource, after_landing_health, after_landing_switch,
 };
+pub(in crate::application) use board_port::AutomationBoardPort;
 pub(crate) use deadline::expiring_frozen_batch_tasks;
 pub(crate) use direct::record_direct_landing_intent;
 use evaluation::{auto_task_action_liveness, auto_task_admission_deferral};
 pub use evaluation::{evaluate_auto_task, evaluate_routine};
 pub(crate) use evaluation::{evaluate_auto_task_with_cache, evaluate_routine_with_cache};
+pub use explain::ConditionExplain;
 pub(crate) use inspect::inspect_routine_with_cache;
 pub use inspect::{
     UnadmittableDefinition, UnresolvableBranch, WedgedConsumer, delivery_ownership_refusal,

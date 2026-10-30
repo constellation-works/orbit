@@ -1,7 +1,7 @@
 ---
 title: Auto-concurrency — Design
 owner: claude
-last_updated: 2026-10-27
+last_updated: 2026-10-30
 last_validated: 2026-10-27
 status: Draft
 feature: auto-concurrency
@@ -557,7 +557,12 @@ Implemented in `runtime/host_resource/profile/` (`build.rs`, `lookup.rs`,
   run counts from its first recorded minute, so a run whose minute zero was
   never recorded still changes the key when it finishes. Pruning changes the
   count when a run's last minute row goes; removing its earlier rows leaves the
-  count unchanged.
+  count unchanged. The probe scans every retained minute row, so a read runs
+  it only when the store's `delivery_runs_stamp` counter moved since the cached
+  answer; triggers bump that counter on a run's first or last minute row and on
+  an insert, delete, re-key or `finished_at` change of a sampled run's
+  `job_runs` row. The dashboard's read also keeps each workspace's encoded
+  profiles with the cached set, so a hit does not re-encode them.
   Only profiles are cached: the forecast's live inputs (running deliveries,
   reservations, baseline) are read fresh every pass.
 

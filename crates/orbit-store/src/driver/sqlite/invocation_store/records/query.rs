@@ -74,7 +74,7 @@ impl Store {
             return Ok(records);
         }
 
-        hydrate_invocation_records(self, &mut records)?;
+        hydrate_invocation_records(self, &mut records, !filter.skip_tool_calls)?;
         Ok(records)
     }
 

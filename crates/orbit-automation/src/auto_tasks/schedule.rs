@@ -42,6 +42,8 @@ pub fn validate_schedule(schedule: &AutoTaskSchedule) -> Result<(), OrbitError> 
             Ok(())
         }
         AutoTaskSchedule::Interval { every_minutes } => interval_period(*every_minutes).map(drop),
+        // The loader type-checks the expression; nothing here is time-based.
+        AutoTaskSchedule::Condition { .. } => Ok(()),
     }
 }
 
@@ -66,6 +68,9 @@ pub fn decide_due(
         AutoTaskSchedule::Deliveries { .. } => Err(OrbitError::InvalidInput(
             "delivery schedules require source evaluation".into(),
         )),
+        AutoTaskSchedule::Condition { .. } => Err(OrbitError::InvalidInput(
+            "condition schedules do not fire in this Orbit".into(),
+        )),
         AutoTaskSchedule::Cron { cron } => decide_cron(cron, lower_bound, now),
         AutoTaskSchedule::Interval { every_minutes } => {
             decide_interval(*every_minutes, baseline, lower_bound, now)
@@ -83,14 +88,15 @@ pub fn decide_due(
 /// `baseline` is the cursor's first-observed slot. Interval schedules are
 /// anchored to it and cannot be projected without one; cron schedules are
 /// absolute, so they project with or without a cursor. Delivery schedules have
-/// no time-based occurrence at all and always project `None`.
+/// no time-based occurrence at all and always project `None`, as do condition
+/// schedules.
 pub fn next_scheduled_slot(
     schedule: &AutoTaskSchedule,
     baseline: Option<DateTime<Utc>>,
     now: DateTime<Utc>,
 ) -> Result<Option<DateTime<Utc>>, OrbitError> {
     match schedule {
-        AutoTaskSchedule::Deliveries { .. } => Ok(None),
+        AutoTaskSchedule::Deliveries { .. } | AutoTaskSchedule::Condition { .. } => Ok(None),
         AutoTaskSchedule::Cron { cron } => {
             // Cron is evaluated in host-local time, as the due path does; the
             // projection is reported in UTC like every other stored slot.

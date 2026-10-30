@@ -265,7 +265,7 @@ Once the rules exist, `ux-review-ui` and `ux-review-cli` change:
 | `ux_rules.ui_base_url` | `"http://127.0.0.1:7878"` | Live dashboard URL for UI rules. |
 | `ux_rules.max_new_tasks` | `10` | New tasks per run. |
 | `ux_rules.file_at` | `"low"` | Lowest severity filed. |
-| `ux_rules.disabled` | `[]` | Rule ids not run, each with a reason in the config comment. |
+| `ux_rules.disabled` | `[]` | Rule ids whose results are recorded only, not filed; the runner still runs them. |
 
 ### Surfaces
 

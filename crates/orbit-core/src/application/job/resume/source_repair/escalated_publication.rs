@@ -33,44 +33,16 @@ impl OrbitRuntime {
         &self,
         task: &Task,
     ) -> Result<(TaskHistoryEntry, SourceRepairBinding), OrbitError> {
-        if !self.task_run_is_local(task) {
-            return Err(refuse("the task's publication belongs to another machine"));
-        }
-        let source_id = task
-            .job_run_id
-            .as_deref()
-            .ok_or_else(|| refuse("the task has no run whose publication it could resume"))?;
-        let source = self
-            .get_job_run_backend(source_id)?
-            .ok_or_else(|| refuse("the task's run is missing"))?;
-        self.owner_source_identity(&source, task)?;
-        if source.state != JobRunState::Failed
-            || source.finished_at.is_none()
-            || run_owner_liveness(&source) != RunOwnerLiveness::Stopped
-        {
-            return Err(refuse(
-                "the task's run is not a conclusively stopped failed delivery",
-            ));
-        }
-        if self.get_task_history(&task.id)?.iter().any(|e| {
-            e.event == orbit_types::task::CANDIDATE_DISCARDED_EVENT && e.at >= source.created_at
-        }) {
-            return Err(refuse("an operator discarded this run's candidate"));
-        }
-        let newest = self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
-            job_id: Some("task_pr_pipeline".into()),
-            task_id: Some(task.id.clone()),
-            limit: Some(1),
-            include_steps: false,
-            ..Default::default()
-        })?;
-        if newest.first().is_none_or(|run| run.run_id != source_id) {
-            return Err(refuse(
-                "newer execution makes publication association ambiguous",
-            ));
-        }
+        let (source_id, source) = self.stopped_failed_requeue_source(
+            task,
+            "the task's publication belongs to another machine",
+            "the task has no run whose publication it could resume",
+        )?;
+        super::published_owner::require_stopped_failed_requeue_source(&source)?;
+        let entries = self.get_task_history(&task.id)?;
+        self.require_current_requeue_source(task, &source, &source_id, &entries)?;
         let state = self
-            .read_run_state(source_id)?
+            .read_run_state(&source_id)?
             .ok_or_else(|| refuse("source checkpoints missing"))?;
         let receipt = state.failure_activity_checkpoint.as_ref().ok_or_else(|| {
             refuse("the run's failure handoff recorded no receipt keeping its pull request")
@@ -87,7 +59,7 @@ impl OrbitRuntime {
         }
         // A receipt written before it named its run and specification
         // cannot show the candidate still implements this task.
-        if output.get("handoff_run_id").and_then(Value::as_str) != Some(source_id)
+        if output.get("handoff_run_id").and_then(Value::as_str) != Some(source_id.as_str())
             || output.get("task_id").and_then(Value::as_str) != Some(task.id.as_str())
         {
             return Err(refuse(
@@ -105,7 +77,7 @@ impl OrbitRuntime {
         let (_, _, binding) = self.observe_escalated_publication(source, task.clone())?;
         self.require_green_required_checks(&binding)?;
         let entry = self
-            .published_owner_requeue_record(task, source_id)?
+            .published_owner_requeue_record(task, &source_id)?
             .ok_or_else(|| refuse("the run's publication cannot be preserved"))?;
         Ok((entry, binding))
     }

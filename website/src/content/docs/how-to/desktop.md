@@ -47,11 +47,12 @@ bundle an independent Orbit runtime; instead, it starts and supervises the
 When starting the dashboard server, the desktop shell searches standard
 installation paths for an executable `orbit` binary:
 
-- Locations configured in the `ORBIT_INSTALL_DIR` environment variable
+- The directory set in the `ORBIT_INSTALL_DIR` environment variable
 - `~/.orbit/bin`
 - Directories listed in your system `PATH`
 - Global package manager locations: `~/.cargo/bin`, `~/.local/bin`,
-  `~/.npm-global/bin`, and Node version manager (`nvm`) active versions
+  `~/.npm-global/bin`, and the `bin` directory of every Node version installed
+  with Node version manager (`nvm`) under `~/.nvm/versions/node`
 - System directories: `/opt/homebrew/bin`, `/usr/local/bin`, and `/usr/bin`
 
 If `orbit` is installed in a non-standard location or outside your user `PATH`,
@@ -105,8 +106,8 @@ The supervisor redirects server output to a dedicated log file:
   `~/Library/Logs/works.constellation.orbit.desktop/` on macOS.
 - **Permissions**: Created with user-only permissions (`0600`) to protect
   workspace names, task IDs, and repository paths.
-- **Log rotation**: Truncated automatically on app launch if the file size
-  exceeds 8 MiB.
+- **Log rotation**: Truncated automatically whenever Orbit starts the dashboard
+  server, if the file size exceeds 8 MiB.
 
 Inspect `dashboard-server.log` if the server fails to bind or exits
 unexpectedly during startup.
@@ -145,14 +146,16 @@ The desktop app checks GitHub releases for newer versions one minute after
 launch, and every 24 hours thereafter:
 
 1. The app verifies the release's signed checksum manifest against built-in
-   Orbit release public keys. Unverified manifests or modified packages are
-   rejected immediately.
+   Orbit release public keys, and rejects a manifest that fails verification.
+   A downloaded package whose hash does not match the signed manifest is
+   discarded before anything is installed.
 2. If an update is verified, a desktop notification is raised, and the tray menu
    item changes from *Check for Updates…* to *Install Orbit X.Y.Z…*.
 3. Selecting the install item presents a confirmation dialog. Orbit never
    downloads or applies an update without your explicit confirmation.
-4. You can manually check at any time by selecting *Check for Updates…* from
-   the tray.
+4. Select *Check for Updates…* from the tray to check manually. While an update
+   is pending, that item reads *Install Orbit X.Y.Z…* and offers installation
+   instead of checking.
 
 ## Fleet monitoring and notifications
 
@@ -166,8 +169,9 @@ While running in the background, the desktop app acts as a fleet monitor:
   pipeline runs are grouped under the originating task. One task failure
   produces only one notification and one tray entry.
 - **Remote host awareness**: When more than one host is registered in your
-  Orbit fleet, notifications and attention labels explicitly name the host and
-  workspace, keeping multi-machine activities clear.
+  Orbit fleet, notifications explicitly name the host and workspace, keeping
+  multi-machine activities clear. Tray attention rows show the task or run
+  title only.
 - **Unreachable hosts**: If a remote host stops responding, the watcher retains
   its previous baseline rather than resetting counters to zero. When the host
   comes back online, old events are not re-announced as new notifications.

@@ -2,6 +2,7 @@ mod agent_tools;
 mod agents_tools;
 mod artifact_redaction;
 mod auto_task_tools;
+mod automation_tools;
 mod codebase_tools;
 mod command_tools;
 mod crew_tools;

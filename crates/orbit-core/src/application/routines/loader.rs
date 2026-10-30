@@ -56,13 +56,13 @@ const REPLICA_LOCAL_ROUTINE_JOBS: &[&str] =
     &[REPLICA_LOCAL_ROUTINE_JOB, REPLICA_LOCAL_STORE_GC_JOB];
 
 /// Whether a replica checkout may schedule `definition` on this host's clock:
-/// a cron routine targeting worktree GC or store GC. Delivery and state
-/// triggers observe owner coordination state, so they are owner-only even for
-/// those jobs. Listing, toggling and the sweep all ask this one rule.
+/// a cron routine targeting worktree GC or store GC. Delivery, state and
+/// condition triggers observe owner coordination state, so they are
+/// owner-only even for those jobs. Listing, toggling and the sweep all ask
+/// this one rule.
 pub fn runs_in_replica(definition: &RoutineDefinition) -> bool {
     REPLICA_LOCAL_ROUTINE_JOBS.contains(&definition.target.job_name())
-        && definition.trigger.deliveries_landed.is_none()
-        && definition.trigger.state.is_none()
+        && definition.trigger.is_cron()
 }
 
 /// Why a replica checkout does not schedule `definition`, naming the owner

@@ -75,7 +75,8 @@ pub struct ResolvedConfig {
     pub workflow_base_branch: String,
     /// Host pressure thresholds and the throttle enable switch.
     pub resource_throttle: crate::registry::ResourceThrottleSettings,
-    /// Host-wide forecast thresholds and profile bounds; currently settings only.
+    /// Host-wide forecast thresholds and profile bounds; gap-fit admission
+    /// reads them in shadow and enforce modes.
     pub auto_concurrency: crate::registry::AutoConcurrencySettings,
     /// Named provider-model assignments from `[crews.<name>]`, disabled crews
     /// included (see [`Crew::enabled`]).

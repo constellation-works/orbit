@@ -1,6 +1,6 @@
 ---
 title: Scheduling YAML
-description: "Hand-authored auto-task and routine YAML: schedules, templates, delivery and state triggers, dedupe, and preconditions."
+description: "Hand-authored auto-task and routine YAML: schedules, templates, delivery, state and condition triggers, dedupe, and preconditions."
 ---
 
 An **auto-task** is one YAML file that files a task on a schedule. A **routine** is one YAML file that starts a catalog job. The host clock evaluates both. A new chore is a new auto-task; a new pipeline fire is a new routine. [Routines and auto-tasks](../../concepts/scheduling/) is the model, and [Schedule recurring work](../../how-to/recurring-work/) is the clock, pause, and repair procedure.
@@ -68,13 +68,14 @@ schedule:
 
 ### One schedule
 
-`schedule` carries exactly one of `cron`, `every_minutes`, or `deliveries_landed`. A file with none of them, or with more than one, is rejected and names which forms it found.
+`schedule` carries exactly one of `cron`, `every_minutes`, `deliveries_landed`, or `condition`. A file with none of them, or with more than one, is rejected and names which forms it found.
 
 | Form | Meaning |
 |---|---|
 | `cron` | Five-field cron, evaluated in the host's local time. An empty value is rejected. |
 | `every_minutes` | An integer from 1 through 525600 (365 days). The interval is anchored at the slot first observed for this definition. |
 | `deliveries_landed` | Verified landings on a branch. There is no clock slot. See [Delivery triggers](#delivery-triggers). |
+| `condition` | A typed predicate over workspace state. It is checked and explained but does not fire yet, so the definition must stay `enabled: false`. See [Condition triggers](#condition-triggers). |
 
 A cron or interval definition that was asleep through several slots files one make-up task for the missed window, then waits for the next slot. A delivery definition does not catch up on a clock.
 
@@ -240,13 +241,14 @@ Replace `weekly_report_pipeline` with a job this workspace's catalog already has
 
 ### One trigger
 
-`trigger` carries exactly one of `cron`, `state`, or `deliveries_landed`.
+`trigger` carries exactly one of `cron`, `state`, `deliveries_landed`, or `condition`.
 
 | Form | Extra rule |
 |---|---|
 | `cron` | Five-field cron in the host's local time. `missed_run` applies to slots missed while the machine was down. |
 | `state` | `policy.overlap` is `forbid`. `target` is the job that kind requires. `cron` and `deliveries_landed` are absent. |
 | `deliveries_landed` | `policy.overlap` is `forbid`. `cron` and `state` are absent. The object is the [delivery trigger](#delivery-triggers). |
+| `condition` | The other forms are absent and `enabled` is `false`. The object is the [condition trigger](#condition-triggers). |
 
 `missed_run: skip` is the default. Each missed slot is recorded and nothing is dispatched for it; `orbit routine list --json` shows the reason on `last_fire.detail`. `missed_run: catch_up_once` fires one make-up run. The seeded worktree-GC routine uses `catch_up_once`.
 
@@ -411,3 +413,66 @@ policy:
 Replace the job name and the branch. Omit `owner_machine` to use the workspace's registered owner, or set it to a machine id from `orbit host list`. The same owner, baseline, coverage, and exclusion rules as an auto-task delivery trigger apply. The routine submits the job; it does not file a task.
 
 `orbit clock tick --dry-run --verbose` prints the decision for every routine and auto-task and writes nothing. `orbit routine show <name>` prints the definition the clock loaded.
+
+## Condition triggers
+
+`trigger.condition` on a routine and `schedule.condition` on an auto-task use the same object: a predicate in the [Common Expression Language](https://github.com/google/cel-spec) (CEL) over the workspace's state. This release type-checks the predicate when the file loads and explains it on demand. It does not fire: a condition definition with `enabled: true` fails to load with a message saying conditions cannot fire yet, and nothing is minted or run. Use `orbit automation explain <name>` to see what it would match.
+
+```yaml
+schemaVersion: 1
+name: release-prep
+enabled: false
+schedule:
+  condition:
+    scope: workspace
+    when: >-
+      board.eligible.empty && board.in_progress.count == 0 && board.open_runs.count == 0
+      && (!has(self.last_fired) || now - self.last_fired > duration('72h'))
+    for_minutes: 30
+template:
+  title: Prepare release
+  tags: [release]
+dedupe: skip_if_open
+```
+
+| Key | Default | Meaning |
+|---|---|---|
+| `scope` | required | `task` (one subject per task the prefilter selects, bound as `task`) or `workspace` (one subject; read `board`). `host` and `file` parse and are refused as `scope_unavailable`. |
+| `when` | required | The CEL predicate. It must be `bool`. |
+| `rearm` | `!(when)` | The predicate that re-arms a fired subject. |
+| `for_minutes`, `cooldown_minutes` | `0` | Hold before a fire and minimum time between a subject's fires, at most 10080. |
+| `max_fires_per_hour`, `max_fires_per_day` | `10`, `50` | Fire caps per definition. The daily cap is at least the hourly one. |
+| `max_matches` | `20` | Matches admitted at enable, 1 through 1000. |
+| `on_enable` | `baseline` | `baseline` or `fire_existing`: what enabling does with subjects already true. |
+| `board_includes_own` | `false` | Count the definition's own minted tasks in `board`. |
+| `hosts` | owner | Host scope only. |
+| `roots`, `glob`, `max_depth`, `settle_seconds`, `identity`, `hash_full_max_bytes`, `group_by`, `group_settle_seconds` | — | File scope only. |
+
+The firing keys (`for_minutes` through `on_enable`) are validated now and take effect when conditions fire.
+
+### What an expression reads
+
+| Read | Fields |
+|---|---|
+| `task` (task scope) | `id`, `title`, `status`, `tags`, `type`, `priority`, `complexity`, `crew` (optional), `parent_id` (optional), `dependencies`, `created_at`, `updated_at`, `status_since`, `origin` (optional: `trigger`, `fire_id`, `depth`) |
+| `tasks['<ID>']` | The same fields for one task. The index must be a string literal. |
+| `board` | `by_status['<status>']`, `by_tag['<tag>']` (a literal tag), `drain_running`, and `eligible`, `backlog`, `in_progress`, `blocked`, `review` and `open_runs`, each with `count` and `empty` |
+| `self` | `last_fired` (optional), `fires_24h`; an auto-task also has `last_minted` and `last_minted_task` (optional) |
+| `now` | The evaluation time |
+
+Statuses are spelled as stored: `proposed`, `backlog`, `in_progress`, `review`, `done`, `blocked`, `archived`, `rejected`, `someday`. Read an optional field only after testing it, as in `has(task.origin) && task.origin.depth < 3`. A value that cannot be read, such as a `tasks['<ID>']` that does not exist, makes the evaluation unknown, never false.
+
+The language is a subset of CEL: literals, comparison and logic, `in`, `has()`, `size()`, `startsWith`, `endsWith`, `contains`, `lowerAscii`, `timestamp()` and `duration()` with their arithmetic and accessors, and `all`, `exists`, `exists_one`, `map` and `filter` over lists. `matches()`, map literals and other functions are refused.
+
+### Load-time checks
+
+A condition that fails any check fails to load. The error names the file, the clause (`trigger.condition.when`, `schedule.condition.rearm`) and the line and column inside the expression. Every other definition still loads.
+
+- The expression parses, every identifier and field exists in its scope, every operator is well typed, and the result is `bool`.
+- `tasks[...]` and `board.by_tag[...]` take a string literal, never a computed value.
+- A `task` scope has a top-level `&&` conjunct that limits the subjects: `task.status == '<status>'`, `task.status in [...]`, or `'<tag>' in task.tags`.
+- The expression is at most 4 KiB, 200 parse nodes (macros expanded) and two nested comprehensions.
+
+`orbit automation explain <name>` (or `routine:<name>` / `auto-task:<name>` when both kinds share the name) evaluates the condition over live state and writes nothing. It shows the scope, the prefilter, the ownership verdict, up to 20 matches, up to 20 closest misses (subjects failing exactly one top-level clause), and for one subject (`--subject <task ID>`) each top-level `&&` and `||` clause with its value and the values it read. Arm state, holds, fires and `self` values show as not yet tracked.
+
+An Orbit release without condition triggers reports each such file as a load error (``unknown field `condition` ``) and keeps loading the rest.
