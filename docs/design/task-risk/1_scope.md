@@ -47,17 +47,19 @@ size-only estimator using backtests also summarized by the
 records and artifacts were inspected: they describe weekly temporal comparisons,
 but expose no original analysis script or frozen input manifest. Consequently this
 design does not reuse their numerical performance or significance claims as
-verified results. The reported small incremental crew signal supports considering
-a pooled predictor in the observed workload, not equivalence of models, no
-interaction, or extrapolation to much harder tasks.
+verified results. Without the original cohort and label rules, those summaries
+cannot validate production calibration, model equivalence, absent interactions or
+extrapolation to harder work. In particular, pre-attribution tasks must not be
+treated as clean negatives.
 
-[ORB-20094] owns the newly authorized authoring-session backtest. The 2026-10-30 06:26 UTC preparation comment reports limited recent landed-diff
-telemetry and explicitly holds scoring pending the reliable regression-reporting
-start date. Its artifact list was still empty at readback; these are preparation
-observations, not backtest results. Until receipts are published and inspected,
-that run supplies no measured result here. Required receipts are script and input hashes,
-cutoffs, joins, exclusions, fold-level metrics and provenance coverage. Missing
-receipts prevent empirical promotion, not writing this Draft.
+[ORB-20094] records the completed October 29, 2026 exploratory analysis; its
+scripts, frozen input, results and within-tier comparisons are attached to
+[ORB-20095] under `backtest-2026-10-29/`. [ORB-20107] adds the results and
+size-response figures to this document. The [dated evidence report](references/2026-10-29-risk-backtest.md)
+records the input hash, cohort, joins, cutoffs, exclusions, uncertainty and
+provenance limits. These are descriptive seven-day observations and exploratory
+temporal comparisons, not the proposed primary 30-day validation or a causal
+capability study.
 
 The task's 06:29 UTC evidence update identifies source-policy changes, confirmed
 against their git diffs: `09e60b0757811368879fd0885f36950f586c0aa0`
@@ -217,6 +219,55 @@ authorized comparisons need randomized assignment within safe overlapping task
 strata, fixed budgets/tools/review rules, blinded independent adjudication,
 predefined stopping and severity safeguards, and task-level clustering. Replay
 benchmarks supplement but cannot replace prospective production outcomes.
+
+### Exploratory evidence from October 29, 2026
+
+The [evidence report](references/2026-10-29-risk-backtest.md) uses the frozen
+owner snapshot at 2026-10-30 06:31 UTC (October 29 Pacific), SHA-256
+`d6445bfd33beea3e350597945be1fc95a69c58ee393ed5e5872ea93af7e7811d`.
+The primary descriptive cohort starts after the October 8 source filing fix and
+requires seven complete follow-up days. Completion, historical size and relation
+observation time remain proxies; deployment and complete ascertainment are not
+established. Failed/non-landed episodes are outside this outcome population.
+
+![Separate size-response curves within low, medium and hard task complexity, with observed bins and task-bootstrap uncertainty](references/risk-size-curves.svg)
+
+Each curve independently fits `p = 1 - exp(-exp(a + b * ln(1 + lines)))`
+within one recorded task tier and exact model version. Slopes are unconstrained:
+the model permits a falling response. Dots show observed equal-count size-bin
+rates; shading is a pointwise 95% percentile band from 800 task-bootstrap refits.
+Curves stop at each group's 5th–95th size percentiles. These curves do not adjust
+for task type, calendar, routing or review and cannot establish a causal size
+effect, different model growth laws or out-of-support behavior.
+
+| Within-tier observation | Evidence and limit |
+| --- | --- |
+| Medium Sol versus Grok | Raw seven-day linked rates are 38/376 (10.1%) and 25/89 (28.1%). On common calendar-week/type/size cells, standardized rates are 10.9% and 26.6%; this is the clearest medium-tier association, subject to observational and related-task limits. |
+| Medium Sol versus Sonnet | Raw rates are 10.1% and 13/67 (19.4%); common-support rates 7.1% and 14.6% remain uncertain. |
+| Hard Sol versus Opus | Raw rates are 12/42 (28.6%) and 59/207 (28.5%); fitted bands and slope intervals overlap widely, so the data do not settle different size responses. |
+| Low small-model pool | Current Luna 204 + Haiku 155 + Muse Spark 6 gives 365 tasks, 17 linked outcomes (4.7%). The same pool has only 19 medium tasks and no hard examples; it supplies no curve for demanding work. |
+
+The medium Sol and Grok log-size slopes are approximately 0.35 and 0.37; their
+fitted levels differ more clearly than their growth rates. Hard Sol/Opus slopes
+are about 0.44/0.59 with broad overlapping task-bootstrap intervals. A separate
+[individual low-tier figure](references/risk-size-low-individual.svg) retains
+Luna and Haiku where their samples suffice; Muse Spark's six tasks cannot support
+its own curve. Pooling never mixes task complexity or infers equivalent member
+capability. The full report gives sample ranges, raw and standardized results,
+slope intervals, source sensitivities and the small-sample exclusions.
+
+The earlier pooled temporal rerun used four bins with 2,036 held-out tasks and
+264 linked seven-day outcomes. Complexity/type improved the tested size-only
+proper score; additional regularized model terms gave no clear further
+improvement. The stricter post-October-8 forecasting comparison has only 66
+held-out tasks and five outcomes after reserving training and label-maturity
+windows. Neither result establishes model equality. Astra and Luna have no
+common recorded complexity tier in the broader mature cohort, and the within-tier
+associations above demonstrate why aggregate comparisons alone are insufficient.
+
+This evidence supports testing model-by-complexity structure and prospective
+snapshots. It does not satisfy the primary 30-day/shadow ship gates or approve a
+production estimator, scorecard or routing change.
 
 ### Uncertainty and unsupported cases
 
@@ -429,6 +480,7 @@ backlog dispatch. Core contracts remain generic and provider names remain data.
 
 ## Task References
 
+- [ORB-20107] — adds the exploratory backtest, within-tier curves and evidence report.
 - [ORB-20095] — requests this model-relative task-risk Draft and generated index.
 - [ORB-20094] — authorized the authoring-session backtest and owns its receipts.
 - [ORB-19361] — introduced the size-only riskiness estimator and recorded prior evidence.
