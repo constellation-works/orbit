@@ -151,7 +151,7 @@ through downtime, pauses or retries consumes wall time; it never resets it.
 
 Every job containing auto-task steps requires a finite `spec.expire_when`:
 initially `now >= timestamp('<RFC3339>')` or
-`now >= self.started_at + duration('<positive finite duration>')`, at most seven
+`now >= job.started_at + duration('<positive finite duration>')`, at most seven
 days from admission. These restricted ordinary CEL shapes make the outer bound
 recoverable without proving that arbitrary code eventually becomes true. Step
 expiry may use general admitted CEL within that bound. More complex timing is
@@ -288,7 +288,7 @@ spec:
   state: disabled
   kind: workflow
   max_active_runs: 1
-  expire_when: "now >= self.started_at + duration('24h')"
+  expire_when: "now >= job.started_at + duration('24h')"
   steps:
     - id: qa
       target: auto-task:full-qa-sweep
