@@ -299,7 +299,7 @@ fn touching_deviations(finding: &Value, record: &Value) -> Vec<Value> {
         .collect()
 }
 
-fn regions_overlap(left: [u32; 4], right: [u32; 4]) -> bool {
+pub(super) fn regions_overlap(left: [u32; 4], right: [u32; 4]) -> bool {
     left[0] < right[0].saturating_add(right[2])
         && right[0] < left[0].saturating_add(left[2])
         && left[1] < right[1].saturating_add(right[3])
@@ -520,6 +520,7 @@ pub(super) struct ParsedVisualVerdict {
     pub severity: Option<String>,
     pub reasoning: String,
     pub deviation_rejected: bool,
+    pub rejection_reason: Option<String>,
 }
 
 /// Every valid verdict in a verifier fan-out result, by finding id.
@@ -584,6 +585,7 @@ fn parse_verdict(
         .get("severity")
         .and_then(Value::as_str)
         .map(str::to_string);
+    let mut rejection_reason = None;
     match verdict {
         VisualVerdictKind::Confirmed => {
             if evidence.is_empty() {
@@ -598,7 +600,7 @@ fn parse_verdict(
             let rejection = item
                 .get("rejection")
                 .ok_or("a REJECTED verdict must name its rejection")?;
-            non_empty(rejection, "reason")?;
+            rejection_reason = Some(non_empty(rejection, "reason")?);
             non_empty(rejection, "detail")?;
         }
         VisualVerdictKind::Unverified => return Err("unverified is not a verdict".into()),
@@ -612,5 +614,6 @@ fn parse_verdict(
             .get("deviation_rejected")
             .and_then(Value::as_bool)
             .unwrap_or(false),
+        rejection_reason,
     })
 }

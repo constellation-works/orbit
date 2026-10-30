@@ -434,6 +434,12 @@ pub struct VisualFindingVerdict {
     /// and its basis did not hold (§2.5).
     #[serde(default)]
     pub deviation_rejected: bool,
+    /// For a REJECTED verdict, the verifier's rejection ground
+    /// (`premise_wrong`, `already_fixed`, `unreachable` or `duplicate`);
+    /// only `premise_wrong` holds a deviation's basis (§2.5). Absent on
+    /// records written before the ground was carried.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rejection_reason: Option<String>,
 }
 
 /// One comparison or check finding in `visual/review.json` (§11.1).
