@@ -9,13 +9,15 @@ next: "Daniel reviews this scope; then file phase 1 (ladder config, shadow trial
 feature: crew-ladder
 doc_role: scope
 type: design
-summary: "Scope: an operator-ordered ladder of crews (model and effort) per workspace; each complexity tier continuously trials the next cheaper rung on a small share of its tasks as a system-run experiment, promotes it on a sequential non-inferiority test and keeps going until a rung fails, so each tier settles at the cheapest crew that holds its quality, with demotion on evidence"
-tags: [crew-ladder, crew-pools, experiments, crew-performance, agent-scorecards, effort]
+summary: "Scope: an opt-in, operator-ordered ladder of crews (model and effort) per workspace; each complexity tier continuously trials the next cheaper rung on a small share of its tasks as a system-run experiment, promotes it on a sequential non-inferiority test and keeps going until a rung fails, so each tier settles at the cheapest crew that holds its quality, with demotion on evidence and, once the delivery-quality grader is adopted, a per-dimension code-quality guardrail"
+tags: [crew-ladder, crew-pools, experiments, crew-performance, agent-scorecards, effort, decision-assistance]
 ---
 
 # Scope: crew ladder
 
-Status: design only, nothing built. Daniel, 2026-10-30: "crew complexity assignment is based
+Status: design only, nothing built. The whole feature is opt-in: nothing runs until an
+operator sets a mode and names the tiers, and the code-quality guardrail is a second,
+separate opt-in. Daniel, 2026-10-30: "crew complexity assignment is based
 on a feel. we have experiment feature, but that's manual. I think it should be auto-adjusted",
 with a "randomness" rate at which a crew is tried above its level, its level moving up when
 it does well "and eventually settle to its optimal level. Or perhaps we should add this for
@@ -33,7 +35,13 @@ optional reasoning `effort`. The
 crew pool, read outcomes per arm (done rate, first-pass acceptance, repairs, recoveries,
 escaped regressions, `cost_usd`) and file a proposed promotion task on an operator's
 conclusion. `exp-4e3e0399` (half of medium to luna, haiku and muse-spark) is the first crew
-experiment, run by hand, with a verdict expected around 2026-11-18.
+experiment, run by hand, with a verdict expected around 2026-11-18. The proposed
+delivery-quality grader (**decision-assistance/specs/delivery-quality.md**, ORB-20000,
+PR constellation-works/orbit#7031, design only; link it here once that PR merges) would grade each delivered code
+change on six anchored dimensions (scope fit, robustness, structure, standards, verification,
+maintainability), with abstention and coverage. It forbids any ranking or routing use until a
+separate evaluated proposal and an explicit adoption decision; §
+[Code quality](#code-quality-opt-in-gated) is that consumer's side.
 
 ## Problem
 
@@ -45,6 +53,10 @@ experiment, run by hand, with a verdict expected around 2026-11-18.
   start, someone to read the verdict and a promotion. The question "what is the cheapest crew
   that can do medium?" is really a sequence of experiments (can luna? then can haiku?), and
   the answer changes whenever a model is updated, which is monthly.
+- **Outcomes miss code quality.** Done, first-pass acceptance and escaped regressions say how
+  work turned out, not whether the code is well structured, follows conventions or is
+  properly verified. A cheaper crew can pass review and still leave weaker code, which a
+  ladder that only reads outcomes would happily promote.
 - **The real unit is model plus effort.** `opus·xhigh` and `opus·high` differ in cost and
   latency much as two models do. Pools name crews, so effort is already part of a crew, but
   nobody tests whether a tier needs the higher effort.
@@ -67,6 +79,11 @@ operator by default, or applied automatically when the workspace opts in. Eviden
 being read after promotion, and a promoted rung that starts doing worse is demoted. Failed
 rungs are retried after a while, because models change.
 
+Opt-in: `mode` defaults to `off` and `tiers` to none, so a workspace runs trials only after
+the operator sets both. Code-quality grading adds paid model requests, so it is a separate
+switch (`delivery_quality`), and it can only gate promotion once the grader has passed its
+own evaluation and the operator has adopted it for this use.
+
 Unchanged: the configured pools stay the operator's and are never rewritten. Explicit crews,
 purpose pools, run overrides, usage pressure, crew performance and manual experiments work as
 today. A workspace without a ladder behaves exactly as now.
@@ -79,8 +96,9 @@ today. A workspace without a ladder behaves exactly as now.
 [workflow.crew_ladder]
 mode = "shadow"             # off | shadow | propose | auto
 rungs = ["haiku", "luna", "sol-medium", "sol", "opus-high", "opus"]   # cheapest first
-tiers = ["low", "medium", "hard"]
+tiers = ["low", "medium", "hard"]   # default: none
 explore_rate = 0.10
+delivery_quality = "off"   # off | shadow | guardrail
 ```
 
 - **A rung is a crew.** Effort rungs are crews that differ only in `effort`, for example
@@ -144,6 +162,43 @@ uses a **sequential non-inferiority test**:
 Quality is compared within the tier, post-stratified by type where the tier mixes types, as
 the experiment readout does by complexity.
 
+### Code quality (opt-in, gated)
+
+The outcome score above cannot see code quality. When the workspace opts in, trials also
+read the delivery-quality profile (the grader proposal above) of
+their tasks, as a **guardrail**, never as a score term:
+
+- **Per dimension, no composite.** For each of the six dimensions, the share of the arm's
+  graded tasks at `weak` or `deficient`. The candidate fails the guardrail when, on any
+  applicable dimension, the lower confidence bound of (candidate share − control share)
+  exceeds `quality_grade_margin` (default 10 points). Grades are never averaged into one
+  number, never added to the outcome score, and never offset a regression or a review
+  finding; a high grade cannot rescue a candidate that failed on outcomes.
+- **Why a trial is the right place.** The grader proposal warns against comparing crews that
+  received different work. A trial's arms are randomised from one tier's population, so task
+  mix is comparable by construction, and the comparison is arm against arm over the same
+  period, not a crew's all-time distribution.
+- **Coverage counts.** Every eligible trial task counts, graded or not. Units with
+  `insufficient_evidence`, abstention, unavailable attribution, outage or budget gaps are
+  shown per arm. The guardrail is `inconclusive` when either arm's graded coverage is under
+  `min_grade_coverage` (default 80%) or the arms' coverage differs by more than 10 points, so
+  selective grading cannot make a candidate look better. An inconclusive guardrail blocks
+  promotion; the trial keeps collecting and stops at `max_sample` without promotion.
+- **Attribution.** Grades follow the implementation attempt the grader attributes, not the
+  task's later crew. A task the reviewer repaired is graded on the implementer's attempt; a
+  unit whose attribution is unavailable is excluded from the comparison and counted in
+  coverage.
+- **Bounded spend.** Grades are requested only for trial tasks: every candidate task and a
+  seeded sample of control tasks of the same size, so paid requests are about twice the
+  candidate count, under the grader service's host grant and budget.
+- **Gate.** `delivery_quality = "guardrail"` is refused at load until the grader consumer is
+  enabled and its adoption for this use is recorded (the grader proposal's phase 5 and the
+  separate decision it requires). Until then `shadow` records grades for trial tasks when the
+  grader runs, shows them in the trial readout, and affects nothing.
+- **What grades never do.** They do not change learned-member weights, crew performance,
+  scorecard rankings or review authority. A demotion check (below) may read the same
+  guardrail for learned members once it is adopted, and only for them.
+
 ### Acting on a decision
 
 | Mode | On promote | On stop |
@@ -172,8 +227,9 @@ the experiment readout does by complexity.
 
 - **Learned members** are watched after promotion: their quality over the last
   `watch_window` (default 30) settled tasks in the tier, against the configured members',
-  with the same margin. A member that falls below it, or has a confirmed `high` or worse
-  escaped regression, is demoted: removed from the learned pool in `auto`, proposed for
+  with the same margin, and the code-quality guardrail when it is adopted. A member that falls
+  below it, fails the guardrail, or has a confirmed `high` or worse escaped regression, is
+  demoted: removed from the learned pool in `auto`, proposed for
   removal in `propose`. A demotion marks the rung `failed` for the tier.
 - **Configured members are never removed.** The ladder reports a configured member that
   fails the same check and files a decision request; changing the configuration stays the
@@ -191,7 +247,7 @@ earlier model never carries over, as in crew performance.
 |---|---|---|
 | `workflow.crew_ladder.mode` | `"off"` | `off`, `shadow`, `propose` or `auto`. |
 | `workflow.crew_ladder.rungs` | `[]` | Crew names, cheapest first. Unknown or disabled crews fail at load. |
-| `workflow.crew_ladder.tiers` | `["low", "medium", "hard"]` | Tiers that run trials. `xhard` is opt-in. |
+| `workflow.crew_ladder.tiers` | `[]` | Tiers that run trials; none until the operator names them. `xhard` is allowed only by naming it. |
 | `workflow.crew_ladder.explore_rate` | `0.10` | Candidate arm weight, between 0.02 and 0.25. |
 | `workflow.crew_ladder.margin` | `5` | Non-inferiority margin in quality points. |
 | `workflow.crew_ladder.look_every` | `10` | Settled candidate tasks between looks. |
@@ -199,6 +255,9 @@ earlier model never carries over, as in crew performance.
 | `workflow.crew_ladder.exclude_types` | `[]` | Task types never trialled, for example `["security", "ui"]`. |
 | `workflow.crew_ladder.watch_window` | `30` | Settled tasks per learned member for the demotion check. |
 | `workflow.crew_ladder.retry_after_days` | `30` | Days before a failed rung is trialled again. |
+| `workflow.crew_ladder.delivery_quality` | `"off"` | `off`; `shadow` (record trial tasks' grades when the grader runs; no effect); `guardrail` (gate promotion on them; refused until the grader is adopted for this use). |
+| `workflow.crew_ladder.quality_grade_margin` | `10` | Points by which the candidate's `weak`/`deficient` share may exceed control's on any dimension. |
+| `workflow.crew_ladder.min_grade_coverage` | `0.8` | Graded share of eligible tasks each arm needs for the guardrail to decide. |
 
 Ladder trials count toward `experiments.max_running`, and need `experiments.enabled`.
 
@@ -209,7 +268,8 @@ Ladder trials count toward `experiments.max_running`, and need `experiments.enab
   progress to the next look and its bounds, failed rungs with retry dates, and in `shadow`
   what would be trialled.
 - **Experiments page.** Trials appear as experiments owned by `system:crew-ladder`, with the
-  usual readout plus the sequential bounds.
+  usual readout plus the sequential bounds and, with `delivery_quality` on, the per-dimension
+  grade shares, coverage and guardrail state per arm.
 - **Analytics › Crews.** A ladder panel: rungs down the side, tiers across, each cell
   configured, learned, trialling, failed or untried.
 - **Decision channel.** Promotions in `propose`, demotions, and configured members failing the
@@ -229,6 +289,9 @@ Ladder trials count toward `experiments.max_running`, and need `experiments.enab
 - **Rewriting configuration.** Learned members live in the store; configured pools never
   change.
 - **Purpose pools.** Pilot, review, recovery and auto-fix pools are not trialled.
+- **A code-quality score.** Delivery-quality grades gate promotion as a per-dimension
+  guardrail only; there is no composite, ranking or routing multiplier from them.
+- **On by default.** No mode, tier or grading is enabled by default, in any workspace.
 
 ## Concerns and honest limitations
 
@@ -248,6 +311,12 @@ Ladder trials count toward `experiments.max_running`, and need `experiments.enab
 - **Model changes.** A provider updating a model mid-trial invalidates the evidence. The
   crew's configuration digest catches a changed model name; a silent provider-side change is
   not detected.
+- **The grader is unvalidated.** The delivery-quality grader is design only, and the
+  decision-assistance screens so far were negative. Until it passes its own calibration and
+  holdout, the ladder decides on outcomes alone, and outcomes miss code quality. That gap is
+  why the guardrail exists and why it waits.
+- **Grading cost and coverage.** Each graded task is a paid request; budget or outage gaps
+  make the guardrail inconclusive rather than permissive, which can stall promotions.
 - **Interaction with crew performance.** A newly learned member starts at neutral
   performance, so it gets its configured-peer weight until evidence moves it.
 
@@ -260,9 +329,13 @@ Ladder trials count toward `experiments.max_running`, and need `experiments.enab
 2. **Trials with `propose`.** Live system experiments, the quality score, the sequential test
    with its looks and guardrail stops, promotion and stop handling, failed rungs and re-trial,
    and decision requests. Promotion goes through the existing promotion task.
+   `delivery_quality = "shadow"` records trial tasks' grades when the grader runs.
 3. **`auto` and demotion.** The learned pool record, draws that include learned members with
    `ladder:` provenance, the demotion watch, and the Analytics › Crews ladder panel.
-4. **Later.** Each filed only when needed: upward strengthening, per-type ladders (trials per
+4. **Code-quality guardrail.** Filed only after the delivery-quality grader is adopted for
+   this use: `delivery_quality = "guardrail"`, per-dimension shares with intervals,
+   coverage rules, seeded control sampling, and the guardrail in the demotion check.
+5. **Later.** Each filed only when needed: upward strengthening, per-type ladders (trials per
    type pool), `xhard` trials by default, and purpose pools.
 
 ## Open questions
@@ -273,13 +346,17 @@ Ladder trials count toward `experiments.max_running`, and need `experiments.enab
    lower cost, quick evidence. Should phase 2 start there before cross-model rungs?
 3. **Learned weight.** Should a learned member start at its peers' weight, or ramp up over
    its first watch window?
-4. **`xhard`.** The pilot never demotes out of `xhard`. Should the ladder ever trial there,
+4. **Guardrail dimensions.** Should every dimension gate promotion, or only robustness,
+   verification and scope fit, with structure, standards and maintainability shown but not
+   gating?
+5. **`xhard`.** The pilot never demotes out of `xhard`. Should the ladder ever trial there,
    or is `xhard` always the operator's?
 
 ## Acceptance (feature level)
 
 - A ladder naming an unknown or disabled crew fails to load naming it; a workspace without a
-  ladder draws exactly as before.
+  ladder, with `mode = "off"` or with no tiers listed, draws exactly as before and creates
+  no trial.
 - In `shadow`, `orbit crew ladder` shows for each tier its floor and the rung it would trial,
   and no task's crew changes.
 - In `propose` or `auto`, each listed tier runs at most one trial, for the rung directly below
@@ -296,8 +373,18 @@ Ladder trials count toward `experiments.max_running`, and need `experiments.enab
   is only reported.
 - A failed rung is trialled again after `retry_after_days`, or when its crew's model or effort
   changes.
+- `delivery_quality = "guardrail"` is refused at load until the grader is adopted for this
+  use. Once on, a candidate whose `weak`/`deficient` share exceeds control's by more than the
+  margin on any dimension is not promoted, and an arm under `min_grade_coverage` or with
+  unequal coverage makes the guardrail inconclusive, never a pass. Grades never change
+  weights, rankings or review outcomes.
 
 ## Task References
 
-No tasks yet. The reused machinery is in the [experiments](../experiments/1_scope.md) and
+- [ORB-19999] — phase 1: ladder config, report and shadow trials
+- [ORB-20000] — proposes the advisory delivery-quality grader the guardrail would consume
+
+The reused machinery is in the [experiments](../experiments/1_scope.md) and
 [crew performance](../crew-performance/1_scope.md) designs.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
