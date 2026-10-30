@@ -1,8 +1,9 @@
 //! `visual_checks`: the deterministic checks (§7) over the capture of
 //! record. The workspace's UI rules ran on each capture's live page inside
 //! the driver; this step reads their results and adds the capture checks
-//! (`render_timeout`, `setup_failed`, `off_loopback_request`,
-//! `color_scheme_leak`, `unstable_view`). In this phase every finding is
+//! (`render_timeout`, `setup_failed`, `image_over_budget`,
+//! `off_loopback_request`, `color_scheme_leak`, `unstable_view`). In this
+//! phase every finding is
 //! recorded in `visual/checks.json`; nothing blocks and nothing is filed.
 
 use std::collections::BTreeMap;
@@ -13,6 +14,10 @@ use orbit_engine::DispatchError;
 use orbit_types::task::{
     VISUAL_CAPTURE_ARTIFACT, VISUAL_CHECKS_ARTIFACT, VisualCaptureOutcome, VisualCaptureRecord,
     VisualCheckFinding, VisualChecksRecord, visual_review_summary,
+};
+#[cfg(test)]
+use orbit_types::task::{
+    VisualCaptureError, VisualCapturedMock, VisualReviewMode,
 };
 use serde_json::{Value, json};
 
@@ -95,16 +100,21 @@ fn capture_findings(record: &VisualCaptureRecord) -> Vec<VisualCheckFinding> {
     let mut findings = Vec::new();
     for mock in &record.mocks {
         if let Some(error) = &mock.error
-            && matches!(error.code.as_str(), "render_timeout" | "setup_failed")
+            && matches!(
+                error.code.as_str(),
+                "render_timeout" | "setup_failed" | "image_over_budget"
+            )
         {
             findings.push(finding(
                 &error.code,
                 &mock.artifact,
                 "high",
-                if error.code == "setup_failed" {
-                    "The app's setup failed before the view rendered"
-                } else {
-                    "The view did not reach its ready state"
+                match error.code.as_str() {
+                    "setup_failed" => "The app's setup failed before the view rendered",
+                    "image_over_budget" => {
+                        "The capture image remained over the artifact limit"
+                    }
+                    _ => "The view did not reach its ready state",
                 },
                 &error.message,
                 "change",
