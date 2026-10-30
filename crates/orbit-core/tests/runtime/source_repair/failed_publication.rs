@@ -798,6 +798,7 @@ fn settle_and_publish_reviewer(
         ),
         baseline_commands: f.runtime.review_baseline_commands().to_vec(),
         host_evidence: policy.review_host_evidence.value.clone(),
+        selective_before_landing: None,
         captured_at: Utc::now(),
     });
     published_owner::save_run(f, &run);

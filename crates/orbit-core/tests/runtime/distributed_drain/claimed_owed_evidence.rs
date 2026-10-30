@@ -683,6 +683,7 @@ pub(super) fn owner_resumes(leaf: &ReviewedLeaf, timing: ReviewTiming) -> Resume
         required_validation_commands: Some(Vec::new()),
         baseline_commands: Vec::new(),
         host_evidence: Vec::new(),
+        selective_before_landing: None,
         captured_at: Utc::now(),
     };
     let run = jobs

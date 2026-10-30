@@ -748,6 +748,13 @@ pub fn admission_refusal(
     {
         return Some(AdmissionRefusal::BeforePrUnsupported);
     }
+    // An active selective policy is refused to an executor that cannot
+    // evaluate it on the PR route: dropping it would deliver unreviewed.
+    if request.ship.selective_policy().is_some()
+        && !(request.selective_review && request.review_gate && request.ship.mode == "pr")
+    {
+        return Some(AdmissionRefusal::SelectiveUnsupported);
+    }
     None
 }
 

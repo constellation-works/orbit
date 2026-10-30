@@ -172,6 +172,12 @@ pub struct AdmissionReviewContract {
     /// synthesizes as requirements whatever its reviewer reports.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub host_evidence: Vec<orbit_types::workflow::HostEvidenceRule>,
+    /// The owner's frozen selective before-landing policy, when active.
+    /// The leaf evaluates its pinned candidate against it and the owner
+    /// verifies the receipt's digest and identities at acceptance. Absent
+    /// on contracts captured before the feature: no selective scan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selective_before_landing: Option<orbit_types::workflow::SelectiveBeforeLandingPolicy>,
 }
 
 impl AdmissionShipContract {
@@ -188,6 +194,15 @@ impl AdmissionShipContract {
         }
     }
 
+    /// The selective policy this contract captured, when active.
+    #[must_use]
+    pub fn selective_policy(&self) -> Option<&orbit_types::workflow::SelectiveBeforeLandingPolicy> {
+        self.review
+            .as_ref()
+            .and_then(|review| review.selective_before_landing.as_ref())
+            .filter(|policy| policy.is_active())
+    }
+
     /// Whether `review` matches the captured timing and is itself well
     /// formed.
     #[must_use]
@@ -195,13 +210,26 @@ impl AdmissionShipContract {
         match &self.review {
             None => !self.before_pr && !self.before_landing,
             Some(review) => {
-                self.before_pr != self.before_landing
+                let selective = review
+                    .selective_before_landing
+                    .as_ref()
+                    .filter(|policy| policy.is_active());
+                let timing_matches = if selective.is_some() {
+                    // Selective review is its own layer beside an off
+                    // timing, or strengthens under an explicit
+                    // before-landing capture; never beside before-PR.
+                    !self.before_pr
+                } else {
+                    self.before_pr != self.before_landing
+                };
+                timing_matches
                     && review.contract_version == orbit_types::workflow::REVIEW_CONTRACT_VERSION
                     && review
                         .crew
                         .as_deref()
                         .is_none_or(|crew| !crew.trim().is_empty())
                     && review.required_validation_commands.is_some()
+                    && selective.is_none_or(|policy| policy.validate().is_ok())
             }
         }
     }
@@ -293,6 +321,11 @@ pub enum AdmissionRefusal {
     /// landing.
     #[serde(alias = "review_policy_unsupported")]
     BeforePrUnsupported,
+    /// The owner captured an active selective before-landing policy and
+    /// the executor does not declare selective-review capability on the
+    /// PR route. An older executor must refuse the contract, never drop
+    /// the policy into an unreviewed path.
+    SelectiveUnsupported,
 }
 
 impl AdmissionRefusal {
@@ -304,6 +337,7 @@ impl AdmissionRefusal {
             Self::ProtocolMismatch => "protocol_mismatch",
             Self::ShipModeUnsupported => "ship_mode_unsupported",
             Self::BeforePrUnsupported => "before_pr_unsupported",
+            Self::SelectiveUnsupported => "selective_review_unsupported",
         }
     }
 }
@@ -527,6 +561,12 @@ pub struct AdmissionRequest {
     /// `review.timing = before_pr` admits only an executor that declares it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub review_gate: bool,
+    /// Whether the executor's leaf evaluates a captured selective
+    /// before-landing policy and returns its selection receipt. Absent
+    /// (an older executor) reads as not capable: an owner with an active
+    /// selective policy refuses it rather than dropping the policy.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub selective_review: bool,
     pub run_context: AdmissionRunContext,
     pub ship: AdmissionShipContract,
     /// What the executor can run. Absent for an owner-local admission and

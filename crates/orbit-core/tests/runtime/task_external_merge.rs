@@ -341,6 +341,7 @@ impl Fixture {
             caller_fingerprint: None,
             caller_before_pr: false,
             review_gate: true,
+            selective_review: false,
             run_context: AdmissionRunContext {
                 run_id: format!("drain-{number}"),
                 job_name: "workspace_pull_pipeline".into(),
@@ -545,6 +546,7 @@ impl Fixture {
                 delivery,
             },
             review: HandoffReview {
+                selective_receipt: None,
                 policy: ReviewTiming::None,
                 disposition: HandoffReviewDisposition::NotRequired,
             },
@@ -1046,6 +1048,7 @@ fn a_recovered_claim_with_an_unrecorded_rescued_pr_can_settle() {
             delivery: HandoffDelivery::PullRequest { number: 4940 },
         },
         review: HandoffReview {
+            selective_receipt: None,
             policy: ReviewTiming::None,
             disposition: HandoffReviewDisposition::NotRequired,
         },

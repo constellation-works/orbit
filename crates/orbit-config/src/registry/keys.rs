@@ -14,6 +14,12 @@ pub fn config_key_options(key: &str) -> Vec<&'static str> {
         "security_alert_sweep.min_severity" => SECURITY_ALERT_SEVERITIES.to_vec(),
         "ux_rules.file_at" => vec!["critical", "high", "medium", "low", "nit"],
         "review.timing" => crate::operation::ReviewTimingSetting::CHOICES.to_vec(),
+        "review.selective_before_landing.mode" => {
+            orbit_types::workflow::SelectiveBeforeLandingMode::CHOICES.to_vec()
+        }
+        "review.selective_before_landing.unknown_risk" => {
+            orbit_types::workflow::SelectiveUnknownRisk::CHOICES.to_vec()
+        }
         "machine.worker_containment" => crate::aliases::WorkerContainmentMode::CHOICES.to_vec(),
         "workflow.validation_env.shell_probe" => crate::aliases::ShellProbeMode::CHOICES.to_vec(),
         _ => Vec::new(),

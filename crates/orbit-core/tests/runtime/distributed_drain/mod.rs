@@ -1276,6 +1276,7 @@ fn handoff(record: &LocalPullAdmission) -> TaskHandoff {
             delivery: HandoffDelivery::PullRequest { number: 42 },
         },
         review: HandoffReview {
+            selective_receipt: None,
             policy: ReviewTiming::None,
             disposition: HandoffReviewDisposition::NotRequired,
         },

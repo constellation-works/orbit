@@ -135,6 +135,7 @@ impl Leaf {
         let request = AdmissionRequest {
             caller_before_pr: true,
             review_gate: true,
+            selective_review: false,
             ..admission_request(
                 "request-1".into(),
                 AdmissionRunContext {

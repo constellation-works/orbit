@@ -1153,6 +1153,7 @@ fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
                 runtime.workflow_required_validation_commands().to_vec(),
             ),
             baseline_commands: runtime.review_baseline_commands().to_vec(),
+            selective_before_landing: None,
             captured_at: Utc::now(),
             host_evidence: Vec::new(),
         };

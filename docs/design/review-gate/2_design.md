@@ -525,9 +525,9 @@ PR stays open and unmerged while the owner supplies the named checks. Other
 non-approving leaf reviews fail with the PR open and unmerged; their failure
 settlement blocks the task on the owner.
 
-### 3.3 Proposed: selective before-landing review
+### 3.3 Selective before-landing review [ORB-20087]
 
-**Proposed, not implemented.** Daniel's 2026-10-29 direction is to restore
+**Shipped (default off).** ORB-20087 implements this section behind `review.selective_before_landing` (`off` by default); shipping enables no live policy — observe/enforce adoption is a later explicit operator decision. The text below is the shipped contract. Daniel's 2026-10-29 direction is to restore
 before-landing review selectively using configurable regression-risk and path
 rules; [ORB-20087] tracks implementation. Symbol-history triggers are
 deferred. This extends this gate; it does not add another reviewer, merge
@@ -541,8 +541,7 @@ isolation required before disabling Copilot workflow-run approval.
 
 #### Configuration in `config.toml`
 
-The following is the proposed workspace configuration, not syntax that a
-current Orbit build accepts:
+The following is the workspace configuration an operator may adopt:
 
 ```toml
 [review]
@@ -565,7 +564,7 @@ After observing selection volume, an operator may change only `mode` to
 without starting a reviewer or changing the existing delivery decision.
 `"off"` preserves today's behavior and performs no selective risk scan.
 
-| Proposed key | Default and validation |
+| Key | Default and validation |
 | --- | --- |
 | `review.selective_before_landing.mode` | `"off"`; only `off`, `observe`, `enforce` are accepted. |
 | `review.selective_before_landing.risk_threshold` | Unset: disable the risk predicate. If set, a finite probability in `[0, 1]`; comparison is strictly `risk > threshold`, so exactly `0.40` does not exceed `0.40`. |

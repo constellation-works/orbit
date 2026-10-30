@@ -94,6 +94,24 @@ pub struct BeforeLandingSwitch {
     /// `problems` and `healthy` carry it.
     #[serde(skip)]
     pub local_route_incompatible: bool,
+    /// The resolved selective policy, when its mode is not `off`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selective: Option<SelectiveSwitch>,
+}
+
+/// `[review.selective_before_landing]` as resolved, for diagnostics.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SelectiveSwitch {
+    /// `observe` or `enforce`.
+    pub mode: String,
+    /// Config layer that decided `mode`.
+    pub source: String,
+    /// The risk threshold spelling, when the risk predicate is on.
+    pub risk_threshold: Option<String>,
+    /// The path globs, when the path predicate is on.
+    pub paths: Vec<String>,
+    /// `review` or `skip`.
+    pub unknown_risk: String,
 }
 
 /// The `delivery-code-review` auto-task: review landed deliveries in batches.
@@ -179,9 +197,29 @@ impl ReviewSwitches {
                 before_landing.hosts_source,
             )
         };
+        let selective = match &before_landing.selective {
+            Some(selective) => {
+                let mut predicates = Vec::new();
+                if let Some(threshold) = &selective.risk_threshold {
+                    predicates.push(format!("risk > {threshold}"));
+                }
+                if !selective.paths.is_empty() {
+                    predicates.push(format!("paths [{}]", selective.paths.join(", ")));
+                }
+                format!(
+                    "; selective {} (review.selective_before_landing.mode, {}): {}; \
+                     unknown risk {}",
+                    selective.mode,
+                    selective.source,
+                    predicates.join(" or "),
+                    selective.unknown_risk,
+                )
+            }
+            None => String::new(),
+        };
         format!(
-            "{problems}{} (review.timing, {}){hosts}; shares review.minutes and its reviewer \
-             with before-PR review: {}",
+            "{problems}{} (review.timing, {}){hosts}{selective}; shares review.minutes and \
+             its reviewer with before-PR review: {}",
             if before_landing.enabled { "on" } else { "off" },
             before_landing.source,
             self.pre_landing_crew_phrase(),
@@ -281,7 +319,25 @@ fn review_switches_under(
             policy.review_before_pr.source.label(),
         ));
     }
+    let selective = policy.selective_before_landing_policy().map(|resolved| {
+        let fields = &policy.selective_before_landing;
+        SelectiveSwitch {
+            mode: resolved.mode.as_str().to_string(),
+            source: fields.mode.source.label().to_string(),
+            risk_threshold: resolved.risk_threshold.clone(),
+            paths: resolved.paths.clone(),
+            unknown_risk: resolved.unknown_risk.as_str().to_string(),
+        }
+    });
     let mut before_landing_problems = Vec::new();
+    if selective.is_some() && local_route {
+        before_landing_problems.push(format!(
+            "review.selective_before_landing.mode ({}) is active but automatic delivery \
+             uses the local-only route, which opens no pull request to select at; ship \
+             through the PR route or set the mode to off",
+            policy.selective_before_landing.mode.source.label(),
+        ));
+    }
     if before_landing_on && local_route {
         before_landing_problems.push(local_route_before_landing_conflict(
             policy.review_before_landing.source.label(),
@@ -293,6 +349,13 @@ fn review_switches_under(
     }
     let hosts = &policy.review_before_landing_hosts;
     let mut before_landing_warnings = Vec::new();
+    if selective
+        .as_ref()
+        .is_some_and(|selective| selective.mode == "enforce")
+        && !before_landing_on
+    {
+        before_landing_problems.extend(crew_problems.iter().cloned());
+    }
     if before_landing_on {
         before_landing_problems.extend(crew_problems);
         if !hosts.value.is_empty() {
@@ -355,6 +418,7 @@ fn review_switches_under(
             problems: before_landing_problems,
             warnings: before_landing_warnings,
             local_route_incompatible: before_landing_on && local_route,
+            selective,
         },
         after_landing: AfterLandingSwitch {
             enabled,

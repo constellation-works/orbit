@@ -168,7 +168,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Policy & Sandboxing](./design/policy-sandbox/1_overview.md) | — | claude |
 | [Process Supervision](./design/process-supervision/1_overview.md) | — | claude |
 | [Remote Access](./design/remote-access/1_overview.md) | — | codex |
-| [Review Gate](./design/review-gate/1_overview.md) | ORB-20099: staged before-PR deprecation (§1.1), then dependent ORB-20087: selective before-landing risk/path rules (§3.3); symbols deferred. | codex |
+| [Review Gate](./design/review-gate/1_overview.md) | ORB-20087 shipped selective before-landing risk/path rules (§3.3, default off) after ORB-20099 staged before-PR deprecation (§1.1); observe/enforce adoption is an operator decision; symbols deferred. | codex |
 | [Routines](./design/routines/1_overview.md) | — | claude |
 | [Scheduled Tasks](./design/scheduled-tasks/1_scope.md) | Consumer calendar and Schedule picker in orbit-office | claude |
 | [State Compatibility](./design/state-compatibility/1_overview.md) | — | claude |
@@ -233,7 +233,7 @@ a conservative title/status fallback.
 | [Process Supervision](./design/process-supervision/1_overview.md) | Record of converging Orbit's child-process supervisors (orbit-common's bounded runner, orbit-exec's SupervisedChild, the engine CLI runner, and two ad-hoc loops) onto one kill-on-drop supervisor in orbit-common, with the caller inventory and the seven-step migration, now landed. | Draft | claude |
 | [Project Learnings](./design/project-learnings/4_decisions.md) | Project Learnings — Decisions: why the native learning subsystem was removed and why leftover .orbit/learnings/ files stay ignored. | Accepted | claude |
 | [Remote Access](./design/remote-access/1_overview.md) | Multi-workspace Orbit Web serving and loopback-safe remote access over an SSH local forward. | Accepted | codex |
-| [Review Gate](./design/review-gate/1_overview.md) | Independent automatic review with captured timing and exact-tree coverage; shipped staged before-PR deprecation precedes proposed selective before-landing risk/path rules and preserves existing runs and evidence. | Accepted | codex |
+| [Review Gate](./design/review-gate/1_overview.md) | Independent automatic review with captured timing and exact-tree coverage; shipped staged before-PR deprecation and shipped selective before-landing risk/path rules (default off) preserve existing runs and evidence. | Accepted | codex |
 | [Routines](./design/routines/1_overview.md) | Durable checkout-local routine definitions dispatch catalog jobs on cron, delivery or state eligibility, with host-local checkpoints. | Implemented | claude |
 | [Scheduled Tasks](./design/scheduled-tasks/1_scope.md) | Scope: let a task wait for a date — an optional not_before instant that every dispatcher honours as a self-lifting admission hold, readable by date range so a calendar can show it | Draft | claude |
 | [Script Steps](./design/script-steps/1_scope.md) | Scope: a job step that runs a workspace script by name inside the executor sandbox, authorized by an operator grant bound to the script's content digest, with JSON stdin/stdout, declared files, audit and the job retry policy | Draft | claude |

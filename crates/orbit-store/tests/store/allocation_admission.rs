@@ -494,6 +494,7 @@ fn admission_request(
         caller_fingerprint: None,
         caller_before_pr: false,
         review_gate: false,
+        selective_review: false,
         run_context: AdmissionRunContext {
             run_id: run_id.into(),
             job_name: job_name.into(),
@@ -1140,6 +1141,7 @@ impl Delivery {
             host_evidence: vec![],
         };
         self.handoff.review = HandoffReview {
+            selective_receipt: None,
             policy: ReviewTiming::BeforePr,
             disposition: HandoffReviewDisposition::BeforePr(Box::new(evidence)),
         };
@@ -1534,6 +1536,7 @@ fn before_pr_ship() -> AdmissionShipContract {
         required_validation_commands: Some(vec!["build".into(), "test".into()]),
         baseline_commands: Vec::new(),
         host_evidence: Vec::new(),
+        selective_before_landing: None,
     });
     ship
 }

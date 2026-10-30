@@ -145,7 +145,9 @@ pub use memory_limit::{MemoryLimit, MemoryUnit};
 pub use operation::{
     OPERATION_POLICY_VERSION, OperationField, OperationLayerSource, OperationPolicy,
     PRE_LANDING_REVIEW_CREW_KEY, REVIEW_CREW_KEY, REVIEW_MINUTES_KEY, REVIEW_TIMING_KEY,
-    ReviewCrewPool, ReviewCrewSetting, ReviewTimingSetting,
+    ReviewCrewPool, ReviewCrewSetting, ReviewTimingSetting, SELECTIVE_MODE_KEY,
+    SELECTIVE_PATHS_KEY, SELECTIVE_RISK_THRESHOLD_KEY, SELECTIVE_UNKNOWN_RISK_KEY, SelectiveLayer,
+    SelectiveResolved, selective_mode_parse, selective_unknown_risk_parse,
 };
 pub use persistence::PersistenceConfig;
 pub use plugin_enablement::{

@@ -197,6 +197,7 @@ impl ReviewedHandoff {
                 required_validation_commands: Some(commands.clone()),
                 baseline_commands: Vec::new(),
                 host_evidence: Vec::new(),
+                selective_before_landing: None,
             }),
         };
         let boundary = TaskCommitBoundary::new(
@@ -213,6 +214,7 @@ impl ReviewedHandoff {
             caller_fingerprint: None,
             caller_before_pr: false,
             review_gate: true,
+            selective_review: false,
             run_context: AdmissionRunContext {
                 run_id: "drain".into(),
                 job_name: "workspace_pull_pipeline".into(),
@@ -398,6 +400,7 @@ impl ReviewedHandoff {
                 delivery: HandoffDelivery::PullRequest { number: 42 },
             },
             review: HandoffReview {
+                selective_receipt: None,
                 policy: timing,
                 disposition,
             },

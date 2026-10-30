@@ -124,6 +124,7 @@ impl OrbitRuntime {
                 )));
             }
         }
+        self.verify_selective_receipt(handoff, &candidate, &receipt.request.ship)?;
         let review = self.observe_handoff_review(handoff, &candidate)?;
         let light_delivery = self.owner_light_delivery(&handoff.task_id, &candidate)?;
         // An empty list is no required check: the handoff is accepted with no
@@ -137,6 +138,94 @@ impl OrbitRuntime {
             known_red: Vec::new(),
             light_delivery,
         })
+    }
+
+    /// Re-evaluate a claimed selective selection against the owner's own
+    /// reading of the candidate diff: an agent's claimed non-match is
+    /// insufficient. The receipt's frozen model coefficients decide the
+    /// risk predicate, so owner and leaf judge the same model.
+    fn verify_selective_receipt(
+        &self,
+        handoff: &TaskHandoff,
+        candidate: &HandoffCandidate,
+        ship: &orbit_store::contracts::AdmissionShipContract,
+    ) -> Result<(), OrbitError> {
+        use orbit_types::workflow::{SelectiveReviewResult, selective_path_matches};
+        let Some(policy) = ship.selective_policy() else {
+            return Ok(());
+        };
+        if matches!(handoff.candidate.delivery, HandoffDelivery::NoDiff { .. }) {
+            return Ok(());
+        }
+        let Some(receipt) = &handoff.review.selective_receipt else {
+            return Err(refusal::refused(
+                "the claim captured an active selective before-landing policy; the handoff \
+                 carries no selection receipt",
+            ));
+        };
+        let pairs = orbit_engine::review_gate::changed_path_pairs(
+            &self.paths().repo_root,
+            &candidate.base.commit,
+            &candidate.candidate.commit,
+        )
+        .map_err(|error| {
+            refusal::refused(format!(
+                "selection_unavailable: owner cannot read the candidate path diff: {error}"
+            ))
+        })?;
+        if receipt.result == SelectiveReviewResult::NotRequired {
+            for (old, new) in &pairs {
+                for path in old.iter().chain(new.iter()) {
+                    if policy
+                        .paths
+                        .iter()
+                        .any(|pattern| selective_path_matches(pattern, path))
+                    {
+                        return Err(refusal::refused(format!(
+                            "selective receipt contradicted: owner-measured diff path \
+                             `{path}` matches the captured selective paths, but the \
+                             receipt records not_required"
+                        )));
+                    }
+                }
+            }
+            if let (Some(threshold), Some(identity)) = (
+                policy.risk_threshold_value(),
+                receipt.risk_model_identity.as_deref(),
+            ) {
+                let coefficient = |name: &str| {
+                    identity
+                        .split_whitespace()
+                        .find_map(|field| field.strip_prefix(name))
+                        .and_then(|value| value.parse::<f64>().ok())
+                };
+                if let (Some(intercept), Some(slope)) =
+                    (coefficient("intercept="), coefficient("slope="))
+                {
+                    let lines = orbit_engine::review_gate::diff_lines_between(
+                        &self.paths().repo_root,
+                        &candidate.base.commit,
+                        &candidate.candidate.commit,
+                    )
+                    .map_err(|error| {
+                        refusal::refused(format!(
+                            "selection_unavailable: owner cannot measure the candidate \
+                             diff: {error}"
+                        ))
+                    })?;
+                    let hazard = (intercept + slope * (lines as f64).ln_1p()).exp();
+                    let probability = -(-hazard).exp_m1();
+                    if probability > threshold {
+                        return Err(refusal::refused(format!(
+                            "selective receipt contradicted: owner-measured risk \
+                             {probability:.6} exceeds the captured threshold, but the \
+                             receipt records not_required"
+                        )));
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// The owner's reading of the facts a before-PR certificate stands on

@@ -62,8 +62,17 @@ impl crate::OrbitRuntime {
     /// rather than claiming a task its gate would escalate.
     pub(crate) fn claimed_review_refusal(&self, ship: &AdmissionShipContract) -> Option<String> {
         let review = ship.review.as_ref()?;
+        let selective_enforced = ship
+            .selective_policy()
+            .is_some_and(|policy| policy.is_enforced());
+        if !ship.before_pr && !ship.before_landing && !selective_enforced {
+            // Observe-only selective review needs no reviewer crew.
+            return None;
+        }
         let key = if ship.before_landing {
             "review.timing = before_landing"
+        } else if selective_enforced && !ship.before_pr {
+            "review.selective_before_landing.mode = enforce"
         } else {
             "review.timing = before_pr"
         };
@@ -147,6 +156,13 @@ impl crate::OrbitRuntime {
         let policy = self.operation_policy();
         let before_pr = self.local_review_before_pr();
         let before_landing = policy.reviews_before_landing_for(executor);
+        // A host-list match stays unconditional for that executor; other
+        // executors carry the selective policy to evaluate on the leaf.
+        let selective = if before_pr || before_landing {
+            None
+        } else {
+            policy.selective_before_landing_policy()
+        };
         AdmissionShipContract {
             mode: match self
                 .workspace_runtime_binding()
@@ -161,15 +177,18 @@ impl crate::OrbitRuntime {
             before_landing,
             completion: self.workflow_distributed_completion().to_string(),
             authorization_reference: self.owner_completion_authority(),
-            review: (before_pr || before_landing).then(|| AdmissionReviewContract {
-                contract_version: REVIEW_CONTRACT_VERSION,
-                crew: self.claim_review_crew(),
-                budget: policy.review_budget(),
-                required_validation_commands: Some(
-                    self.workflow_required_validation_commands().to_vec(),
-                ),
-                baseline_commands: self.review_baseline_commands().to_vec(),
-                host_evidence: policy.review_host_evidence.value.clone(),
+            review: (before_pr || before_landing || selective.is_some()).then(|| {
+                AdmissionReviewContract {
+                    contract_version: REVIEW_CONTRACT_VERSION,
+                    crew: self.claim_review_crew(),
+                    budget: policy.review_budget(),
+                    required_validation_commands: Some(
+                        self.workflow_required_validation_commands().to_vec(),
+                    ),
+                    baseline_commands: self.review_baseline_commands().to_vec(),
+                    host_evidence: policy.review_host_evidence.value.clone(),
+                    selective_before_landing: selective.clone(),
+                }
             }),
         }
     }
@@ -296,6 +315,7 @@ impl crate::OrbitRuntime {
             // Every executor of this binary runs the before-PR gate on its
             // claimed PR leaves [ORB-13908].
             review_gate: true,
+            selective_review: true,
             run_context: AdmissionRunContext {
                 run_id: "probe".to_string(),
                 job_name: "probe".to_string(),
@@ -334,6 +354,13 @@ impl crate::OrbitRuntime {
                     "ship mode '{}' is not available to this caller",
                     request.ship.mode
                 ),
+                AdmissionRefusal::SelectiveUnsupported => {
+                    "owner has an active selective before-landing policy \
+                     (review.selective_before_landing); this executor does not declare \
+                     selective-review capability on the PR route, so it is refused rather \
+                     than allowed to drop the policy"
+                        .to_string()
+                }
                 AdmissionRefusal::BeforePrUnsupported => format!(
                     "owner has {}; that review runs only on the PR route, and this owner \
                      ships '{}'",

@@ -268,6 +268,7 @@ pub(crate) fn pull_refill(
                         // The claimed PR leaf runs the before-PR gate the
                         // ship contract captures [ORB-13908].
                         review_gate: true,
+                        selective_review: true,
                         run_context: AdmissionRunContext {
                             run_id: run_id.clone(),
                             // The job that runs this action, so the owner's

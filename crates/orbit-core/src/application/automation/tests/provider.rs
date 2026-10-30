@@ -41,6 +41,7 @@ fn handoff(
                 delivery,
             },
             review: HandoffReview {
+                selective_receipt: None,
                 policy: ReviewTiming::None,
                 disposition: HandoffReviewDisposition::NotRequired,
             },

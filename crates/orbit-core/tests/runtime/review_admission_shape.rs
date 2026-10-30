@@ -57,6 +57,7 @@ pub(crate) fn admitted_review(attempt_id: &str, lineage: &str, head_sha: &str) -
             budget: ReviewBudget::default(),
             remaining: ReviewConsumption { seconds: 1800 },
             started_at: Utc::now(),
+            selective_receipt: None,
         },
     )))
     .unwrap()

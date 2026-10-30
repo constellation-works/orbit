@@ -150,6 +150,7 @@ fn a_claimed_pr_lands_only_at_the_head_its_before_landing_review_settled() {
     git(&leaf.pair.follower_repo, &["commit", "-q", "-am", "Later"]);
     let later = revision(&leaf.pair.follower_repo, "HEAD");
     let landing_review = |evidence: &HandoffReviewEvidence| HandoffReview {
+        selective_receipt: None,
         policy: ReviewTiming::BeforeLanding,
         disposition: HandoffReviewDisposition::BeforeLanding(Box::new(evidence.clone())),
     };

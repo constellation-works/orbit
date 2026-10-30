@@ -287,6 +287,7 @@ impl ReviewedLeaf {
     ) -> Result<(), OrbitError> {
         self.owner_accepts_review(
             HandoffReview {
+                selective_receipt: None,
                 policy: ReviewTiming::BeforePr,
                 disposition: HandoffReviewDisposition::BeforePr(Box::new(evidence)),
             },
