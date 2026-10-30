@@ -121,3 +121,50 @@ fn board_presence_test_matches_direct_read_on_healthy_facts() {
         );
     }
 }
+
+#[test]
+fn duration_negation_is_refused_at_load() {
+    // cel 0.15 has no duration negation overload, so the checker must refuse
+    // unary '-' on a duration at load instead of accepting an expression that
+    // can only evaluate to unknown. The `true || ...` form pins the absorbed
+    // case: cel's `||` would return true despite the missing overload.
+    for carrier in [ConditionCarrier::Routine, ConditionCarrier::AutoTask] {
+        for when in [
+            "-duration('1h') < duration('0s')",
+            "true || -duration('1h') < duration('0s')",
+        ] {
+            let error = match check_condition(&workspace_condition(when), carrier) {
+                Ok(_) => panic!("accepted duration negation for {carrier:?}: {when}"),
+                Err(error) => error,
+            };
+            assert_eq!(
+                error.clause,
+                format!("{}.when", carrier.clause()),
+                "wrong clause for {when}"
+            );
+            assert!(
+                error.position.is_some(),
+                "missing source position for {when}: {error}"
+            );
+            assert!(
+                error.message.contains("cannot negate duration"),
+                "unexpected message for {when}: {error}"
+            );
+        }
+    }
+}
+
+#[test]
+fn supported_negation_still_checks_and_evaluates() {
+    // Numeric negation and signed duration string literals are supported and
+    // must keep loading and evaluating.
+    for carrier in [ConditionCarrier::Routine, ConditionCarrier::AutoTask] {
+        for when in ["-1 < 0", "duration('-1h') < duration('0s')"] {
+            let checked = check_condition(&workspace_condition(when), carrier)
+                .unwrap_or_else(|error| panic!("refused {when} for {carrier:?}: {error}"));
+            let truth = ConditionEvaluator::new(&healthy_board_facts(&checked.reads))
+                .truth(&checked.when, None);
+            assert_eq!(truth, Truth::True, "{when} did not evaluate true");
+        }
+    }
+}
