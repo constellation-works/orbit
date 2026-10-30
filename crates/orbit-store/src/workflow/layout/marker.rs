@@ -134,6 +134,30 @@ pub(super) fn write_compat_record(
     })
 }
 
+/// Whether a layout-versioned binary has ever stamped this workspace: its
+/// marker, compatibility record or writer record is present. A path that
+/// cannot be checked counts as present, so a caller deciding from an absent
+/// marker fails closed.
+///
+/// Layout versioning predates generation admission, so a workspace at
+/// version 0 that was never stamped has no client that any generation
+/// authority protects; one whose marker is missing beside its other layout
+/// records is a damaged legacy workspace, not a fresh one.
+pub fn layout_ever_stamped(orbit_dir: &Path) -> bool {
+    [
+        marker_path(orbit_dir),
+        compat_path(orbit_dir),
+        writer_path(orbit_dir),
+    ]
+    .iter()
+    .any(|path| {
+        !matches!(
+            std::fs::symlink_metadata(path),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound
+        )
+    })
+}
+
 pub(super) fn read_marker(orbit_dir: &Path) -> Result<u32, OrbitError> {
     let path = marker_path(orbit_dir);
     let raw = match std::fs::read_to_string(&path) {

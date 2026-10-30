@@ -55,7 +55,6 @@ fn open() -> Forgeless {
         repo_root: repo.clone(),
         ship_mode: ShipMode::Pr,
         base_branch: Some("main".to_string()),
-        generation_authority: None,
     };
     let runtime = OrbitRuntime::from_roots_with_binding(&global, &repo.join(".orbit"), binding)
         .unwrap()

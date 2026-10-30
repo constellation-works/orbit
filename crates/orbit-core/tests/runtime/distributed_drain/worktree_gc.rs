@@ -42,7 +42,6 @@ fn replica_gc(mut pair: Pair, config: &str) -> Pair {
                 repo_root: pair.follower_repo.clone(),
                 ship_mode: orbit_core::ShipMode::Local,
                 base_branch: None,
-                generation_authority: None,
             },
         )
         .unwrap()

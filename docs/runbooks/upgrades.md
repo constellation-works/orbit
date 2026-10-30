@@ -4,7 +4,7 @@ summary: Install a new Orbit release with `orbit update`, then review, apply, an
 tags: [operations, upgrades, migrations, recovery]
 paths: ["crates/orbit-cmd/src/update/**", "crates/orbit-common/src/fs/generation/**", "crates/orbit-store/src/workflow/layout/**", "crates/orbit-store/src/driver/sqlite/migration/**", "crates/orbit-store/src/contracts/compat.rs"]
 related_features: [orbit-core]
-related_artifacts: [ORB-10014, ORB-11280, ORB-11344, ORB-11695, ORB-11753, ORB-12013, ORB-12434, ORB-13631, ORB-14320, ORB-20262]
+related_artifacts: [ORB-10014, ORB-11280, ORB-11344, ORB-11695, ORB-11753, ORB-12013, ORB-12434, ORB-13631, ORB-14320, ORB-20262, ORB-20272]
 last_validated: 2026-10-30
 ---
 
@@ -155,37 +155,88 @@ authority; identical copies trivially do.
 The generation authority is chosen from `--root`, `ORBIT_ROOT` or the home directory
 (`~/.orbit`), while the workspace `.orbit` is discovered from the working directory.
 The two can disagree. A process with a fresh home, run from an uninitialized directory
-inside a live checkout, joins an empty authority but discovers that checkout. The
-workspace layout is the one part of a compatibility identity that belongs to the
-workspace, so a pending layout migration is admitted only under the authority whose
-participants use the workspace:
+inside a live checkout, joins an empty authority but discovers that checkout. So can a
+process whose `--root` names the workspace data directory itself, or one whose home
+merely registered the same checkout. The workspace layout is the one part of a
+compatibility identity that belongs to the workspace, so a pending layout migration is
+admitted only under the authority whose participants use the workspace:
 
 - A workspace records that authority's canonical path in
-  `.orbit/state/generation-authority.json`. A registered open records it the first
-  time: a `--workspace` selection, or a cwd inside a checkout that the authority's
-  `workspaces.json` registers. A brand-new workspace records its creator. A data
-  directory opened as its own explicit root records nothing.
+  `.orbit/state/generation-authority.json`. Only two things write it: the first open of
+  a workspace that no layout-versioned Orbit has stamped records its creator, and
+  `orbit migrate --adopt-authority` records the authority it runs under. An open never
+  records anything otherwise. Neither does a registered open, the data directory used as
+  its own explicit root, or an open of a current layout. Each of those is just as true
+  of an unrelated authority. A record is never replaced.
 - A pending layout migration under any other authority is refused before bootstrap
   writes anything to the workspace. The refusal reads `upgrade admission refused:
   workspace '<path>' has a pending layout upgrade (vN to vM) but its clients are
   protected by generation authority '<A>', not this process's '<B>'`.
-- A workspace that recorded nothing, for example one last opened by an older binary,
-  accepts a pending migration only from the authority that registered the checkout.
-  It also accepts the workspace data directory itself when that directory is the
-  explicit `--root` or `ORBIT_ROOT`. Any other authority is refused the same way,
-  with `it has recorded no generation authority and this process's authority '<B>'
-  has not registered it`. An unreadable or malformed record also refuses.
+- A workspace that recorded nothing refuses every pending layout migration, from
+  every authority including its own, with `it has recorded no generation authority`.
+  This applies, for example, to a workspace last opened by an older binary, or to a data
+  directory used as its own `--root`. Adopt it as described below. An unreadable or
+  malformed record also refuses, and Orbit never rewrites it.
+- Every opening authority is also listed in `.orbit/state/generation-authorities.json`.
+  A pending migration under the recorded authority additionally holds admission on every
+  other listed authority. It is refused, naming that authority, while one of that
+  authority's long-lived clients is live (`which has also used this workspace, still has
+  clients this process's authority cannot protect`). Short-lived commands are waited
+  for. Stop those clients and re-run; this authority cannot wait for them.
 - The guard applies only when a layout migration is pending. Opening a current
-  workspace, or joining read-only beside a foreign generation, never consults it.
+  workspace, or joining read-only beside a foreign generation, never consults the record.
   Registered followers, managed children (which use the dispatching host's registry
-  authority) and explicit-root data directories keep working.
+  authority) and a fresh explicit-root data directory record or match their own authority
+  and keep working.
 
-To recover from this refusal, run the command under the authority the workspace's
-clients use: the same home directory, `--root` or `ORBIT_ROOT`. Admission there waits
-for incompatible clients to quiesce, as described below. Do not delete the record,
-the layout marker or admission files, and do not point a scratch home at a live
+To recover from a refusal that names a recorded authority, run the command under that
+authority: the same home directory, `--root` or `ORBIT_ROOT`. Admission there waits for
+incompatible clients to quiesce, as described below. Do not delete the record, the
+ledger, the layout marker or admission files, and do not point a scratch home at a live
 checkout. Retrying from a fresh home does not help: releasing the other authority's
 clients does not authorize a process that does not protect the workspace.
+
+##### Adopt a workspace that recorded no authority
+
+When the refusal says the workspace `has recorded no generation authority`, Orbit
+cannot tell which authority's clients use it. Adopt it explicitly:
+
+1. Stop every Orbit process that uses the workspace, under every home directory,
+   `--root` and `ORBIT_ROOT`: `mcp serve` sessions, the dashboard, drains and clock
+   ticks. Adoption refuses rather than restarting any of them.
+2. Under the authority those clients use, run:
+
+   ```sh
+   orbit migrate --adopt-authority ~/.orbit        # home authority, from the checkout
+   orbit --root /srv/orbit migrate --adopt-authority /srv/orbit   # explicit-root data directory
+   ```
+
+   `PATH` must name the authority the command runs under, and that authority must have
+   registered the checkout or be the workspace data directory itself.
+3. Re-run the refused command, or `orbit migrate --confirm`. The migration is then
+   admitted under the recorded authority, and still waits for its incompatible clients.
+
+Adoption holds admission exclusively on its own authority, on every authority in the
+workspace's ledger, and on the data directory when it has served as an authority. It
+writes the record only while none of their long-lived clients is live, and it refuses
+by naming the participant otherwise. It is refused, and changes nothing, when:
+
+- `PATH` names a different authority from the one the command runs under;
+- that authority neither registered the checkout nor is its data directory;
+- any authority it fences has a live long-lived client;
+- the workspace already records another authority, or its record or ledger is unreadable
+  or malformed; or
+- another authority opens the workspace while the adoption is fencing.
+
+Re-running an adoption that already landed, for example after a lost reply, reports
+`recorded: false` and changes nothing. The record carries `recorded_by`: the method
+(`created` or `adopted`), the evidence, time, PID, executable and layout version. It is
+the audit trail of who claimed the workspace.
+
+Binaries from before the ledger leave no entry in it, so adoption cannot fence an
+authority that only such binaries have used. Step 1 covers them: stop them yourself
+before adopting. Adoption never makes an unverifiable claim true. It only records a
+claim that the authority's registration and a fenced, quiescent moment support.
 
 #### A build that is not the installed orbit
 

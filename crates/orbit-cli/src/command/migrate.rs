@@ -5,6 +5,7 @@ use orbit_cmd::registry_runtime::{
 use orbit_cmd::{MigrateCommands, MigrateStatus, migrate_dry_run_at};
 use orbit_core::application::codebase::{DIFF_STATS_BACKFILL_DEFAULT_LIMIT, DiffStatsBackfill};
 use orbit_core::application::job::TaskCrewBackfill;
+use orbit_core::composition::WorkspaceAuthorityAdoption;
 use orbit_core::{OrbitError, OrbitRuntime};
 use serde_json::json;
 
@@ -16,7 +17,9 @@ use crate::command::{Block, CommandOut, Execute, Payload};
 /// By default, this command lists pending upgrades without applying them.
 /// `--dry-run` explicitly requests the same inspection, while `--confirm`
 /// applies the pending upgrades. Orbit also applies required workspace
-/// upgrades automatically when it opens a workspace.
+/// upgrades automatically when it opens a workspace. `--adopt-authority`
+/// records which generation authority protects a workspace that has
+/// recorded none, without applying anything.
 #[derive(Args)]
 #[command(about = "Apply or inspect pending .orbit layout and store schema migrations")]
 pub struct MigrateCommand {
@@ -40,6 +43,13 @@ pub struct MigrateCommand {
     /// Apply pending migrations, then set each task's crew to the crew its latest delivery selected (latest local delivery run or claimed-leaf settlement), where they differ
     #[arg(long, conflicts_with = "backfill_diff_stats")]
     pub backfill_task_crews: bool,
+    /// Record the generation authority this command runs under (its home directory, --root or ORBIT_ROOT; PATH must name it) as the one protecting a workspace that has recorded none. Stop every orbit process using the workspace first; nothing is migrated
+    #[arg(
+        long,
+        value_name = "PATH",
+        conflicts_with_all = ["confirm", "dry_run", "backfill_diff_stats", "backfill_task_crews"]
+    )]
+    pub adopt_authority: Option<std::path::PathBuf>,
 }
 
 impl MigrateCommand {
@@ -61,7 +71,7 @@ impl MigrateCommand {
                 // Validate the checkout-local identity without opening a
                 // runtime: missing or malformed identity is a re-homing
                 // boundary, not permission to inspect a different root.
-                workspace_runtime_binding(&global_root, &selected.workspace, &selected.checkout)?;
+                workspace_runtime_binding(&selected.workspace, &selected.checkout)?;
                 (global_root, selected.checkout.orbit_dir)
             }
             None => {
@@ -80,6 +90,13 @@ impl MigrateCommand {
                 (global_root, resolved.shared_root)
             }
         };
+        if let Some(claimed) = self.adopt_authority.as_deref() {
+            return adoption_payload(&RegisteredRuntimeFactory::adopt_workspace_authority(
+                &global_root,
+                &orbit_dir,
+                claimed,
+            )?);
+        }
         let status = migrate_dry_run_at(&global_root, &orbit_dir)?;
 
         // `--dry-run` exits nonzero when there is anything pending, and a
@@ -129,6 +146,39 @@ impl Execute for MigrateCommand {
         let status = runtime.migrate_status()?;
         status_payload(&status, false)
     }
+}
+
+fn adoption_payload(adoption: &WorkspaceAuthorityAdoption) -> CommandOut {
+    let doc = json!({
+        "workspace_authority": {
+            "orbit_dir": adoption.orbit_dir.to_string_lossy(),
+            "authority": adoption.authority.to_string_lossy(),
+            "evidence": adoption.evidence.as_str(),
+            "recorded": adoption.recorded,
+            "layout_version": adoption.layout_version,
+            "fenced": adoption
+                .fenced
+                .iter()
+                .map(|authority| authority.to_string_lossy())
+                .collect::<Vec<_>>(),
+        }
+    });
+    let text = if adoption.recorded {
+        format!(
+            "workspace {} now records generation authority {} (evidence: {}); its pending \
+             layout migrations apply under that authority once its clients quiesce",
+            adoption.orbit_dir.display(),
+            adoption.authority.display(),
+            adoption.evidence.as_str()
+        )
+    } else {
+        format!(
+            "workspace {} already records generation authority {}; nothing changed",
+            adoption.orbit_dir.display(),
+            adoption.authority.display()
+        )
+    };
+    Ok(Payload::blocks(doc, vec![Block::text(text)]).into())
 }
 
 fn backfill_payload(report: &DiffStatsBackfill) -> CommandOut {

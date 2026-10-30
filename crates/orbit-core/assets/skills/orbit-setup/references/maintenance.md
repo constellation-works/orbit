@@ -441,6 +441,7 @@ orbit migrate               # inspect pending migrations without applying
 orbit migrate --confirm     # apply
 orbit migrate --backfill-diff-stats [--limit N]  # apply, then record diff stats for done tasks landed earlier
 orbit migrate --backfill-task-crews  # apply, then set task.crew from each task's latest delivery (run or claimed-leaf settlement)
+orbit migrate --adopt-authority ~/.orbit  # record this home as the authority protecting a workspace that recorded none (stop its clients first)
 ```
 
 Both ledgers — the SQLite schema and the workspace layout — auto-apply when a

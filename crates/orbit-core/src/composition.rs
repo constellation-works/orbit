@@ -19,7 +19,10 @@ use crate::bootstrap::policy::seed_default_policies;
 use crate::bootstrap::product_profile::ProductProfile;
 use crate::bootstrap::task_migration::apply_configured_id_start;
 use crate::bootstrap::workspace_authority::admit_workspace_layout_authority;
-pub use crate::bootstrap::workspace_authority::verify_workspace_layout_authority;
+pub use crate::bootstrap::workspace_authority::{
+    AuthorityAdoptionEvidence, WorkspaceAuthorityAdoption, adopt_workspace_layout_authority,
+    verify_workspace_layout_authority,
+};
 #[cfg(target_os = "macos")]
 use crate::runtime::run_input::managed_dispatch_context_from_env;
 use crate::runtime::run_input::managed_run_context_from_env;
@@ -56,11 +59,7 @@ impl OrbitRuntime {
         if !generation.joined_foreign_generation() {
             // The workspace's clients may participate in another authority:
             // refuse before bootstrap writes under them [ORB-20244].
-            verify_workspace_layout_authority(
-                &roots.global_root,
-                &roots.shared_root,
-                binding.as_ref(),
-            )?;
+            verify_workspace_layout_authority(&roots.global_root, &roots.shared_root)?;
         }
         ensure_orbit_root_initialized(&roots.global_root, &roots.shared_root)?;
         build_runtime(
@@ -337,16 +336,12 @@ fn build_runtime(
     let authority = if write_free {
         None
     } else {
-        Some(admit_workspace_layout_authority(
-            global_root,
-            shared_root,
-            binding.as_ref(),
-        )?)
+        Some(admit_workspace_layout_authority(global_root, shared_root)?)
     };
     let layout_report = observe_or_upgrade_layout(shared_root, write_free)?;
-    if let Some(authority) = authority {
-        authority.record(shared_root);
-    }
+    // The admission recorded the authority before the layout changed and
+    // fenced other first adoptions until now.
+    drop(authority);
     let runtime_config = if write_free {
         ResolvedConfig::load(&ConfigRoots::new(global_root, shared_root))?
     } else {

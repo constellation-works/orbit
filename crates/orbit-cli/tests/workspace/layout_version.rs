@@ -104,6 +104,11 @@ fn a_build_that_is_not_installed_cannot_migrate_past_the_installed_orbit() {
         assert!(output.status.success(), "{args:?}: {output:?}");
     }
 
+    // The first open records this home as the workspace's authority, which
+    // admits its later layout migrations.
+    let opened = orbit(&["task", "list", "--json"]);
+    assert!(opened.status.success(), "{opened:?}");
+
     let compiled = orbit_core::composition::compiled_compatibility();
     let newest = compiled.workspace_layout.version;
     assert_eq!(

@@ -40,7 +40,6 @@ fn open(ship_mode: ShipMode, global: &str, workspace: &str) -> (TempDir, OrbitRu
         repo_root: repo,
         ship_mode,
         base_branch: Some("main".to_string()),
-        generation_authority: None,
     };
     let runtime = OrbitRuntime::from_roots_with_binding(&global_root, &workspace_root, binding)
         .unwrap()

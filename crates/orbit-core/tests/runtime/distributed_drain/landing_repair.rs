@@ -590,7 +590,6 @@ impl OwnerLocal {
                 repo_root: repo.clone(),
                 ship_mode: orbit_core::ShipMode::Local,
                 base_branch: Some("main".to_string()),
-                generation_authority: None,
             },
         )
         .expect("owner bound to a local-mode workspace")

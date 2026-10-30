@@ -352,7 +352,23 @@ fn a_foreign_authority_cannot_migrate_a_discovered_workspace_under_live_clients(
         );
 
         // The protecting authority upgrades once its old client has gone, and
-        // B keeps serving its own workspace.
+        // B keeps serving its own workspace. A workspace that recorded no
+        // authority is first adopted by it [ORB-20272].
+        if !recorded {
+            assert_refused(&protected.run(&[
+                "task",
+                "add",
+                "--title",
+                "Unrecorded",
+                "--complexity",
+                "low",
+            ]));
+            protected.run_ok(&[
+                "migrate",
+                "--adopt-authority",
+                &authority_a.to_string_lossy(),
+            ]);
+        }
         let added = protected.run_ok(&[
             "task",
             "add",
