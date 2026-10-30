@@ -238,7 +238,12 @@ fn cwd_git_dirs(cwd: &Path) -> Vec<PathBuf> {
         .ok()
         .and_then(|relative| git_dir.join(relative.trim()).canonicalize().ok());
     let mut dirs = vec![dot_git];
-    if let Some(common) = common {
+    // The common directory is skipped only when a collected directory already
+    // contains it. It goes before the per-worktree gitdir so the gitdir mounts
+    // over it.
+    if let Some(common) = common
+        && !dirs.iter().any(|dir| common.starts_with(dir))
+    {
         dirs.push(common);
     }
     dirs.push(git_dir);
