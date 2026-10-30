@@ -81,6 +81,7 @@ mod jobs;
 mod log;
 mod recovery;
 mod rerun;
+pub(in crate::executor::automation::vcs) mod rerun_diagnostic;
 mod suspect;
 
 pub(in crate::executor::automation::vcs) use base_tip::base_tip_check_evidence;

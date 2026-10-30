@@ -1953,6 +1953,18 @@ existing recovery activities, final validation and push do the repair:
   authenticated retry ancestors. The stopped rebase's branch and original head
   must both match that repaired head; its target base remains pinned. Missing,
   unrelated or disconnected push records cannot authorize a different head.
+- CI rerun-planner refusals are retained on the owning task in
+  `ci-rerun/<execution>/diagnostics.json`, including the observed PR, head,
+  run and job identities, planner stage and a redacted reason header capped
+  at 1 KiB. These are observations, not authenticated mutation authority.
+  The single replaceable artifact keeps the first refusal and the latest 15
+  transitions, with an omitted-transition count; identical consecutive reads
+  add no history. A later successful planner read clears the current refusal.
+  A changed head clears it before any completion hold, while earlier heads
+  remain historical observations. Completion retains its typed outcome beside
+  this journal and includes a current refusal in the stop diagnostic, including
+  when the original completion budget expires. A diagnostic write failure is
+  reported in a warning and never grants recovery permission.
 - Final recovery after `complete_pr` re-reads required checks on the current
   head and receives each failed check's name and diagnostic evidence in
   `required_check_failures`, independently of the earlier step error. The

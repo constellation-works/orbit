@@ -102,6 +102,7 @@ fn evaluate_red_base<H: RuntimeHost + ?Sized>(
 }
 
 /// Produce the first retry through the same planner as claimed landing.
+#[allow(clippy::too_many_arguments)]
 pub(in crate::executor::automation::vcs::pr) fn recover_ci_rerun<H: RuntimeHost + ?Sized>(
     host: &H,
     auto_fix: &admission::AutoFix,
@@ -110,6 +111,9 @@ pub(in crate::executor::automation::vcs::pr) fn recover_ci_rerun<H: RuntimeHost 
     pr_number: &str,
     status: &PullRequestStatus,
     deadline_ms: u64,
+    observation: &mut Option<
+        super::super::super::landing::checks::rerun_diagnostic::CiRerunDiagnostic,
+    >,
 ) -> Result<bool, OrbitError> {
     let Some(head) = status.head_sha.as_deref() else {
         return Ok(false);
@@ -147,15 +151,12 @@ pub(in crate::executor::automation::vcs::pr) fn recover_ci_rerun<H: RuntimeHost 
         base_name.strip_prefix("origin/").unwrap_or(&base_name),
         deadline_ms,
         None,
+        &auto_fix.run_id,
+        observation,
     )? {
         super::super::super::landing::checks::CiRerunStep::NotEligible => Ok(false),
-        super::super::super::landing::checks::CiRerunStep::Wait(reason) => {
-            ledger::record_base_path(
-                host,
-                auto_fix,
-                "ci_retry_wait",
-                &serde_json::json!({"head":head,"reason":reason}),
-            )?;
+        super::super::super::landing::checks::CiRerunStep::Wait(_) => {
+            // The shared bounded journal retains this observation.
             Ok(true)
         }
         super::super::super::landing::checks::CiRerunStep::Acted(_) => Ok(true),
