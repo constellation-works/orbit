@@ -505,8 +505,9 @@ Secret values must not be copied into task prose or logs.
 
 A missing GitHub client, authentication, or API permission is a capability gap,
 not evidence of a clean repository. Read the collect/file step outcomes. CI
-filing honors exact-key operator `covered_by` relations and timed archive/reject
-suppression (`ci_failure.operator_suppression_hours`, default 6; see
+filing honors operator `covered_by` relations and timed archive/reject
+suppression of the same evidenced cause
+(`ci_failure.operator_suppression_hours`, default 6; see
 [recovery](../../orbit-orchestrate/references/recovery.md)). Equal normalized
 failing-test signatures consolidate across jobs with every job retained.
 Otherwise filing first reuses a still-open `ci-failure:<key>` owner, then follows

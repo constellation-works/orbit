@@ -5,16 +5,21 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use orbit_common::OrbitError;
-use orbit_types::task::{CiFailureIdentity, CiFailureSource, Task};
+use orbit_types::task::{CiFailureIdentity, CiFailureSource, Task, TaskComment, TaskStatus};
 
-use super::cluster::{COMPILER_CAUSE_LINE, OPEN_COMPILER_SET_LINE, SIGNATURE_LINE};
+use super::cluster::{COMPILER_CAUSE_LINE, FailureCluster, OPEN_COMPILER_SET_LINE, SIGNATURE_LINE};
 use super::filing::CI_FAILURE_KEY_TAG_PREFIX;
-use super::log_signature::{compiler_cause, compiler_diagnostic_set};
+use super::log_signature::{compiler_cause, compiler_diagnostic_set, error_signature};
 use crate::OrbitRuntime;
+use crate::application::contracts::CI_FAILURE_TAG;
 use crate::application::sweep_filing::digest;
+use crate::application::sweep_filing::duplicate_tasks::DuplicateTaskLookup;
 
 pub(super) struct TaskCiIdentity {
     pub(super) identity: CiFailureIdentity,
+    // A shipped broad key is not a cause. Old fallback records can still
+    // retain a concrete diagnostic in their bounded log section.
+    pub(super) archive_signature: Option<String>,
     // Old-key migration checked the retained log, whereas completed repairs
     // checked the rendered cause line. Keep those distinct for old records
     // whose description excerpt was truncated.
@@ -60,6 +65,10 @@ impl<'a> CiTaskIdentities<'a> {
         let history = self.runtime.get_task_history(&task.id)?;
         let identity = match CiFailureIdentity::from_history(&history) {
             Ok(Some(identity)) => Some(TaskCiIdentity {
+                archive_signature: identity
+                    .signature
+                    .clone()
+                    .or_else(|| retained_archive_signature(task)),
                 prior_compiler_cause_digest: identity.compiler_cause_digest.clone(),
                 identity,
                 legacy_source_ids: None,
@@ -113,6 +122,8 @@ fn ci_identity_from_description_legacy(task: &Task) -> TaskCiIdentity {
             .collect()
     };
     TaskCiIdentity {
+        archive_signature: identity_line(SIGNATURE_LINE)
+            .or_else(|| retained_archive_signature(task)),
         identity: CiFailureIdentity {
             failure_key: task
                 .tags
@@ -133,5 +144,65 @@ fn ci_identity_from_description_legacy(task: &Task) -> TaskCiIdentity {
             labels("(id `", "`)"),
             labels("commit actually checked out: `", "`"),
         ]),
+    }
+}
+
+fn retained_archive_signature(task: &Task) -> Option<String> {
+    let section = task
+        .description
+        .split_once("\n## Failed-step log excerpt\n")?
+        .1;
+    let section = section
+        .split_once("\n## ")
+        .map_or(section, |(excerpt, _)| excerpt);
+    // An incomplete excerpt cannot establish a different cause. Do not scan
+    // other prose, recommendations or comments for diagnostic-looking text.
+    if section.contains("truncated") || section.contains("omitted") || section.contains("[...") {
+        return None;
+    }
+    let log = section
+        .trim_start()
+        .strip_prefix("```\n")?
+        .split_once("\n```")?
+        .0;
+    let signature = error_signature(log, "");
+    (!signature.step_fallback).then_some(signature.text)
+}
+
+/// Exclude a rejected broad-key collision before shared duplicate lookup can
+/// follow its superseding owner. Open exact-key idempotency stays unchanged.
+pub(super) struct CauseCheckedLookup<'a, L: ?Sized> {
+    pub(super) inner: &'a L,
+    pub(super) cluster: &'a FailureCluster,
+    pub(super) identities: &'a CiTaskIdentities<'a>,
+}
+
+impl<L: DuplicateTaskLookup + ?Sized> DuplicateTaskLookup for CauseCheckedLookup<'_, L> {
+    fn list_tasks_by_tags(&self, tags: &[String]) -> Result<Vec<Task>, OrbitError> {
+        let mut tasks = Vec::new();
+        for task in self.inner.list_tasks_by_tags(tags)? {
+            if self.cluster.compiler_cause.is_none()
+                && matches!(task.status, TaskStatus::Archived | TaskStatus::Rejected)
+                && task.tags.iter().any(|tag| tag == CI_FAILURE_TAG)
+                && (self.cluster.signature_is_step_fallback
+                    || !self.identities.for_task(&task)?.is_some_and(|record| {
+                        record.archive_signature.as_ref() == Some(&self.cluster.signature)
+                    }))
+            {
+                continue;
+            }
+            tasks.push(task);
+        }
+        Ok(tasks)
+    }
+
+    fn list_tasks(&self) -> Result<Rc<[Task]>, OrbitError> {
+        self.inner.list_tasks()
+    }
+    fn get_task(&self, id: &str) -> Result<Task, OrbitError> {
+        self.inner.get_task(id)
+    }
+    fn get_task_comments(&self, id: &str) -> Result<Rc<[TaskComment]>, OrbitError> {
+        self.inner.get_task_comments(id)
     }
 }
