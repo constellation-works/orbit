@@ -17,7 +17,7 @@ source_of_truth:
   accepting_server:
     - crates/orbit-cli/src/command/mcp/server/host.rs::ServerMcpHost
   authoritative_dispatch:
-    - crates/orbit-core/src/adapter/command/dispatch/execute.rs
+    - crates/orbit-core/src/adapter/command/dispatch/execute
 
 transport:
   local: stdio

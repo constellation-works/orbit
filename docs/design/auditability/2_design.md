@@ -44,8 +44,8 @@ For `orbit tool run`, [T20260427-52] first collapsed duplicate `agent` + `model`
 
 After [T20260428-4], tool-invocation audit is written at Core's dispatch boundary for
 registered CLI/MCP tools. The current implementation is
-`crates/orbit-core/src/adapter/command/dispatch/execute.rs`: a `ToolEntryPoint` becomes
-`subcommand: "run"` or `"run-mcp"`, setup and handler failures inside the boundary are
+`crates/orbit-core/src/adapter/command/dispatch/execute/audit_store.rs`: a `ToolEntryPoint`
+(`execute/entry.rs`) becomes `subcommand: "run"` or `"run-mcp"`, setup and handler failures inside the boundary are
 audited, and `duration_ms` is at least `1`. The CLI RAII guard covers top-level command
 execution and suppresses its duplicate after Core records a tool row; paths such as `--dry-run` still produce a guard-side row after runtime bootstrap.
 Invalid JSON and other preflight or bootstrap failures occur before the guard exists
@@ -83,7 +83,7 @@ the executing-process hostname, while caller/process fields are additive.
 
 Some runtime paths write targeted command-audit rows directly:
 
-- `crates/orbit-core/src/adapter/command/dispatch/execute.rs` records runtime-backed, in-process, and global CLI/MCP tool invocations as `command: tool` with `subcommand: "run"` or `"run-mcp"`.
+- `crates/orbit-core/src/adapter/command/dispatch/execute/audit_store.rs` records runtime-backed, in-process, and global CLI/MCP tool invocations as `command: tool` with `subcommand: "run"` or `"run-mcp"`.
 - `crates/orbit-cli/src/command/mcp/server/` composes `orbit-mcp` framing with `orbit-cmd` registered runtime selection and carries the session capability policy. Global discovery, unknown/unadvertised names, and workspace setup failures use Core's global audit seam; resolved workspace calls use the runtime seam. Core dispatch enforces governed operation authorization, while federated routing applies destination tool-class checks before delivery.
 - `crates/orbit-runtime/src/task/locks/audit.rs` records task lock reservation checks, reservations, releases, and denials.
 - `crates/orbit-core/src/application/job/pipeline_actions/gate/starvation.rs` records gate-starvation deferrals for task bundles, naming the blocking tasks and claims.
