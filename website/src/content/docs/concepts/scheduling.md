@@ -70,7 +70,10 @@ seeded task-pilot routine uses a `state` trigger that prepares new or edited
 tasks once they settle, and fires nothing while the backlog is unchanged. If
 the branch moves under a task's context files while its pilot runs, that task
 is prepared again at the new head without using a retry; the rest of the batch
-still applies.
+still applies. A routine can also fire on verified deliveries landing on a
+branch (`deliveries_landed`), or when a typed predicate over workspace state
+becomes true for a subject (`condition`); see
+[Condition triggers](../../reference/scheduling-yaml/#condition-triggers).
 
 - **Runs on every owner machine.** A cron routine runs on each machine that
   has the checkout registered and its clock on. To keep it off one machine,
@@ -84,9 +87,9 @@ still applies.
 - **No overlap.** A fire is skipped while the previous one is still running,
   for up to `timeout_minutes`.
 - **Seeded mostly disabled.** `orbit workspace init` writes task pilot, task
-  publication, worktree and store GC, CI and dependency-alert sweeps, and the
-  finding-verification, pilot-warning and blocked-task triage routines, all
-  with `enabled: false`. The one exception is the hourly crew-performance
+  publication, worktree and store GC, CI and dependency-alert sweeps, the
+  daily UX-rules routine, and the finding-verification, pilot-warning and
+  blocked-task triage routines, all with `enabled: false`. The one exception is the hourly crew-performance
   refresh, seeded enabled; while crew performance is off, its action skips
   the scan and writes no snapshot.
 
@@ -95,9 +98,13 @@ Routine files and scheduler state are per machine; git does not share them.
 ## Auto-task
 
 An auto-task says **which recurring chore becomes a task**. It is one YAML
-file under `.orbit/auto_tasks/`, managed with `orbit auto-task`: a cadence, an
+file under `.orbit/auto_tasks/`, managed with `orbit auto-task`: a schedule, an
 `enabled` toggle, and the task to file, with its title, body, acceptance
-criteria, and crew. Each clock tick files a task from every enabled definition
+criteria, and crew. The schedule is a cadence (`cron` or `every_minutes`), a
+`deliveries_landed` trigger, or a `condition` predicate over workspace state
+that fires once per subject; see
+[Condition triggers](../../reference/scheduling-yaml/#condition-triggers).
+Each clock tick files a task from every enabled definition
 that is due. A new chore is a new definition, never new code.
 
 - **A filed task is an ordinary task.** It enters `backlog` by default, or
