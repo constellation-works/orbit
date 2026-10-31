@@ -137,10 +137,10 @@ function fixture(){
       offset:0,limit:50,truncated:true,next_offset:50
     }
   });
-  const detail=(id='ORB-1',revision='rev1')=>({
+  const detail=(id='ORB-1',revision='rev1',crew)=>({
     schema_version:1,workspace:'host-a/ws_shared',observed_at:'now',scope:'task',snapshot:{
       schema_version:1,revision,task:{
-        id,title:'<script>hostile()</script>',description:'<img onerror=bad()>',acceptance_criteria:['Works'],status:'review'
+        id,title:'<script>hostile()</script>',description:'<img onerror=bad()>',acceptance_criteria:['Works'],status:'review',...(crew?{crew}:{})
       },actions:{
         edit:{
           enabled:true
@@ -340,6 +340,26 @@ test('create and edit forms send exact typed fields; closing editor retains draf
   assert.equal(edit.expected_revision,'rev1');
   assert.equal(edit.title,'Changed title');
   assert.ok(!('fields' in edit));
+});
+test('clearing an assigned crew in Edit sends the guarded empty reset; an unassigned task sends none',async()=>{
+  for(const assigned of ['alpha',undefined]){
+    const f=fixture();
+    await f.init();
+    f.click('refresh');
+    f.answer(f.last(),f.list([{id:'ORB-1',title:'Task'}]));
+    await flush();
+    f.get('list').querySelectorAll('button')[0].handlers.click();
+    f.answer(f.last(),f.detail('ORB-1','rev1',assigned));
+    await flush();
+    f.click('edit');
+    assert.equal(f.get('draft-crew').value,assigned||'');
+    f.get('draft-crew').value='';
+    f.get('task-form').handlers.submit({preventDefault(){}});
+    const edit=f.last().params.arguments;
+    assert.equal(f.last().params.name,'orbit_task_update');
+    if(assigned)assert.equal(edit.crew,'','clearing Crew must send the empty reset, not omit it');
+    else assert.ok(!('crew' in edit),'an unassigned task must not trigger a crew redraw');
+  }
 });
 test('server action refusal disables completion; generic errors retain retry identity and draft',async()=>{
   const f=fixture();
@@ -1475,6 +1495,16 @@ test('automation switches read scopes, toggles observed state and requires an ex
  actionButton(f,'Mint task…').handlers.click();assert.equal(f.posted.length,before,'opening confirmation has no effect');
  assert.match(f.get('automation-detail').textContent,/ignores the schedule/);
  actionButton(f,'Mint one task').handlers.click();assert.equal(f.last().params.arguments.acknowledge_unconditional,true);assert.equal(f.last().params.name,'orbit_auto_task_mint');
+});
+test('condition schedules are labelled in list and detail, enabled or not',async()=>{
+ const f=fixture();await f.init();f.click('automation');
+ const condition={condition:{when:'tasks.open > 3'}};
+ f.answer(f.last(),automationRead('routines','host-a/ws_shared',[{name:'watch',enabled:false,schedule:condition},{name:'daily',enabled:true,schedule:{cron:'0 9 * * *'}},{name:'tick',enabled:true,schedule:{every_minutes:5}},{name:'manual',enabled:true,schedule:null}]));await flush();
+ const rows=f.get('automation-list').children;
+ assert.match(rows[0].textContent,/When condition matches/);
+ assert.match(rows[1].textContent,/Cron · 0 9/);assert.match(rows[2].textContent,/Every 5 minutes/);assert.match(rows[3].textContent,/On demand/);
+ rows[0].handlers.click();
+ assert.match(f.get('automation-detail').textContent,/When condition matches/);
 });
 test('automation scopes unknown outcomes and never repeats a run after refresh',async()=>{
  const f=fixture();await f.init();f.click('automation');f.answer(f.last(),automationRead());await flush();

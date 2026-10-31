@@ -5,7 +5,7 @@ window.OrbitAutomation = ({el, ui, tool, open, current}) => {
   const scopes={routines:['Routines','routine'],auto_tasks:['Auto-tasks','auto_task'],jobs:['Jobs','job']};
   const feedback=text=>{el('automation-feedback').textContent=text;};
   const key=()=>`${current()}|${scope}`;
-  const schedule=value=>value?.every_minutes?`Every ${value.every_minutes} minutes`:value?.deliveries_landed?'After verified deliveries':value?.state?'When state matches':value?.cron?`Cron · ${value.cron}`:'On demand';
+  const schedule=value=>value?.every_minutes?`Every ${value.every_minutes} minutes`:value?.deliveries_landed?'After verified deliveries':value?.state?'When state matches':value?.condition?'When condition matches':value?.cron?`Cron · ${value.cron}`:'On demand';
   function button(text,run,focusKey){const b=ui.node('button',text);b.type='button';if(focusKey)b.dataset.automationAction=focusKey;b.disabled=!fresh||busy||uncertain.has(key());b.addEventListener('click',run);return b;}
   function reset(){
     revision++;fresh=false;items=[];selected=null;confirmation=null;offset=0;next=null;

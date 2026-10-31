@@ -235,7 +235,7 @@ impl FederatedMcpHost {
         session_context: ToolSessionContext,
         internal: bool,
     ) -> Result<Value, OrbitError> {
-        let token = workspace_selector(&input, &session_context).ok_or_else(|| {
+        let token = workspace_selector(&input, &session_context)?.ok_or_else(|| {
             OrbitError::InvalidInput(format!(
                 "tool '{name}' requires a host-qualified workspace selector; copy `selector` from \
                  federated orbit.workspace.list"
@@ -662,13 +662,38 @@ fn listed_workspaces(snapshot: &DestinationSnapshot) -> String {
 }
 
 /// The selector the call itself passed, else the session's announced one.
-fn workspace_selector<'a>(input: &'a Value, context: &'a ToolSessionContext) -> Option<&'a str> {
-    input
-        .get("workspace")
-        .and_then(Value::as_str)
-        .or(context.workspace.as_deref())
+///
+/// An omitted or null `workspace` falls back to the session's. A non-string
+/// value is malformed input and is refused rather than silently replaced by
+/// the session default.
+fn workspace_selector<'a>(
+    input: &'a Value,
+    context: &'a ToolSessionContext,
+) -> Result<Option<&'a str>, OrbitError> {
+    let selector = match input.get("workspace") {
+        None | Some(Value::Null) => context.workspace.as_deref(),
+        Some(Value::String(selector)) => Some(selector.as_str()),
+        Some(other) => {
+            return Err(OrbitError::InvalidInput(format!(
+                "`workspace` must be a string selector, got {}",
+                json_type_name(other)
+            )));
+        }
+    };
+    Ok(selector
         .map(str::trim)
-        .filter(|selector| !selector.is_empty())
+        .filter(|selector| !selector.is_empty()))
+}
+
+fn json_type_name(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "a boolean",
+        Value::Number(_) => "a number",
+        Value::String(_) => "a string",
+        Value::Array(_) => "an array",
+        Value::Object(_) => "an object",
+    }
 }
 
 /// v1 destinations address a local `ws_*`, not the host-qualified token.
