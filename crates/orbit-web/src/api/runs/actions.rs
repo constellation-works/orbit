@@ -718,8 +718,10 @@ pub(in crate::api) async fn auto_drain_readiness(
 /// the workspace's owner (a local drain) or a replica (a pull drain from its
 /// owner, with the owner's host name and the selector `--pull` resolves to),
 /// the runtime's own refusal for the source this checkout cannot start, the
-/// configured crews for `--allow-crew`, and the workspace pools each
-/// `--<tier>-complexity-crews` override replaces. A pool configuration the
+/// configured crews for `--allow-crew`, the workspace pools each
+/// `--<tier>-complexity-crews` override replaces, and the review layer
+/// before landing workspace policy applies (`review`, as a run would capture
+/// it: `{"timing", "source"}`) [ORB-20510]. A pool configuration the
 /// runtime cannot read leaves `complexity_pools` null; submission reports why.
 fn drain_start_options(
     runtime: &OrbitRuntime,
@@ -757,6 +759,14 @@ fn drain_start_options(
             tracing::warn!(%error, "workspace complexity pools unreadable; the composer shows none");
             Value::Null
         });
+    let policy = runtime.operation_policy();
+    let review = if policy.review_before_pr.value {
+        json!({"timing": "before-pr", "source": policy.review_before_pr.source.label()})
+    } else if policy.review_before_landing.value {
+        json!({"timing": "before-landing", "source": policy.review_before_landing.source.label()})
+    } else {
+        json!({"timing": "none", "source": policy.review_before_landing.source.label()})
+    };
     Ok(json!({
         "checkout": if owner.is_some() { "replica" } else { "owner" },
         "workspace_id": workspace_id,
@@ -773,5 +783,6 @@ fn drain_start_options(
             .map(|error| error.to_string()),
         "crews": crews,
         "complexity_pools": complexity_pools,
+        "review": review,
     }))
 }

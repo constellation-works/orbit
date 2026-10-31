@@ -20,7 +20,7 @@ let autoDrainConcurrency = "";
 let autoDrainComplete = false;
 let autoDrainApproveProposed = false;
 let autoDrainAutoFix = false;
-// "" keeps workspace review policy; otherwise the layer this window adds.
+// "" keeps workspace review policy; "before-landing" adds that layer.
 let autoDrainReview = "";
 const AUTO_DRAIN_CONCURRENCY_MAX = 4_294_967_295;
 const AUTO_DRAIN_CONCURRENCY_PROBLEM = "Parallel tasks must be a whole number, 1 or more. Leave it blank for the runtime default.";
@@ -215,33 +215,40 @@ function autoDrainAutoFixControl(payload, reasons) {
   });
 }
 
-const AUTO_DRAIN_REVIEW_HELP = "Adds a second-agent review before landing to every task this window admits. It can only add review: the layer workspace policy already applies is kept, and the other layer is refused.";
+const AUTO_DRAIN_REVIEW_HELP = "Adds a second-agent review before landing to every task this window admits.";
 
-// Review before landing for this window only: workspace policy by default, or
-// a layer the window adds. Workspace configuration is unchanged.
+// The review layer workspace policy applies, as readiness reports it; ""
+// for none or a server that does not report it.
+function workspaceReviewTiming(payload) {
+  const timing = payload?.start_options?.review?.timing;
+  return timing === "before-landing" || timing === "before-pr" ? timing : "";
+}
+
+// [ORB-20510] Review before landing for this window only. Where workspace
+// policy already applies a layer the switch shows it on and is locked: a
+// window can add review, never remove it. Otherwise on adds before-landing
+// review for this window; configuration is unchanged.
 function autoDrainReviewControl(payload, reasons) {
-  const label = el("label", { class: "drain-field-label", text: "Review before landing" });
-  label.htmlFor = "auto-drain-review";
-  const select = el("select", { class: "drain-mode-select" });
-  select.id = "auto-drain-review";
-  select.dataset.drainFocus = "review";
-  for (const [value, text] of [["", "Workspace policy"], ["before-pr", "Add before-PR review"], ["before-landing", "Add before-landing review"]]) {
-    const option = el("option", { text });
-    option.value = value;
-    select.appendChild(option);
-  }
-  // Keep an unavailable selected layer clearable after the view changes.
-  select.disabled = Boolean(reasons.review) && !autoDrainReview;
-  select.value = autoDrainReview;
-  select.addEventListener("change", () => {
-    autoDrainReview = select.value;
-    drainControlCallbacks.render(payload);
+  const policy = workspaceReviewTiming(payload);
+  const source = payload?.start_options?.review?.source || "workspace";
+  const help = policy === "before-pr"
+    ? `Workspace policy applies before-PR review (review.timing = before_pr, ${source}; deprecated). Change it in configuration.`
+    : policy
+      ? `Workspace policy applies it (review.timing = before_landing, ${source}). Change it in configuration.`
+      : autoDrainReview ? AUTO_DRAIN_REVIEW_HELP : `Off: workspace policy applies no review before landing. ${AUTO_DRAIN_REVIEW_HELP}`;
+  return drainSwitchField({
+    id: "auto-drain-review",
+    label: "Review before landing",
+    help,
+    checked: Boolean(policy) || autoDrainReview === "before-landing",
+    // Keep an unavailable chosen layer clearable after the view changes.
+    disabled: Boolean(policy) || (Boolean(reasons.review) && !autoDrainReview),
+    refusal: policy ? "" : reasons.review || "",
+    onChange: checked => {
+      autoDrainReview = checked ? "before-landing" : "";
+      drainControlCallbacks.render(payload);
+    },
   });
-  return el("div", { class: "drain-field" }, [
-    drainFieldHead(label, autoDrainReview ? AUTO_DRAIN_REVIEW_HELP : "The workspace's review.timing setting decides."),
-    select,
-    drainFieldRefusal(reasons.review || ""),
-  ]);
 }
 
 // A replica starts a pull from its owner; an owner starts its own backlog.
@@ -262,7 +269,7 @@ function autoDrainStartBlocked(payload) {
     || (autoDrainComplete && Boolean(reasons.complete))
     || (autoDrainApproveProposed && Boolean(reasons.approve))
     || (autoDrainAutoFix && Boolean(reasons.autoFix))
-    || (Boolean(autoDrainReview) && Boolean(reasons.review));
+    || (Boolean(autoDrainReview) && !workspaceReviewTiming(payload) && Boolean(reasons.review));
 }
 
 function autoDrainStartButton(payload, form) {
@@ -293,7 +300,7 @@ function autoDrainStartButton(payload, form) {
       : "Shipped tasks stay in review; a separate action completes them.";
     const approveProposed = autoDrainApproveProposed;
     const autoFix = autoDrainAutoFix;
-    const review = autoDrainReview;
+    const review = workspaceReviewTiming(payload) ? "" : autoDrainReview;
     const confirmText = [
       checkout.replica
         ? `Start pulling from ${checkout.ownerHost} in workspace "${workspace?.name || workspace?.id}"?`
@@ -537,7 +544,7 @@ function autoDrainStartSummary(payload) {
     autoDrainComplete ? "marks done" : "",
     autoDrainApproveProposed ? "approves proposals" : "",
     autoDrainAutoFix ? "auto-fix on" : "",
-    autoDrainReview ? `adds ${autoDrainReview} review` : "",
+    autoDrainReview && !workspaceReviewTiming(payload) ? `adds ${autoDrainReview} review` : "",
   ].filter(Boolean).join(" · ");
 }
 

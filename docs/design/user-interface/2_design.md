@@ -408,7 +408,10 @@ six durations are 1h, 2h, 4h, 8h, 12h and 24h (default 1h); parallel tasks is
 blank for the runtime default or a positive whole number. Invalid input is
 flagged, omitted from readiness queries and blocks Start. Owner windows can
 mark shipped tasks done, approve qualifying proposals, repair PR blockers and
-add a review layer; admission control always follows the host's configured
+switch on review before landing. That switch is on and locked when workspace
+`review.timing` already applies a layer (readiness `start_options.review`);
+otherwise on posts `review: before-landing` for the window [ORB-20510].
+Admission control always follows the host's configured
 auto-concurrency mode, so the dashboard posts no `auto_concurrency` override
 [ORB-20509]. Each control explains
 its policy and authority refusal beside the field. A replica automatically
