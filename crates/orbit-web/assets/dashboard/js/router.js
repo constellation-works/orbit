@@ -447,13 +447,13 @@ function syncRailScrollCues() {
 function snapRailSubtabStrip(strip, focusedSubtab = null) {
   if (!window.matchMedia("(max-width: 760px)").matches) return;
   for (let guard = 0; guard < 16; guard += 1) {
-    if (strip.scrollWidth <= strip.clientWidth + 1) return;
-    const view = strip.getBoundingClientRect();
+    if (strip.scrollWidth <= strip.clientWidth + 1) break;
+    const view = railStripVisibleSpan(strip);
     const first = [...strip.querySelectorAll(".subtab")]
       .find((btn) => btn.getBoundingClientRect().right > view.left + 0.5);
-    if (!first) return;
+    if (!first) break;
     const rect = first.getBoundingClientRect();
-    if (rect.left >= view.left - 0.5) return;
+    if (rect.left >= view.left - 0.5) break;
     // At the strip's end there is nowhere further to scroll: the fade cue
     // carries the hidden views instead of a partial label pretending to fit.
     const before = strip.scrollLeft;
@@ -463,8 +463,34 @@ function snapRailSubtabStrip(strip, focusedSubtab = null) {
       const gap = parseFloat(getComputedStyle(strip).columnGap) || 0;
       strip.scrollLeft += rect.right - view.left + gap;
     }
-    if (strip.scrollLeft === before) return;
+    if (strip.scrollLeft === before) break;
   }
+  // ORB-20524: if the strip cannot scroll far enough, the outer row must
+  // still show the whole focused view.
+  if (focusedSubtab) {
+    const view = railStripVisibleSpan(strip);
+    const rect = focusedSubtab.getBoundingClientRect();
+    if (rect.left < view.left - 0.5 || rect.right > view.right + 0.5) {
+      focusedSubtab.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
+  }
+}
+
+// ORB-20524: the strip's own box can extend past the phone's scrolled `#tabs`
+// row, so measure only the span every scrolling ancestor actually shows.
+function railStripVisibleSpan(strip) {
+  const box = strip.getBoundingClientRect();
+  let left = box.left;
+  let right = box.right;
+  for (let node = strip.parentElement; node && node !== document.body; node = node.parentElement) {
+    if (node.scrollWidth > node.clientWidth + 1 && getComputedStyle(node).overflowX !== "visible") {
+      const clip = node.getBoundingClientRect();
+      left = Math.max(left, clip.left);
+      right = Math.min(right, clip.right);
+    }
+    if (node.id === "tabs") break;
+  }
+  return { left, right };
 }
 
 function setActiveTabImpl(ctx, raw, opts = {}) {
@@ -779,8 +805,10 @@ function initTabsImpl(ctx) {
       event.target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
       // ORB-20479: keyboard scrolling can rest a sub-view strip mid-label;
       // snap the edge back to an item start and refresh the overflow fades.
+      // ORB-20524: a pointer press focuses before its click lands; snapping
+      // then would move the button away, so the route's reveal snaps instead.
       const strip = event.target.closest(".rail-subtabs");
-      if (strip) snapRailSubtabStrip(strip, event.target.matches(":focus-visible") ? event.target : null);
+      if (strip && event.target.matches(":focus-visible")) snapRailSubtabStrip(strip, event.target);
       syncRailScrollCues();
     }
   });

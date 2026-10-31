@@ -184,6 +184,62 @@ try {
     assert.ok(layout.outline.left >= layout.strip.left - 1 && layout.outline.right <= layout.strip.right + 1,
       `${context}: focused view and outline fit inside its scrolling strip`);
   }
+  // ORB-20524: tabbing along the phone rail scrolls the outer `#tabs` row
+  // until a sub-view strip starts left of it. Each focused entry must still end
+  // fully inside that row, and the strip snap must not chase its own clipped box.
+  let outerRowClipsStrip = false;
+  for (const section of ['analytics', 'config', 'diagnostics', 'operations']) {
+    await page.goto('about:blank');
+    await page.goto(`${origin}#${section}`);
+    await settle();
+    const entries = await page.locator('.rail .tab, .rail-subtabs:not(.dimmed) .subtab').count();
+    await page.locator('.rail .tab').first().focus();
+    await page.keyboard.press('Shift+Tab');
+    // Walk forward, then back: Shift+Tab reveals each clipped view at the
+    // row's left edge, where the snap used to measure the strip's hidden box.
+    const keys = [...Array(entries).fill('Tab'), ...Array(entries - 1).fill('Shift+Tab')];
+    for (const [index, key] of keys.entries()) {
+      await page.keyboard.press(key);
+      const layout = await page.evaluate(() => {
+        const node = document.activeElement;
+        const row = document.getElementById('tabs').getBoundingClientRect();
+        const strip = node.closest('.rail-subtabs');
+        const box = node.getBoundingClientRect();
+        const style = getComputedStyle(node);
+        const outset = Math.max(0, parseFloat(style.outlineWidth) + parseFloat(style.outlineOffset));
+        const stripBox = strip?.getBoundingClientRect();
+        return {
+          focused: node.dataset.tab || node.dataset.subtab, focusVisible: node.matches(':focus-visible'),
+          left: box.left - outset, right: box.right + outset, rowLeft: row.left, rowRight: row.right,
+          strip: strip && {
+            left: stripBox.left, right: stripBox.right, scroll: strip.scrollLeft,
+            overflowStart: strip.classList.contains('has-overflow-start'),
+            views: [...strip.querySelectorAll('.subtab')].map(view => {
+              const rect = view.getBoundingClientRect();
+              return { view: view.dataset.subtab, left: rect.left, right: rect.right };
+            }),
+          },
+        };
+      });
+      const context = `${section} keyboard ${key} step ${index}: ${JSON.stringify(layout)}`;
+      assert.equal(layout.focusVisible, true, context);
+      assert.ok(layout.left >= layout.rowLeft - 1 && layout.right <= layout.rowRight + 1,
+        `${context}: focused entry and outline stay inside the scrolled #tabs row`);
+      if (!layout.strip) continue;
+      if (key === 'Shift+Tab' && layout.strip.left < layout.rowLeft - 1 && layout.left < layout.rowLeft + 4 && !outerRowClipsStrip) {
+        await page.screenshot({ path: path.join(evidence, `keyboard-focus-${section}-${layout.focused}-scrolled-row-dark-375.png`) });
+        outerRowClipsStrip = true;
+      }
+      assert.equal(layout.strip.overflowStart, layout.strip.scroll > 1, `${context}: left fade matches hidden views`);
+      // ORB-20479 holds at the edge actually on screen: the strip's own, or
+      // the row's when the row clips the strip.
+      const edge = Math.max(layout.strip.left, layout.rowLeft);
+      const cut = layout.strip.views.find(view => view.left < edge - 1 && view.right > edge + 1);
+      const atEnd = layout.strip.views.at(-1).right <= layout.strip.right + 1;
+      assert.ok(!cut || atEnd, `${context}: ${cut?.view} starts cleanly at the visible strip edge`);
+    }
+  }
+  assert.ok(outerRowClipsStrip, 'Shift+Tab reaches a sub-view strip that starts left of the #tabs row');
   // Counts arrive after the initial route, widening the active destination or
   // an earlier one. A direct load must keep both selections visible afterwards.
   const countRoutes = ['config/hosts', 'analytics/agents/pilots', 'diagnostics/doctor', 'operations/auto-tasks'];
