@@ -32,6 +32,22 @@ function leasesOff() {
   return leasesOffRevision === getWorkspaceRevision();
 }
 
+// ORB-20522: `/api/workspaces` reports each workspace's `lease_enabled`, so the
+// rail hides its Leases item where leases are off instead of offering a tab
+// that only says so. Only an explicit `false` hides it: an unknown setting (an
+// older server, an unopenable workspace, the aggregate view) keeps the item.
+// The tab itself stays routable, so a direct link still shows the off note.
+export function syncLeasesRailItem(workspaces, workspaceId) {
+  const tab = document.querySelector('.tab[data-tab="leases"]');
+  if (!tab) return;
+  const entry = workspaceId && Array.isArray(workspaces)
+    ? workspaces.find((workspace) => workspace?.id === workspaceId)
+    : null;
+  const hide = entry?.lease_enabled === false;
+  if (hide && document.activeElement === tab) tab.blur();
+  tab.hidden = hide;
+}
+
 function isLeasesOffError(error) {
   return error?.status === 400 && /\blease\.enabled\b/.test(String(error.message));
 }

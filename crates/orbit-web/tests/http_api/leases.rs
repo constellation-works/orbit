@@ -97,6 +97,25 @@ fn notice_poll_and_sse_resume_share_durable_sequence() {
 }
 
 #[test]
+fn workspace_listing_reports_whether_leases_are_enabled() {
+    isolated(
+        "leases::workspace_listing_reports_whether_leases_are_enabled",
+        || {
+            let fixture = Fixture::new();
+            let off = json_ok(fixture.server(false).get("/api/workspaces"));
+            assert_eq!(off[0]["lease_enabled"], false, "leases default off: {off}");
+            std::fs::write(
+                fixture.work.join("config.toml"),
+                "[lease]\nenabled = true\n",
+            )
+            .unwrap();
+            let on = json_ok(fixture.server(false).get("/api/workspaces"));
+            assert_eq!(on[0]["lease_enabled"], true, "{on}");
+        },
+    );
+}
+
+#[test]
 fn lease_routes_share_runtime_state_and_gate_writes() {
     isolated(
         "leases::lease_routes_share_runtime_state_and_gate_writes",

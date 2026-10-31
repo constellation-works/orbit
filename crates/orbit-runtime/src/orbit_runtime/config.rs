@@ -197,6 +197,12 @@ impl RuntimeKernel {
         self.context.settings().lease_policy()
     }
 
+    /// `lease.enabled` as admitted: whether this workspace accepts path
+    /// lease operations at all.
+    pub fn leases_enabled(&self) -> bool {
+        self.lease_policy().enabled()
+    }
+
     /// `workflow.lock_modes` as admitted: the paths where a footprint
     /// overlap is shared rather than blocking.
     pub fn footprint_lock_modes(&self) -> &orbit_common::fs::lock_mode::FootprintLockModes {

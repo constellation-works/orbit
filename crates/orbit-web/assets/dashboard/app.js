@@ -34,7 +34,7 @@ import { applyPushedHostResources, fetchAndRenderHostResources, initHostResource
 import { changeStreamLive, onChange, onChangeStreamLive, startChangeStream } from './js/change-stream.js';
 import { refreshDashboardNow, reschedulePolling, setStreamCoverage } from './js/polling.js';
 import { fetchAndRenderPlugins } from './js/plugins.js';
-import { fetchAndRenderLeaseLandings, fetchAndRenderLeases } from './js/leases.js';
+import { fetchAndRenderLeaseLandings, fetchAndRenderLeases, syncLeasesRailItem } from './js/leases.js';
 import { checkHostConnection, chooseHost, hostLevelFailure, initHostSwitcher, showHostFailure } from './js/host-switch.js';
 import {
   renderRunDetailEmpty,
@@ -1955,7 +1955,10 @@ async function ensureHostScope() {
       .then((loaded) => {
         // Rebuild scope chips after both cardinality and selection settle. A
         // shared id across hosts does not trigger a workspace-change listener.
-        if (loaded) setWorkspaceNames(dashboardWorkspaces);
+        if (loaded) {
+          setWorkspaceNames(dashboardWorkspaces);
+          syncLeasesRailItem(dashboardWorkspaces, getWorkspace());
+        }
         else if (workspaceRebuild === rebuild) workspacesWanted = true;
       })
       .finally(() => { if (workspaceRebuild === rebuild) workspaceRebuild = null; });
@@ -2035,6 +2038,7 @@ async function refreshDashboard({ poll = false, explicit = false } = {}) {
 // Invalidate caches at the scope boundary, including programmatic selections.
 // Panel state is reset synchronously by common.js before another frame paints.
 onWorkspaceChange(() => {
+  syncLeasesRailItem(dashboardWorkspaces, getWorkspace());
   lastCleanRefresh = null;
   markRefreshStale(false);
   resetTaskPagination();
