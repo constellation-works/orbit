@@ -28,6 +28,51 @@ use std::path::Path;
 #[derive(Clone)]
 pub(crate) struct InstructionSnapshot(String);
 
+/// Last-revision instruction cache. A pinned revision is immutable, so the
+/// same revision string names the same tree in any checkout that contains it;
+/// sharing the snapshot across the tasks of one apply (and across sequential
+/// applies at the same revision) removes one full tree walk per fingerprint
+/// without changing evidence. Only successes are cached; failures recompute.
+fn instructions_cache() -> &'static std::sync::Mutex<Option<(String, InstructionSnapshot)>> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<Option<(String, InstructionSnapshot)>>> =
+        std::sync::OnceLock::new();
+    CACHE.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// Per-path selector object cache. A pinned revision is immutable, so the
+/// object a path names there never changes; sharing it across the tasks and
+/// fingerprints of one apply removes one tree lookup per shared selector
+/// without changing evidence. Only successes are cached; failures recompute.
+/// Bounded to the most recent 512 entries to avoid unbounded growth in a
+/// long-lived process.
+type SelectorObjectCache = std::collections::HashMap<(String, String), Option<String>>;
+
+fn selector_cache() -> &'static std::sync::Mutex<SelectorObjectCache> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<SelectorObjectCache>> =
+        std::sync::OnceLock::new();
+    CACHE.get_or_init(|| std::sync::Mutex::new(SelectorObjectCache::new()))
+}
+
+fn selector_cached(revision: &str, path: &str) -> Option<Option<String>> {
+    selector_cache()
+        .lock()
+        .ok()?
+        .get(&(revision.to_string(), path.to_string()))
+        .cloned()
+}
+
+fn selector_store(revision: &str, path: &str, object: Option<String>) {
+    if let Ok(mut cache) = selector_cache().lock() {
+        if cache.len() >= 512 {
+            // Evict an arbitrary entry; the next lookup recomputes it.
+            if let Some(key) = cache.keys().next().cloned() {
+                cache.remove(&key);
+            }
+        }
+        cache.insert((revision.to_string(), path.to_string()), object);
+    }
+}
+
 /// The policy a `preparation_eligible` consumer evaluates: its trigger's
 /// eligibility, and its freshness resolved routine > `config.toml` > built-in
 /// default per key [ORB-12745, ORB-13638]. A run with no trigger evaluates
@@ -127,6 +172,12 @@ pub(crate) fn instructions(
     runtime: &OrbitRuntime,
     revision: &str,
 ) -> Result<InstructionSnapshot, AutomationError> {
+    if let Ok(cached) = instructions_cache().lock()
+        && let Some((cached_revision, snapshot)) = cached.as_ref()
+        && cached_revision == revision
+    {
+        return Ok(snapshot.clone());
+    }
     let root = &runtime.paths().repo_root;
     // libgit2 reads the pinned tree without a child process per file. A
     // repository it cannot open (a partial clone, whose blobs Git fetches on
@@ -136,10 +187,14 @@ pub(crate) fn instructions(
         Err(_) => instructions_with_git(&Source::new(root), revision)?,
     };
 
-    Ok(InstructionSnapshot(
+    let snapshot = InstructionSnapshot(
         serde_json::to_string(&instructions)
             .map_err(|error| AutomationError::Evidence(error.to_string()))?,
-    ))
+    );
+    if let Ok(mut cached) = instructions_cache().lock() {
+        *cached = Some((revision.to_string(), snapshot.clone()));
+    }
+    Ok(snapshot)
 }
 
 /// The instruction files at `revision`, in `git ls-tree -r` order (byte
@@ -396,6 +451,12 @@ fn selector_objects(
     if root_selected {
         // The root tree covers every narrower selector, including paths added
         // after the assessment. Git does not list `.` as an ls-tree path.
+        // The tree id is immutable for the revision, so it is cached.
+        if let Some(cached) = selector_cached(revision, ".")
+            && let Some(tree) = cached
+        {
+            return Ok(json!({".": tree}));
+        }
         let tree = match &repo {
             Some(repo) => revision_tree(repo, revision)?.id().to_string(),
             None => Source::new(root).git(&[
@@ -405,6 +466,7 @@ fn selector_objects(
                 &format!("{revision}^{{tree}}"),
             ])?,
         };
+        selector_store(revision, ".", Some(tree.clone()));
         return Ok(json!({".": tree}));
     }
     if paths.len() > 50 {
@@ -428,34 +490,76 @@ fn selector_objects(
         return Ok(json!(objects));
     }
     let Some(repo) = repo else {
-        let mut args = vec![
-            "--literal-pathspecs",
-            "ls-tree",
-            "-z",
-            "--full-tree",
-            revision,
-            "--",
-        ];
-        args.extend(objects.keys().map(String::as_str));
-        let listing = Source::new(root).git(&args)?;
-        for entry in listing.split('\0') {
-            let Some((meta, path)) = entry.split_once('\t') else {
-                continue;
-            };
-            if let (Some(slot), Some(object)) = (objects.get_mut(path), meta.split(' ').nth(2)) {
-                *slot = json!(object);
+        // Fill what the per-revision cache already holds; only uncached paths
+        // pay for a Git lookup, and each result populates the cache.
+        let mut uncached: Vec<String> = Vec::new();
+        for (path, slot) in objects.iter_mut() {
+            if let Some(cached) = selector_cached(revision, path) {
+                if let Some(object) = cached {
+                    *slot = json!(object);
+                }
+            } else {
+                uncached.push(path.clone());
+            }
+        }
+        if !uncached.is_empty() {
+            let mut args = vec![
+                "--literal-pathspecs",
+                "ls-tree",
+                "-z",
+                "--full-tree",
+                revision,
+                "--",
+            ];
+            args.extend(uncached.iter().map(String::as_str));
+            let listing = Source::new(root).git(&args)?;
+            let mut found = std::collections::BTreeSet::new();
+            for entry in listing.split('\0') {
+                let Some((meta, path)) = entry.split_once('\t') else {
+                    continue;
+                };
+                if let (Some(slot), Some(object)) = (objects.get_mut(path), meta.split(' ').nth(2))
+                {
+                    *slot = json!(object);
+                    selector_store(revision, path, Some(object.to_string()));
+                    found.insert(path.to_string());
+                }
+            }
+            for path in uncached {
+                if !found.contains(&path) {
+                    selector_store(revision, &path, None);
+                }
             }
         }
         return Ok(json!(objects));
     };
     // Selector paths are normalized (no `.`, empty or trailing components),
     // so an exact tree lookup names what the literal ls-tree pathspec lists.
-    let tree = revision_tree(&repo, revision)?;
-    for (path, slot) in &mut objects {
-        match tree.get_path(Path::new(path)) {
-            Ok(entry) => *slot = json!(entry.id().to_string()),
-            Err(error) if error.code() == git2::ErrorCode::NotFound => {}
-            Err(error) => return Err(local_git_error(error)),
+    // Immutable per revision, so shared across tasks and fingerprints.
+    let mut uncached = Vec::new();
+    for (path, slot) in objects.iter_mut() {
+        if let Some(cached) = selector_cached(revision, path) {
+            if let Some(object) = cached {
+                *slot = json!(object);
+            }
+        } else {
+            uncached.push(path.clone());
+        }
+    }
+    if !uncached.is_empty() {
+        let tree = revision_tree(&repo, revision)?;
+        for path in uncached {
+            let object = match tree.get_path(Path::new(&path)) {
+                Ok(entry) => Some(entry.id().to_string()),
+                Err(error) if error.code() == git2::ErrorCode::NotFound => None,
+                Err(error) => return Err(local_git_error(error)),
+            };
+            selector_store(revision, &path, object.clone());
+            if let Some(slot) = objects.get_mut(&path)
+                && let Some(object) = object
+            {
+                *slot = json!(object);
+            }
         }
     }
     Ok(json!(objects))

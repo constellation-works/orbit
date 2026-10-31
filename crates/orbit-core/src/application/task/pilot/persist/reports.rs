@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use orbit_common::OrbitError;
-use orbit_types::task::TaskStatus;
+use orbit_types::task::{ContextCreationState, Task, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::automation::members::PreparationPolicy;
 use serde_json::{Value, json};
 
@@ -43,6 +43,27 @@ pub(in super::super) fn superseded_task(
         Err(OrbitError::NotFound { .. }) => return Ok(None),
         Err(error) => return Err(error),
     };
+    let history = runtime.get_task_history(task_id)?;
+    superseded_with_current(runtime, &current, &history, snapshot, policy, ci_sweep)
+}
+
+/// Same as [`superseded_task`] but over an already-fetched task and history.
+/// The caller holds the task locks, so no concurrent mutation can intervene
+/// between the fetch and these checks; sharing the fetch removes one task
+/// read and two history reads per locked application without changing the
+/// decision.
+pub(in super::super) fn superseded_with_current(
+    runtime: &OrbitRuntime,
+    current: &Task,
+    history: &[TaskHistoryEntry],
+    snapshot: &PreparedTaskSnapshot,
+    policy: &PreparationPolicy,
+    ci_sweep: bool,
+) -> Result<Option<Value>, OrbitError> {
+    if !matches!(snapshot.status, TaskStatus::Proposed | TaskStatus::Backlog) {
+        return Ok(None);
+    }
+    let task_id = current.id.as_str();
     let superseded = |reason: &str, detail: &str| {
         super::super::superseded_outcome(task_id, reason, current.status, detail)
     };
@@ -83,7 +104,6 @@ pub(in super::super) fn superseded_task(
             "an execution claim superseded preparation",
         )));
     }
-    let history = runtime.get_task_history(task_id)?;
     let newer = &history[snapshot.history_len.unwrap_or(0).min(history.len())..];
     let edited = snapshot.history_len.is_some()
         && newer.iter().any(|entry| {
@@ -103,12 +123,23 @@ pub(in super::super) fn superseded_task(
         || current.complexity != snapshot.complexity
         || current.title != snapshot.title
         || current.tags != snapshot.tags;
-    let creation_drift =
-        runtime.context_creation_state(&current)?.identity() != snapshot.context_creation_identity;
+    // Same history the caller already fetched: resolving the grant from it
+    // removes one history read per superseded check without changing the
+    // identity compared.
+    let creation_drift = ContextCreationState::resolve(
+        &current.id,
+        &current.context_files,
+        current.updated_at,
+        history
+            .iter()
+            .map(|entry| (entry.event.as_str(), entry.note.as_deref())),
+    )
+    .identity()
+        != snapshot.context_creation_identity;
     if edited {
         let material_drift = if let Some((_, revision)) = &snapshot.material {
             let fresh = runtime
-                .task_pilot_fingerprints(&current, revision, policy)
+                .task_pilot_fingerprints(current, revision, policy)
                 .map_err(orbit_automation::automation_error_to_orbit)?;
             snapshot
                 .status_neutral_fingerprint
@@ -120,10 +151,10 @@ pub(in super::super) fn superseded_task(
             true
         };
         if structural_drift || material_drift {
-            let (reason, detail) = task_snapshot_drift(runtime, &current, snapshot, policy)
+            let (reason, detail) = task_snapshot_drift(runtime, current, snapshot, policy)
                 .unwrap_or(("task_edited", "task fields changed after preparation"));
             let detail = if reason == "material_changed" {
-                material_change_detail(runtime, &current, snapshot, policy)
+                material_change_detail(runtime, current, snapshot, policy)
             } else {
                 detail.to_string()
             };
@@ -158,7 +189,7 @@ pub(in super::super) fn superseded_task(
                     .as_deref()
                     .is_some_and(|note| note.starts_with("workflow admission:"))
         })
-        && (status_only_fingerprint(runtime, &current, snapshot, policy).is_some()
+        && (status_only_fingerprint(runtime, current, snapshot, policy).is_some()
             || (snapshot.material.is_none() && snapshot.history_len.is_some() && !edited))
     {
         return Ok(Some(superseded(

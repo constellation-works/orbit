@@ -25,7 +25,7 @@ use super::drift::task_snapshot_drift;
 use super::history::{assessment_history_summary, material_change_detail, status_only_fingerprint};
 #[cfg(test)]
 use super::lock_hook;
-use super::reports::{source_superseded, superseded_task};
+use super::reports::{source_superseded, superseded_task, superseded_with_current};
 
 /// Lock rounds before an assessment whose dependency graph keeps growing
 /// between discovery and its locks is refused as stale.
@@ -152,6 +152,14 @@ pub(in super::super) fn apply_task(
                 }
                 Err(error) => return Err(error),
             };
+            // One history read covers the receipt, superseded and creation
+            // checks below. The task locks are held, so no concurrent
+            // mutation to these tasks can intervene before the atomic write.
+            let history = runtime.get_task_history(&task.task_id)?;
+            let already_applied = history.iter().any(|event| {
+                event.event == "task_pilot_applied"
+                    && event.receipt() == Some(task.operation_id.as_str())
+            });
             // Re-read under the discovered locks even on replay. A replay
             // may approve only dependencies actually stored, never edges the
             // original write skipped or edges it would add on a new apply.
@@ -161,7 +169,7 @@ pub(in super::super) fn apply_task(
                 graph_changed = true;
                 return Ok(());
             };
-            if operation_was_applied(runtime, &task.task_id, &task.operation_id)? {
+            if already_applied {
                 match admit(&current, task, &graph) {
                     Ok(admission) => task.set_admission(admission),
                     Err(refusal) => {
@@ -180,7 +188,7 @@ pub(in super::super) fn apply_task(
                 return Ok(());
             }
             if let Some(superseded) =
-                superseded_task(runtime, &task.task_id, &snapshot, policy, ci_sweep)?
+                superseded_with_current(runtime, &current, &history, &snapshot, policy, ci_sweep)?
             {
                 outcome = Some(ApplyTaskOutcome::Superseded(superseded));
                 return Ok(());
@@ -213,9 +221,17 @@ pub(in super::super) fn apply_task(
                 }
                 return Ok(());
             }
-            if runtime.context_creation_state(&current)?.identity()
-                != snapshot.context_creation_identity
-            {
+            // Same locked history: no second history read for the grant check.
+            let creation_identity = orbit_types::task::ContextCreationState::resolve(
+                &current.id,
+                &current.context_files,
+                current.updated_at,
+                history
+                    .iter()
+                    .map(|entry| (entry.event.as_str(), entry.note.as_deref())),
+            )
+            .identity();
+            if creation_identity != snapshot.context_creation_identity {
                 outcome = Some(ApplyTaskOutcome::Stale(
                     CONTEXT_CREATION_CHANGED,
                     CONTEXT_CREATION_CHANGED_DETAIL.to_string(),
@@ -459,16 +475,20 @@ pub(in super::super) fn apply_task(
             let mutation = apply_atomic_with_retries(runtime, &task.task_id, &mutation_params)?;
             match mutation {
                 AtomicTaskMutationOutcome::Applied => {
+                    // The atomic write applied exactly the assessed material
+                    // sealed in `written` while these locks were held (any
+                    // concurrent change fails as Stale instead). Reusing its
+                    // fingerprint removes one task read and one material
+                    // fingerprint per applied task without changing evidence.
+                    let fingerprint = written
+                        .material
+                        .as_ref()
+                        .map(|(fingerprint, _)| fingerprint.clone());
                     task.applied_material = Some(written);
                     runtime.record_event(OrbitEvent::TaskUpdated {
                         id: task.task_id.clone(),
                     })?;
-                    outcome = Some(ApplyTaskOutcome::Applied(resulting_fingerprint(
-                        runtime,
-                        &task.task_id,
-                        &snapshot,
-                        policy,
-                    )?));
+                    outcome = Some(ApplyTaskOutcome::Applied(fingerprint));
                 }
                 AtomicTaskMutationOutcome::AlreadyApplied => {
                     task.applied_material =
