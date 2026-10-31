@@ -151,12 +151,6 @@ fn each_refusal_names_its_field() {
     // of the error, not by its wording.
     let cases: Vec<(&str, Value, &str)> = vec![
         (
-            "enabled job",
-            json!({"state": "enabled", "expire_when": "now >= job.started_at + duration('1h')",
-                   "steps": [{"id": "a", "target": "auto-task:x"}]}),
-            "spec.state",
-        ),
-        (
             "missing outer bound",
             json!({"state": "disabled", "steps": [{"id": "a", "target": "auto-task:x"}]}),
             "spec.expire_when",

@@ -244,6 +244,13 @@ pub enum DispatchError {
     #[error("child_cancelled: {message}")]
     ChildRunCancelled { message: String },
 
+    /// An `auto-task:` step is waiting on a condition, an admission hold or
+    /// its bound task (ORB-20158). Not a failure: the run parks durably,
+    /// without retry, recovery or the failure handoff, and the owner clock
+    /// resumes it at `wake_at`.
+    #[error("auto_task_parked: {}", .0.reason)]
+    AutoTaskParked(Box<orbit_types::workflow::ParkedWait>),
+
     /// Completion cannot overtake a task's verified-live implementation run.
     #[error(
         "task '{task_id}' cannot move to done while linked run '{run_id}' has a verified-live owner"
@@ -407,6 +414,7 @@ impl DispatchError {
                 | DispatchError::ReviewEvidenceHold(_)
                 | DispatchError::ForgeUnavailableHold(_)
                 | DispatchError::ChildRunCancelled { .. }
+                | DispatchError::AutoTaskParked(_)
                 | DispatchError::ScriptRefused { .. }
                 | DispatchError::ScriptOutputInvalid { .. }
                 | DispatchError::ProtocolSkew(_)

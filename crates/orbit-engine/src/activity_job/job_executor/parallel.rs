@@ -30,7 +30,11 @@ pub(super) fn run_parallel(
                             );
                         }
                     };
-                    (branch_id, run_step(branch, ctx_ref))
+                    if let Some(restored) = restored_branch(step, branch, ctx_ref) {
+                        return (branch_id, Ok(restored));
+                    }
+                    let result = run_step(branch, ctx_ref);
+                    (branch_id, checkpoint_branch(step, branch, ctx_ref, result))
                 });
                 (join_branch_id, handle)
             })
@@ -55,14 +59,19 @@ pub(super) fn run_parallel(
     let mut failures = 0u32;
     let mut first_error: Option<DispatchError> = None;
     let mut first_failure: Option<String> = None;
+    // [ORB-20158] Branches waiting on an auto-task step: neither a success
+    // nor a failure. The join decides once they settle.
+    let mut parks = Vec::new();
     for (branch_id, res) in &results {
         let outcome_str = match res {
             Ok(o) if o.success => "success",
             Ok(_) => "failed",
+            Err(DispatchError::AutoTaskParked(_)) => "parked",
             Err(_) => "error",
         };
         match res {
             Ok(o) if o.success => successes += 1,
+            Err(DispatchError::AutoTaskParked(park)) => parks.push((**park).clone()),
             Ok(o) => {
                 failures += 1;
                 let provider_failure = |message: Option<&str>| {
@@ -108,6 +117,26 @@ pub(super) fn run_parallel(
         JoinMode::Any => successes > 0,
         JoinMode::Quorum { n } => successes >= *n,
     };
+    // A join that pending branches could still satisfy parks the block; one
+    // they can no longer rescue keeps the existing failure semantics. `all`
+    // fails on any failure; `any`/`quorum` fail once the parked branches
+    // cannot make up the shortfall.
+    let pending = parks.len() as u32;
+    let can_still_pass = match &block.join {
+        JoinMode::All => failures == 0,
+        JoinMode::Any => successes + pending > 0,
+        JoinMode::Quorum { n } => successes + pending >= *n,
+    };
+    let join_satisfied = match &block.join {
+        JoinMode::All => block_ok && pending == 0,
+        JoinMode::Any | JoinMode::Quorum { .. } => block_ok,
+    };
+    if !join_satisfied
+        && can_still_pass
+        && let Some(park) = merge_parked(parks)
+    {
+        return Err(DispatchError::AutoTaskParked(Box::new(park)));
+    }
 
     if !block_ok && let Some(err) = first_error {
         // Surface the first branch error if no branch succeeded and any
@@ -130,6 +159,66 @@ pub(super) fn run_parallel(
         // recovery and run finalization like a failed fan-out's.
         message: (!block_ok).then_some(first_failure).flatten(),
     })
+}
+
+/// The recorded output of a succeeded branch a resumed auto-task job
+/// restores. Only target branches are restored whole; a compound branch
+/// replays, and its own nested branches and auto-task records restore
+/// themselves inside it.
+fn restored_branch(step: &JobV2Step, branch: &JobV2Step, ctx: &ExecCtx<'_>) -> Option<StepOutcome> {
+    if !matches!(
+        branch.body,
+        JobV2StepBody::Target(_) | JobV2StepBody::TargetRef(_)
+    ) {
+        return None;
+    }
+    let output = ctx
+        .restored_branches
+        .as_ref()?
+        .get(&step.id)?
+        .get(&branch.id)?
+        .clone();
+    emit_job_event_lossy(
+        &ctx.audit,
+        ctx.task_id(),
+        V2AuditEventKind::StepSkipped {
+            step_id: branch.id.clone(),
+            reason: format!(
+                "resume: branch already succeeded in parallel step `{}`",
+                step.id
+            ),
+        },
+    );
+    record_pipeline(ctx, &branch.id, output.clone());
+    Some(StepOutcome {
+        success: true,
+        output,
+        message: None,
+    })
+}
+
+/// Checkpoint a succeeded branch of a job with auto-task steps before the
+/// join, so a sibling that parks or fails cannot make a replay rerun it.
+/// Fail-closed: an unrecorded success fails the branch.
+fn checkpoint_branch(
+    step: &JobV2Step,
+    branch: &JobV2Step,
+    ctx: &ExecCtx<'_>,
+    result: Result<StepOutcome, DispatchError>,
+) -> Result<StepOutcome, DispatchError> {
+    let outcome = result?;
+    if !outcome.success || ctx.restored_branches.is_none() {
+        return Ok(outcome);
+    }
+    ctx.host
+        .checkpoint_parallel_branch(&ctx.run_id, &step.id, &branch.id, &outcome.output)
+        .map_err(|error| {
+            DispatchError::JobExecution(format!(
+                "parallel step `{}`: branch `{}` succeeded but its checkpoint failed: {error}",
+                step.id, branch.id
+            ))
+        })?;
+    Ok(outcome)
 }
 
 // ---------------------------------------------------------------------------

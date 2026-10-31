@@ -56,6 +56,7 @@ use super::run::CANCELLATION_WORKER_EXIT_AUDIT;
 mod admission;
 mod claude_credential;
 mod notices;
+mod parked;
 mod submit;
 mod wait;
 mod worker;

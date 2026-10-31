@@ -1,14 +1,14 @@
 //! Auto-task job steps [ORB-20157]: the load-time checks of a job's
 //! `auto-task:` steps and their CEL fields
-//! (`docs/design/activity-job/specs/auto-task-step.md` §2-§4). Phase 1
-//! defines and explains these steps; nothing here evaluates a wait, and no
-//! binary runs such a job yet.
+//! (`docs/design/activity-job/specs/auto-task-step.md` §2-§4). The runtime
+//! [ORB-20158] evaluates the checked expressions each pass through
+//! `ConditionEvaluator::for_job_wait`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use cel::common::ast::Expr;
 use chrono::{DateTime, Duration, Utc};
-use orbit_types::workflow::{JobScheduleState, JobV2, JobV2Step, JobV2StepBody};
+use orbit_types::workflow::{JobV2, JobV2Step, JobV2StepBody};
 
 use super::ast::{path_of, string_literal};
 use super::check::{CheckedExpression, ConditionCheckError, ConditionReads, check_expression};
@@ -91,15 +91,6 @@ pub fn check_job_waits(
         return Err(refusal(
             JOB_EXPIRY_CLAUSE,
             "is admitted only on a job with a `target: auto-task:<name>` step",
-        ));
-    }
-    // A schemaVersion 3 job stays disabled even when none of the extension's
-    // fields remain [ORB-20237].
-    if job.is_auto_task_job() && job.state == JobScheduleState::Enabled {
-        return Err(refusal(
-            "spec.state",
-            "a schemaVersion 3 job must stay `disabled`: this Orbit defines and explains \
-             auto-task steps but cannot run them yet",
         ));
     }
     if auto_task_steps.is_empty() {

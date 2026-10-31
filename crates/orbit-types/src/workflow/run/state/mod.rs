@@ -1,6 +1,7 @@
 //! Durable run state: the pipeline snapshot and the drain, recovery and
 //! failure-classification records it carries.
 
+mod auto_task;
 mod drain;
 mod failure;
 mod pipeline;
@@ -8,6 +9,10 @@ mod pipeline_serialization;
 mod recovery;
 mod steering;
 
+pub use auto_task::{
+    AUTO_TASK_CHECKPOINT_VERSION, AutoTaskReceipt, AutoTaskRunCheckpoint, AutoTaskStepRecord,
+    AutoTaskStepStatus, FrozenAutoTaskTarget, ParkedWait,
+};
 pub use drain::{
     CrewExclusion, CrewExclusionSource, DrainAdmissionForecast, DrainAdmissionPass,
     DrainAdmissionsStop, DrainApprovalReport, DrainCancelRequest, DrainCapacity, DrainHoldFinding,

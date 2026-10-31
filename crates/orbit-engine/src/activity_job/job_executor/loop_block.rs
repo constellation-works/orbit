@@ -73,6 +73,7 @@ pub(super) fn run_loop(
                 .as_ref()
                 .and_then(|items| items.get(iteration_index as usize).cloned()),
             iteration: Some(iteration_index),
+            restored_branches: None,
         };
 
         for body in &block.steps {

@@ -177,26 +177,34 @@ pub fn validate_job(job: &JobV2) -> Result<(), DispatchError> {
     Ok(())
 }
 
-/// Refuse a job using the auto-task step extension before any step runs:
-/// this binary defines and explains such steps but has no durable waiting or
-/// keyed child admission to run them with
-/// (`docs/design/activity-job/specs/auto-task-step.md` §7, phase 1).
+/// Refuse an `auto-task:` step this binary cannot run with one keyed
+/// invocation identity before any step runs: inside `loop` or `fan_out`, an
+/// iteration or item would collapse onto the step's single reservation
+/// (`docs/design/activity-job/specs/auto-task-step.md` §4). The catalog
+/// checker refuses the same shapes at load; this guards a direct run.
 fn refuse_auto_task_steps(job: &JobV2) -> Result<(), DispatchError> {
-    let what = match job.auto_task_steps().first() {
-        Some(step) => format!(
-            "step `{}` targets auto-task `{}`",
-            step.id,
-            step.auto_task_name().unwrap_or_default()
-        ),
-        None if job.is_auto_task_job() => {
-            "the job declares schemaVersion 3, `expire_when` or a step wait field".to_string()
+    fn walk(steps: &[JobV2Step], repeated: bool) -> Result<(), DispatchError> {
+        for step in steps {
+            if repeated && let Some(name) = step.auto_task_name() {
+                return Err(DispatchError::JobValidation(format!(
+                    "step `{}` targets auto-task `{name}` inside `loop` or `fan_out`; \
+                     auto-task steps run only in sequential and parallel lists; no step ran \
+                     and no task was minted",
+                    step.id
+                )));
+            }
+            match &step.body {
+                JobV2StepBody::Parallel { parallel } => walk(&parallel.branches, repeated)?,
+                JobV2StepBody::FanOut { fan_out, .. } => {
+                    walk(std::slice::from_ref(&*fan_out.worker), true)?;
+                }
+                JobV2StepBody::Loop { loop_ } => walk(&loop_.steps, true)?,
+                JobV2StepBody::Target(_) | JobV2StepBody::TargetRef(_) => {}
+            }
         }
-        None => return Ok(()),
-    };
-    Err(DispatchError::JobValidation(format!(
-        "{what}: auto-task steps can be defined and explained, but this Orbit cannot run them \
-         yet; no step ran and no task was minted"
-    )))
+        Ok(())
+    }
+    walk(&job.steps, false)
 }
 
 /// [ORB-11325] Reject a job whose `when:` / `break_when:` reads

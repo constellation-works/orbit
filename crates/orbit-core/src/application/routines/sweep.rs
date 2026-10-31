@@ -555,6 +555,34 @@ pub(crate) fn run_sweep_at_with_providers_at(
         }
     }
 
+    // [ORB-20158] A job run parked on an auto-task step is revisited when
+    // due: the same logical run continues, it is never submitted again.
+    if !options.dry_run {
+        for (workspace, runtime) in &discovered.entries {
+            if !tick_allows_workspace(deadline, workspace, &mut skipped_workspaces) {
+                continue;
+            }
+            match runtime.wake_parked_job_runs(now_utc) {
+                Ok(woken) => {
+                    if !woken.is_empty() {
+                        tracing::info!(
+                            target: "orbit.core.sweep",
+                            workspace = %workspace.name,
+                            woken = woken.len(),
+                            "sweep.parked_runs_woken"
+                        );
+                    }
+                }
+                Err(error) => tracing::warn!(
+                    target: "orbit.core.sweep",
+                    workspace = %workspace.name,
+                    error = %error,
+                    "sweep.parked_runs_wake_failed"
+                ),
+            }
+        }
+    }
+
     // The final-recovery backstop runs last: it only submits runs for tasks
     // already blocked, and stands down itself off the owner or with an empty
     // `workflow.purpose_crews.final_recovery` pool.

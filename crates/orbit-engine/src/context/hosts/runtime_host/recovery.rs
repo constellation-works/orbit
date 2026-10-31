@@ -52,6 +52,53 @@ macro_rules! recovery_methods {
             compound_outputs: &BTreeMap<String, Value>,
         ) -> Result<(), DispatchError>;
 
+        /// Observe one `auto-task:` step pass deterministically (ORB-20158):
+        /// its durable record, the frozen definition's hold, the bound task's
+        /// terminal receipt, the deadline, expiry and readiness at the owner's
+        /// pass time. Writes nothing. A host that cannot observe refuses, so
+        /// the step never mints on a guess.
+        fn observe_auto_task_step(
+            &self,
+            run_id: &str,
+            request: &AutoTaskStepRequest,
+        ) -> Result<AutoTaskObservation, DispatchError>;
+
+        /// Durably record an `auto-task:` step's record in the run's versioned
+        /// checkpoint before the engine relies on it. Fail-closed: the engine
+        /// admits nothing after an error.
+        fn checkpoint_auto_task_step(
+            &self,
+            run_id: &str,
+            step_id: &str,
+            record: &AutoTaskStepRecord,
+        ) -> Result<(), DispatchError>;
+
+        /// Resolve the step's durable reservation under the owner admission
+        /// fence: an existing task minted for its action key, a compatible
+        /// open instance, a hold, or one keyed mint after re-checking
+        /// readiness, guards and expiry. Requires a checkpointed reservation.
+        fn admit_auto_task_step(
+            &self,
+            run_id: &str,
+            step_id: &str,
+        ) -> Result<AutoTaskAdmission, DispatchError>;
+
+        /// Durably record a succeeded branch of a `parallel:` block in a job
+        /// with auto-task steps, so a replay restores it instead of running
+        /// it again. Fail-closed.
+        fn checkpoint_parallel_branch(
+            &self,
+            run_id: &str,
+            step_id: &str,
+            branch_id: &str,
+            output: &Value,
+        ) -> Result<(), DispatchError>;
+
+        /// Park the run: it stays live and counts against its job's
+        /// `max_active_runs`, holds no worker, and the owner clock resumes it
+        /// at `park.wake_at`. Orphan reconciliation tells it from worker loss.
+        fn park_job_run(&self, run_id: &str, park: &ParkedWait) -> Result<(), DispatchError>;
+
         /// Persist diagnostic output from an incomplete step without marking it
         /// successful or making it eligible for resume skipping.
         fn checkpoint_step_diagnostic(

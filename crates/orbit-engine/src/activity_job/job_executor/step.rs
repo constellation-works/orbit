@@ -15,6 +15,11 @@ pub(super) fn run_step(step: &JobV2Step, ctx: &ExecCtx<'_>) -> Result<StepOutcom
                     reason: when_false_skip_reason(expr),
                 },
             );
+            // A skipped auto-task step stays `skipped` to later waits: a
+            // successful no-op is not accepted prerequisite evidence.
+            if let Some(name) = step.auto_task_name() {
+                record_skipped_auto_task_step(step, name, ctx)?;
+            }
             return Ok(StepOutcome {
                 success: true,
                 output: Value::Null,
@@ -33,8 +38,13 @@ pub(super) fn run_step(step: &JobV2Step, ctx: &ExecCtx<'_>) -> Result<StepOutcom
     .map_err(|e| DispatchError::AuditFailed(format!("{e:?}")))?;
     ctx.audit.push_parent_lossy(step_event_id);
 
+    // An auto-task step binds a task and waits for it; it has no retry or
+    // recovery activity, and a pass that cannot settle parks the run.
     let (result, lock_wait_ms) =
-        orbit_common::fs::lock_wait::measure(|| run_step_with_retry(step, ctx));
+        orbit_common::fs::lock_wait::measure(|| match step.auto_task_name() {
+            Some(name) => run_auto_task_step(step, name, ctx),
+            None => run_step_with_retry(step, ctx),
+        });
 
     ctx.audit.pop_parent_lossy();
     let (outcome_str, error_message) = match &result {
@@ -48,6 +58,7 @@ pub(super) fn run_step(step: &JobV2Step, ctx: &ExecCtx<'_>) -> Result<StepOutcom
         Err(error @ DispatchError::ChildRunCancelled { .. }) => {
             ("cancelled", Some(error.to_string()))
         }
+        Err(error @ DispatchError::AutoTaskParked(_)) => ("parked", Some(error.to_string())),
         Err(err) => ("error", Some(err.to_string())),
     };
     emit_job_event_lossy(

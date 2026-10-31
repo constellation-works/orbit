@@ -39,7 +39,17 @@ pub(super) struct ExecCtx<'a> {
     /// as `{{ item }}`.
     pub(super) item: Option<Value>,
     pub(super) iteration: Option<u32>,
+    /// [ORB-20158] `Some` in a job with auto-task steps, outside loops and
+    /// fan-outs: each `parallel:` block checkpoints a succeeded branch, and a
+    /// replay restores the branches recorded here (parallel step id → branch
+    /// id → output) instead of running them again.
+    pub(super) restored_branches: Option<Arc<RestoredBranches>>,
 }
+
+/// Succeeded `parallel:` branches a resumed auto-task job restores, keyed by
+/// the parallel step id and then the branch id.
+pub(super) type RestoredBranches =
+    std::collections::BTreeMap<String, std::collections::BTreeMap<String, Value>>;
 
 impl ExecCtx<'_> {
     /// Resolved task id for the activity input, if any. Threaded onto every

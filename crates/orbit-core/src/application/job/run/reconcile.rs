@@ -105,6 +105,7 @@ impl OrbitRuntime {
             .list_all_pending_or_running_runs()?
             .into_iter()
             .filter(|run| run.state == JobRunState::Running && running_run_owner_is_stale(run))
+            .filter(|run| !self.job_run_is_parked(run))
             .collect())
     }
 
@@ -119,6 +120,18 @@ impl OrbitRuntime {
             .into_iter()
             .filter(|run| pending_run_stale_reason(run).is_some())
             .collect())
+    }
+
+    /// [ORB-20158] Whether `run` is live and parked on an auto-task step: its
+    /// worker exited on purpose and the owner clock resumes it, so its dead
+    /// owner is not worker loss. An unreadable state is not a park.
+    fn job_run_is_parked(&self, run: &JobRun) -> bool {
+        run.state == JobRunState::Running
+            && self
+                .read_run_state(&run.run_id)
+                .ok()
+                .flatten()
+                .is_some_and(|state| state.parked_wait().is_some())
     }
 
     pub(crate) fn reconcile_stale_job_runs(
@@ -208,7 +221,7 @@ impl OrbitRuntime {
         if pass.has_healthy(run) {
             return Ok(false);
         }
-        if stale_job_run_diagnostic(run).is_none() {
+        if stale_job_run_diagnostic(run).is_none() || self.job_run_is_parked(run) {
             if !run.state.is_terminal() {
                 pass.remember_healthy(run);
             }
@@ -246,6 +259,9 @@ impl OrbitRuntime {
         let Some((error_code, message)) = stale_job_run_diagnostic(&current) else {
             return Ok(false);
         };
+        if self.job_run_is_parked(&current) {
+            return Ok(false);
+        }
         if !self.provider_evidence_allows_orphan_finalization(&current.run_id, provider_probe) {
             return Ok(false);
         }

@@ -64,6 +64,7 @@ pub use activity_job::{
     validate_job, validate_job_deterministic_actions,
 };
 pub use context::{
+    AutoTaskAdmission, AutoTaskObservation, AutoTaskReadiness, AutoTaskStepRequest,
     ClaimExecutionContext, CompletionObservationAdmission, CrewConfig, FinalRecoveryAdmission,
     FinalRecoveryAdmissionRequest, FinalRecoveryApplication, FinalRecoveryApplied, GeneratedPath,
     HandoffLandingContext, HandoffLandingStep, HandoffLandingUpdate, PLUGIN_BROKER_ENV,

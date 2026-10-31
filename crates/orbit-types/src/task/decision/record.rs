@@ -75,4 +75,21 @@ pub enum TaskDecision {
     /// The tag lists before and after a write that changed them, recorded
     /// on the `tags_changed` event.
     TagsChanged(TagsChanged),
+    /// The keyed job-step invocation a task was minted for, recorded on its
+    /// `created` event. It resolves a lost creation reply to this task.
+    JobStepInvocation(JobStepInvocation),
+}
+
+/// Creation receipt of a task an auto-task job step minted.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct JobStepInvocation {
+    /// `(run lineage, step id)` reservation key.
+    pub action_key: String,
+    /// Digest of the definition and inputs the step requested.
+    pub input_digest: String,
+    /// The auto-task definition the task was minted from.
+    pub auto_task: String,
+    /// The job execution and step that minted it.
+    pub run_id: String,
+    pub step_id: String,
 }

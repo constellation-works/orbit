@@ -457,6 +457,22 @@ impl PipelineWorkerSupervisor {
                     self.note_exit_after_reconciliation(run_id, &worker_exit);
                     return Ok(());
                 }
+                // [ORB-20158] A worker that parked its auto-task run exits
+                // with the run deliberately live: not worker loss.
+                if run.state == JobRunState::Running
+                    && self
+                        .runs
+                        .read_run_state(run_id)?
+                        .is_some_and(|state| state.parked_wait().is_some())
+                {
+                    tracing::info!(
+                        target: "orbit.core.job_run",
+                        run_id,
+                        worker_pid = child_pid,
+                        "pipeline worker exited after parking its run",
+                    );
+                    return Ok(());
+                }
                 let ownership = if run.pid == Some(child_pid) {
                     "after claiming"
                 } else {

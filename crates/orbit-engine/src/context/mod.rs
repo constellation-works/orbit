@@ -16,6 +16,7 @@ pub(crate) use env::{ProvenanceEnv, provenance_env};
 #[cfg(feature = "test-support")]
 pub use hosts::NullRuntimeHost;
 pub use hosts::{
+    AutoTaskAdmission, AutoTaskObservation, AutoTaskReadiness, AutoTaskStepRequest,
     ClaimExecutionContext, CompletionObservationAdmission, CrewConfig, FinalRecoveryAdmission,
     FinalRecoveryAdmissionRequest, FinalRecoveryApplication, FinalRecoveryApplied, GeneratedPath,
     HandoffLandingContext, HandoffLandingStep, HandoffLandingUpdate, PLUGIN_BROKER_ENV,

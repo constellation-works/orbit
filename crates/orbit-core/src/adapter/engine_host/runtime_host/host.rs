@@ -50,7 +50,7 @@ use crate::adapter::engine_host::actions::{cli_executor, dispatch, sandbox, task
 use crate::runtime::engine::paths::current_repo_root;
 
 use super::{
-    activity_tools, agent, checkpoints, claims, crew, executors, invocation, recovery,
+    activity_tools, agent, auto_task, checkpoints, claims, crew, executors, invocation, recovery,
     task_automation, validation,
 };
 
@@ -804,6 +804,49 @@ impl RuntimeHost for OrbitRuntime {
         compound_outputs: &BTreeMap<String, Value>,
     ) -> Result<(), DispatchError> {
         recovery::checkpoint_step(self, run_id, step_index, step_id, output, compound_outputs)
+    }
+
+    fn observe_auto_task_step(
+        &self,
+        run_id: &str,
+        request: &orbit_engine::AutoTaskStepRequest,
+    ) -> Result<orbit_engine::AutoTaskObservation, DispatchError> {
+        auto_task::observe_auto_task_step(self, run_id, request)
+    }
+
+    fn checkpoint_auto_task_step(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        record: &orbit_types::workflow::AutoTaskStepRecord,
+    ) -> Result<(), DispatchError> {
+        auto_task::checkpoint_auto_task_step(self, run_id, step_id, record)
+    }
+
+    fn admit_auto_task_step(
+        &self,
+        run_id: &str,
+        step_id: &str,
+    ) -> Result<orbit_engine::AutoTaskAdmission, DispatchError> {
+        auto_task::admit_auto_task_step(self, run_id, step_id)
+    }
+
+    fn checkpoint_parallel_branch(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        branch_id: &str,
+        output: &Value,
+    ) -> Result<(), DispatchError> {
+        auto_task::checkpoint_parallel_branch(self, run_id, step_id, branch_id, output)
+    }
+
+    fn park_job_run(
+        &self,
+        run_id: &str,
+        park: &orbit_types::workflow::ParkedWait,
+    ) -> Result<(), DispatchError> {
+        auto_task::park_job_run(self, run_id, park)
     }
 
     fn checkpoint_step_diagnostic(

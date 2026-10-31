@@ -6,7 +6,7 @@ last_validated: 2026-10-30
 status: Draft
 feature: activity-job
 type: design
-summary: "Proposed auto-task targets in existing jobs, with durable CEL waiting, keyed task binding, accepted evidence and expiry."
+summary: "Auto-task targets in existing jobs, with durable CEL waiting, keyed task binding, accepted evidence and expiry; phases 1 and 2 built."
 tags: [activity-job, condition-triggers, auto-tasks]
 ---
 
@@ -14,10 +14,11 @@ tags: [activity-job, condition-triggers, auto-tasks]
 
 This is an extension to existing jobs. Phase 1 (§7) has shipped:
 `target: auto-task:<name>`, `wait_until`, `expire_when`, `reuse_when`,
-`require_result` and the CEL facts below load, are checked and are explained,
-but no binary runs such a job yet. Such a job declares `schemaVersion: 3`
-([ORB-20237]), must stay disabled, and submission is refused before any run
-or task exists. It replaces the unmerged proposal for
+`require_result` and the CEL facts below load, are checked and are explained.
+Such a job declares `schemaVersion: 3` ([ORB-20237]). Phase 2 ([ORB-20158])
+runs it: keyed bind or mint, parked waits, admission rechecks and
+partial-branch checkpoints. No readiness adapter exists yet, so a step with
+`require_result` holds. It replaces the unmerged proposal for
 a separate auto-sequence definition type.
 **Auto-sequence** may be an informal name for a job composing auto-tasks; it has
 no separate directory, loader, trigger carrier, commands or lifecycle.
@@ -382,7 +383,8 @@ and long-lived clients keep shipped behavior unless they opt into the extension.
 
 Deliver in phases: (1) disabled schema, target resolution and CEL explain
 (shipped, see "Phase 1 as built" below);
-(2) keyed bind/mint, parked waits, admission and partial-branch checkpoints;
+(2) keyed bind/mint, parked waits, admission and partial-branch checkpoints
+(built, see "Phase 2 as built");
 (3) QA, security and preparation readiness adapters plus disabled job/routine examples.
 None silently expands the already-filed condition-language phase-1 task. Actual
 enablement, provider work and release timing remain operator decisions.
@@ -396,19 +398,19 @@ enablement, provider work and release timing remain operator decisions.
   header, omitted when 2, and is never inferred from the remaining fields, so
   a 3 survives normalization and a serialized round trip
   ([Auto-task jobs declare schemaVersion 3](../4_decisions.md#auto-task-jobs-declare-schemaversion-3)).
-  Every `schemaVersion: 3` job is phase-1 only, even with no extension field
-  left: it must stay disabled and cannot be submitted or run until its author
-  removes the keys and declares 2 again. Activities stay `schemaVersion: 2`.
+  A `schemaVersion: 3` job keeps the version even with no extension field
+  left. Activities stay `schemaVersion: 2`. Phase 1 also kept every such job
+  disabled and refused to submit it; phase 2 lifts that.
 - **Shape.** `orbit-types` parses the new keys. An auto-task step admits only
   `id`, `stage`, `when`, `target` and the four wait keys, so a key this binary
   does not know is refused, not dropped. `timeout_seconds: 0`, a serialized
   ref's default, is the one exception. The wait keys are refused on any other
-  step. The engine keeps an `auto-task:` ref through target resolution, and
-  `validate_job` refuses the job before its first step.
+  step. The engine keeps an `auto-task:` ref through target resolution;
+  `validate_job` refuses one inside `loop` or `fan_out` before the first step.
 - **Checks.** `orbit-automation`'s condition checker gains a typed job scope
   (`condition/job_wait.rs`), and Core runs it at catalog load, so a refused
   job leaves the catalog with a per-file diagnostic, like a parse error. It
-  refuses `state: enabled`, a missing, non-restricted, non-positive or
+  refuses a missing, non-restricted, non-positive or
   over-168h `spec.expire_when`, more than 32 auto-task steps, a target inside
   `loop` or `fan_out`, and an unregistered `require_result`. Inside the
   expressions it also refuses type errors, unknown or computed `steps[]`
@@ -437,6 +439,57 @@ enablement, provider work and release timing remain operator decisions.
   guard keeps a newer binary from bootstrapping while an older live client
   holds the workspace. That covers binaries built between [ORB-20157] and
   [ORB-20237], which would accept the `schemaVersion: 2` form.
+
+### Phase 2 as built
+
+- **Freeze.** Submission checks the waits again and, for a job with an
+  auto-task step, pins its YAML as the run's definition snapshot (a catalog
+  job included) and records a versioned checkpoint in the run state:
+  admission time, outer deadline, and the integration branch's commit when a
+  step requires `release-readiness/v1` (refused if it cannot be pinned).
+  A resume keeps its source's checkpoint, so deadlines include queue time and
+  downtime. Only a detached submission runs such a job; the foreground
+  `orbit job run <path>` refuses it.
+- **Step pass.** The engine (`job_executor/auto_task.rs`) asks the host to
+  observe the step, then checkpoints before each effect: activation, a
+  reservation, then admission. Observation reads the bound task's terminal
+  receipt with the owner's recorded settlement time, then expiry, then
+  readiness, in that order. Completed (`done`) is accepted. Archived,
+  rejected or missing tasks are not, and nothing remints them. A receipt
+  settled after the deadline is not accepted, and the step times out. A
+  checkpoint error stops the step before any effect.
+- **Admission.** Core (`auto_tasks/job_step.rs`) admits under the auto-task
+  cursor sidecar lock, the fence scheduled and manual mints already hold.
+  A step's action key is `<run>:<step>`. Its mint records a
+  `job_step_invocation` creation receipt on the task, so a lost reply
+  resolves to that task instead of a second mint. Under the fence it
+  rechecks expiry, the definition's current enablement and its own
+  workspace condition or schedule guard, and `wait_until`. With
+  `skip_if_open` dedupe it binds an open instance, or holds when that
+  instance was minted for other inputs or the job pins a revision. Mints
+  consume no schedule cursor. The board view excludes only the step's own
+  bound task, so two parallel `board.empty` branches serialize: one binds and
+  the other parks until it finishes. A task, host or file condition has no
+  bindable subject in a job step and holds, as does `require_result`, which
+  has no evidence adapter yet. `reuse_when` never matches yet.
+- **Parking.** A waiting, held or bound step parks the run. The run stays
+  `running`, so it counts against `max_active_runs`. Its checkpoint records
+  the park and its worker exits, holding no provider, thread, worktree or
+  drain slot. Orphan reconciliation and the worker supervisor skip a parked
+  run. The sweep wakes it when due (at most 60 s later, or at the deadline).
+  The woken worker adopts it by a compare-and-set on its park, so it resumes
+  once. A job disabled or removed while parked cancels the run.
+- **Parallel.** A succeeded branch's output is checkpointed and restored on
+  replay without rerunning it. A block whose join can still pass parks while
+  any branch is parked; its join semantics are unchanged.
+- **Start guard.** A minted task starts only while its step admits it. Local
+  submission and owner pull-claim admission recheck the run (not finished),
+  the binding, the step (not settled or expired), the definition and
+  `wait_until`. Bound existing work is never restricted.
+- **Older writers.** The checkpoint carries a version, and a binary refuses
+  to rewrite a newer one. A workspace this binary opens is at layout version
+  7 (`auto-task-job-checkpoints`, a breaking migration), so a binary that
+  would drop the checkpoint or reap a parked run cannot open it.
 
 ## 8. Acceptance and honest limitations
 
@@ -474,5 +527,7 @@ to enable until those contracts are implemented and validated.
 - [ORB-20157] — phase 1: define, check and explain disabled auto-task steps.
 - [ORB-20237] — require `schemaVersion: 3` for auto-task jobs and fence older
   clients with layout migration 5.
+- [ORB-20158] — phase 2: keyed bind/mint, parked waits, admission rechecks and
+  partial-branch checkpoints; layout migration 7.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

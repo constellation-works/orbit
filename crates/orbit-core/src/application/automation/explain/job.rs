@@ -1,8 +1,8 @@
 //! `orbit automation explain job:<name>` [ORB-20157]: a job's auto-task
 //! steps as checked at load, with each named auto-task resolved and frozen
-//! for inspection (`docs/design/activity-job/specs/auto-task-step.md` §7,
-//! phase 1). No such job runs yet, so there is no wait to evaluate; the
-//! report reads definitions and writes nothing.
+//! for inspection (`docs/design/activity-job/specs/auto-task-step.md` §7).
+//! It explains the definition, not an execution: no wait is evaluated, and
+//! the report reads definitions and writes nothing.
 
 use chrono::Utc;
 use orbit_automation::condition::{
@@ -178,10 +178,11 @@ impl OrbitRuntime {
             steps,
             evaluated_at: now.to_rfc3339(),
             runtime: ExplainedJobRuntime {
-                executable: false,
-                note: "auto-task steps are defined and explained only: this Orbit refuses to \
-                       enable or run the job, so nothing waits, no task is minted and no \
-                       result is accepted",
+                executable: true,
+                note: "an enabled job runs detached: each execution freezes this definition, \
+                       parks without a worker while a step waits, and mints at most one task \
+                       per step; a step requiring release-readiness/v1 holds, since this Orbit \
+                       has no evidence adapter for it",
             },
         })
     }
