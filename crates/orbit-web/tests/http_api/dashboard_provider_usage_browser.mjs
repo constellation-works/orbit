@@ -49,6 +49,38 @@ const busy = () => {
   };
 };
 
+// The dk-server-2 shape (ORB-20589): Claude's usage reading carries no
+// account, while its pressures are per model crew account (claude/fable,
+// claude/haiku, claude/opus, claude/sonnet). Five real provider accounts.
+const dkShape = () => {
+  const now = new Date();
+  const reading = (provider, window, used, extra = {}) => ({
+    provider, scope: null, window, used_percent: used, exhausted: false, resets_at: null, source: 'native',
+    observed_at: now.toISOString(), age_seconds: 30, stale: false, gating: true, partial: false, threshold: 90,
+    gated: false, until: null, crews: [], ...extra,
+  });
+  const accountPressure = (provider, account, value) => ({ provider, account, pressure: value, pressure_window: null });
+  return {
+    provider_limits: [
+      reading('antigravity', 'gemini-argon-wtu-weekly', 100, { scope: 'argon' }),
+      reading('codex', 'primary', 100, { threshold: 'off' }),
+      reading('muse', 'weekly', 84),
+      reading('claude', 'seven_day', 19),
+      reading('grok', 'weekly', 16),
+    ],
+    provider_pressures: [
+      { provider: 'antigravity', pressure: 1, pressure_window: null },
+      { provider: 'codex', pressure: 0, pressure_window: null },
+      { provider: 'muse', pressure: 1.02, pressure_window: null },
+      accountPressure('claude', 'fable', 1),
+      accountPressure('claude', 'haiku', 1),
+      accountPressure('claude', 'opus', 1),
+      accountPressure('claude', 'sonnet', 1),
+      { provider: 'grok', pressure: 0.95, pressure_window: null },
+    ],
+  };
+};
+
 try {
   const context = await browser.newContext({ viewport: { width: 1920, height: 900 } });
   const page = await context.newPage();
@@ -385,6 +417,32 @@ try {
   await page.keyboard.press('Escape');
   assert.equal(await open(), false);
   assert.equal(await page.evaluate(() => document.activeElement.dataset.usageKey), 'claude', 'Esc after a changed poll returns focus to the chip');
+
+  // ---- The dk-server-2 shape: per-model Claude pressures must not become
+  // empty claude/<model> rows, and Claude's own row carries a pressure.
+  override = dkShape();
+  await load(1920, () => document.querySelectorAll('#provider-usage-chips .provider-usage-item').length === 4);
+  await chip('*').click();
+  await dialog.waitFor({ state: 'visible' });
+  const dkCount = await page.evaluate(() => document.querySelector('#provider-usage-dialog .usage-observed')?.textContent);
+  assert.equal(dkCount, '5 providers', 'the header counts real provider accounts, not per-model pressure entries');
+  const dkRows = await dialogRows();
+  assert.equal(dkRows.length, 5, 'one row per real provider account');
+  assert.deepEqual(dkRows.map(row => row.split(' ')[0]), ['antigravity', 'codex', 'muse', 'claude', 'grok']);
+  assert.ok(!dkRows.some(row => row.startsWith('claude/')), 'no claude/<model> placeholder rows');
+  assert.match(dkRows[3], /^claude 19% 7-day pressure ×1$/, 'the Claude row shows its usage with a pressure value');
+  await shoot('provider-dk-shape-dark-1920.png', 900, 560);
+  await page.keyboard.press('Escape');
+  await load(375, () => document.querySelectorAll('#provider-usage-chips .provider-usage-summary').length === 1);
+  const dkPlus = await page.evaluate(() => document.querySelector('#provider-usage-chips .provider-usage-count')?.textContent ?? null);
+  assert.equal(dkPlus, '+4', 'the summary chip counts real provider accounts, not per-model pressure entries');
+  await page.locator('#provider-usage-chips .provider-usage-summary').scrollIntoViewIfNeeded();
+  await chip('*').click();
+  await dialog.waitFor({ state: 'visible' });
+  assert.equal((await dialogRows()).length, 5, 'the all-providers dialog at 375px lists real accounts only');
+  const dkPlaced = await dialog.boundingBox();
+  await shoot('provider-dk-shape-dark-375.png', 375, Math.min(900, Math.round(dkPlaced.y + dkPlaced.height + 16)));
+  await page.keyboard.press('Escape');
 
   // ---- A stale-by-date reading that is still gated lists its gate and held crews.
   override = (() => {
