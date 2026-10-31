@@ -8,11 +8,11 @@
     },
     "orbit-automation": {
       "test_function_paths": [
-        "auto_tasks/tests/scheduler.rs::checkpoint_write_failure_records_mint_evidence_and_retry_reconciles",
-        "auto_tasks/tests/scheduler.rs::interruption_after_claim_reports_unresolved_and_does_not_remint",
-        "auto_tasks/tests/scheduler.rs::interruption_after_mint_reconciles_on_retry_without_reminting",
-        "auto_tasks/tests/scheduler.rs::loaded_definition_deleted_before_admission_cannot_recreate_cursor",
-        "auto_tasks/tests/scheduler.rs::overlapping_due_passes_mint_one_task"
+        "auto_tasks/scheduler/tests/scheduler.rs::checkpoint_write_failure_records_mint_evidence_and_retry_reconciles",
+        "auto_tasks/scheduler/tests/scheduler.rs::interruption_after_claim_reports_unresolved_and_does_not_remint",
+        "auto_tasks/scheduler/tests/scheduler.rs::interruption_after_mint_reconciles_on_retry_without_reminting",
+        "auto_tasks/scheduler/tests/scheduler.rs::loaded_definition_deleted_before_admission_cannot_recreate_cursor",
+        "auto_tasks/scheduler/tests/scheduler.rs::overlapping_due_passes_mint_one_task"
       ]
     },
     "orbit-cli": {

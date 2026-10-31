@@ -71,7 +71,7 @@ Introduce auto-tasks as git-versioned YAML definitions under `.orbit/auto_tasks/
 ## A quiet integration branch skips the mint, and an unanswerable precondition does not
 
 **Recorded:** 2026-09-20 · [ORB-12698]
-**Paths:** `crates/orbit-automation/src/auto_tasks/scheduler.rs`, `crates/orbit-core/src/application/auto_tasks/change_probe.rs`, `.orbit/auto_tasks/**`
+**Paths:** `crates/orbit-automation/src/auto_tasks/scheduler/preconditions.rs`, `crates/orbit-core/src/application/auto_tasks/change_probe.rs`, `.orbit/auto_tasks/**`
 
 ### Context
 

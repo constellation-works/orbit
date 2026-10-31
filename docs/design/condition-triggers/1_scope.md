@@ -61,7 +61,7 @@ Bearing: Orbit already has these pieces, all read from source at `d0cfa7a04`.
   bundle (`add_task_admitted_guarded`, `crates/orbit-core/src/application/task/add.rs`).
   Time-scheduled auto-tasks use a different method. They claim a slot in a cursor
   file before minting and then record the task ID
-  (`fire_slot`, `crates/orbit-automation/src/auto_tasks/scheduler.rs`).
+  (`fire_slot`, `crates/orbit-automation/src/auto_tasks/scheduler/locked.rs`).
 - **Host facts.** The host resource sampler measures CPU (load per core, and measured
   utilization), memory percent, Linux I/O pressure, and disk used percent. Disk is
   measured for the filesystem that holds each of three paths: the repository root,
@@ -817,7 +817,7 @@ What a false or unknown guard does depends on the kind:
   it, as catch-up already does. This is how the shipped preconditions
   `skip_if_unchanged` and `skip_unless_blocked_candidates` already treat a skip
   ("the slot is deliberately left unconsumed", `fire_locked`,
-  `crates/orbit-automation/src/auto_tasks/scheduler.rs`). So the example reads "once
+  `crates/orbit-automation/src/auto_tasks/scheduler/locked.rs`). So the example reads "once
   per night, at the first moment after 02:00 that the board is empty".
   `guard_miss: skip` consumes the slot instead, giving "only if empty at 02:00".
 - **`deliveries_landed`.** A false guard dispatches nothing. Pending deliveries and
