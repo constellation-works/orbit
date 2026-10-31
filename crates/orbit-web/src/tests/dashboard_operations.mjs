@@ -1834,7 +1834,7 @@ replicaWorkspace = false;
 const backlogRows = link => Array.from(link?.querySelectorAll('.drain-backlog-forecast-row') || []);
 const backlogRow = (link, metric) => link?.querySelector(`.drain-backlog-forecast-row[data-metric="${metric}"]`);
 const rowFigure = (link, metric) => backlogRow(link, metric)?.querySelector('.drain-forecast-figure-main')?.textContent;
-const rowWidth = (link, metric, part) => parseFloat(backlogRow(link, metric)?.querySelector(part)?.style.width || 'NaN');
+const rowLeft = (link, metric, part) => parseFloat(backlogRow(link, metric)?.querySelector(part)?.style.left || 'NaN');
 assert(rowFigure(backlogLink(), 'drain') === '6.5h – 20h', 'the forecast summary updates after its independent request settles');
 const searchesBeforeReady = backlogForecastSearches.length;
 backlogForecastMode = 'ready';
@@ -1845,19 +1845,20 @@ const readyLink = backlogLink();
 const readyText = readyLink?.textContent || '';
 assert(backlogForecastSearches.length === searchesBeforeReady + 1 && !readySearch.includes('lookback_days') && !readySearch.includes('arrivals'), `the summary reads the default backlog forecast: ${readySearch}`);
 assert(readyLink?.tagName === 'A' && readyLink.getAttribute('href')?.includes('#analytics/forecast') && readyLink.getAttribute('title')?.endsWith('Analytics › Forecast'), `the summary links to Analytics › Forecast: ${readyLink?.outerHTML}`);
-// Time to drain, cost and tokens are bar rows in the CPU and Memory meter's
-// language: label, a p50 fill with a lighter p50 to p90 extension, and the
-// p50 – p90 figures. Without a baseline there is no tick, and each bar's p90
-// ends inside the track. Counts and exact cost are in the tooltip and the
+// Time to drain, cost and tokens are rows beside the CPU and Memory meters:
+// label, a flat line with a dot at p50 and shading strongest there, fading
+// out to p90, and the p50 – p90 figures. Without a baseline there is no tick,
+// and each line's p90 ends inside the track. Counts and exact cost are in the tooltip and the
 // accessible text.
 assert(backlogRows(readyLink).map(row => row.dataset.metric).join() === 'drain,cost,tokens' && backlogRows(readyLink).map(row => row.querySelector('dt')?.textContent).join() === 'Time to drain,Cost,Tokens', `ready rows: ${readyText}`);
 assert(rowFigure(readyLink, 'drain') === '6.5h – 20h' && rowFigure(readyLink, 'cost') === '$13 – $40' && rowFigure(readyLink, 'tokens') === '1.5M – 4.8M', `ready figures: ${readyText}`);
 for (const metric of ['drain', 'cost', 'tokens']) {
-  const fill = rowWidth(readyLink, metric, '.drain-forecast-fill');
-  const spreadNode = backlogRow(readyLink, metric)?.querySelector('.drain-backlog-forecast-spread');
-  const left = parseFloat(spreadNode?.style.left || 'NaN');
-  const spread = parseFloat(spreadNode?.style.width || 'NaN');
-  assert(fill > 0 && Math.abs(left - fill) < 0.01 && spread > 0 && left + spread <= 100, `${metric}: p50 fill with a p50 to p90 extension inside the track: fill=${fill} left=${left} spread=${spread}`);
+  const dot = rowLeft(readyLink, metric, '.drain-backlog-forecast-p50');
+  const bandNode = backlogRow(readyLink, metric)?.querySelector('.drain-backlog-forecast-band');
+  const left = parseFloat(bandNode?.style.left || 'NaN');
+  const width = parseFloat(bandNode?.style.width || 'NaN');
+  const center = parseFloat(bandNode?.style.getPropertyValue('--center') || 'NaN');
+  assert(dot > 0 && left >= 0 && Math.abs(left + width * center / 100 - dot) < 0.05 && Math.abs(left + width - 90) < 0.01, `${metric}: p50 dot with shading centred on it, ending at p90 inside the track: dot=${dot} left=${left} width=${width} center=${center}`);
 }
 assert(!readyLink.querySelector('.drain-forecast-tick') && !readyLink.querySelector('.drain-backlog-forecast-legend'), 'a forecast without a baseline draws no reference tick');
 assert(readyText.includes('p50 – p90') && readyText.includes('18 backlog · 2 in progress') && readyText.includes('Tokens p50 1.5M, p90 4.8M') && !readyLink.classList.contains('unavailable'), `ready accessible text: ${readyText}`);
@@ -1886,7 +1887,7 @@ await fetchAndRenderAutoDrainPane();
 await tick();
 const baselinedLink = backlogLink();
 const tickLeft = metric => parseFloat(backlogRow(baselinedLink, metric)?.querySelector('.drain-forecast-tick')?.style.left || 'NaN');
-assert(Math.abs(tickLeft('drain') / rowWidth(baselinedLink, 'drain', '.drain-forecast-fill') - 5 / 6.5) < 0.001 && Math.abs(tickLeft('cost') / rowWidth(baselinedLink, 'cost', '.drain-forecast-fill') - 10 / 12.5) < 0.001, `the tick sits at the baseline p50: drain=${tickLeft('drain')} cost=${tickLeft('cost')}`);
+assert(Math.abs(tickLeft('drain') / rowLeft(baselinedLink, 'drain', '.drain-backlog-forecast-p50') - 5 / 6.5) < 0.001 && Math.abs(tickLeft('cost') / rowLeft(baselinedLink, 'cost', '.drain-backlog-forecast-p50') - 10 / 12.5) < 0.001, `the tick sits at the baseline p50: drain=${tickLeft('drain')} cost=${tickLeft('cost')}`);
 assert(!backlogRow(baselinedLink, 'tokens')?.querySelector('.drain-forecast-tick') && baselinedLink.querySelector('.drain-backlog-forecast-legend')?.textContent === 'pre-regression baseline p50', `a metric without a baseline has no tick, and the legend names the tick: ${baselinedLink?.textContent}`);
 assert(/pre-regression baseline p50 5\.0h/.test(backlogRow(baselinedLink, 'drain').querySelector('.visually-hidden')?.textContent || ''), 'the tick is read aloud');
 for (const mode of ['empty', 'error', 'missing']) {
@@ -1896,7 +1897,7 @@ for (const mode of ['empty', 'error', 'missing']) {
   const missed = backlogLink();
   const wantReason = mode === 'empty' ? 'empty' : 'transport';
   const wantText = mode === 'empty' ? /no backlog/i : /couldn't load/i;
-  assert(forecastCard()?.querySelectorAll('.drain-backlog-forecast').length === 1 && missed?.classList.contains('unavailable') && missed.dataset.forecastReason === wantReason && wantText.test(missed.textContent) && backlogRows(missed).length === 0 && !missed.querySelector('.drain-forecast-meter'), `${mode}: one muted line with no bars, explained in its tooltip (${wantReason}): ${missed?.textContent}`);
+  assert(forecastCard()?.querySelectorAll('.drain-backlog-forecast').length === 1 && missed?.classList.contains('unavailable') && missed.dataset.forecastReason === wantReason && wantText.test(missed.textContent) && backlogRows(missed).length === 0 && !missed.querySelector('.drain-backlog-forecast-meter'), `${mode}: one muted line with no bars, explained in its tooltip (${wantReason}): ${missed?.textContent}`);
   assert(missed.getAttribute('href')?.includes('#analytics/forecast') || String(missed.href || '').includes('analytics/forecast'), `${mode}: the explained line stays a link to Analytics › Forecast`);
   assert(forecastTextIncludesAdmission() && get('auto-drain-body').querySelector('.drain-capacity'), `${mode}: the drain card still renders`);
 }
@@ -1907,9 +1908,9 @@ const regressionLink = backlogLink();
 // The rows draw the baseline, muted and labelled; the reason and the
 // baseline's caveat stay in the tooltip and accessible text [ORB-20453]. A
 // missing quantile reads unknown and draws nothing: time to drain has its
-// p50 fill and no extension, and tokens, with neither, has no row.
+// p50 dot and no shading, and tokens, with neither, has no row.
 assert(regressionLink?.dataset.forecastReason === 'regression_history_missing' && regressionLink.querySelector('.drain-backlog-forecast-bars.baseline') && regressionLink.querySelector('.drain-backlog-forecast-basis')?.textContent === 'pre-regression baseline', `regression gap draws the baseline rows: ${regressionLink?.textContent}`);
-assert(rowFigure(regressionLink, 'drain') === '2.7h – unknown' && rowWidth(regressionLink, 'drain', '.drain-forecast-fill') > 0 && !backlogRow(regressionLink, 'drain').querySelector('.drain-backlog-forecast-spread'), `an unknown p90 draws no extension: ${regressionLink?.textContent}`);
+assert(rowFigure(regressionLink, 'drain') === '2.7h – unknown' && rowLeft(regressionLink, 'drain', '.drain-backlog-forecast-p50') > 0 && !backlogRow(regressionLink, 'drain').querySelector('.drain-backlog-forecast-band'), `an unknown p90 draws no shading: ${regressionLink?.textContent}`);
 assert(rowFigure(regressionLink, 'cost') === '$10 – $25' && !backlogRow(regressionLink, 'tokens') && !regressionLink.querySelector('.drain-forecast-tick'), `baseline cost row, no tokens row, no tick: ${regressionLink?.textContent}`);
 assert(/regression/i.test(regressionLink.title) && /pre-regression baseline/i.test(regressionLink.querySelector(':scope > .visually-hidden')?.textContent || ''), `the reason and baseline caveat stay in the tooltip and accessible text: ${regressionLink.title}`);
 assert(!/90-day horizon/i.test(regressionLink.textContent), `regression gap is not a horizon exceedance: ${regressionLink?.textContent}`);

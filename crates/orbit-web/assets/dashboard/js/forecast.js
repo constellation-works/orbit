@@ -417,26 +417,34 @@ function backlogBarReferences(baseline) {
   return Object.values(references).some((value) => value != null) ? references : null;
 }
 
-// Share of the track the largest figure may fill, so a p90 never reads as a
-// bar pinned to a limit when there is no limit.
+// Share of the line the largest figure may reach, so a p90 never reads as a
+// value pinned to a limit when there is no limit.
 const BACKLOG_BAR_SPAN = 0.9;
 
-// One row in the CPU and Memory meter's language: label, bar and figures.
-// The solid fill is p50 and the lighter extension runs from p50 to p90. Each
-// bar is scaled to its own largest figure (its p90, or the tick when that is
+// One row beside the CPU and Memory meters: label, line and figures. The
+// distribution sits on a flat line: a dot at p50, with colour strongest there
+// and fading outward to p90. The forecast has no p10, so the fade to the left
+// of p50 mirrors the right half as a visual falloff and is not a figure. Each
+// line is scaled to its own largest figure (its p90, or the tick when that is
 // further), since the three metrics share no unit. A missing quantile reads
-// "unknown" and draws nothing in its place.
+// "unknown" and draws nothing in its place: no p50 draws no row mark, and no
+// p90 leaves the dot without a spread.
 function backlogBarRow([key, label, , fmt], quantiles, reference, caveat) {
   const { p50, p90 } = quantiles;
   const top = Math.max(p50 ?? 0, p90 ?? 0, reference ?? 0);
-  const share = (value) => `${(top > 0 ? Math.max(0, value) / top * BACKLOG_BAR_SPAN * 100 : 0).toFixed(2)}%`;
+  const at = (value) => (top > 0 ? Math.max(0, value) / top * BACKLOG_BAR_SPAN * 100 : 0);
+  const share = (value) => `${at(value).toFixed(2)}%`;
   const figures = `${p50 == null ? "unknown" : fmt(p50)} – ${p90 == null ? "unknown" : fmt(p90)}`;
-  const meter = el("span", { class: "drain-forecast-meter drain-backlog-forecast-meter", "aria-hidden": "true" }, [
-    p50 != null && p90 != null && p90 > p50
-      ? el("span", { class: "drain-backlog-forecast-spread", style: { left: share(p50), width: share(p90 - p50) } })
-      : null,
-    p50 != null ? el("span", { class: "drain-forecast-fill", style: { width: share(p50) } }) : null,
+  let band = null;
+  if (p50 != null && p90 != null && p90 > p50) {
+    const start = Math.max(0, p50 - (p90 - p50));
+    band = el("span", { class: "drain-backlog-forecast-band", style: { left: share(start), width: share(p90 - start) } });
+    band.style.setProperty("--center", `${((p50 - start) / (p90 - start) * 100).toFixed(2)}%`);
+  }
+  const meter = el("span", { class: "drain-backlog-forecast-meter", "aria-hidden": "true" }, [
+    band,
     reference != null ? el("span", { class: "drain-forecast-tick", style: { left: share(reference) } }) : null,
+    p50 != null ? el("span", { class: "drain-backlog-forecast-p50", style: { left: share(p50) } }) : null,
   ].filter(Boolean));
   const spoken = [`${label} p50 ${p50 == null ? "unknown" : fmt(p50)}, p90 ${p90 == null ? "unknown" : fmt(p90)}`,
     reference != null ? `pre-regression baseline p50 ${fmt(reference)}` : "", caveat].filter(Boolean).join(", ");
@@ -469,7 +477,7 @@ function wholeUsd(value) {
 }
 
 /// Compact link to Analytics › Forecast: time to drain, cost and tokens as
-/// bar rows (p50 fill, p50 – p90 extension, figures beside), with a
+/// rows (p50 marked on a flat line, shading out to p90, figures beside), with a
 /// freshness label for all the snapshot's figures. Counts and exact cost are
 /// in its tooltip and accessible text. When the adjusted forecast is
 /// unavailable the rows draw the pre-regression baseline, muted and labelled
