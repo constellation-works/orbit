@@ -344,8 +344,7 @@ measure() {
   validate_owned_path "$arm.log" absent
   validate_owned_path "$(basename "$RESULT")" file
   start="$(date +%s.%N)"
-  ARM_SPAWNING=1
-  PENDING_CANCEL=""
+  PENDING_CANCEL="" ARM_SPAWNING=1
   setsid /usr/bin/time -f '%U\t%S' -o "$timing" \
     env ORBIT_BUILD_BUDGET_BENCH_PACKAGE="$PACKAGE" \
     ORBIT_BUILD_BUDGET_BENCH_PROCESSES="$PROCESSES" \
