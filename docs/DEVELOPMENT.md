@@ -565,8 +565,9 @@ the all-targets Clippy lint), the exclusive self-test lane, workspace test
 listing, workspace tests, production Clippy, doctests, documentation,
 supply-chain checks and repository guards. `--test-archive` mode records only
 `workflow-test-list-build` and `workspace-test-archive`, `--test-partitions`
-mode only `workspace-test-partitions`, and `--test-doctests` mode only
-`doctests`. `--checks` mode records every phase except the workflow test build,
+mode `workspace-test-archive-extract` followed by `workspace-test-partitions`,
+and `--test-doctests` mode only `doctests`. An extraction failure stops before
+the proof, so no `workspace-test-partitions` record is emitted. `--checks` mode records every phase except the workflow test build,
 the workspace test phases and doctests: the hosted Check job leaves doctests to
 the Test build job. That job runs them through `with-test-build-lint.sh`
 directly and logs a `doctests_seconds=` timing, with no `ci-guardrails-phase`
