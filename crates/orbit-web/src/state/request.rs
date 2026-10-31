@@ -111,7 +111,7 @@ impl WsRejection {
         }
     }
 
-    fn no_default() -> Self {
+    pub(super) fn no_default() -> Self {
         Self {
             status: StatusCode::BAD_REQUEST,
             message: "no workspace selected and no default is configured; \
@@ -146,6 +146,12 @@ impl FromRequestParts<DashboardState> for Ws {
         // since the last request is honored, and the resolved runtime always
         // matches the pinned binding.
         let requested = parts.uri.query().and_then(workspace_from_query);
+        // A warm request whose runtime is already cached current resolves
+        // inline; anything that might reload or build takes the blocking
+        // path below. See `DashboardState::try_resolve_cached`.
+        if let Some(resolved) = state.try_resolve_cached(requested.as_deref()) {
+            return resolved.map(Ws);
+        }
         let state = state.clone();
         tokio::task::spawn_blocking(move || {
             let pinned = state.pin();
@@ -182,6 +188,12 @@ impl FromRequestParts<DashboardState> for ConfigFileWs {
         state: &DashboardState,
     ) -> Result<Self, Self::Rejection> {
         let requested = parts.uri.query().and_then(workspace_from_query);
+        // Same inline fast path as `Ws`: the stale-tolerant resolver shares
+        // its cached first step, and everything past it (a rebuild, the
+        // stale-runtime fallback) stays on the blocking path below.
+        if let Some(resolved) = state.try_resolve_cached(requested.as_deref()) {
+            return resolved.map(ConfigFileWs);
+        }
         let state = state.clone();
         tokio::task::spawn_blocking(move || {
             let pinned = state.pin();

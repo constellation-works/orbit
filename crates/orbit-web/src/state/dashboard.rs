@@ -128,6 +128,29 @@ impl StateInner {
         }
     }
 
+    /// The binding and orbit dir `snapshot` serves `id` under, or the
+    /// rejection its selection earns. The sole authority for that mapping:
+    /// strict resolution, the config-file resolver and the cached fast path
+    /// all read it, so they can never disagree about a workspace.
+    fn snapshot_binding(
+        snapshot: &Snapshot,
+        id: &str,
+    ) -> Result<(WorkspaceRuntimeBinding, PathBuf), WsRejection> {
+        let entry = snapshot
+            .entries
+            .iter()
+            .find(|entry| entry.id == id)
+            .ok_or_else(|| WsRejection::unknown(id))?;
+        if !entry.active {
+            return Err(WsRejection::inactive(id));
+        }
+        let binding = entry
+            .binding
+            .clone()
+            .ok_or_else(|| WsRejection::missing_binding(id))?;
+        Ok((binding, entry.orbit_dir.clone()))
+    }
+
     /// Resolve (and lazily build + cache) the runtime for `id` against a single
     /// pinned `snapshot`. The pinned snapshot is the sole authority for the
     /// binding: the cache is validated against it, never trusted by id alone.
@@ -141,21 +164,7 @@ impl StateInner {
         snapshot: &Snapshot,
         id: &str,
     ) -> Result<Arc<OrbitRuntime>, WsRejection> {
-        let (binding, orbit_dir) = {
-            let entry = snapshot
-                .entries
-                .iter()
-                .find(|entry| entry.id == id)
-                .ok_or_else(|| WsRejection::unknown(id))?;
-            if !entry.active {
-                return Err(WsRejection::inactive(id));
-            }
-            let binding = entry
-                .binding
-                .clone()
-                .ok_or_else(|| WsRejection::missing_binding(id))?;
-            (binding, entry.orbit_dir.clone())
-        };
+        let (binding, orbit_dir) = Self::snapshot_binding(snapshot, id)?;
         let generation = snapshot.generation;
         // Sample before the build, as the registry fingerprint is: an edit
         // during construction then makes the published entry stale on the
@@ -206,21 +215,7 @@ impl StateInner {
         snapshot: &Snapshot,
         id: &str,
     ) -> Result<Arc<OrbitRuntime>, WsRejection> {
-        let (binding, orbit_dir) = {
-            let entry = snapshot
-                .entries
-                .iter()
-                .find(|entry| entry.id == id)
-                .ok_or_else(|| WsRejection::unknown(id))?;
-            if !entry.active {
-                return Err(WsRejection::inactive(id));
-            }
-            let binding = entry
-                .binding
-                .clone()
-                .ok_or_else(|| WsRejection::missing_binding(id))?;
-            (binding, entry.orbit_dir.clone())
-        };
+        let (binding, orbit_dir) = Self::snapshot_binding(snapshot, id)?;
         let generation = snapshot.generation;
         let config_stamp = ConfigLayerStamp::read(&self.global_root, &orbit_dir);
         if let Some(runtime) = self.cached_matching(id, &binding, &orbit_dir, &config_stamp)? {
@@ -341,8 +336,11 @@ impl StateInner {
             // successful rebuild replaces it via `publish_runtime`.
             return Ok(None);
         }
+        // The stamp equality above covers the workspace plugin toggles,
+        // which live in the stamped workspace config file; only the host
+        // plugin rows still need comparing here.
         if !runtime
-            .plugin_state_changed()
+            .plugin_installed_changed()
             .map_err(|error| WsRejection::build_failed(id, &error))?
         {
             return Ok(Some(runtime));
@@ -783,6 +781,49 @@ impl DashboardState {
         Pinned {
             inner: self.inner.clone(),
             snapshot: self.inner.snapshot(),
+        }
+    }
+
+    /// Resolve `requested` (or the default workspace) from the runtime
+    /// cache alone, when that is already the whole answer `pin` +
+    /// `resolve_runtime` would give: the registry and checkout
+    /// fingerprints are current (so `pin` would not reload) and a cached
+    /// runtime matches the current snapshot, binding and config stamp (so
+    /// resolution would not build). Selection rejections are answers too.
+    /// `None` means the request may need a reload or a build, which stays
+    /// on the blocking path the extractors already use; this fast path
+    /// only skips the thread hop every warm request used to pay. It runs on
+    /// the request thread: the `stat` calls, the stamp comparison and the
+    /// installed-plugin row query that `cached_matching` makes.
+    pub(crate) fn try_resolve_cached(
+        &self,
+        requested: Option<&str>,
+    ) -> Option<Result<Arc<OrbitRuntime>, WsRejection>> {
+        if let Some(source) = self.inner.source.as_ref()
+            && !self.registry_is_current(source)
+        {
+            return None;
+        }
+        let snapshot = self.inner.snapshot();
+        let id = match requested {
+            Some(id) => id,
+            None => match snapshot.default_workspace.as_deref() {
+                Some(id) => id,
+                None => return Some(Err(WsRejection::no_default())),
+            },
+        };
+        let (binding, orbit_dir) = match StateInner::snapshot_binding(&snapshot, id) {
+            Ok(binding) => binding,
+            Err(rejection) => return Some(Err(rejection)),
+        };
+        let config_stamp = ConfigLayerStamp::read(&self.inner.global_root, &orbit_dir);
+        match self
+            .inner
+            .cached_matching(id, &binding, &orbit_dir, &config_stamp)
+        {
+            Ok(Some(runtime)) => Some(Ok(runtime)),
+            Ok(None) => None,
+            Err(rejection) => Some(Err(rejection)),
         }
     }
 
