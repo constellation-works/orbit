@@ -86,6 +86,10 @@ pub const NOT_ID_ROUTED_TOOLS: &[(&str, &str)] = &[
         "an experiment id is workspace-local and carries no host prefix",
     ),
     (
+        "orbit.experiment.delete",
+        "an experiment id is workspace-local and carries no host prefix",
+    ),
+    (
         "orbit.experiment.abandon",
         "an experiment id is workspace-local and carries no host prefix",
     ),
