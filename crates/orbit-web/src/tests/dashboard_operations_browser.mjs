@@ -64,7 +64,8 @@ globalThis.dockReview = {
   posts: () => requests.filter(r => r.method === 'POST' && r.path === '/api/workflows/auto').length,
   lastBody: () => requests.filter(r => r.method === 'POST' && r.path === '/api/workflows/auto').at(-1)?.body,
   showUncertainStop: async () => {
-    replicaWorkspace = false;
+    // [ORB-20501] The settle-only Send exists only on replica checkouts.
+    replicaWorkspace = true;
     stopOutcome = 'stopped';
     stopSettlements = [{ task_id: 'ORB-4', outcome: 'launch_uncertain' }];
     drainRunId = null;
@@ -73,6 +74,8 @@ globalThis.dockReview = {
     await fetchAndRenderOperations();
     drainButton('Send pending results').click();
     await tick(); await tick(); await tick();
+    // Later scenarios run on the owner checkout; the next render picks this up.
+    replicaWorkspace = false;
     setActiveTab('auto-drain');
   },
   hold: () => { delayPost = true; releasePost = null; },
