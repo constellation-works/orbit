@@ -272,19 +272,6 @@ impl AutoTaskSchedule {
             Self::Condition { .. } => None,
         }
     }
-
-    /// Replace the guard of a typed kind; a condition keeps none.
-    pub fn with_guard(mut self, replacement: ScheduleGuard) -> Self {
-        match &mut self {
-            Self::Deliveries { guard, .. }
-            | Self::Cron { guard, .. }
-            | Self::Interval { guard, .. } => {
-                *guard = replacement;
-            }
-            Self::Condition { .. } => {}
-        }
-        self
-    }
 }
 
 /// Wire representation used to preserve field-specific errors while enforcing
