@@ -789,6 +789,77 @@ fn agent_effort_is_recorded_after_resolution_and_survives_configuration_changes(
     );
 }
 
+/// A `<crew>@<effort>` reference runs its crew at that effort and is recorded
+/// under its own name, so effort tuning never blends it with the crew's own
+/// effort; an effort the provider cannot take is refused before dispatch.
+#[test]
+fn crew_effort_reference_dispatches_and_records_the_overridden_effort() {
+    if !isolated_run_observation(
+        "run_observation::agent_invoke::crew_effort_reference_dispatches_and_records_the_overridden_effort",
+    ) {
+        return;
+    }
+    let fixture = Fixture::init();
+    let args_path = fixture.home.join("provider-argv");
+    let frame = serde_json::json!({"type":"item.completed", "item":{"type":"agent_message", "text":AGENT_TEST_ANSWER}});
+    plant_invoke_provider(
+        &fixture,
+        &format!(
+            "printf '%s\\n' \"$@\" > '{}'\nprintf '%s\\n' '{}'\nprintf '%s\\n' '{{\"type\":\"turn.completed\",\"usage\":{{\"input_tokens\":100,\"output_tokens\":20}}}}'",
+            args_path.display(),
+            frame
+        ),
+    );
+    let config_path = fixture.home.join(".orbit/config.toml");
+    let mut config: toml_edit::DocumentMut =
+        fs::read_to_string(&config_path).unwrap().parse().unwrap();
+    config["crews"]["sol"]["effort"] = toml_edit::value("high");
+    fs::write(&config_path, config.to_string()).unwrap();
+    let dispatch = |crew: &str| {
+        fixture
+            .orbit()
+            .env("ORBIT_OPERATOR", "1")
+            .env_remove("RUST_LOG")
+            .timeout(AGENT_COMMAND_TIMEOUT)
+            .args([
+                "run",
+                "agent",
+                "effort reference probe",
+                "--crew",
+                crew,
+                "--wait",
+                "--timeout",
+                "30s",
+                "--provider-sandbox",
+                "danger-full-access",
+                "--json",
+            ])
+            .output()
+            .unwrap()
+    };
+
+    let output = dispatch("sol@low");
+    assert!(output.status.success(), "{output:?}");
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let argv = fs::read_to_string(&args_path).unwrap();
+    assert!(
+        argv.contains("model_reasoning_effort=\"low\"") && !argv.contains("\"high\""),
+        "the reference effort must replace the crew's own: {argv}"
+    );
+    let shown = fixture.show_json(result["run_id"].as_str().unwrap());
+    let launch = &shown["run"]["agent_executions"][0];
+    assert_eq!(launch["crew"], "sol@low", "{shown}");
+    assert_eq!(launch["reasoning_effort"], "low", "{shown}");
+
+    let refused = dispatch("sol@ultra");
+    assert!(!refused.status.success());
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(
+        stderr.contains("sol@ultra") && stderr.contains("low, medium, high, xhigh, max"),
+        "{stderr}"
+    );
+}
+
 /// Provenance is completed-invocation evidence: when the provider reports a
 /// different model than the crew requested, `run show` names the
 /// provider-reported model while keeping the recorded crew and effort, and a

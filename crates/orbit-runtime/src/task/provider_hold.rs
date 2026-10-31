@@ -225,14 +225,13 @@ impl RuntimeKernel {
                     .map(|crew| crew.name)
             });
         let registry = self.context.settings().crews();
-        let run_provider = run_crew
+        let run_crew_config = run_crew
             .as_deref()
-            .and_then(|crew| registry.get(crew))
+            .and_then(|crew| orbit_types::identity::find_crew(crew, registry));
+        let run_provider = run_crew_config
+            .as_ref()
             .map(|crew| crew.assignment.provider.clone());
-        let run_account = run_crew
-            .as_deref()
-            .and_then(|crew| registry.get(crew))
-            .and_then(Crew::account);
+        let run_account = run_crew_config.as_ref().and_then(Crew::account);
         let provider = error_message
             .and_then(failed_provider)
             .map(ToOwned::to_owned)

@@ -390,6 +390,23 @@ can still reject a value for a particular model.
 Choose capability with the model first, then use `effort` to tune the reasoning
 budget within it.
 
+#### Effort per reference
+
+Any place that names a crew can also pick its effort with `<crew>@<effort>`:
+complexity, type and purpose pools, review pools, `workflow.default_crew`,
+`workflow.crew_ladder.rungs`, a task's `crew` and `--crew`. In a pool the weight
+still follows: `hard_complexity_crews = ["opus@medium:100", "opus:100"]`.
+
+- The reference effort wins over the crew's own `effort` and the activity's
+  inline setting; a reference without `@` behaves exactly as before.
+- `opus@medium` and `opus` are separate pool members, with their own weights,
+  and runs, scorecards, experiments and the crew ladder record them separately.
+  They share the crew's account, limits and holds.
+- An effort the provider or model does not accept, such as `grok@max`, is
+  refused when the config loads and by `orbit config set`, naming the accepted
+  values. Unlike a crew table's `effort`, it is never silently ignored.
+- Crew names cannot contain `@` or `:`.
+
 ### System work
 
 Orbit's own work draws its crew from the complexity pools, like a task with no
@@ -703,7 +720,7 @@ Log snapshots retain the numeric operational `offset` and add `agent_offset`. Re
 
 Notes:
 
-- Pool entries are `name` or `name:weight`, all bare or all weighted. An empty
+- Pool entries are `crew[@effort]` or `crew[@effort]:weight`, all bare or all weighted. An empty
   pool sends that tier to `default_crew`.
 - Each resource-throttle percentage is 1–100, and each resume mark must be
   lower than its high-water mark.

@@ -55,7 +55,7 @@ impl OrbitRuntime {
         let registry = self.context.settings().crews();
         let mut outages = outages.into_iter().filter(|outage| {
             outage.provider.is_none()
-                || registry.get(&outage.crew).is_none_or(|crew| {
+                || orbit_types::identity::find_crew(&outage.crew, registry).is_none_or(|crew| {
                     same_provider(Some(&crew.assignment.provider), outage.provider.as_deref())
                 })
         });

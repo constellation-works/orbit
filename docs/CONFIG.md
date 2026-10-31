@@ -1315,6 +1315,8 @@ provider = "antigravity"
 
 An unsupported `effort` (`max` on Grok, `effort = "hard"`) is ignored for that crew, never remapped, with a warning naming the file, crew, value and accepted values. `orbit doctor` lists ignored properties; `orbit config set` refuses a value load would drop. A selected crew's provider, model and effort each override an activity's inline baseline.
 
+**Crew references.** Wherever a crew is named — the complexity, type, purpose, review and final-recovery pools, `workflow.default_crew`, `workflow.crew_ladder.rungs`, a task or auto-task `crew`, `--crew` and MCP `crew` inputs — it can carry an effort: `<crew>@<effort>`, followed in pools by the usual `:<weight>` (`hard_complexity_crews = ["opus@medium:100", "opus:100", "sol:100"]`). The reference runs that crew at that effort, ahead of the crew's own `effort` and the activity's inline baseline; without `@effort` the crew's own `effort` applies, as before. `opus@medium` and `opus` are distinct pool members with their own weights, and runs, scorecards, experiments and the crew ladder record them under those names. They share the crew's provider account, holds and limits. Unlike a crew table's `effort`, a reference effort the provider or model does not accept (`grok@max`, `luna@hard`) is refused at load and by `orbit config set`, naming the reference and the accepted values. Crew names may therefore contain neither `:` nor `@`.
+
 **Recorded effort.** Each provider launch records its resolved crew, model and
 `reasoning_effort` before the process starts, after crew/inline precedence and
 configuration admission. `null` means no effort option was rendered (provider
@@ -1417,7 +1419,7 @@ Final recovery keeps its own rules (no fallback; `[]` turns it off), and automat
 
 - `model` and `provider` must be non-empty.
 - `default_crew` must name a defined crew. Left unset with crews defined, Orbit uses `opus` (or a legacy `claude` crew), else refuses to load.
-- A crew name may not contain `:`, which the pool grammar reserves ([repair](#repairing-a-config-that-already-names-a-crew-with-a-colon)).
+- A crew name may not contain `:` or `@`, which the crew-reference grammar reserves ([repair](#repairing-a-config-that-already-names-a-crew-with-a-colon)).
 - An Antigravity crew needs an `agy models` slug; a bare Gemini CLI ID such as `gemini-3.8-flash` fails with migration guidance.
 
 **Retired crew shapes** fail load with migration guidance: `planner` / `implementer` / `reviewer` sub-tables (use flat `model` and `provider`); `backend` (`cli` is ignored, `http` and `auto` refused, likewise in `ORBIT_BACKEND` and `[runtime] backend`; remove it); `[agent.<role>]` tables (use `[crews.<name>]` plus `workflow.default_crew`).
@@ -1451,7 +1453,7 @@ env = ["ANTHROPIC_API_KEY=ANTHROPIC_CREDITS_API_KEY_1"]
 Every command, `orbit config set` included, refuses to load, so edit the file by hand. Layers are checked before merging, so the error names the defining file:
 
 ```
-error: invalid input: [crews]: crew name 'gpt-5:codex' must not contain ':'; ...
+error: invalid input: [crews]: crew name 'gpt-5:codex' must not contain ':' or '@'; ...
 Edit '~/.orbit/config.toml' and rename or remove the [crews."gpt-5:codex"] table, then rerun the command
 ```
 
@@ -1803,7 +1805,7 @@ final_recovery = ["sol:100", "opus:20"]
 ```
 
 - **Unset:** `["sol:100", "opus:20"]`, filtered to crews defined in `[crews.*]`. With neither defined the pool is empty and final recovery is off, without a validation error.
-- **Explicit:** standard pool grammar (`name` or `name:weight`); every named crew must exist in `[crews.*]`.
+- **Explicit:** standard pool grammar (`crew[@effort]` or `crew[@effort]:weight`); every named crew must exist in `[crews.*]`.
 - **`[]`** disables final recovery.
 
 A final-recovery `resume` records its rationale and the failed step's refusal
