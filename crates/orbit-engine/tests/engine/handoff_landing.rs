@@ -460,8 +460,8 @@ fn a_mismatched_merged_pr_resolves_the_intent_before_stopping_later_attempts() {
 }
 
 /// A pull request the provider reports open with a fixed merge state and
-/// status rollup. It answers only status reads; any other operation is
-/// recorded and refused, so a test sees whether the landing tried to merge.
+/// status rollup. It answers status and required-check reads; any other
+/// operation is recorded and refused, so a test sees whether it tried to merge.
 struct OpenPullRequestHost {
     context: HandoffLandingContext,
     steps: Mutex<Vec<HandoffLandingStep>>,
@@ -512,6 +512,12 @@ impl orbit_engine::test_support::NullRuntimeHost for OpenPullRequestHost {
     ) -> Result<Value, OrbitError> {
         if operation == "ci.commit_jobs" {
             return Ok(json!({"jobs": []}));
+        }
+        if operation == "pr.required_checks" {
+            let head = &self.context.candidate.candidate.commit;
+            return Ok(
+                json!({"pull_request":{"headRefOid":head,"commits":{"nodes":[{"commit":{"oid":head,"statusCheckRollup":null}}]}}}),
+            );
         }
         if operation != "pr.status" {
             self.sent.lock().unwrap().push(operation.to_string());
@@ -1260,6 +1266,7 @@ fn owner_landing_waits_for_exact_required_checks_before_one_verified_merge() {
     *host.policies.lock().unwrap() = vec![
         pending_policy(&head, "QUEUED", true),
         pending_policy(&head, "IN_PROGRESS", true),
+        pending_policy(&head, "COMPLETED", true),
     ]
     .into();
     let (result, waits) = counted_land(
@@ -1271,7 +1278,7 @@ fn owner_landing_waits_for_exact_required_checks_before_one_verified_merge() {
         "landed"
     );
     assert_eq!(waits, [5, 5]);
-    assert_sent_len(&host.forge, "pr.required_checks", 2, "exact");
+    assert_sent_len(&host.forge, "pr.required_checks", 3, "exact");
     assert_sent_len(&host.forge, "pr.status", 4, "exact");
     assert_sent_len(&host.forge, "pr.merge", 1, "exact");
     let ops = host.forge.ops.lock().unwrap();
@@ -1284,7 +1291,7 @@ fn owner_landing_waits_for_exact_required_checks_before_one_verified_merge() {
                 .expect("poll reads carry the original deadline")
         })
         .collect();
-    assert_eq!(deadlines.len(), 6);
+    assert_eq!(deadlines.len(), 7);
     let first_deadline = deadlines[0];
     let uniform = deadlines.iter().all(|d| *d == first_deadline);
     assert!(uniform, "deadline never resets: {deadlines:?}");

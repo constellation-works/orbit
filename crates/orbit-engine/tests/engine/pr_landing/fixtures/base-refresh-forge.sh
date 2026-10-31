@@ -84,9 +84,9 @@ case "$1 ${2:-}" in
         fi ;;
     'repo view') printf '{"nameWithOwner":"%s"}\n' "$slug" ;;
     'api graphql')
-        if [ -f "$forge/policy-unreadable" ]; then echo '{"errors":[{"message":"unavailable"}]}'; exit; fi
         case "$*" in
             *requiredStatusChecks*)
+                if [ -f "$forge/policy-unreadable" ]; then echo '{"errors":[{"message":"unavailable"}]}'; exit; fi
                 if [ -f "$forge/policy-no-rule" ]; then printf '{"data":{"repository":{"pullRequest":{"headRefOid":"%s","baseRefName":"%s","reviewDecision":null,"baseRef":{"branchProtectionRule":null}}}}}\n' "$head" "$base"; exit; fi
                 printf '{"data":{"repository":{"pullRequest":{"headRefOid":"%s","baseRefName":"%s","reviewDecision":null,"baseRef":{"branchProtectionRule":{"id":"RULE-1","requiredStatusChecks":[]}}}}}}\n' "$head" "$base" ;;
             *statusCheckRollup*)
