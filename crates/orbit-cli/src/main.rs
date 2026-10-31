@@ -1025,3 +1025,4 @@ fn json_error_format(sink: &OutputSink, tool_run_json_output: Option<bool>) -> O
 
 #[cfg(test)]
 mod tests;
+// ORB-20394 leaf-crate CI measurement; never merge.
