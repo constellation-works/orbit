@@ -1346,8 +1346,7 @@ fn a_check_failing_only_tests_the_base_fails_continues_as_known_red() {
 
 /// Seed the durable state left by interruption after certificate recording
 /// and one history write. Settlement must finish the second write once.
-#[test]
-fn settlement_replay_reconciles_missing_known_red_history() {
+fn settlement_replay_reconciles_missing_known_red_history_scenario() {
     let mut fixture = with_checks(
         Fixture::new_with_config(
             &[],
@@ -1586,4 +1585,9 @@ crate::scenario_table!(
     a_check_failing_only_tests_the_base_fails_continues_as_known_red,
     an_env_prefixed_claim_on_a_registered_check_is_that_check,
     a_known_red_shaped_failure_the_host_cannot_vouch_for_still_refuses
+);
+
+crate::scenario_table!(
+    settlement_replay_reconciles_missing_known_red_history,
+    settlement_replay_reconciles_missing_known_red_history_scenario
 );

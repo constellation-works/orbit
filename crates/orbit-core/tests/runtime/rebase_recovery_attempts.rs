@@ -132,8 +132,7 @@ impl Fixture {
     }
 }
 
-#[test]
-fn a_resumed_run_certifies_its_second_recovery_of_one_step() {
+fn a_resumed_run_certifies_its_second_recovery_of_one_step_scenario() {
     let fixture = fixture();
 
     // Recovery A lands the candidate on the pin; the advanced base conflicts
@@ -199,8 +198,7 @@ fn a_resumed_run_certifies_its_second_recovery_of_one_step() {
 /// The host certifies, then fails to persist the run-store copy. The step is
 /// left with no usable evidence rather than the older attempt's, and the
 /// identical completion persists once the store accepts writes again.
-#[test]
-fn a_certified_attempt_whose_copy_failed_is_reissued_unchanged() {
+fn a_certified_attempt_whose_copy_failed_is_reissued_unchanged_scenario() {
     let fixture = fixture();
     let attempt = fixture.admit(CANDIDATE, PINNED);
     let recovery_a = fixture.completion(attempt, CANDIDATE, PINNED, HEAD_A);
@@ -242,8 +240,7 @@ fn a_certified_attempt_whose_copy_failed_is_reissued_unchanged() {
 /// every reservation of a step, oldest first, from its own record, across a
 /// restart; and the clean chase a retry certifies as the step's newest attempt
 /// supersedes the recovery it carried forward.
-#[test]
-fn the_host_reports_each_reserved_attempt_and_certifies_a_chase_as_the_newest() {
+fn the_host_reports_each_reserved_attempt_and_certifies_a_chase_as_the_newest_scenario() {
     let fixture = fixture();
     let attempt = fixture.admit(CANDIDATE, PINNED);
     let recovery = fixture.completion(attempt, CANDIDATE, PINNED, HEAD_A);
@@ -322,8 +319,7 @@ impl Drop for WriteFault {
 
 /// Delivery preparations authenticate unchanged candidates and the full fresh
 /// observation through the same public host boundary as rewritten candidates.
-#[test]
-fn fresh_preparation_certificates_bind_all_observations_across_restart() {
+fn fresh_preparation_certificates_bind_all_observations_across_restart_scenario() {
     let fixture = fixture();
     let certify = |runtime: &OrbitRuntime, step: &str, base: &str, extra: Value| {
         let attempt = runtime
@@ -413,3 +409,20 @@ fn fresh_preparation_certificates_bind_all_observations_across_restart() {
         1
     );
 }
+
+crate::scenario_table!(
+    a_resumed_run_certifies_its_second_recovery_of_one_step,
+    a_resumed_run_certifies_its_second_recovery_of_one_step_scenario
+);
+crate::scenario_table!(
+    a_certified_attempt_whose_copy_failed_is_reissued_unchanged,
+    a_certified_attempt_whose_copy_failed_is_reissued_unchanged_scenario
+);
+crate::scenario_table!(
+    the_host_reports_each_reserved_attempt_and_certifies_a_chase_as_the_newest,
+    the_host_reports_each_reserved_attempt_and_certifies_a_chase_as_the_newest_scenario
+);
+crate::scenario_table!(
+    fresh_preparation_certificates_bind_all_observations_across_restart,
+    fresh_preparation_certificates_bind_all_observations_across_restart_scenario
+);

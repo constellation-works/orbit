@@ -80,8 +80,7 @@ fn settle_with(fixture: &Fixture, admission: Value) -> Result<Value, DispatchErr
 /// their recorded order, and one recorded before `held_attempt_id`,
 /// `owed_evidence`, `owner_owed_evidence`, `host_validation` and
 /// `evidence_carry` existed settles the same candidate.
-#[test]
-fn admitted_output_keeps_its_recorded_shape_and_an_older_one_settles() {
+fn admitted_output_keeps_its_recorded_shape_and_an_older_one_settles_scenario() {
     let mut fixture = Fixture::new();
     fixture.admit();
     let admission = fixture.input["admission"].clone();
@@ -181,8 +180,7 @@ fn admitted_output_keeps_its_recorded_shape_and_an_older_one_settles() {
 /// the captured timing, `null`s when no admission was captured, and
 /// settlement passes the reason through. The budget preflight records only
 /// its decision and lineage.
-#[test]
-fn not_applicable_and_preflight_outputs_keep_their_recorded_shape() {
+fn not_applicable_and_preflight_outputs_keep_their_recorded_shape_scenario() {
     let mut fixture = Fixture::before_landing();
     fixture.admit();
     let timing_source = fixture
@@ -237,8 +235,7 @@ fn not_applicable_and_preflight_outputs_keep_their_recorded_shape() {
 /// `review.before_landing` were the review switches deserializes from its
 /// recorded bytes, and the gate follows the timing it captured after the
 /// workspace config moves to `review.timing = "off"`.
-#[test]
-fn a_run_captured_under_the_deprecated_switches_gates_as_it_captured() {
+fn a_run_captured_under_the_deprecated_switches_gates_as_it_captured_scenario() {
     for timing in ["before-pr", "before-landing"] {
         let mut fixture = if timing == "before-pr" {
             Fixture::new()
@@ -326,8 +323,7 @@ fn a_run_captured_under_the_deprecated_switches_gates_as_it_captured() {
 
 /// ORB-20218: a light-delivery skip must retain the observed/nonselected
 /// receipt; a positive enforced selection overrides that same skip tag.
-#[test]
-fn selective_receipt_survives_a_light_skip_beside_a_stronger_landing_layer() {
+fn selective_receipt_survives_a_light_skip_beside_a_stronger_landing_layer_scenario() {
     for (mode, paths, required) in [
         ("observe", vec!["candidate.txt"], false),
         ("enforce", vec!["unrelated/**"], false),
@@ -374,3 +370,20 @@ fn selective_receipt_survives_a_light_skip_beside_a_stronger_landing_layer() {
         }
     }
 }
+
+crate::scenario_table!(
+    admitted_output_keeps_its_recorded_shape_and_an_older_one_settles,
+    admitted_output_keeps_its_recorded_shape_and_an_older_one_settles_scenario
+);
+crate::scenario_table!(
+    not_applicable_and_preflight_outputs_keep_their_recorded_shape,
+    not_applicable_and_preflight_outputs_keep_their_recorded_shape_scenario
+);
+crate::scenario_table!(
+    a_run_captured_under_the_deprecated_switches_gates_as_it_captured,
+    a_run_captured_under_the_deprecated_switches_gates_as_it_captured_scenario
+);
+crate::scenario_table!(
+    selective_receipt_survives_a_light_skip_beside_a_stronger_landing_layer,
+    selective_receipt_survives_a_light_skip_beside_a_stronger_landing_layer_scenario
+);

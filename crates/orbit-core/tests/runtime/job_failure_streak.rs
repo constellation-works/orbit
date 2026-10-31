@@ -120,8 +120,7 @@ fn write_job(jobs_dir: &Path) {
     .unwrap();
 }
 
-#[test]
-fn a_success_ends_the_streak_and_the_newest_failures_are_counted() {
+fn a_success_ends_the_streak_and_the_newest_failures_are_counted_scenario() {
     let mut fixture = Fixture::new("");
     fixture.run(JobRunState::Failed, Some("older failure"));
     fixture.run(JobRunState::Failed, Some("older failure"));
@@ -138,16 +137,14 @@ fn a_success_ends_the_streak_and_the_newest_failures_are_counted() {
     assert!(!streak.truncated);
 }
 
-#[test]
-fn a_job_whose_newest_run_succeeded_has_no_streak() {
+fn a_job_whose_newest_run_succeeded_has_no_streak_scenario() {
     let mut fixture = Fixture::new("");
     fixture.run(JobRunState::Failed, Some("failure"));
     fixture.run(JobRunState::Success, None);
     assert_eq!(fixture.streak(), None);
 }
 
-#[test]
-fn cancels_and_holds_neither_count_nor_break_the_streak() {
+fn cancels_and_holds_neither_count_nor_break_the_streak_scenario() {
     let mut fixture = Fixture::new("");
     fixture.run(JobRunState::Success, None);
     let (_, since) = fixture.run(JobRunState::Failed, Some("failure"));
@@ -168,8 +165,7 @@ fn cancels_and_holds_neither_count_nor_break_the_streak() {
     );
 }
 
-#[test]
-fn runs_agree_on_one_error_signature_despite_ids_and_counts() {
+fn runs_agree_on_one_error_signature_despite_ids_and_counts_scenario() {
     let mut fixture = Fixture::new("");
     fixture.run(
         JobRunState::Failed,
@@ -191,11 +187,31 @@ fn runs_agree_on_one_error_signature_despite_ids_and_counts() {
     );
 }
 
-#[test]
-fn the_warn_threshold_defaults_to_five_and_zero_turns_it_off() {
+fn the_warn_threshold_defaults_to_five_and_zero_turns_it_off_scenario() {
     assert_eq!(Fixture::new("").runtime.job_failure_streak_warn(), 5);
     let configured = Fixture::new("[jobs]\nfailure_streak_warn = 8\n");
     assert_eq!(configured.runtime.job_failure_streak_warn(), 8);
     let off = Fixture::new("[jobs]\nfailure_streak_warn = 0\n");
     assert_eq!(off.runtime.job_failure_streak_warn(), 0);
 }
+
+crate::scenario_table!(
+    a_success_ends_the_streak_and_the_newest_failures_are_counted,
+    a_success_ends_the_streak_and_the_newest_failures_are_counted_scenario
+);
+crate::scenario_table!(
+    a_job_whose_newest_run_succeeded_has_no_streak,
+    a_job_whose_newest_run_succeeded_has_no_streak_scenario
+);
+crate::scenario_table!(
+    cancels_and_holds_neither_count_nor_break_the_streak,
+    cancels_and_holds_neither_count_nor_break_the_streak_scenario
+);
+crate::scenario_table!(
+    runs_agree_on_one_error_signature_despite_ids_and_counts,
+    runs_agree_on_one_error_signature_despite_ids_and_counts_scenario
+);
+crate::scenario_table!(
+    the_warn_threshold_defaults_to_five_and_zero_turns_it_off,
+    the_warn_threshold_defaults_to_five_and_zero_turns_it_off_scenario
+);
