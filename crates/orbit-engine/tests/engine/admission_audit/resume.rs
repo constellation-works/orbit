@@ -331,6 +331,7 @@ impl orbit_engine::test_support::NullRuntimeHost for CompoundReplayHost {
             receipt,
             bound_status: None,
             deadline: Some(now + Duration::hours(24)),
+            dynamic_expiry: false,
             expired: None,
             readiness,
             recheck_at: now + Duration::seconds(30),
