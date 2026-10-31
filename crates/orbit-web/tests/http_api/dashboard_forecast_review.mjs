@@ -378,9 +378,10 @@ assert.equal(regressionSummary.reasonKind, 'regression_history_missing');
 const regressionLink = compactLink(regressionSummary);
 assert.ok(regressionLink.getAttribute('href')?.includes('analytics/forecast') || String(regressionLink.href || '').includes('analytics/forecast'), 'compact regression link stays navigable');
 assert.equal(regressionLink.dataset.forecastReason, 'regression_history_missing');
-assert.ok(/regression/i.test(regressionLink.querySelector('.drain-backlog-forecast-reason')?.textContent || ''), 'compact link shows the reason visibly, not only in a tooltip');
+assert.ok(/regression/i.test(regressionLink.title), 'compact link keeps the reason in its tooltip');
+assert.ok(/^Time to drain /.test(regressionLink.querySelector('.drain-backlog-forecast-baseline')?.textContent || ''), `compact link shows only the baseline figures [ORB-20453]: ${regressionLink.textContent}`);
 assert.ok(regressionLink.querySelector('.visually-hidden')?.textContent.includes('36'), `compact accessible detail carries support counts: ${regressionLink.textContent}`);
-assert.ok(/pre-regression baseline/i.test(regressionLink.textContent) && /excludes unsupported regression/i.test(regressionLink.textContent), `compact link labels the baseline: ${regressionLink.textContent}`);
+assert.ok(/excludes unsupported regression/i.test(regressionLink.querySelector('.visually-hidden')?.textContent || ''), `compact accessible detail labels the baseline: ${regressionLink.textContent}`);
 
 for (const [flags, kind] of [[{ risk_unestimated: true }, 'risk_unestimated'], [{ arrival_conflict_unknown: true }, 'arrival_conflict_unknown']]) {
   const fixture = unavailableFixture({ flags, baseline: null });

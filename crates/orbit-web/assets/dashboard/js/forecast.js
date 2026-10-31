@@ -313,10 +313,18 @@ export function forecastBaselineFigures(baseline) {
   return figures.time || figures.cost || figures.tokens ? figures : null;
 }
 
-function baselineText(figures) {
+// The baseline's figures as one sentence ("Time to drain p50 … · Tokens …."),
+// the drain card's whole visible Backlog line when the adjusted forecast is
+// unavailable [ORB-20453]; "" when there are none.
+function baselineFigureText(figures) {
   if (!figures) return "";
   const parts = [figures.time && `Time to drain ${figures.time}`, figures.cost && `Cost ${figures.cost}`, figures.tokens && `Tokens ${figures.tokens}`].filter(Boolean);
-  return parts.length ? `Pre-regression baseline (excludes unsupported regression follow-up work): ${parts.join(" · ")}.` : "";
+  return parts.length ? `${parts.join(" · ")}.` : "";
+}
+
+function baselineText(figures) {
+  const text = baselineFigureText(figures);
+  return text ? `Pre-regression baseline (excludes unsupported regression follow-up work): ${text}` : "";
 }
 
 export function backlogForecastFailureSummary() {
@@ -375,8 +383,10 @@ function wholeUsd(value) {
 
 /// Compact link to Analytics › Forecast: p50 – p90 time to drain and cost,
 /// with a freshness label for all the snapshot's figures. Counts, tokens and
-/// exact cost are in its tooltip and accessible text. A null summary is the
-/// muted unavailable line.
+/// exact cost are in its tooltip and accessible text. When the adjusted
+/// forecast is unavailable the line shows only the baseline's figures, or
+/// nothing; the reason and the baseline's caveat stay in the tooltip and
+/// accessible text [ORB-20453].
 export function drainBacklogForecastLink(summary) {
   const unavailable = !summary || Boolean(summary.unavailable);
   const link = el("a", { class: unavailable ? "drain-backlog-forecast unavailable" : "drain-backlog-forecast" });
@@ -388,8 +398,7 @@ export function drainBacklogForecastLink(summary) {
     if (summary) link.dataset.forecastReason = summary.reasonKind || "unknown";
     for (const child of [
       el("span", { class: "drain-section-label", text: "Backlog" }),
-      el("span", { class: "drain-backlog-forecast-reason", text: reason }),
-      summary?.baselineText ? el("span", { class: "drain-backlog-forecast-baseline", text: summary.baselineText }) : null,
+      el("span", { class: "drain-backlog-forecast-baseline", text: baselineFigureText(summary?.baseline) }),
       el("span", { class: "visually-hidden", text: ` ${detail}` }),
       el("span", { class: "drain-backlog-forecast-go", text: "›", "aria-hidden": "true" }),
     ]) if (child) link.append(child);
