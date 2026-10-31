@@ -65,6 +65,8 @@ mod host;
 mod host_forward;
 #[path = "http_api/incident_lists.rs"]
 mod incident_lists;
+#[path = "http_api/job_failure_streaks.rs"]
+mod job_failure_streaks;
 #[path = "http_api/job_run_lists.rs"]
 mod job_run_lists;
 #[path = "http_api/lease_listener.rs"]

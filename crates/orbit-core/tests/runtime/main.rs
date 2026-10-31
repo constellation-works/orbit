@@ -129,6 +129,7 @@ mod host_resources;
 mod host_ui_routing;
 mod implement_blocker;
 mod invocation_metrics;
+mod job_failure_streak;
 mod job_finalization;
 mod light_delivery;
 mod local_route_before_pr;

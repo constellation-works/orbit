@@ -142,6 +142,7 @@ pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state
             post(frictions::resolve_friction_action),
         )
         .route("/jobs", get(jobs::list_jobs))
+        .route("/jobs/failure-streaks", get(jobs::list_job_failure_streaks))
         .route("/jobs/{id}/run", post(jobs::run_job_action))
         .route("/job-runs", get(jobs::list_job_runs))
         .route("/job-runs/{id}/resume", post(jobs::resume_job_run_action))
