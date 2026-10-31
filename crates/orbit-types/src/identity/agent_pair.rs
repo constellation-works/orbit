@@ -89,6 +89,22 @@ impl ReasoningEffort {
         }
     }
 
+    /// The efforts [`Self::validate_for_provider_model`] accepts, for refusal
+    /// messages.
+    #[must_use]
+    pub fn accepted_for_provider_model(provider: &str, model: Option<&str>) -> &'static str {
+        match provider {
+            "antigravity" => "low, medium, high",
+            "grok" => match model.map(str::trim).filter(|model| !model.is_empty()) {
+                Some("grok-4.7" | "grok-4.6") => "low, medium, high, xhigh",
+                Some("grok-4.5") => "low, medium, high",
+                _ => "omit the key",
+            },
+            "claude" | "codex" | "muse" => Self::VALUES,
+            _ => "omit the key",
+        }
+    }
+
     fn validate_grok_model_effort(self, model: Option<&str>) -> Result<(), ProviderModelError> {
         let model = model.map(str::trim).filter(|model| !model.is_empty());
         match (model, self) {
@@ -222,9 +238,10 @@ impl Crew {
     /// limits, provider holds and authentication exclusions are its own,
     /// keyed by its name. `None` for a crew on its provider's default
     /// login, which shares those with the provider's other such crews.
+    /// Every `<crew>@<effort>` reference shares its crew's account.
     #[must_use]
     pub fn account(&self) -> Option<&str> {
-        (!self.env.is_empty()).then_some(self.name.as_str())
+        (!self.env.is_empty()).then_some(self.base_name())
     }
 }
 
@@ -236,7 +253,35 @@ fn is_enabled(enabled: &bool) -> bool {
     *enabled
 }
 
-/// Resolve a named crew from the active registry.
+/// Separates a crew reference's crew name from the reasoning effort it runs at:
+/// `opus@medium`. Crew names may not contain it.
+pub const CREW_EFFORT_SEPARATOR: char = '@';
+
+impl Crew {
+    /// The `[crews.<name>]` table this crew comes from: its own name, or the
+    /// part before `@` for a `<crew>@<effort>` reference.
+    #[must_use]
+    pub fn base_name(&self) -> &str {
+        crew_reference_base(&self.name)
+    }
+}
+
+/// The crew-table name a reference points at: `opus@medium` → `opus`.
+#[must_use]
+pub fn crew_reference_base(reference: &str) -> &str {
+    let reference = reference.trim();
+    reference
+        .split_once(CREW_EFFORT_SEPARATOR)
+        .map_or(reference, |(base, _)| base.trim())
+}
+
+/// Resolve a crew reference from the active registry.
+///
+/// A reference is a crew name, or `<crew>@<effort>`. The latter resolves to a
+/// copy of the crew named `<crew>@<effort>` whose assignment runs at that
+/// effort, so pools, task crews, recorded runs and scorecards keep it apart
+/// from the crew's own effort. An effort the crew's provider and model do not
+/// accept is refused, naming the accepted values; it is never dropped.
 pub fn resolve_crew(name: &str, registry: &BTreeMap<String, Crew>) -> Result<Crew, IdentityError> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
@@ -245,12 +290,56 @@ pub fn resolve_crew(name: &str, registry: &BTreeMap<String, Crew>) -> Result<Cre
             registry.keys().cloned().collect(),
         ));
     }
-    registry.get(trimmed).cloned().ok_or_else(|| {
+    let (base, effort) = match trimmed.split_once(CREW_EFFORT_SEPARATOR) {
+        Some((base, effort)) => (base.trim(), Some(effort.trim())),
+        None => (trimmed, None),
+    };
+    let crew = registry.get(base).cloned().ok_or_else(|| {
         IdentityError::invalid_input_with_suggestions(
-            format!("crew '{trimmed}' is not defined in [crews.*]"),
+            format!("crew '{base}' is not defined in [crews.*]"),
             registry.keys().cloned().collect(),
         )
-    })
+    })?;
+    match effort {
+        Some(effort) => crew_at_effort(crew, effort, trimmed),
+        None => Ok(crew),
+    }
+}
+
+/// Look up a crew reference, or `None` when it names no configured crew or an
+/// effort that crew cannot run at. For filters over admitted entries, where
+/// [`resolve_crew`] already refused anything malformed.
+#[must_use]
+pub fn find_crew(name: &str, registry: &BTreeMap<String, Crew>) -> Option<Crew> {
+    resolve_crew(name, registry).ok()
+}
+
+fn crew_at_effort(mut crew: Crew, raw: &str, reference: &str) -> Result<Crew, IdentityError> {
+    let provider = crate::workflow::activity_job::activity_v2::Provider::resolve_name(
+        &crew.assignment.provider,
+    )
+    .map(|identity| identity.provider.as_str())
+    .unwrap_or(crew.assignment.provider.as_str());
+    let model = Some(crew.assignment.model.as_str());
+    let accepted = ReasoningEffort::accepted_for_provider_model(provider, model);
+    let refusal = |reason: String| {
+        IdentityError::Invalid(format!(
+            "crew reference '{reference}' {reason}; crew '{}' ({provider} {}) accepts: {accepted}",
+            crew.name, crew.assignment.model
+        ))
+    };
+    if raw.is_empty() {
+        return Err(refusal("names no effort after '@'".to_string()));
+    }
+    let effort = raw
+        .parse::<ReasoningEffort>()
+        .map_err(|_| refusal(format!("names unknown effort '{raw}'")))?;
+    effort
+        .validate_for_provider_model(provider, model)
+        .map_err(|error| refusal(format!("cannot run at effort '{effort}': {error}")))?;
+    crew.name = format!("{}{CREW_EFFORT_SEPARATOR}{effort}", crew.name);
+    crew.assignment.effort = Some(effort);
+    Ok(crew)
 }
 
 /// The full set of agent CLI families Orbit knows how to orchestrate.

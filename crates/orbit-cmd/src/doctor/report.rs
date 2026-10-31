@@ -166,7 +166,7 @@ fn routed_provider_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
 
     names.into_iter().map(|name| {
         let check_name = format!("provider:{name}");
-        let Some(crew) = config.crews.get(&name) else {
+        let Some(crew) = orbit_types::identity::find_crew(&name, &config.crews) else {
             return WorkspaceDoctorResult {
                 duration_ms: 0,
                 check_name,
@@ -269,7 +269,7 @@ pub(super) fn routed_crew_names(
 /// Provider readiness follows dispatch. A disabled crew is omitted. A name
 /// absent from the registry stays included so the probe can report it missing.
 fn routing_selects_crew(config: &ResolvedConfig, name: &str) -> bool {
-    match config.crews.get(name) {
+    match orbit_types::identity::find_crew(name, &config.crews) {
         Some(crew) => crew.enabled,
         None => true,
     }

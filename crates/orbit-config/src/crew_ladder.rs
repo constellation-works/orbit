@@ -248,8 +248,8 @@ pub(crate) fn admit_crew_ladder_exclude_types(
 }
 
 /// Admit `workflow.crew_ladder.rungs` in place against the crew registry:
-/// each rung a known, enabled crew named once, rewritten to its canonical
-/// name. Order is kept: it is the operator's cheapest-first order.
+/// each rung a known, enabled crew reference (`crew` or `crew@effort`) named
+/// once, rewritten to its canonical name. Order is kept: it is the operator's cheapest-first order.
 pub(crate) fn admit_crew_ladder_rungs(
     rungs: &mut [String],
     crews: &BTreeMap<String, Crew>,
@@ -263,7 +263,8 @@ pub(crate) fn admit_crew_ladder_rungs(
             return Err(OrbitError::InvalidInput(format!(
                 "{CREW_LADDER_RUNGS_KEY} names crew '{}', which is disabled ([crews.{}] enabled = \
                  false)",
-                crew.name, crew.name
+                crew.name,
+                crew.base_name()
             )));
         }
         if !seen.insert(crew.name.clone()) {

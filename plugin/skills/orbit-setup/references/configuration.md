@@ -145,7 +145,7 @@ file, retain the [workspace preset procedure](first-run.md#workspace-presets).
 |---|---|
 | `workflow.base_branch` | Config fallback for ship/auto/pilot base branch. A registered workspace `base_branch` takes precedence. |
 | `workflow.default_crew` | Crew for any task that doesn't declare one. |
-| `workflow.<tier>_complexity_crews` | Automatic crew pool per task complexity (`low`, `medium`, `hard`, `xhard`); entries `name` or `name:weight`. Empty (`[]`) routes that tier to `default_crew`. Orbit's own work draws from them too while its purpose pool is unset: auto-task templates by complexity, the task pilot and PR auto-fix from `low`, failure and PR conflict recovery from `medium`. The retired system-crew key loads with a deprecation warning and is ignored. |
+| `workflow.<tier>_complexity_crews` | Automatic crew pool per task complexity (`low`, `medium`, `hard`, `xhard`); entries `crew[@effort]` or `crew[@effort]:weight` (`opus@medium:100` runs opus at medium effort as its own member). Empty (`[]`) routes that tier to `default_crew`. Orbit's own work draws from them too while its purpose pool is unset: auto-task templates by complexity, the task pilot and PR auto-fix from `low`, failure and PR conflict recovery from `medium`. The retired system-crew key loads with a deprecation warning and is ignored. |
 | `workflow.purpose_crews.<purpose>` | Weighted pool for one purpose of work, written like the complexity pools: `task_pilot`, `failure_recovery`, `final_recovery`, `auto_fix`, `pre_landing_review`, `review`, `baseline_red_repair`, `sweep_tasks` (every task the CI failure, Dependabot and code-scanning sweeps file, and merged-head repairs a review reconciliation files), `explorer` (read-only explorers; see `workflow.explore.*`). An explicit task, template or activity crew wins; otherwise the purpose pool is drawn, narrowed by `--allow-crew`; unset or `[]` keeps the earlier route. A provider limit or failure hold on the assigned member redraws from the pool's other enabled members before the complexity pool. `final_recovery` has no earlier route: `final_recovery = []` disables final recovery. `pre_landing_review` falls back to `review` when unset or empty; `review` also supplies after-landing review and is described below. `orbit config show --all` lists each purpose's resolved pool and its source (`crew_purposes` in `--json`). |
 | `workflow.explore.enabled` | Let managed implement and review-repair runs delegate read-only questions through `orbit.agent.invoke` to sandboxed explorers drawn from `workflow.purpose_crews.explorer` (default off). Budgets: `workflow.explore.max_calls_per_run` (6), `max_concurrent_per_run` (2), `timeout_seconds` (600) and `max_answer_bytes` (16384). |
 | `workflow.regression_risk.enabled` | Mark regression-prone context files in implement and review prompts (default on). This switch controls prompt marks only. A file qualifies with at least `min_support` touching done tasks in `window_days` (defaults 5 and 30) and a regressed share of at least `threshold_percent` (default 40); at most `max_files` marks (default 3), highest rate first. These are file-level prompt marks. Task riskiness is a separate estimate fitted on task size alone, without per-file or crew attribution, and continues to use `window_days` and `min_support` when marks are off. Tasks without a usable diff-based fit use the number of distinct file and directory paths in their context selectors. A review or done task with a resolvable diff and enough matching landed-diff history uses inserted plus deleted lines instead. The task detail breakdown shows this basis and its size band: recent done tasks on the same basis at least this size, and how many regressed. A `~` before the percentage means some selectors have no path and are omitted from the declared-file count, making it a lower bound. `threshold_percent` and `max_files` apply to prompt marks only. A Tasks row without an estimate has no risk part. Task detail shows **No estimate** with its reason: no files (no context selectors and no usable diff-based estimate), no paths (selectors identify no file or directory), thin history (not enough usable done-task observations on the selected basis to fit), or unavailable (the estimate could not be computed). Only an estimated task shows the collapsible Regression risk breakdown. |
@@ -732,6 +732,10 @@ A crew is one named provider-and-model assignment. A task's `crew` field selects
 its executor; `workflow.default_crew` covers the rest.
 
 Optional `effort` tunes the existing provider-mapped reasoning vocabulary.
+Any crew reference (pools, `default_crew`, ladder rungs, task `crew`, `--crew`) may
+override it as `<crew>@<effort>`: the reference wins over the crew's `effort`, is a
+distinct pool member and scorecard row, shares the crew's account, and an effort the
+provider rejects is refused at load (never ignored). Crew names may not contain `@`.
 Each launch records the effective value after crew/inline precedence and
 admission, alongside its resolved crew and model. Run show (`--json` and
 `orbit.workflow.run.show`) exposes `agent_executions` on the run and displayed
@@ -832,7 +836,7 @@ To add a lane or fix its login, follow [Provider setup](providers.md#provider-se
 ### Crew names containing a colon
 
 The pool grammar reserves `:` for weights: `workflow.*_complexity_crews` and
-`workflow.purpose_crews.*` entries are written `name` or `name:weight`. Orbit
+`workflow.purpose_crews.*` entries are written `crew[@effort]` or `crew[@effort]:weight`. Orbit
 therefore refuses any crew whose name contains a colon, both where it is
 defined and in `orbit config set crews.<name>.<field>`. It checks each config
 file on its own as it loads, before the layers merge. A `config.toml` that

@@ -5,7 +5,7 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_home_dir;
-use orbit_types::identity::{Crew, resolve_crew};
+use orbit_types::identity::{CREW_EFFORT_SEPARATOR, Crew, find_crew, resolve_crew};
 use orbit_types::task::TaskComplexity;
 use orbit_types::workflow::CrewPurpose;
 use serde::{Deserialize, Serialize};
@@ -18,8 +18,9 @@ const BARE_WEIGHT: u32 = 1;
 /// Per-complexity configuration or run overrides. `None` inherits the matching
 /// configured pool; `Some([])` explicitly disables that pool for a run.
 ///
-/// Each entry is written `name` or `name:weight`; a pool is either all bare or
-/// all weighted. [`canonical_crew_pool`] is the one place that grammar is
+/// Each entry is written `crew[@effort]` or `crew[@effort]:weight`; a pool is
+/// either all bare or all weighted. `opus@medium` and `opus` are distinct
+/// members. [`canonical_crew_pool`] is the one place that grammar is
 /// admitted, so configuration, `orbit config set` and CLI overrides reject the
 /// same malformed pools.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -199,11 +200,12 @@ pub(crate) fn admit_type_complexity_crews(
                         entry.name
                     )));
                 }
-                if crews.get(&entry.name).is_some_and(|crew| !crew.enabled) {
+                if find_crew(&entry.name, crews).is_some_and(|crew| !crew.enabled) {
                     return Err(OrbitError::InvalidInput(format!(
                         "{setting} names crew '{}', which is disabled ([crews.{}] enabled = \
                          false)",
-                        entry.name, entry.name
+                        entry.name,
+                        orbit_types::identity::crew_reference_base(&entry.name)
                     )));
                 }
             }
@@ -395,7 +397,7 @@ fn parse_entry<'a>(raw: &'a str, setting: &str) -> Result<(&'a str, Option<u32>)
 /// file: a persisted colon-named crew fails every command, `orbit config`
 /// included, so the refusal has to say which file to hand-edit.
 pub(crate) fn reject_unpoolable_crew_name(name: &str, context: &str) -> Result<(), OrbitError> {
-    if name.contains(WEIGHT_SEPARATOR) {
+    if is_unpoolable_crew_name(name) {
         return Err(OrbitError::InvalidInput(unpoolable_crew_name_message(
             name, context,
         )));
@@ -417,7 +419,7 @@ pub(crate) fn reject_unpoolable_crew_name_in_config(
     context: &str,
     config_path: &Path,
 ) -> Result<(), OrbitError> {
-    if name.contains(WEIGHT_SEPARATOR) {
+    if is_unpoolable_crew_name(name) {
         let path = redact_home_dir(&config_path.display().to_string());
         let grammar = unpoolable_crew_name_message(name, context);
         return Err(OrbitError::InvalidInput(format!(
@@ -429,11 +431,15 @@ pub(crate) fn reject_unpoolable_crew_name_in_config(
     Ok(())
 }
 
+fn is_unpoolable_crew_name(name: &str) -> bool {
+    name.contains(WEIGHT_SEPARATOR) || name.contains(CREW_EFFORT_SEPARATOR)
+}
+
 fn unpoolable_crew_name_message(name: &str, context: &str) -> String {
     format!(
-        "{context}: crew name '{name}' must not contain '{WEIGHT_SEPARATOR}'; \
-         workflow.*_complexity_crews entries are written 'name' or 'name:weight', so the pool \
-         grammar reserves that separator"
+        "{context}: crew name '{name}' must not contain '{WEIGHT_SEPARATOR}' or \
+         '{CREW_EFFORT_SEPARATOR}'; crew references are written 'crew', 'crew@effort' or, in \
+         pools, 'crew@effort:weight', so the grammar reserves both separators"
     )
 }
 

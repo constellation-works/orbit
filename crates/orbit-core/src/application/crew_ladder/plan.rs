@@ -278,7 +278,9 @@ impl OrbitRuntime {
             let members = pool
                 .iter()
                 .filter(|entry| {
-                    entry.weight > 0 && crews.get(&entry.name).is_some_and(|crew| crew.enabled)
+                    entry.weight > 0
+                        && orbit_types::identity::find_crew(&entry.name, crews)
+                            .is_some_and(|crew| crew.enabled)
                 })
                 .map(|entry| entry.name.as_str())
                 .collect::<BTreeSet<_>>();

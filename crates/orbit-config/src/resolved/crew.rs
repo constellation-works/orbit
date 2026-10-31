@@ -141,11 +141,11 @@ impl ResolvedConfig {
         let key = "workflow.default_crew";
         self.default_crew
             .as_deref()
-            .and_then(|name| self.crews.get(name))
+            .and_then(|name| orbit_types::identity::find_crew(name, &self.crews))
             .filter(|crew| !crew.enabled)
             .map(|crew| DisabledLaneCrew {
                 key,
-                crew: crew.name.clone(),
+                crew: crew.base_name().to_string(),
             })
             .into_iter()
             .collect()
@@ -389,16 +389,7 @@ fn crew_effort_from_raw(
 }
 
 fn effort_accepted_values(provider: &str, model: Option<&str>) -> &'static str {
-    match provider {
-        "antigravity" => "low, medium, high",
-        "grok" => match model.map(str::trim).filter(|model| !model.is_empty()) {
-            Some("grok-4.7" | "grok-4.6") => "low, medium, high, xhigh",
-            Some("grok-4.5") => "low, medium, high",
-            _ => "omit the key",
-        },
-        "claude" | "codex" | "muse" => ReasoningEffort::VALUES,
-        _ => "omit the key",
-    }
+    ReasoningEffort::accepted_for_provider_model(provider, model)
 }
 
 fn ignore_optional_crew_property(

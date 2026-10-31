@@ -65,11 +65,9 @@ impl OrbitRuntime {
         if let Some(recovery) = stored.get(&record.request.request_id) {
             return Ok(Some(recovery.clone()));
         }
-        let Some(crew) = unavailable
-            .crew
-            .as_deref()
-            .and_then(|name| self.context.settings().crews().get(name))
-        else {
+        let Some(crew) = unavailable.crew.as_deref().and_then(|name| {
+            orbit_types::identity::find_crew(name, self.context.settings().crews())
+        }) else {
             return Ok(None);
         };
         let provider = Provider::parse(&crew.assignment.provider)
