@@ -27,12 +27,17 @@ template:
       this host. If it is a follower replica, stop: record `wrong_host` with the evidence in
       the execution summary, attach no cursor, and file nothing.
     - **Durable records only.** Read pilot and recovery outcomes from task records and run
-      records, never from an agent's chat output or a run's free-text log alone:
+      records, never from an agent's chat output or a run's free-text log alone.
+      Currently proposed and blocked tasks:
       `orbit tool run orbit.task.list --input '{"status":["proposed","blocked"],"limit":10000,"model":"<agent-family>"}'`
-      (check `truncated`), `orbit tool run orbit.task.show --input '{"id":"<task-id>","model":"<agent-family>"}'`
-      (its `pilot_warnings`, `block`, `history`, `comments` and `relations`), and
-      `orbit run show <run-id> --no-reconcile --json`. Never drop `--no-reconcile`. Do not read
-      the Orbit database or state files directly.
+      When that response lists no tasks and does not report a cut-off page, those
+      statuses are empty. Do not drop the status filter, and do not page every task
+      in the workspace. One task's records:
+      `orbit tool run orbit.task.show --input '{"id":"<task-id>","model":"<agent-family>","fields":["pilot_warnings","history","comments","relations","job_run_id","job_run_machine","artifacts"]}'`.
+      Those are the only `orbit.task.show` fields this pass requests. Run records:
+      `orbit run show <run-id> --no-reconcile --json` and
+      `orbit run history -j <job> --since <window start> --limit 200 --no-reconcile --json`.
+      Never drop `--no-reconcile`. Do not read the Orbit database or state files directly.
     - **Writes are limited to these calls.** `orbit.task.add` files a fix;
       `orbit.task.update` adds a comment to an open fix task that covers a group and nothing
       else (only `id`, `comment` and `model`; your own task's `execution_summary` excepted);
@@ -52,18 +57,45 @@ template:
     - **Cursor.** Find the newest completed prior pass with `orbit.task.list`
       `{"status":["done"],"tag":["pilot-block-patterns","no-diff-expected"],"limit":1}` and
       read its `pilot-block-cursor.json` and `pilot-block-report.json` with
-      `orbit.task.artifact.get`. Record the new cursor, the moment this scan starts, before
-      reading any task. A prior pass whose artifacts can't be read is reported, and this pass
-      compares against nothing.
-    - **Analysis window: the 14 days before scan start.** Report occurrences since the prior
-      cursor separately; they decide whether a cause is still firing.
+      `orbit.task.artifact.get` only after `artifacts` from `orbit.task.show` lists those
+      paths. Record the new scan start, the moment this scan starts, before reading any
+      task. A prior pass whose artifacts can't be read is reported, and this pass compares
+      against nothing and is a first pass.
+    - **First pass (no prior cursor): the 3 days before scan start.** A pass with no
+      readable cursor uses this shorter window, not 14 days, so an existing backlog drains
+      over a few passes.
+    - **Steady pass (a prior cursor with no `resume_after`): the 14 days before scan
+      start.** Report occurrences since the prior cursor separately; they decide whether a
+      cause is still firing.
+    - **Resume pass (the prior cursor has `resume_after`).** Do not advance the window.
+      Keep that cursor's `cursor` value as the window end and continue with events strictly
+      after `resume_after`, oldest first. A later pass advances the window only after a pass
+      finishes it (`partial` false and no `resume_after`).
 
     ## 2. Collect
 
-    For every task with an event in the window, record each occurrence with its task id, time
-    and source record. Start from the records `escalation_triage_pipeline` already left: it
-    has read each held assessment and escalated block once, and its disposition is the
-    primary input. Read the raw pilot and recovery records for what it did not cover.
+    No list or search call selects tasks by history-event kind inside a time window. Do not
+    scan the task corpus to find events. Build a candidate set, then read at most 60 tasks
+    this pass, oldest occurrence first. That cap is the whole collection, including triage
+    markers and raw pilot and recovery reads.
+
+    - **Candidates.** Runs of `escalation_triage_pipeline` and
+      `blocked_task_recovery_pipeline` since the window start:
+      `orbit run history -j <job> --since <window start> --limit 200 --no-reconcile --json`.
+      Each run's `task_ids` is a candidate. Those triage runs are the primary input.
+      Add the proposed and blocked tasks from the list in Rules when a run did not already
+      name them.
+    - **Order and cap.** Sort by the earliest time you can see without a per-task read
+      (the run's `created_at`, else the task's `updated_at`). Show the first 60 with the
+      fields in Rules. When candidates remain, the pass is partial: stop reading, finish
+      sections 3–6 for what you read, and still succeed. Set `partial` to true and set
+      `resume_after` to the time of the last occurrence you processed. The next pass
+      continues from that `resume_after`.
+
+    For every task you read, record each in-window occurrence with its task id, time and
+    source record. Start from the records `escalation_triage_pipeline` already left: its
+    disposition is the primary input. Read the raw pilot and recovery records for what it
+    did not cover.
 
     - **Escalation triage dispositions (primary).** Each `pilot_warning_triaged` and
       `blocked_task_triaged` history marker in the window, with its comment
@@ -80,11 +112,15 @@ template:
       how a hold was later resolved: an operator's `task-pilot-admission:` comment or
       `pilot_admission_decided` decision, a material edit that re-piloted clean, promotion, or
       rejection.
-    - **Blocks after final recovery.** For blocks without a triage marker, each
+    - **Escalations after final recovery.** For episodes without a triage marker, each
       `final_recovery_decided` history entry and its `final_recovery` comment
-      (`outcome=escalated` and the diagnosis), and the block's run from the task's `block`
-      field. For every block, note what ended it: a later requeue that delivered, an operator
-      applying a proposed option, a human edit, a rejection, or nothing yet.
+      (`outcome=escalated` and the diagnosis). The episode starts at the history entry
+      whose `to_status` is `blocked`. The run id is `decision.run_id` on that history
+      entry when it is present, otherwise a `run_id=` token in the entry `note`, otherwise
+      the task's `job_run_id`. Read that run with
+      `orbit run show <run-id> --no-reconcile --json`. For every such episode, note what
+      ended it: a later requeue that delivered, an operator applying a proposed option, a
+      human edit, a rejection, or nothing yet.
 
     ## 3. Group by cause and route to the source
 
@@ -154,27 +190,36 @@ template:
     `pilot-block-report.json` with `orbit.task.artifact.put`:
 
     ```json
-    {"schema_version": 1, "scan_start": "<RFC 3339>", "head": "<sha>",
+    {"schema_version": 1, "partial": false, "scan_start": "<RFC 3339>", "head": "<sha>",
+     "window_start": "<RFC 3339>", "resume_after": null,
      "groups": [{"signature": "...", "route": "authoring|pilot|recovery|run_failure|setup",
                  "occurrences": 0, "new_since_cursor": 0, "previous": 0, "tasks": ["..."],
                  "disposition": "filed:<id>|commented:<id>|rejected:<id>|regression:<id>|deferred|counted"}],
      "fix_effectiveness": [{"task": "...", "landed": "...", "before_per_week": 0, "after_per_week": 0, "verdict": "..."}]}
     ```
 
-    Write `{"schema_version":1,"cursor":"<scan start>"}` to `.orbit/tmp/pilot-block-cursor.json`
-    and attach it as `pilot-block-cursor.json`, on every completed owner pass including an
-    empty one.
+    A capped pass sets `"partial": true` and `resume_after` to the last processed event
+    time. Counts cover only the tasks this pass read. A finished window sets `"partial":
+    false` and `resume_after` to null.
+
+    Write the cursor to `.orbit/tmp/pilot-block-cursor.json` and attach it as
+    `pilot-block-cursor.json` on every completed owner pass, including an empty one and a
+    partial one. A finished window is `{"schema_version":1,"cursor":"<scan start>"}`. A
+    capped pass is
+    `{"schema_version":1,"cursor":"<scan start>","resume_after":"<last processed event time>"}`.
+    Hitting the collection cap completes the pass: attach both artifacts. An unfinished
+    window is not a reason to end without them.
 
     Execution summary: the groups with route, counts and change against the prior pass; the
     fix-effectiveness verdicts; filed, commented and deferred ids; every tool refusal
     verbatim; and anything unreadable.
   acceptance_criteria:
-  - Escalation-triage dispositions (`pilot_warning_triaged` and `blocked_task_triaged` markers and their comments) in the 14-day window were collected first, untriaged pilot holds and final-recovery escalations were added from task history, `pilot_warnings` and run records, and `pilot-block-report.json` lists every group with its signature, route, counts and disposition.
+  - Escalation-triage dispositions (`pilot_warning_triaged` and `blocked_task_triaged` markers and their comments) in this pass's window were collected first from run history, untriaged pilot holds and final-recovery escalations were added from at most 60 task reads of `history`, `comments`, `pilot_warnings` and run records, and `pilot-block-report.json` lists every group from that read with its signature, route, counts and disposition, with `partial` true when the candidate set was capped.
   - Every recurring group (at least 3 occurrences across 2 tasks) has one route (authoring, pilot, recovery, run_failure or setup) and was commented on an open covering task, mapped to a rejected one, or filed, with at most 5 new tasks filed and the rest listed as deferred.
   - Run-failure groups were only commented on an open `run-failure-patterns` task or filed as one tagged `run-failure-patterns`; no failure-rate measurement task was filed.
   - No blocked or pilot-held task was edited, requeued, commented on or triaged; the only writes on other tasks were comments on open fix tasks covering a group.
   - Every group carries its change against the prior pass, and every fix this auto-task filed that reached done in the last 30 days has an effectiveness verdict, with a regression task filed for each `not effective` fix.
-  - The pass ran on the owning machine and attached `pilot-block-cursor.json`, or stopped with `wrong_host` in the execution summary without filing and without attaching a cursor.
+  - The pass ran on the owning machine and attached `pilot-block-report.json` and `pilot-block-cursor.json`, including `resume_after` when `partial` is true, or stopped with `wrong_host` in the execution summary without filing and without attaching a cursor.
   task_type: chore
   tags:
   - pilot-block-patterns
