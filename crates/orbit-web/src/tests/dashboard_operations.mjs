@@ -110,6 +110,9 @@ const startedQueuedRuns = new Set();
 // backlog; a replica pulls from its owner, and the runtime's refusal for the
 // other source is shown as it words it.
 let extraStartCrews = [];
+// [ORB-20519] Review layer the readiness reports, as drain_start_options does
+// (`{timing, source}`); null means the workspace applies no review.
+let drainReviewFixture = null;
 const LOCAL_REFUSAL = 'destination capability refused: this checkout is a replica of ws-one; its owner m-owner drains the backlog';
 const PULL_REFUSAL = "destination capability refused: `--pull` runs on a replica checkout; this checkout is its workspace's owner, whose drain is plain `orbit run auto`";
 const startOptions = () => ({
@@ -122,6 +125,7 @@ const startOptions = () => ({
   local_refusal: replicaWorkspace ? LOCAL_REFUSAL : null,
   pull_refusal: replicaWorkspace ? null : PULL_REFUSAL,
   crews: [{ name: 'opus', enabled: true }, { name: 'sol', enabled: true }, { name: 'luna', enabled: true }, { name: 'retired', enabled: false }, ...extraStartCrews.map((name) => ({ name, enabled: true }))],
+  review: drainReviewFixture || { timing: 'none', source: 'workspace' },
   complexity_pools: {
     low: { crews: [{ name: 'luna', weight: 1 }], source: 'workflow.low_complexity_crews' },
     medium: { crews: [{ name: 'sol', weight: 2 }, { name: 'luna', weight: 1 }], source: 'workflow.medium_complexity_crews' },
@@ -508,6 +512,38 @@ assert(approveSwitch().disabled && drainText().includes('A pull replica cannot a
 replicaWorkspace = false;
 await fetchAndRenderOperations();
 assert(!approveSwitch().disabled, 'the opt-in returns on an owner');
+
+// [ORB-20519] The Review before landing switch honors the replica refusal
+// before the replica-local policy: on an owner a workspace timing locks on
+// with its source named; on a replica the same timing stays off with the
+// owner-decides refusal visible.
+const reviewSwitch = () => startNode('auto-drain-review');
+const reviewHelp = () => get('auto-drain-review-help').textContent;
+const reviewReason = () => get('auto-drain-review-reason')?.textContent || '';
+drainReviewFixture = { timing: 'before-landing', source: 'workspace' };
+replicaWorkspace = false;
+await fetchAndRenderOperations();
+assert(reviewSwitch().checked && reviewSwitch().disabled, 'owner workspace before-landing policy locks review on');
+assert(reviewHelp().includes('Workspace policy applies it') && reviewHelp().includes('before_landing') && reviewHelp().includes('workspace'), `owner lock names its source: ${reviewHelp()}`);
+assert(!reviewReason().trim(), 'owner lock shows no refusal');
+drainReviewFixture = { timing: 'before-pr', source: 'workspace' };
+await fetchAndRenderOperations();
+assert(reviewSwitch().checked && reviewSwitch().disabled, 'owner workspace before-pr policy locks review on');
+assert(reviewHelp().includes('before-PR') && reviewHelp().includes('before_pr'), `owner before-pr lock names its timing: ${reviewHelp()}`);
+for (const timing of ['before-landing', 'before-pr']) {
+  drainReviewFixture = { timing, source: 'workspace' };
+  replicaWorkspace = true;
+  await fetchAndRenderOperations();
+  assert(!reviewSwitch().checked && reviewSwitch().disabled, `replica does not show local ${timing} policy as locked on`);
+  assert(reviewReason().includes('owner decides'), `replica keeps the owner-decides refusal for local ${timing}: ${reviewReason()}`);
+  assert(!reviewHelp().includes('Workspace policy applies'), `replica does not claim workspace policy for local ${timing}: ${reviewHelp()}`);
+  assert(!drainButton('Start 2h window').disabled, `replica with local ${timing} policy can still start a default window`);
+}
+drainReviewFixture = null;
+replicaWorkspace = false;
+await fetchAndRenderOperations();
+assert(!reviewSwitch().checked && !reviewSwitch().disabled, 'review returns to an opt-in off switch');
+assert(reviewHelp().includes('Off: workspace policy applies no review'), `review off help: ${reviewHelp()}`);
 
 // Concurrency the server would refuse (zero, negative, fractional) never reaches
 // it: the readiness read a poll makes would answer 400 and blank the card, and
