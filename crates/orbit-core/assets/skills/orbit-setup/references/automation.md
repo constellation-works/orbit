@@ -118,6 +118,57 @@ on this host.
 | `task-publication` | weekly Sunday at 04:47 host-local time (`47 4 * * 0`) | `task_publication_pipeline` | Disabled by default because publishing task prose to a remote is an operator decision. Publishes only this owned workspace; unbound workspaces record `skipped: publication_unbound`. Unchanged content is a recorded no-op. Attachments default to `omit` under `publication.routine_attachments`; `include` fails closed without the explicit unscanned opt-in. Replicas report it owner-only and never fire it. Missed runs skip; overlaps are forbidden — [publication.md](publication.md#weekly-publication-routine). |
 | `ux-rules` | daily at 06:40 | `ux_rules_pipeline` | Disabled by default. Runs the UX rules on each surface in `ux_rules.surfaces` through an operator-granted `ux_rules_runner` script step, then files proposed bug tasks for failing rules, capped by `ux_rules.max_new_tasks`. Grant the script with `orbit script grant ux_rules_runner` ([Workspace scripts](#workspace-scripts)). With no grant or no surfaces it does no work. |
 
+### UX rules checks
+
+The seeded `ux-rules` routine runs `ux_rules_pipeline` daily and is disabled by
+default. It runs `ux_rules.runner` once for each surface in `ux_rules.surfaces`.
+The `file_rule_findings` activity keeps one open task per `rule_fingerprint`; new
+failures become proposed bug tasks. The runner script manifest must be granted
+with `orbit script grant ux_rules_runner` before the routine can do work. With
+no grant or an empty `surfaces` list, the run does no work. Enable the routine
+deliberately after configuration; see [Turning the scheduler on](#turning-the-scheduler-on).
+
+Set workspace values in the `[ux_rules]` table or with
+`orbit config set ux_rules.<key> <value>`. For example:
+
+```toml
+[ux_rules]
+surfaces = ["cli"]
+file_at = "medium"
+disabled = []
+max_new_tasks = 10
+ui_base_url = "http://127.0.0.1:7878"
+```
+
+- `surfaces` selects the checks to run, such as `"cli"` and `"ui"`; an empty
+  list disables the work.
+- `file_at` is the lowest result severity to file (`critical`, `high`,
+  `medium`, `low` or `nit`). Results below it are recorded only.
+- `disabled` lists rule IDs to run but record without filing.
+- `max_new_tasks` caps new task filings per run; higher-severity results are
+  filed first.
+- `ui_base_url` is the address of the live UI measured by UI rules. A
+  network-none script step cannot reach a dashboard on loopback, so a live UI
+  needs the runner's fixture mode.
+
+`file_rule_findings` is the routine's deterministic filing step, not a config
+key: it deduplicates by `rule_fingerprint` and keeps one open task for each
+finding. The `ux_rules.max_new_tasks` cap and the `file_at` and `disabled`
+filters control which new results it files.
+
+Verify the effective settings and grant, then inspect a recorded routine run:
+
+```bash
+orbit config show --all
+orbit script show ux_rules_runner
+orbit routine list
+orbit routine show <routine-name>
+orbit run show <run-id>
+```
+
+The script must report `grant state: granted`. The routine's recent fires show
+the run ID; `orbit run show` reports its result counts and filing-step output.
+
 ### Crew performance snapshot
 
 A crew draw must never run the scorecard scan, so the by-type cell matrix is
