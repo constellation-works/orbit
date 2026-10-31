@@ -474,10 +474,102 @@ try {
   await page.locator('#tasks-main > .col-tasks').waitFor({ state: 'visible' });
   await page.setViewportSize({ width: 1440, height: 900 });
   check(await page.locator('#dock-tab-locks').getAttribute('aria-selected') === 'true', 'Saved dock tab lost on plain Tasks route');
+  // ORB-20461: keyboard focus must survive dock-warning repaints. Exercise the
+  // shipped warning-list module on an isolated page: focus and expand a row,
+  // repaint with identical entries (as every log filter pass does), repaint
+  // with a changed list while the Log action holds focus, then remove the
+  // focused warning and empty the list. Focus must follow the surviving row
+  // or action, land on a nearby row when its warning is gone, and fall back
+  // to the selected dock tab when nothing remains; expansion follows too.
+  const focusPage = await browser.newPage({ viewport: { width: 1440, height: 900 }, timezoneId: 'America/Los_Angeles' });
+  try {
+    focusPage.on('pageerror', (error) => pageErrors.push(String(error)));
+    await focusPage.goto(`http://127.0.0.1:${server.address().port}/#tasks?dock=log`);
+    // The browser answers focus and layout on the active tab; make this page
+    // that tab before driving keyboard focus through the module.
+    await focusPage.bringToFront();
+    // Light the Tasks pane the way the tab switcher does, without booting the
+    // dashboard: the regression needs the shipped warning-list module
+    // rendered, not the router or the log stream (which would repaint
+    // mid-assertion and race it).
+    await focusPage.evaluate(() => {
+      document.querySelector('.tab-pane[data-tab="tasks"]')?.classList.add('active');
+    });
+    const warningFocus = await focusPage.evaluate(async () => {
+      const outcomes = [];
+      const { setLogWarnings } = await import('/js/dock-warnings.js');
+      const box = document.getElementById('dock-warnings');
+      const selectedTab = () => document.querySelector('#dock-mode-toggle .dock-seg.on');
+      const warning = (message) => ({
+        ts: '2026-10-29T12:00:00Z', source: 'Log', message, reveal: () => {},
+      });
+      const activeLabel = () => {
+        const active = document.activeElement;
+        return `${active?.tagName}.${active?.className}`;
+      };
+      setLogWarnings([warning('Focus must survive repaint')]);
+      const row = box.querySelector('.dock-warning');
+      if (!row) {
+        outcomes.push('warning row did not render');
+        return outcomes;
+      }
+      row.focus();
+      row.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      if (document.activeElement !== row || !row.classList.contains('expanded')) {
+        outcomes.push(`row did not take focus and expand before the repaint: ${activeLabel()}`);
+      }
+      // Unchanged repaint, as log-tail.js issues on every filter pass.
+      setLogWarnings([warning('Focus must survive repaint')]);
+      const repainted = box.querySelector('.dock-warning');
+      if (document.activeElement !== repainted) {
+        outcomes.push(`unchanged repaint dropped row focus to ${activeLabel()}`);
+      }
+      if (!repainted?.classList.contains('expanded')) outcomes.push('unchanged repaint lost the expansion');
+      // Changed repaint while the Log action holds focus.
+      repainted.querySelector('button.dock-warning-source')?.focus();
+      setLogWarnings([warning('Newer warning arrives'), warning('Focus must survive repaint')]);
+      const targetAction = [...box.querySelectorAll('.dock-warning')]
+        .find((node) => node.title === 'Focus must survive repaint')
+        ?.querySelector('button.dock-warning-source');
+      if (document.activeElement !== targetAction) {
+        outcomes.push(`changed repaint dropped action focus to ${activeLabel()}`);
+      }
+      // Removing the focused warning lands on the row that took its place.
+      targetAction?.focus();
+      setLogWarnings([warning('Newer warning arrives')]);
+      if (document.activeElement?.title !== 'Newer warning arrives') {
+        outcomes.push(`removed warning left focus at ${activeLabel()} instead of a nearby row`);
+      }
+      // Emptying the list hides the box and falls back to the selected dock tab.
+      document.activeElement?.focus();
+      setLogWarnings([]);
+      if (document.activeElement !== selectedTab() || !box.hidden) {
+        outcomes.push(`emptied list left focus at ${activeLabel()} instead of the selected dock tab`);
+      }
+      // Leave one row visible for the evidence capture below.
+      setLogWarnings([warning('Focus must survive repaint')]);
+      return outcomes;
+    });
+    for (const outcome of warningFocus) failures.push(`[ORB-20461] ${outcome}`);
+    const focusDebug = await focusPage.evaluate(() => {
+      const box = document.getElementById('dock-warnings');
+      const rect = box?.getBoundingClientRect();
+      return {
+        hidden: box?.hidden,
+        rect: rect && { w: Math.round(rect.width), h: Math.round(rect.height) },
+        rows: box?.querySelectorAll('.dock-warning').length,
+        active: `${document.activeElement?.tagName}.${document.activeElement?.className}`,
+      };
+    });
+    console.log(`ORB-20461 focus outcomes: ${JSON.stringify(warningFocus)} state: ${JSON.stringify(focusDebug)}`);
+    await focusPage.locator('#dock-warnings').screenshot({ path: path.join(evidence, 'tasks-dock-warnings-focus-dark-1440.png'), animations: 'disabled' });
+  } finally {
+    await focusPage.close();
+  }
   fs.writeFileSync(path.join(evidence, 'dock-alignment.json'), JSON.stringify({ measurements, failures, pageErrors }, null, 2));
   if (failures.length) throw new Error(`Dock regression (${failures.length} failures): ${failures.slice(0, 10).join(' | ')}`);
   if (pageErrors.length) throw new Error(`Browser page errors: ${pageErrors.join(' | ')}`);
-  console.log(`PASS: stable dock tabs/viewport/list/card geometry at 1440x900 and 1440x420 with empty, state, pending, error and success feedback; lock counts, filter, expansion, warning badges, keyboard tabs, scrolled refresh and persisted/deep-linked selection; 375px normal/short dock controls, resize routing and Back with retained status/search filters. Evidence: ${evidence}`);
+  console.log(`PASS: stable dock tabs/viewport/list/card geometry at 1440x900 and 1440x420 with empty, state, pending, error and success feedback; lock counts, filter, expansion, warning badges, keyboard tabs, warning-row focus across log repaints with a removal fallback, scrolled refresh and persisted/deep-linked selection; 375px normal/short dock controls, resize routing and Back with retained status/search filters. Evidence: ${evidence}`);
 } finally {
   await browser?.close();
   await new Promise(resolve => server.close(resolve));
