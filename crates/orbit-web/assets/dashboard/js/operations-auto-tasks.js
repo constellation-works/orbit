@@ -311,6 +311,17 @@ function autoTaskRow(payload, definition, workspaceId) {
       title: definition.last_evaluation?.last_fired_at ? time(definition.last_evaluation.last_fired_at) : "" }),
     ]
     : [el("span", { class: "operation-cell-main muted", text: lastEvaluationText(definition) })];
+  const schedule = definition.schedule || {};
+  const cronLabel = schedule.cron ? cronText(schedule.cron) : null;
+  const minutes = schedule.every_minutes;
+  let scheduleLabel = definition.schedule_summary || "—";
+  if (Number.isInteger(minutes) && minutes > 0) {
+    const unit = minutes % 1440 === 0 ? [1440, "day"] : minutes % 60 === 0 ? [60, "hour"] : null;
+    if (unit) {
+      const count = minutes / unit[0];
+      scheduleLabel = scheduleLabel.replace(/^every \d+ minutes?\b/, `every ${count} ${unit[1]}${count === 1 ? "" : "s"}`);
+    }
+  }
   const next = definition.next_evaluation;
   const nextCell = next?.state === "scheduled" && next.at
     ? whenCell("Next mint", next.at)
@@ -330,8 +341,8 @@ function autoTaskRow(payload, definition, workspaceId) {
         ].filter(Boolean)),
       ], "operation-cell-identity"),
       operationCell("Trigger", [
-        el("span", { class: "operation-cell-main", text: definition.schedule?.cron ? cronText(definition.schedule.cron) : (definition.schedule_summary || "—") }),
-        el("span", { class: "operation-cell-sub", text: [definition.schedule?.cron, definition.condition ? conditionStateLabel(definition.condition) : null, definition.dedupe === "always" ? "always fire" : "skip if open"].filter(Boolean).join(" · ") }),
+        el("span", { class: "operation-cell-main", text: cronLabel || scheduleLabel }),
+        el("span", { class: "operation-cell-sub", text: [schedule.cron && cronLabel !== schedule.cron ? schedule.cron : null, definition.condition ? conditionStateLabel(definition.condition) : null, definition.dedupe === "always" ? "always fire" : "skip if open"].filter(Boolean).join(" · ") }),
         autoTaskEditButton(payload, definition),
       ]),
       nextCell,
@@ -341,7 +352,7 @@ function autoTaskRow(payload, definition, workspaceId) {
     operationDetails(detailsKey, [
       el("div", { class: "operation-target mono", text: definition.template_summary || template.title || "" }),
       el("div", { class: "operation-grid" }, [
-        field("Schedule", definition.schedule_summary || "—"),
+        field("Schedule", scheduleLabel),
         field("Dedupe", definition.dedupe === "always" ? "always fire" : "skip if open"),
         field("Last scheduler evaluation", lastEvaluationText(definition)),
         field("Last minted task", lastMintedText(definition)),
