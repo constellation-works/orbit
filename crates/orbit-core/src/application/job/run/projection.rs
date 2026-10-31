@@ -223,6 +223,11 @@ pub fn job_run_to_json(run: &JobRun, state: Option<&PipelineState>) -> Value {
     );
     // Crews whose `env` sources the submitting process did not hold. Names
     // only.
+    value["crew_pool_warnings"] = json!(
+        state
+            .map(|state| state.pull_drain.pool_crew_exclusion_warnings())
+            .unwrap_or_default()
+    );
     value["crew_env_unset"] = json!(
         state_for_agent_result
             .map(|state| state.crew_env_unset.as_slice())

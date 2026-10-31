@@ -83,6 +83,12 @@ pub fn explain_workspace_auto_readiness(
         None => drain_ceiling(active_drain.as_ref(), pull_drain.as_ref()),
     };
 
+    let pull_state = pull_drain
+        .as_ref()
+        .map(|drain| runtime.read_run_state(&drain.run_id))
+        .transpose()?
+        .flatten();
+
     // Validated here, before any snapshot work, so a typo reads the same way
     // it would on `orbit run auto --allow-crew`.
     let pool_input = active_drain
@@ -123,6 +129,11 @@ pub fn explain_workspace_auto_readiness(
         allowlist.as_ref(),
         &pools,
         review.as_ref(),
+        status_state
+            .as_ref()
+            .filter(|_| active_drain.is_some())
+            .or(pull_state.as_ref())
+            .map(|state| state.crew_env_unset.as_slice()),
     )
     .map_err(|error| OrbitError::Execution(format!("read readiness snapshot: {error}")))?;
     let live_leaves = read_live_leaf_runs(runtime)?;
@@ -482,7 +493,8 @@ pub fn explain_workspace_auto_readiness(
                             object.insert("placement_wait".to_string(), json!(wait));
                         }
                     }
-                    BacklogTaskExclusionReason::CrewNotAllowed => {
+                    BacklogTaskExclusionReason::CrewNotAllowed | BacklogTaskExclusionReason::CrewEnvUnset => {
+                        object.insert("detail".to_string(), json!(excluded.detail));
                         object.insert("reason".to_string(), json!(excluded.reason));
                         object.insert("crew".to_string(), json!(excluded.crew));
                         object.insert("allowed_crews".to_string(), json!(allowlist.as_ref().map(CrewAllowlist::names)));
@@ -742,6 +754,7 @@ pub fn explain_workspace_auto_readiness(
     let provider_auth_failures = runtime.provider_auth_failures(now);
 
     let mut payload = json!({
+        "crew_pool_warnings": status_state.as_ref().filter(|_| active_drain.is_some() || pull_drain.is_none()).or(pull_state.as_ref()).map(|state| state.pull_drain.pool_crew_exclusion_warnings()).unwrap_or_default(),
         "auto_concurrency": runtime.auto_concurrency_view(
             active_drain.as_ref().map(|drain| &drain.input)
                 .or_else(|| recent_drain.as_ref().and_then(|run| run.input.as_ref()))

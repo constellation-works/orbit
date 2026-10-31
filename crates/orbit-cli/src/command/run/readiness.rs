@@ -79,6 +79,14 @@ fn readiness_lines(payload: &Value, formatter: &WaitingTaskFormatter) -> Vec<Str
         "Snapshot only — eligible does not guarantee a task will start. Active leaf runs: {}/{}; free slots: {}.",
         capacity["active_leaf_runs"], capacity["max_active_leaf_runs"], capacity["free_slots"],
     )];
+    for warning in payload["crew_pool_warnings"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+    {
+        lines.push(format!("Warning: {warning}"));
+    }
     if let Some(warning) = payload["validation_env_warning"].as_str() {
         lines.push(format!("Validation environment warning: {warning}"));
     }

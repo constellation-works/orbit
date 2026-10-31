@@ -99,7 +99,7 @@ pub(crate) fn list_backlog_tasks(
             &pools,
             mode,
             review.as_ref(),
-            false,
+            super::snapshot::BacklogReadMode::Admission,
         )?;
         // [ORB-15191] A ship that fans out to more than one task holds work
         // with no footprint to the drain's rule: it waits for its pilot, or

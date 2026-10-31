@@ -51,3 +51,39 @@ pub(crate) use types::CapturedCrewPools;
 #[cfg(feature = "test-support")]
 pub use write_back::with_crew_backfill_checkpoint;
 pub use write_back::{TaskCrewBackfill, TaskCrewChange};
+
+impl crate::OrbitRuntime {
+    /// Positive-weight complexity and type pool members, before host filters.
+    pub(crate) fn pool_health_crew_names(
+        &self,
+        input: &serde_json::Value,
+    ) -> Result<std::collections::BTreeSet<String>, orbit_common::OrbitError> {
+        let mut pools = self.auto_crew_pools_for_input(input)?;
+        // Pull coordinators do not capture local task-draw policy. Their
+        // configured pools still need health observations.
+        if pools.is_empty() {
+            pools = self.capture_auto_crew_pools(&serde_json::Value::Null)?;
+        }
+        let mut names = pools
+            .values()
+            .flat_map(|pool| &pool.crews)
+            .filter(|entry| entry.weight > 0)
+            .map(|entry| entry.name.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        let settings = self.context.settings();
+        for (task_type, tier, entries) in settings.type_complexity_crews().iter() {
+            let pool = orbit_config::canonical_crew_pool(
+                entries,
+                settings.crews(),
+                &orbit_config::type_complexity_crews_key(task_type, tier),
+            )?;
+            names.extend(
+                pool.entries
+                    .into_iter()
+                    .filter(|entry| entry.weight > 0)
+                    .map(|entry| entry.name),
+            );
+        }
+        Ok(names)
+    }
+}

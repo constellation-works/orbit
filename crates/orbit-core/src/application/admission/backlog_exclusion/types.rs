@@ -14,7 +14,8 @@ pub(crate) struct BacklogTaskExclusion {
     pub(crate) reason: BacklogTaskExclusionReason,
     pub(crate) conflicts: Vec<BacklogTaskConflict>,
     /// The crew the task would have dispatched as, on a
-    /// [`BacklogTaskExclusionReason::CrewNotAllowed`] exclusion. Naming the
+    /// [`BacklogTaskExclusionReason::CrewNotAllowed`] or
+    /// [`BacklogTaskExclusionReason::CrewEnvUnset`] exclusion. Naming the
     /// *effective* crew — not the raw `task.crew`, which is often unset and
     /// inherited — is what makes the exclusion actionable [ORB-11242].
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -52,6 +53,8 @@ pub(crate) enum BacklogTaskExclusionReason {
     /// it is — never silently re-crewed — and the remaining eligible work
     /// keeps filling the drain's slots.
     CrewNotAllowed,
+    /// Every otherwise permitted candidate has an unset declared env source.
+    CrewEnvUnset,
     /// The task's `os:` tags name no OS this host runs. It stays in `backlog`
     /// for a host that does — a follower pulling from this owner, say — and
     /// `detail` names the wait (`waits for a macos host (os:macos)`).

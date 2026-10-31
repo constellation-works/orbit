@@ -15,7 +15,10 @@ use crate::doctor::*;
 pub(in crate::doctor) fn doctor_check_env_pass(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
     let unset = runtime.unset_env_pass_names();
     let crew_unset = runtime.unset_crew_env();
-    if unset.is_empty() && crew_unset.is_empty() {
+    let crews = runtime.configured_crew_env_sources();
+    let service_warnings =
+        crate::service_environment::crew_source_environment_warnings(runtime, &crews);
+    if unset.is_empty() && crew_unset.is_empty() && service_warnings.is_empty() {
         return check(
             "env-pass",
             WorkspaceDoctorStatus::Ok,
@@ -24,7 +27,7 @@ pub(in crate::doctor) fn doctor_check_env_pass(runtime: &OrbitRuntime) -> Worksp
                 .to_string(),
         );
     }
-    let mut problems = Vec::new();
+    let mut problems = service_warnings;
     if !unset.is_empty() {
         problems.push(format!(
             "`execution.env.pass` names variables unset or empty in this environment: {}; \
@@ -58,8 +61,9 @@ pub(in crate::doctor) fn doctor_check_env_pass(runtime: &OrbitRuntime) -> Worksp
         WorkspaceDoctorStatus::Warning,
         problems.join("; "),
         "Export the variables before starting the drain or service (clock-started runs read \
-         them from ~/.orbit/clock.env). Drains inherit the launching shell's environment, so \
-         start them from a login shell (or set the variables in the unit's environment), or \
+         them from ~/.orbit/clock.env). Drains inherit their launching process's environment: \
+         use a login shell for CLI starts, or set the variables in the service environment \
+         and restart it, or \
          remove the names from `execution.env.pass` or the crew's `env`, then rerun \
          `orbit doctor`."
             .to_string(),
