@@ -225,10 +225,12 @@ The triager records exactly one disposition per episode through
   nothing else. The tool itself refuses to requeue a security-tagged task or
   one whose run executed on another machine.
 
-The triager holds no task-update, requeue or run-resume tool and no `--force`
-path: it never completes, rejects or archives a task, resumes a run, or merges
-or closes a pull request. A recovery that needs one of those is reported with
-the exact operator command. To triage one blocked task now, run
+The triager holds no task-update tool, no direct requeue or run-resume tool and
+no `--force` path. Its only status changes are the bounded `block_triage`
+actions above: `requeue`, `resume_run` and `rerun_ci`. It never completes,
+rejects or archives a task, resumes a run outside `resume_run`, or merges or
+closes a pull request. A recovery that needs one of those is reported with the
+exact operator command. To triage one blocked task now, run
 `orbit run job escalation_triage_pipeline --input 'subject="block"' --input
 'task_ids=["<task-id>"]'`. The dashboard's task details panel offers the
 same explicit submission as a **Triage** action — on a blocked task with
