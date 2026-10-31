@@ -38,6 +38,7 @@ shared workspace. Preserve the user's installation method and existing config.
 | macOS: Claude worker token and the clock env file | [macOS](references/macos.md) |
 | Headless browser kit (`orbit browser-kit`) so workers can render and screenshot UI changes | [Browser kit](references/browser-checks.md) |
 | Scheduled execution | [Automation](references/automation.md) |
+| Workspace scripts (`target: script:<name>` job steps): what a script is, granting or revoking one, grant staleness, network and root grants, or verifying a grant | [Automation — Workspace scripts](references/automation.md#workspace-scripts) |
 | Recurring QA and other task templates | [Auto-tasks](references/auto-tasks.md) |
 | Prompt-size cost estimates, token usage and unknown cost | [Operational logs — Prompt-size cost accounting](references/operational-logs.md#prompt-size-cost-accounting) |
 | Choose which shipped routines and auto-tasks an existing workspace carries, reconcile a policy change, or diagnose excluded defaults | [Configuration — Seeding policy](references/configuration.md#seeding-policy) |
