@@ -35,8 +35,8 @@ pub use asset_loader::{
 pub use catalog::{
     ACTIVITY_REF_PREFIX, CatalogDirectory, CatalogDirectoryList, CatalogError, ResolveError,
     SCRIPT_REF_PREFIX, V2ActivityCatalog, V2JobCatalog, catalog_error_to_orbit,
-    load_activity_catalog_asset, resolve_job_target_refs, resolve_job_target_refs_with_scripts,
-    validate_catalog_activity_tools,
+    job_definition_files, load_activity_catalog_asset, resolve_job_target_refs,
+    resolve_job_target_refs_with_scripts, validate_catalog_activity_tools,
 };
 pub use script_catalog::{
     ScriptArgError, ScriptAsset, ScriptLoadError, ScriptSnapshot, V2ScriptCatalog,

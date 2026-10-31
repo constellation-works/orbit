@@ -663,6 +663,18 @@ fn walk_dir(
     Ok(())
 }
 
+/// Every `.yaml` or `.yml` file a job directory layer parses, recursively, in
+/// walk order. A caller that memoizes a job catalog keys on these files, so it
+/// lists exactly what the loader reads.
+pub fn job_definition_files(dir: &Path) -> Result<Vec<PathBuf>, CatalogError> {
+    let mut files = Vec::new();
+    walk_dir(dir, &mut |path| {
+        files.push(path.to_path_buf());
+        Ok(())
+    })?;
+    Ok(files)
+}
+
 /// Walk `job` and rewrite every `activity:` [`JobV2StepBody::TargetRef`]
 /// into a [`JobV2StepBody::Target`] using the named [`ActivityV2`] from
 /// `catalog`. A ref with an unknown name is a hard error; silently

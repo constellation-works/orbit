@@ -518,6 +518,10 @@ fn legacy_db_adopts_versioned_ledger() {
                 "migration.v0080".to_string(),
                 "application_consent".to_string()
             ),
+            (
+                "migration.v0081".to_string(),
+                "invocation_reliability_window_index".to_string()
+            ),
         ]
     );
 }
