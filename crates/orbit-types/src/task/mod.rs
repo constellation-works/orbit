@@ -23,8 +23,7 @@ mod severity;
 mod show_fields;
 mod tags_changed;
 mod ui_requirement;
-mod visual_capture;
-mod visual_review;
+mod visual;
 mod work_class;
 pub use error::TaskError;
 
@@ -146,17 +145,7 @@ pub use tags_changed::{TAGS_CHANGED_EVENT, TagsChanged, TagsChangedError, tags_a
 pub use ui_requirement::{
     BROWSER_KIT_INSTALL_COMMAND, UI_TAG, browser_kit_wait, requires_browser_kit,
 };
-pub use visual_capture::{
-    DEFAULT_VISUAL_MAX_MOCKS, VISUAL_ARTIFACT_PREFIX, VISUAL_CAPTURE_ARTIFACT,
-    VISUAL_CAPTURE_MISMATCH, VISUAL_CHECKS_ARTIFACT, VISUAL_MAX_IMAGE_BYTES,
-    VISUAL_SETTLE_ARTIFACT, VisualCaptureError, VisualCaptureExpectation, VisualCaptureImage,
-    VisualCaptureOutcome, VisualCaptureRecord, VisualCapturedMock, VisualCheckFinding,
-    VisualChecksRecord, VisualKitPin, VisualManifestCapture, VisualManifestRef, VisualMockDigest,
-    VisualMockDigestRecord, VisualNotEstablished, VisualReviewContract, VisualReviewMode,
-    VisualSettleOutcome, VisualSettleRecord, VisualSettleRefusal, is_visual_artifact,
-    visual_capture_mismatches, visual_review_summary, visual_review_summary_with_review,
-};
-pub use visual_review::{
+pub use visual::{
     DEFAULT_VISUAL_BLOCK_AT, DEFAULT_VISUAL_FILE_AT, DEFAULT_VISUAL_MAX_FINDINGS,
     DEFAULT_VISUAL_MAX_IMAGE_TOKENS, DEFAULT_VISUAL_MAX_IMAGES, VISUAL_DISPUTE_ACCEPTED_EVENT,
     VISUAL_IMAGE_TOKEN_CONSTANT, VISUAL_MEASURE_INVOCATION_IDS, VISUAL_MEASURE_PURPOSE,
@@ -169,6 +158,16 @@ pub use visual_review::{
     select_visual_budget, validate_visual_evidence, validate_visual_region_location,
     visual_disposition, visual_image_catalog, visual_image_dimensions, visual_image_tokens,
     visual_region_inside, visual_severity_rank, visual_severity_weight,
+};
+pub use visual::{
+    DEFAULT_VISUAL_MAX_MOCKS, VISUAL_ARTIFACT_PREFIX, VISUAL_CAPTURE_ARTIFACT,
+    VISUAL_CAPTURE_MISMATCH, VISUAL_CHECKS_ARTIFACT, VISUAL_MAX_IMAGE_BYTES,
+    VISUAL_SETTLE_ARTIFACT, VisualCaptureError, VisualCaptureExpectation, VisualCaptureImage,
+    VisualCaptureOutcome, VisualCaptureRecord, VisualCapturedMock, VisualCheckFinding,
+    VisualChecksRecord, VisualKitPin, VisualManifestCapture, VisualManifestRef, VisualMockDigest,
+    VisualMockDigestRecord, VisualNotEstablished, VisualReviewContract, VisualReviewMode,
+    VisualSettleOutcome, VisualSettleRecord, VisualSettleRefusal, is_visual_artifact,
+    visual_capture_mismatches, visual_review_summary, visual_review_summary_with_review,
 };
 pub use work_class::{
     CHANGE_WORK_CLASS, NO_DIFF_WORK_CLASS, auto_task_template, is_no_diff_expected, work_class,
