@@ -7,7 +7,7 @@
 // Pure vanilla JS, split into ES modules with no build step.
 //
 // The forecast is per workspace; the aggregate view shows the usual
-// placeholder. The history and arrivals toggles refetch: only the default
+// placeholder. The history select and arrivals toggle refetch: only the default
 // view (30 days reaching back to at least the newest 50 completions, no
 // arrivals, the live drain ceiling) is the one stored and scored, and is read
 // from the newest stored snapshot when one is fresh; Refresh recomputes it
@@ -19,7 +19,7 @@
 import {
   el as makeEl, syncNodes, fetchJson, requestPanel, panelCanRender, getWorkspaceRevision,
   onWorkspaceChange, renderPanelPlaceholder, isAggregateView, formatDateTime, infoHint,
-  scopedHashHref, bindTaskLink, relativeTime,
+  scopedHashHref, bindTaskLink, relativeTime, statusPill, detailsPanel,
 } from './common.js';
 
 const $ = (id) => document.getElementById(id);
@@ -45,7 +45,7 @@ const HISTORIES = [
   ["tasks:500", "Last 500", "The newest 500 completed tasks, whatever their age"],
   ["days:90", "90d", "The last 90 days, reaching back to at least the newest 50 completed tasks"],
 ];
-const ARRIVALS = [["off", "No arrivals"], ["on", "Recent arrivals"]];
+const ARRIVALS = [["off", "No arrivals"], ["on", "With arrivals"]];
 const COMPLEXITY_LABELS = {
   low: "Low", medium: "Medium", hard: "Hard", xhard: "Xhard", unassessed: "Unassessed",
 };
@@ -177,7 +177,7 @@ export function renderForecast() {
   const forecast = lastPayload.forecast || {};
   const count = $(COUNT);
   if (count) count.textContent = `${forecast.tasks ?? 0} task${forecast.tasks === 1 ? "" : "s"} · ${lastPayload.inputs?.concurrency ?? "?"} slots`;
-  const nodes = [forecastCard(), waitsCard(), scheduleCard(), byComplexityCard(), coverageCard(), calibrationCard()];
+  const nodes = [headerBar(), answerCard(), tasksCard(), gapsCard(), calibrationCard(), detailSections()];
   const root = el("div", { class: "fc-view" }, nodes);
   root.dataset.key = "forecast-view";
   root.dataset.hash = JSON.stringify([view, lastPayload, calibrationHistoryPage]);
@@ -434,7 +434,12 @@ export function drainBacklogForecastLink(summary) {
   return link;
 }
 
-// ---- forecast -------------------------------------------------------------
+// ---- page -----------------------------------------------------------------
+//
+// Top to bottom: the header, the answer (time to drain, if approved, cost),
+// one tasks table, the data gaps that are not zero, calibration, then the
+// collapsed detail: stored forecasts, every wait gate, and how the forecast
+// is made with the full coverage checklist.
 
 function seg(label, options, current, onPick) {
   return el("div", { class: "mx-seg mx-seg-wrap", role: "group", "aria-label": label }, options.map(([key, text, title]) => {
@@ -449,15 +454,93 @@ function seg(label, options, current, onPick) {
   }));
 }
 
-function kpi(label, quantiles, fmt, foot) {
-  const value = (q) => (quantiles?.[q] == null ? "—" : fmt(quantiles[q]));
-  return el("div", { class: "mx-sc fc-kpi", role: "group", "aria-label": label }, [
+function historyControl() {
+  const select = el("select", { class: "mx-select", "aria-label": "Delivery history" }, HISTORIES.map(([key, text, title]) => {
+    const option = el("option", { text, title });
+    option.value = key;
+    option.selected = key === view.history;
+    return option;
+  }));
+  select.addEventListener("change", () => {
+    if (select.value === view.history) return;
+    view.history = select.value;
+    refetch();
+  });
+  return el("label", { class: "fc-history" }, [el("span", { class: "fc-control-label", text: "History" }), select]);
+}
+
+// Where this forecast came from and how old it is. The absolute time is its
+// tooltip; Refresh recomputes it live.
+function sourceLabel() {
+  const stored = lastPayload.served_from === "stored";
+  const age = relativeTime(lastPayload.generated_at);
+  const text = stored ? `Stored ${age ?? "earlier"}` : "Live";
+  const title = lastPayload.generated_at ? `Computed ${formatDateTime(lastPayload.generated_at)}` : null;
+  return el("span", { class: "fc-source", text, title });
+}
+
+function refreshButton() {
+  const button = el("button", { class: "mx-seg-btn", type: "button", text: "Refresh", title: "Recompute this forecast live now", "aria-label": "Refresh forecast" });
+  button.addEventListener("click", () => {
+    button.disabled = true;
+    fetchAndRenderForecast({ refresh: true })
+      .catch((error) => console.error("Failed to refresh backlog forecast", error))
+      .finally(() => { button.disabled = false; });
+  });
+  return el("div", { class: "mx-seg", role: "group", "aria-label": "Forecast refresh" }, [button]);
+}
+
+// The panel head already reads "N tasks · N slots"; this line continues it.
+function headerBar() {
+  const meta = el("p", { class: "fc-meta" }, [
+    sourceLabel(),
+    lastPayload.model_version != null ? ` · model v${lastPayload.model_version}` : null,
+  ]);
+  return el("div", { class: "fc-header" }, [
+    meta,
+    el("div", { class: "fc-tools" }, [
+      historyControl(),
+      seg("Arrivals", ARRIVALS, view.arrivals, (key) => { view.arrivals = key; }),
+      refreshButton(),
+    ]),
+  ]);
+}
+
+function card(title, meta, children, className = "", id = null) {
+  const node = el("section", { id, class: `mx-card ${className}`.trim(), "aria-label": title }, [
+    el("div", { class: "mx-card-head" }, [
+      el("h2", { class: "mx-card-title", text: title }),
+      meta ? el("span", { class: "mx-card-meta", text: meta }) : null,
+    ]),
+    ...children,
+  ]);
+  return node;
+}
+
+function table(label, head, rows, caption) {
+  return el("div", { class: "mx-table-wrap", tabindex: "0", role: "region", "aria-label": label }, [
+    el("table", { class: "mx-table fc-table" }, [
+      caption ? el("caption", { text: caption }) : null,
+      el("thead", {}, [el("tr", {}, head.map(([text, numeric]) => el("th", { scope: "col", class: numeric ? "num" : null, text })))]),
+      el("tbody", {}, rows),
+    ]),
+  ]);
+}
+
+// ---- answer ---------------------------------------------------------------
+
+// One read-out: p50 large with p90 beside it. `unknown` names a percentile
+// the response left out; adjusted figures use "—", the baseline "unknown".
+function figure(label, quantiles, fmt, foot, { className = "fc-kpi", unknown = "—" } = {}) {
+  const value = (q) => (num(quantiles?.[q]) == null ? unknown : fmt(quantiles[q]));
+  const feet = (Array.isArray(foot) ? foot : [foot]).filter(Boolean);
+  return el("div", { class: `mx-sc fc-fig ${className}`, role: "group", "aria-label": label }, [
     el("span", { class: "mx-sc-label", text: label }),
     el("span", { class: "fc-kpi-pair" }, [
       el("span", { class: "fc-q" }, [el("span", { class: "mx-sc-tag", text: "p50" }), el("span", { class: "mx-sc-value", text: value("p50") })]),
-      el("span", { class: "fc-q" }, [el("span", { class: "mx-sc-tag", text: "p90" }), el("span", { class: "mx-sc-value fc-p90", text: value("p90") })]),
+      el("span", { class: "fc-q fc-p90" }, [el("span", { class: "mx-sc-tag", text: "p90" }), el("span", { class: "fc-p90-value", text: value("p90") })]),
     ]),
-    foot ? el("span", { class: "mx-sc-foot", text: foot }) : null,
+    ...feet.map((text) => el("span", { class: "mx-sc-foot", text })),
   ]);
 }
 
@@ -488,40 +571,62 @@ function drainFoot(quantiles) {
   return hasHorizonCensoringEvidence(lastPayload.forecast) ? "beyond the 90-day horizon" : UNREPORTED_FORECAST_REASON;
 }
 
-function unavailableBlock(forecast, payload) {
-  const info = forecastUnavailableInfo(forecast, payload);
-  if (!info) return null;
-  const children = [
-    el("span", { class: "fc-assume-head", text: `Forecast unavailable: ${info.label}` }),
-    el("span", { class: "fc-assume-rate", text: info.detail }),
-  ];
-  const block = el("div", { class: "fc-assume fc-unavailable", role: "note" }, children);
-  block.dataset.forecastReason = info.kind;
-  return block;
+function costedFoot() {
+  const tasks = forecastCount(lastPayload.coverage?.tasks ?? lastPayload.forecast?.tasks);
+  const costed = Math.max(0, tasks - forecastCount(lastPayload.coverage?.uncosted));
+  return `${costed} of ${tasks} task${tasks === 1 ? "" : "s"} costed`;
 }
 
-function baselineBlock(baseline) {
-  const figures = forecastBaselineFigures(baseline);
-  if (!figures) return null;
-  const parts = [figures.time && `Time to drain ${figures.time}`, figures.cost && `Cost ${figures.cost}`, figures.tokens && `Tokens ${figures.tokens}`].filter(Boolean).join(" · ");
-  const block = el("div", { class: "fc-assume fc-baseline", role: "note" }, [
-    el("span", { class: "fc-assume-head", text: "Pre-regression baseline" }),
-    el("span", { class: "fc-assume-rate", text: `${parts}. This baseline excludes unsupported regression follow-up work and is not the regression-adjusted forecast; a percentile shown as unknown was not estimated.` }),
-  ]);
-  block.dataset.forecastBaseline = "pre-regression";
-  return block;
+// "+0.4h at p50" between two drain times on the same basis.
+function drainDelta(next, base) {
+  const after = num(next?.p50);
+  const before = num(base?.p50);
+  if (after == null || before == null) return null;
+  const diff = after - before;
+  if (Math.abs(diff) < 1 / 60) return "no change at p50";
+  return `${diff > 0 ? "+" : "−"}${formatForecastHours(Math.abs(diff))} at p50`;
 }
 
-function capacityText(inputs) {
-  const source = {
-    requested: "requested",
-    run_control: "the running drain's adjusted ceiling",
-    run_input: "the running drain's ceiling",
-    pull_run_control: "the pull drain's adjusted ceiling",
-    pull_run_input: "the pull drain's ceiling",
-    default: "the default ceiling; no drain is running",
-  }[inputs.concurrency_source] || inputs.concurrency_source;
-  return `${inputs.concurrency} leaf run${inputs.concurrency === 1 ? "" : "s"} at once (${source})`;
+// If the proposed tasks were approved: the adjusted drain time, or the
+// baseline when that is unavailable too. The page's one warning line covers
+// why; this figure only says which it shows.
+function approvedFigure() {
+  const approved = lastPayload.if_approved;
+  const proposed = forecastCount(lastPayload.backlog?.proposed);
+  if (!approved || !proposed) return null;
+  const forecast = lastPayload.forecast || {};
+  const label = "If proposed work is approved";
+  const noun = `${proposed} proposed task${proposed === 1 ? "" : "s"}`;
+  const rest = (scenario) => `cost ${formatForecastQuantileRange(scenario?.usd, formatForecastUsd)} · tokens ${formatForecastQuantileRange(scenario?.tokens, formatForecastTokens)}`;
+  if (forecastUnavailableInfo(approved, lastPayload)) {
+    const baseline = approved.pre_regression_baseline;
+    if (!forecastBaselineFigures(baseline)) return figure(label, null, formatForecastHours, [`${noun} · no baseline`], { className: "fc-approved-fig", unknown: "unknown" });
+    const delta = drainDelta(baseline.time_to_drain_hours, forecast.pre_regression_baseline?.time_to_drain_hours);
+    return figure(label, baseline.time_to_drain_hours, formatForecastHours, [[noun, "baseline", delta].filter(Boolean).join(" · "), rest(baseline)], { className: "fc-approved-fig", unknown: "unknown" });
+  }
+  const delta = drainDelta(approved.time_to_drain_hours, forecast.time_to_drain_hours);
+  return figure(label, approved.time_to_drain_hours, formatForecastHours, [[noun, delta].filter(Boolean).join(" · "), rest(approved)], { className: "fc-approved-fig" });
+}
+
+function focusGaps() {
+  const target = $("fc-gaps");
+  target?.scrollIntoView?.({ block: "start", behavior: "smooth" });
+  target?.focus?.({ preventScroll: true });
+}
+
+// The single warning when the regression-adjusted forecast is unavailable;
+// the reasons and evidence are in Data gaps.
+function warningLine(info, hasBaseline) {
+  const missing = forecastCount(lastPayload.coverage?.regression_history_missing);
+  const lead = hasBaseline ? "Baseline only — " : "No forecast — ";
+  const text = info.kind === "regression_history_missing" && missing
+    ? `${lead}regression follow-up work isn't included because ${missing} task${missing === 1 ? " has" : "s have"} no regression history.`
+    : `${lead}the regression-adjusted forecast is unavailable: ${info.label}.`;
+  const link = el("button", { class: "fc-link", type: "button", text: "See data gaps" });
+  link.addEventListener("click", focusGaps);
+  const node = el("p", { class: "fc-warning fc-unavailable", role: "note" }, [text, " ", link]);
+  node.dataset.forecastReason = info.kind;
+  return node;
 }
 
 function arrivalsLine() {
@@ -532,108 +637,9 @@ function arrivalsLine() {
   const assumed = lastPayload.inputs?.arrivals
     ? "Includes new tasks arriving at the recent rate."
     : "Assumes no new tasks arrive.";
-  return el("div", { class: "fc-assume" }, [
-    el("span", { class: "fc-assume-head", text: assumed }),
-    el("span", { class: "fc-assume-rate" }, [
-      `Last ${arrivals.window_days ?? 7} days: ${fmtRate(perDay.total)} filed (${parts}), ${fmtRate(arrivals.done_per_day)} done.`,
-    ]),
+  return el("p", { class: "fc-line fc-arrivals" }, [
+    `${assumed} Last ${arrivals.window_days ?? 7} days: ${fmtRate(perDay.total)} filed (${parts}), ${fmtRate(arrivals.done_per_day)} done.`,
   ]);
-}
-
-// The sample the forecast drew from: n deliveries, and how far back they reach.
-function historyText(inputs) {
-  const n = `n=${inputs.history_deliveries ?? 0} deliveries`;
-  const since = inputs.lookback_start ? ` since ${formatDateTime(inputs.lookback_start)}` : "";
-  if (inputs.history_tasks != null) return `${n}${since} (the newest ${inputs.history_tasks} completions)`;
-  return `${n}${since} (${inputs.lookback_days ?? "?"} days, at least the newest ${inputs.min_history_tasks ?? 50} completions)`;
-}
-
-// Where this forecast came from and how old it is, beside a Refresh that
-// recomputes it live. The absolute stored time is in the Calibration card.
-function sourceTools() {
-  const stored = lastPayload.served_from === "stored";
-  const age = relativeTime(lastPayload.generated_at);
-  const text = stored ? `Stored ${age ?? "earlier"}` : "Live";
-  const title = lastPayload.generated_at ? `Computed ${formatDateTime(lastPayload.generated_at)}` : null;
-  const button = el("button", { class: "mx-seg-btn", type: "button", text: "Refresh", title: "Recompute this forecast live now", "aria-label": "Refresh forecast" });
-  button.addEventListener("click", () => {
-    button.disabled = true;
-    fetchAndRenderForecast({ refresh: true })
-      .catch((error) => console.error("Failed to refresh backlog forecast", error))
-      .finally(() => { button.disabled = false; });
-  });
-  return el("div", { class: "fc-source-tools" }, [
-    el("span", { class: "fc-source mx-muted", text, title }),
-    el("div", { class: "mx-seg", role: "group", "aria-label": "Forecast refresh" }, [button]),
-  ]);
-}
-
-function forecastCard() {
-  const inputs = lastPayload.inputs || {};
-  const forecast = lastPayload.forecast || {};
-  const backlog = lastPayload.backlog || {};
-  const tools = el("div", { class: "mx-trend-tools" }, [
-    seg("Delivery history", HISTORIES, view.history, (key) => { view.history = key; }),
-    seg("Arrivals", ARRIVALS, view.arrivals, (key) => { view.arrivals = key; }),
-    sourceTools(),
-  ]);
-  const meta = `${backlog.backlog ?? 0} backlog · ${backlog.in_progress ?? 0} in progress · ${backlog.blocked ?? 0} blocked · ${historyText(inputs)}`;
-  const children = [
-    el("div", { class: "mx-card-head" }, [
-      el("h2", { class: "mx-card-title", text: "Time to drain and cost" }),
-      tools,
-    ]),
-    el("p", { class: "mx-blurb" }, [
-      `${meta}. Simulated ${inputs.iterations ?? 0} times on ${capacityText(inputs)}. `,
-      infoHint(`${samplingExplanation(inputs)} Each simulated drain admits work as the drain does: in dispatch order, after its dependencies finish, never beside a task whose files overlap, an editing task without context files alone, and behind surfaces reserved by higher-priority work. Each attempt first draws a recorded attempt of the same pool: one that blocked, failed or was abandoned frees its slot when that attempt did, then requeues, waits for a return drawn from how long blocked work took to come back (or never does), or stops. Blocked tasks start out waiting for that return. Review and someday tasks are left out, and so is work that depends on them; in-progress tasks count only their remaining work. Review locks, static eligibility and arrivals' files are not modelled yet.`),
-      lastPayload.model_version != null ? el("span", { class: "fc-model mx-muted", text: ` Model v${lastPayload.model_version}.` }) : null,
-    ]),
-  ];
-  if (!forecast.tasks) {
-    children.push(el("div", { class: "mx-empty" }, [
-      el("div", { class: "mx-empty-title", text: "Nothing to forecast" }),
-      el("div", { class: "mx-empty-detail", text: "No backlog or in-progress tasks in this workspace." }),
-    ]));
-  } else if (!inputs.history_deliveries) {
-    children.push(el("div", { class: "mx-empty" }, [
-      el("div", { class: "mx-empty-title", text: "No delivery history to sample" }),
-      el("div", { class: "mx-empty-detail", text: inputs.history_tasks != null
-        ? `None of the newest ${inputs.history_tasks} completed tasks has recorded agent runs.`
-        : `No task finished with recorded agent runs in the last ${inputs.lookback_days} days or among the newest ${inputs.min_history_tasks ?? 50} completions. Widen the history.` }),
-    ]));
-  } else if (forecastUnavailableInfo(forecast, lastPayload)) {
-    children.push(unavailableBlock(forecast, lastPayload), baselineBlock(forecast.pre_regression_baseline));
-    const subset = subsetNote(forecast);
-    if (subset) children.push(subset);
-  } else {
-    children.push(el("div", { class: "mx-series fc-kpis" }, [
-      kpi("Time to drain", forecast.time_to_drain_hours, formatForecastHours, drainFoot(forecast.time_to_drain_hours)),
-      kpi("Cost", forecast.usd, formatForecastUsd, metricFoot(forecast.usd, "usd")),
-      kpi("Tokens", forecast.tokens, formatForecastTokens, metricFoot(forecast.tokens, "tokens")),
-      kpi("Effective parallelism", forecast.effective_parallelism, fmtParallelism, `of ${inputs.concurrency ?? "?"} slots, averaged over the drain`),
-      kpi("Critical path", forecast.critical_path_hours, formatForecastHours, "longest dependency chain"),
-    ]));
-    const subset = subsetNote(forecast);
-    if (subset) children.push(subset);
-    const odds = drainOdds(forecast);
-    if (odds) children.push(el("p", { class: "fc-approved fc-odds" }, [odds]));
-  }
-  children.push(arrivalsLine());
-  const approved = lastPayload.if_approved;
-  if (approved && backlog.proposed) {
-    const approvedInfo = forecastUnavailableInfo(approved, lastPayload);
-    if (approvedInfo) {
-      children.push(el("div", { class: "fc-approved fc-approved-unavailable" }, [
-        el("p", { class: "fc-approved", text: `If approved, the adjusted forecast is also unavailable: ${approvedInfo.label}. ${approvedInfo.detail}` }),
-        baselineBlock(approved.pre_regression_baseline),
-      ]));
-    } else {
-      children.push(el("p", { class: "fc-approved" }, [
-        `If the ${backlog.proposed} proposed task${backlog.proposed === 1 ? " is" : "s are"} approved: drain ${formatForecastQuantileRange(approved.time_to_drain_hours, formatForecastHours)}, cost ${formatForecastQuantileRange(approved.usd, formatForecastUsd)}, tokens ${formatForecastQuantileRange(approved.tokens, formatForecastTokens)} (p50 – p90).`,
-      ]));
-    }
-  }
-  return el("section", { class: "mx-card", "aria-label": "Backlog forecast" }, children);
 }
 
 // Unforecastable dependencies withhold the full totals; the schedulable
@@ -642,9 +648,9 @@ function subsetNote(forecast) {
   const subset = forecast.schedulable_subset;
   if (!subset) return null;
   const left = (subset.of ?? 0) - (subset.tasks ?? 0);
-  return el("div", { class: "fc-assume fc-subset", role: "note" }, [
-    el("span", { class: "fc-assume-head", text: `No full total: ${left} task${left === 1 ? "" : "s"} depend${left === 1 ? "s" : ""} on work the drain cannot start.` }),
-    el("span", { class: "fc-assume-rate", text: `The other ${subset.tasks} of ${subset.of}: drain ${formatForecastQuantileRange(subset.time_to_drain_hours, formatForecastHours)}, cost ${formatForecastQuantileRange(subset.usd, formatForecastUsd)}, tokens ${formatForecastQuantileRange(subset.tokens, formatForecastTokens)} (p50 – p90).` }),
+  return el("p", { class: "fc-line fc-subset", role: "note" }, [
+    el("strong", { text: `No full total: ${left} task${left === 1 ? "" : "s"} depend${left === 1 ? "s" : ""} on work the drain cannot start. ` }),
+    `The other ${subset.tasks} of ${subset.of}: drain ${formatForecastQuantileRange(subset.time_to_drain_hours, formatForecastHours)}, cost ${formatForecastQuantileRange(subset.usd, formatForecastUsd)}, tokens ${formatForecastQuantileRange(subset.tokens, formatForecastTokens)} (p50 – p90).`,
   ]);
 }
 
@@ -662,76 +668,119 @@ function drainOdds(forecast) {
   return forecast.simulation_truncated ? `${text} Some runs hit the event limit.` : text;
 }
 
-function card(title, meta, children, className = "") {
-  return el("section", { class: `mx-card ${className}`.trim(), "aria-label": title }, [
-    el("div", { class: "mx-card-head" }, [
-      el("h2", { class: "mx-card-title", text: title }),
-      meta ? el("span", { class: "mx-card-meta", text: meta }) : null,
-    ]),
-    ...children,
-  ]);
+function answerCard() {
+  const inputs = lastPayload.inputs || {};
+  const forecast = lastPayload.forecast || {};
+  const children = [];
+  if (!forecast.tasks) {
+    children.push(el("div", { class: "mx-empty" }, [
+      el("div", { class: "mx-empty-title", text: "Nothing to forecast" }),
+      el("div", { class: "mx-empty-detail", text: "No backlog or in-progress tasks in this workspace." }),
+    ]));
+  } else if (!inputs.history_deliveries) {
+    children.push(el("div", { class: "mx-empty" }, [
+      el("div", { class: "mx-empty-title", text: "No delivery history to sample" }),
+      el("div", { class: "mx-empty-detail", text: inputs.history_tasks != null
+        ? `None of the newest ${inputs.history_tasks} completed tasks has recorded agent runs.`
+        : `No task finished with recorded agent runs in the last ${inputs.lookback_days} days or among the newest ${inputs.min_history_tasks ?? 50} completions. Widen the history.` }),
+    ]));
+  } else {
+    const info = forecastUnavailableInfo(forecast, lastPayload);
+    if (info) {
+      const baseline = forecast.pre_regression_baseline;
+      const hasBaseline = Boolean(forecastBaselineFigures(baseline));
+      const unknown = { className: "fc-baseline-fig", unknown: "unknown" };
+      const figures = el("div", { class: hasBaseline ? "fc-figures fc-baseline" : "fc-figures" }, [
+        hasBaseline ? figure("Time to drain", baseline.time_to_drain_hours, formatForecastHours, "pre-regression baseline", unknown) : null,
+        approvedFigure(),
+        hasBaseline ? figure("Cost", baseline.usd, formatForecastUsd, costedFoot(), unknown) : null,
+      ]);
+      if (hasBaseline) figures.dataset.forecastBaseline = "pre-regression";
+      if (figures.children.length) children.push(figures);
+      children.push(warningLine(info, hasBaseline));
+      if (hasBaseline) children.push(el("div", { class: "fc-minor-row" }, [figure("Tokens", baseline.tokens, formatForecastTokens, "pre-regression baseline", { ...unknown, className: "fc-baseline-fig fc-minor" })]));
+    } else {
+      children.push(el("div", { class: "fc-figures" }, [
+        figure("Time to drain", forecast.time_to_drain_hours, formatForecastHours, drainFoot(forecast.time_to_drain_hours) || "current backlog"),
+        approvedFigure(),
+        figure("Cost", forecast.usd, formatForecastUsd, [metricFoot(forecast.usd, "usd"), costedFoot()]),
+      ]));
+      children.push(el("div", { class: "fc-minor-row" }, [
+        figure("Tokens", forecast.tokens, formatForecastTokens, metricFoot(forecast.tokens, "tokens"), { className: "fc-kpi fc-minor" }),
+        figure("Effective parallelism", forecast.effective_parallelism, fmtParallelism, `of ${inputs.concurrency ?? "?"} slots, averaged over the drain`, { className: "fc-kpi fc-minor" }),
+        figure("Critical path", forecast.critical_path_hours, formatForecastHours, "longest dependency chain", { className: "fc-kpi fc-minor" }),
+      ]));
+      const odds = drainOdds(forecast);
+      if (odds) children.push(el("p", { class: "fc-line fc-odds" }, [odds]));
+    }
+    children.push(subsetNote(forecast));
+  }
+  children.push(arrivalsLine());
+  return el("section", { class: "mx-card fc-answer", "aria-label": "Backlog forecast" }, children);
 }
 
-function table(label, head, rows, caption) {
-  return el("div", { class: "mx-table-wrap", tabindex: "0", role: "region", "aria-label": label }, [
-    el("table", { class: "mx-table fc-table" }, [
-      caption ? el("caption", { text: caption }) : null,
-      el("thead", {}, [el("tr", {}, head.map(([text, numeric]) => el("th", { scope: "col", class: numeric ? "num" : null, text })))]),
-      el("tbody", {}, rows),
-    ]),
-  ]);
-}
+// ---- tasks ----------------------------------------------------------------
 
-function waitsCard() {
-  const waits = lastPayload.forecast?.wait_hours;
-  if (!waits || !lastPayload.forecast?.tasks) return null;
-  const rows = WAITS.map(([key, label, hint]) => el("tr", {}, [
-    el("th", { scope: "row" }, [label, " ", infoHint(hint)]),
-    el("td", { class: "num", text: formatForecastQuantileRange(waits[key], formatForecastHours) }),
-  ]));
-  const caption = "Summed over every waiting task, so hours add up across tasks and exceed the time to drain. A task counts under the first gate it fails.";
-  const head = [["Held back by"], ["Waiting", true]];
-  return card("Why work waits", "task-hours, p50 – p90", [
-    el("div", { class: "fc-waits" }, [
-      el("p", { class: "mx-blurb fc-waits-caption", text: caption }),
-      el("div", { class: "fc-waits-grid" }, [
-        table("First four waiting reasons", head, rows.slice(0, 4)),
-        table("Last three waiting reasons", head, rows.slice(4)),
-      ]),
-    ]),
-  ], "fc-waits-card");
-}
-
-function taskCell(row) {
+function taskCell(row, review) {
   const link = el("a", { class: "fc-task", text: row.title || "Untitled task" });
   bindTaskLink(link, row.id);
-  return el("th", { scope: "row" }, [link]);
+  const reviewText = review ? reviewAssumptionText(row) : null;
+  const sub = [row.complexity ? COMPLEXITY_LABELS[row.complexity] || row.complexity : null, reviewText && reviewText !== "—" ? reviewText : null].filter(Boolean).join(" · ");
+  return el("th", { scope: "row" }, [link, sub ? el("span", { class: "fc-sub", text: sub }) : null]);
 }
 
-function scheduleCard() {
+function startsCell(row) {
+  if (row.unforecastable) return el("td", { class: "fc-unforecastable", text: UNFORECASTABLE_LABELS[row.unforecastable] || row.unforecastable });
+  if (row.status === "in-progress") return el("td", { class: "num", text: "running" });
+  return el("td", { class: "num" }, [
+    formatForecastQuantileRange(row.predicted_start_hours, formatForecastHours),
+    el("span", { class: "fc-sub", text: `order ${formatForecastQuantileRange(row.predicted_start_rank, fmtRank)}` }),
+  ]);
+}
+
+function costCell(row) {
+  const tokens = quantilePair(row.tokens) ? `${formatForecastQuantileRange(row.tokens, formatForecastTokens)} tokens` : null;
+  return el("td", { class: "num" }, [
+    formatForecastQuantileRange(row.usd, formatForecastUsd),
+    tokens ? el("span", { class: "fc-sub", text: tokens }) : null,
+  ]);
+}
+
+// Only the gates that held work back; the full table is in the details.
+function waitsLine() {
+  const waits = lastPayload.forecast?.wait_hours;
+  if (!waits) return null;
+  const active = WAITS.filter(([key]) => num(waits[key]?.p50) > 0 || num(waits[key]?.p90) > 0);
+  const text = active.length
+    ? `Waiting: ${active.map(([key, label]) => `${label.toLowerCase()} ${formatForecastQuantileRange(waits[key], formatForecastHours)}`).join("; ")} (task-hours, p50 – p90).`
+    : "Nothing waits: no gate held work back in the simulated drains.";
+  return el("p", { class: "fc-line fc-waits-line", text });
+}
+
+function tasksCard() {
   const predictions = lastPayload.forecast?.task_predictions || [];
   if (!predictions.length) return null;
   const shown = predictions.slice(0, SCHEDULE_ROWS);
   const review = scheduleShowsReview(shown);
   const rows = shown.map((row) => el("tr", {}, [
-    taskCell(row),
-    el("td", { class: "fc-state", text: row.status }),
-    review ? el("td", { class: "fc-review", text: reviewAssumptionText(row) }) : null,
-    row.unforecastable
-      ? el("td", { class: "fc-unforecastable", colspan: "3", text: UNFORECASTABLE_LABELS[row.unforecastable] || row.unforecastable })
-      : el("td", { class: "num", text: row.status === "in-progress" ? "running" : formatForecastQuantileRange(row.predicted_start_hours, formatForecastHours) }),
-    row.unforecastable ? null : el("td", { class: "num", text: row.status === "in-progress" ? "—" : formatForecastQuantileRange(row.predicted_start_rank, fmtRank) }),
-    row.unforecastable ? null : el("td", { class: "num", text: fmtShare(row.completion_probability) }),
+    taskCell(row, review),
+    el("td", { class: "fc-state" }, [statusPill(row.status)]),
+    startsCell(row),
+    el("td", { class: "num", text: formatForecastQuantileRange(row.work_hours, formatForecastHours) }),
+    costCell(row),
+    el("td", { class: "num", text: row.unforecastable ? "—" : fmtShare(row.completion_probability) }),
   ]));
-  const meta = predictions.length > shown.length ? `first ${shown.length} of ${predictions.length}` : `${predictions.length} task${predictions.length === 1 ? "" : "s"}`;
-  const head = [["Task"], ["Status"], ["Starts in", true], ["Start order", true], ["Finishes", true]];
-  if (review) head.splice(2, 0, ["Review"]);
-  const caption = review
-    ? "In-progress tasks, then the backlog in dispatch order. Start time and order are p50 – p90 across simulated drains; finishes is the share of runs in which the task finishes within the horizon. Review is the assumed review mode: a thin pool either keeps that mode or drops it."
-    : "In-progress tasks, then the backlog in dispatch order. Start time and order are p50 – p90 across simulated drains; finishes is the share of runs in which the task finishes within the horizon.";
-  return card("Predicted schedule", meta, [
-    table("Predicted schedule", head, rows, caption),
-  ]);
+  const count = predictions.length > shown.length ? `first ${shown.length} of ${predictions.length}` : `${predictions.length} task${predictions.length === 1 ? "" : "s"}`;
+  const head = [["Task"], ["Status"], ["Starts in", true], ["Work hours", true], ["Cost", true], ["Finishes", true]];
+  return card("Tasks", `${count} · dispatch order · p50 – p90`, [
+    table("Forecast tasks", head, rows),
+    waitsLine(),
+  ], "fc-tasks");
+}
+
+function scheduleCaption(review) {
+  const base = "In-progress tasks, then the backlog in dispatch order. Start time and order are p50 – p90 across simulated drains; work hours, cost and tokens count every attempt a task starts by the horizon; finishes is the share of runs in which the task finishes within the horizon.";
+  return review ? `${base} The line under each task names its complexity and assumed review mode: a thin pool either keeps that mode or drops it.` : base;
 }
 
 // Review-mode coverage is present on current forecasts and absent on older
@@ -779,7 +828,7 @@ function reviewAssumptionText(row) {
   return mode;
 }
 
-function byComplexityCard() {
+function byComplexityTable() {
   const rows = (lastPayload.forecast?.by_complexity || []).map((row) => el("tr", {}, [
     el("th", { scope: "row", text: COMPLEXITY_LABELS[row.complexity] || row.complexity }),
     el("td", { class: "num", text: String(row.tasks) }),
@@ -788,15 +837,17 @@ function byComplexityCard() {
     el("td", { class: "num", text: formatForecastQuantileRange(row.usd, formatForecastUsd) }),
     el("td", { class: "num", text: formatForecastQuantileRange(row.tokens, formatForecastTokens) }),
   ]));
-  const content = rows.length
+  return rows.length
     ? table("Forecast by complexity", [["Complexity"], ["Tasks", true], ["Sampled from"], ["Work hours", true], ["Cost", true], ["Tokens", true]], rows, "p50 – p90 per complexity. Work hours sum every task's slot time, so they exceed the time to drain when runs overlap.")
     : el("div", { class: "mx-empty-note", text: "No backlog tasks." });
-  return card("By complexity", null, [content]);
 }
 
-function coverageCard() {
+// ---- data gaps ------------------------------------------------------------
+
+// Every coverage check as [key, label, count, definition]: the gaps card
+// shows the non-zero ones, the method section all of them.
+function coverageItems() {
   const coverage = lastPayload.coverage || {};
-  const backlog = lastPayload.backlog || {};
   const arrivals = lastPayload.arrivals?.coverage || {};
   const min = lastPayload.inputs?.min_cell_samples ?? 5;
   const thinHint = reportsReviewMode()
@@ -808,45 +859,163 @@ function coverageCard() {
     ? `No complexity yet: sampled from every delivery of the task's review mode when there are at least ${min}, otherwise from every delivery, dropping the review mode.`
     : "No complexity yet: sampled from every delivery.";
   const reviewItems = reportsReviewMode() ? [
-    ["Review mode dropped", coverage.review_mode_fallbacks, `The sample no longer conditions on the task's review mode. The mode-preserving pools had fewer than ${min} deliveries, including when the lookback has no history. A wider pool that still keeps the review mode is counted under thin-cell fallbacks instead.`],
-    ["Unknown review assumption", coverage.review_mode_unknown, "The task's review mode could not be resolved, so it is not treated as a measured review policy. An unknown assumption uses the mode-pooled fallback."],
-    ["History with unknown review", coverage.history_review_mode_unknown, "Deliveries in the lookback whose review evidence is missing or contradictory. They are not a measured review mode."],
+    ["review_mode_fallbacks", "Review mode dropped", coverage.review_mode_fallbacks, `The sample no longer conditions on the task's review mode. The mode-preserving pools had fewer than ${min} deliveries, including when the lookback has no history. A wider pool that still keeps the review mode is counted under thin-cell fallbacks instead.`],
+    ["review_mode_unknown", "Unknown review assumption", coverage.review_mode_unknown, "The task's review mode could not be resolved, so it is not treated as a measured review policy. An unknown assumption uses the mode-pooled fallback."],
+    ["history_review_mode_unknown", "History with unknown review", coverage.history_review_mode_unknown, "Deliveries in the lookback whose review evidence is missing or contradictory. They are not a measured review mode."],
   ] : [];
   const regressionItems = ["regression_history_missing", "risk_unestimated", "regression_history_thin"].some((key) => Object.prototype.hasOwnProperty.call(coverage, key)) ? [
-    ["Missing regression history", coverage.regression_history_missing, "Tasks whose regression follow-up cannot be estimated from recorded fix history. This is why the adjusted forecast may be unavailable; the pre-regression baseline excludes that follow-up work."],
-    ["Risk not estimated", coverage.risk_unestimated, "Tasks whose regression risk has no estimate."],
-    ["Thin regression history", coverage.regression_history_thin, "Tasks with some regression history, but fewer bundles than the minimum sample."],
+    ["regression_history_missing", "Missing regression history", coverage.regression_history_missing, "Tasks whose regression follow-up cannot be estimated from recorded fix history. This is why the adjusted forecast may be unavailable; the pre-regression baseline excludes that follow-up work."],
+    ["risk_unestimated", "Risk not estimated", coverage.risk_unestimated, "Tasks whose regression risk has no estimate."],
+    ["regression_history_thin", "Thin regression history", coverage.regression_history_thin, "Tasks with some regression history, but fewer bundles than the minimum sample."],
   ] : [];
-  const items = [
+  return [
     ...regressionItems,
-    ["Unassessed", coverage.unassessed, unassessedHint],
-    ["Thin-cell fallbacks", coverage.thin_cell_fallbacks, thinHint],
+    ["unassessed", "Unassessed", coverage.unassessed, unassessedHint],
+    ["thin_cell_fallbacks", "Thin-cell fallbacks", coverage.thin_cell_fallbacks, thinHint],
     ...reviewItems,
-    ["Uncovered model", coverage.uncovered_model, "No sampled delivery has every run priced, so tokens are not forecast for these tasks."],
-    ["Uncosted", coverage.uncosted, "No sampled delivery has every run's provider cost, so cost is not forecast for these tasks."],
-    ["No history", coverage.no_history, "Nothing to sample at all."],
-    ["Unforecastable dependency", coverage.dependency_unforecastable, "Depends on work the drain will not start (in review, blocked, someday, unapproved, elsewhere or missing), sits behind such work, or is on a dependency cycle. Left out of the full totals."],
-    ["Unverifiable dependencies", coverage.unverifiable_dependencies, "Dependencies this workspace cannot verify. The drain treats them as satisfied, and so does the forecast."],
-    ["Review lock overlaps", coverage.review_lock_overlaps, "Overlaps files a task in review still locks. The forecast does not model when review releases them."],
-    ["Blocked", coverage.blocked, "Blocked now: each waits for a return drawn from how long blocked work took to come back, given how long it has waited."],
-    ["Attempt-outcome fallbacks", coverage.outcome_fallbacks, `Fewer than ${lastPayload.inputs?.min_cell_samples ?? 5} recorded attempts of the same complexity, crew pool and review mode: outcomes sampled from a wider pool.`],
-    ["No attempt history", coverage.outcome_no_history, "No recorded attempt to sample: every first attempt is assumed to deliver."],
-    ["No return history", coverage.return_unsupported, "Blocked, with no recorded wait to draw a return from. Left out of the full totals."],
-    ["Unknown return tail", coverage.return_tail_unsupported, "Recorded waits run out before 90 days: a draw past the last one counts as no return."],
-    ["Unknown elapsed time", coverage.phase_age_unknown, "Running or blocked, but the history does not say since when: treated as just started."],
-    ["Arrival history: missing tokens", arrivals.missing_tokens, "Deliveries missing normalized tokens in the pool used by recent arrivals."],
-    ["Arrival history: missing cost", arrivals.missing_usd, "Deliveries missing provider cost in the pool used by recent arrivals."],
+    ["uncovered_model", "Uncovered model", coverage.uncovered_model, "No sampled delivery has every run priced, so tokens are not forecast for these tasks."],
+    ["uncosted", "Uncosted", coverage.uncosted, "No sampled delivery has every run's provider cost, so cost is not forecast for these tasks."],
+    ["no_history", "No history", coverage.no_history, "Nothing to sample at all."],
+    ["dependency_unforecastable", "Unforecastable dependency", coverage.dependency_unforecastable, "Depends on work the drain will not start (in review, blocked, someday, unapproved, elsewhere or missing), sits behind such work, or is on a dependency cycle. Left out of the full totals."],
+    ["unverifiable_dependencies", "Unverifiable dependencies", coverage.unverifiable_dependencies, "Dependencies this workspace cannot verify. The drain treats them as satisfied, and so does the forecast."],
+    ["review_lock_overlaps", "Review lock overlaps", coverage.review_lock_overlaps, "Overlaps files a task in review still locks. The forecast does not model when review releases them."],
+    ["blocked", "Blocked", coverage.blocked, "Blocked now: each waits for a return drawn from how long blocked work took to come back, given how long it has waited."],
+    ["outcome_fallbacks", "Attempt-outcome fallbacks", coverage.outcome_fallbacks, `Fewer than ${min} recorded attempts of the same complexity, crew pool and review mode: outcomes sampled from a wider pool.`],
+    ["outcome_no_history", "No attempt history", coverage.outcome_no_history, "No recorded attempt to sample: every first attempt is assumed to deliver."],
+    ["return_unsupported", "No return history", coverage.return_unsupported, "Blocked, with no recorded wait to draw a return from. Left out of the full totals."],
+    ["return_tail_unsupported", "Unknown return tail", coverage.return_tail_unsupported, "Recorded waits run out before 90 days: a draw past the last one counts as no return."],
+    ["phase_age_unknown", "Unknown elapsed time", coverage.phase_age_unknown, "Running or blocked, but the history does not say since when: treated as just started."],
+    ["arrivals_missing_tokens", "Arrival history: missing tokens", arrivals.missing_tokens, "Deliveries missing normalized tokens in the pool used by recent arrivals."],
+    ["arrivals_missing_usd", "Arrival history: missing cost", arrivals.missing_usd, "Deliveries missing provider cost in the pool used by recent arrivals."],
   ];
-  const list = el("dl", { class: "fc-coverage" }, items.map(([label, value, hint]) => el("div", { class: "fc-cov" }, [
-    el("dt", {}, [label, " ", infoHint(hint)]),
-    el("dd", { class: value ? "fc-warn" : null, text: String(value ?? 0) }),
+}
+
+// Why the adjusted forecast is unavailable, with its evidence: the detail
+// behind the answer card's one warning line.
+function unavailableNote() {
+  const forecast = lastPayload.forecast || {};
+  const info = forecast.tasks ? forecastUnavailableInfo(forecast, lastPayload) : null;
+  if (!info) return null;
+  const parts = [info.detail];
+  if (forecastBaselineFigures(forecast.pre_regression_baseline)) {
+    parts.push("The pre-regression baseline shown instead excludes unsupported regression follow-up work and is not the regression-adjusted forecast; a percentile shown as unknown was not estimated.");
+  }
+  const approved = lastPayload.if_approved;
+  const approvedInfo = approved && lastPayload.backlog?.proposed ? forecastUnavailableInfo(approved, lastPayload) : null;
+  if (approvedInfo) parts.push(`If approved, the adjusted forecast is also unavailable: ${approvedInfo.label}.`);
+  const node = el("p", { class: "fc-line fc-gap-note" }, [parts.join(" ")]);
+  node.dataset.forecastReason = info.kind;
+  return node;
+}
+
+function gapsCard() {
+  const items = coverageItems();
+  const open = items.filter(([, , value]) => num(value) > 0);
+  const clear = items.length - open.length;
+  const meta = open.length ? `${clear} other check${clear === 1 ? "" : "s"} clear` : `all ${items.length} checks clear`;
+  const tiles = open.length
+    ? el("div", { class: "fc-gaps" }, open.map(([key, label, value, hint]) => el("div", { class: key === "regression_history_missing" ? "fc-gap fc-gap-key" : "fc-gap", title: hint }, [
+      el("span", { class: "fc-gap-label", text: label }),
+      el("span", { class: "fc-gap-count", text: String(value) }),
+    ])))
+    : el("div", { class: "mx-empty-note", text: "No data gaps: every coverage check is clear." });
+  const node = card("Data gaps", meta, [tiles, unavailableNote()], "fc-gaps-card", "fc-gaps");
+  node.tabIndex = -1;
+  return node;
+}
+
+function coverageChecklist() {
+  const coverage = lastPayload.coverage || {};
+  const backlog = lastPayload.backlog || {};
+  const arrivals = lastPayload.arrivals?.coverage || {};
+  const list = el("dl", { class: "fc-coverage" }, coverageItems().map(([, label, value, hint]) => el("div", { class: "fc-cov" }, [
+    el("dt", {}, [label]),
+    el("dd", { class: value ? "fc-cov-count fc-warn" : "fc-cov-count", text: String(value ?? 0) }),
+    el("dd", { class: "fc-cov-def", text: hint }),
   ])));
   const left = `${backlog.review ?? 0} in review are not forecast.`;
   const arrivalNote = `Recent arrivals sample all ${arrivals.deliveries ?? 0} history deliveries for both the backlog and if-approved totals. A sampled arrival missing tokens or cost makes that iteration's total unavailable for that metric; duration remains independent. Missing totals sort last, so p50 or p90 can show —. These gaps do not affect the no-arrivals forecast.`;
-  return card("Coverage", `${coverage.tasks ?? 0} initial tasks forecast`, [list, el("p", { class: "mx-blurb", text: arrivalNote }), el("p", { class: "mx-blurb", text: left })]);
+  return [
+    el("h3", { class: "fc-sub-title", text: `Coverage checklist · ${coverage.tasks ?? 0} initial tasks forecast` }),
+    list,
+    el("p", { class: "mx-blurb", text: arrivalNote }),
+    el("p", { class: "mx-blurb", text: left }),
+  ];
 }
 
 // ---- calibration -----------------------------------------------------------
+
+const CALIBRATION_SETTLEMENT = "Removed or re-scoped tasks, and done tasks with no agent runs after the forecast, are left out and counted. Rejected and archived tasks are also excluded under model versions before 5; from version 5 they count as abandoned, with their post-forecast cost and token usage retained in actual totals. Before model version 9, a forecast is scored as a whole once no tasks are pending, at least one task is done or abandoned, and none was left out. From model version 9 onward, whole-forecast scoring stays provisional until 90 days after the forecast, even if its initial tasks finish earlier, so regression follow-ups observed during that window can be counted. At the cutoff, the cohort settles regardless of pending tasks and its whole actual is scored if no tasks were left out; unfinished work has no time-to-drain actual. Per-task hits can accrue before then. A settled cohort with an abandoned task is scored as not drained and has no time-to-drain actual.";
+
+// A share of actuals under a percentile against its target: within five
+// points reads as calibrated, anything else as a miss.
+function calibrationBar(label, share, target) {
+  const value = num(share);
+  const miss = value != null && Math.abs(value - target) > 0.05;
+  const width = value == null ? 0 : Math.max(0, Math.min(1, value)) * 100;
+  const text = value == null ? "—" : fmtShare(value);
+  return el("div", { class: miss ? "fc-cal-row fc-miss" : "fc-cal-row" }, [
+    el("span", { class: "fc-cal-label", text: label }),
+    el("span", { class: "fc-cal-track", role: "img", "aria-label": `${label}: ${text}, target ${Math.round(target * 100)}%` }, [
+      el("span", { class: "fc-cal-fill", style: { width: `${width}%` } }),
+      el("span", { class: "fc-cal-target", style: { left: `${target * 100}%` } }),
+    ]),
+    el("span", { class: "fc-cal-value", text }),
+  ]);
+}
+
+function calibrationMeasure(label, hits) {
+  return el("div", { class: "fc-cal", role: "group", "aria-label": label }, [
+    el("div", { class: "fc-cal-head" }, [
+      el("span", { text: label }),
+      el("span", { class: "fc-cal-n", text: `${hits?.n ?? 0} scored` }),
+    ]),
+    calibrationBar("p50", hits?.under_p50, 0.5),
+    calibrationBar("p90", hits?.under_p90, 0.9),
+  ]);
+}
+
+function settlementLine(calibration) {
+  const level = calibration.forecast_level || {};
+  const drain = level.time_to_drain_hours || {};
+  const parts = [];
+  if (drain.n) {
+    parts.push(`Whole-backlog totals: ${drain.n} scored, ${fmtShare(drain.under_p50)} under p50 · ${fmtShare(drain.under_p90)} under p90 on time to drain`);
+  } else {
+    parts.push("Whole-backlog totals (drain time, cost, tokens) settle under each model's rule, up to 90 days after the forecast — none scored yet");
+  }
+  if (num(level.settled)) parts.push(`${level.settled} settled${num(level.not_drained) ? `, ${level.not_drained} not drained` : ""}`);
+  const current = calibration.model_version;
+  const previous = (calibration.by_model_version || [])
+    .filter((row) => row.model_version !== current && row.task_level?.hours?.n)
+    .sort((a, b) => b.model_version - a.model_version)[0];
+  if (previous) {
+    const hits = previous.task_level.hours;
+    parts.push(`v${previous.model_version} scored ${fmtShare(hits.under_p50)} · ${fmtShare(hits.under_p90)} on task hours (${hits.n})`);
+  }
+  return el("p", { class: "fc-line fc-settlement", text: `${parts.join(". ")}.` });
+}
+
+function calibrationCard() {
+  const calibration = lastPayload.calibration || {};
+  const current = calibration.model_version;
+  const meta = `${current != null ? `model v${current} · ` : ""}target 50% under p50, 90% under p90`;
+  if (!(calibration.forecasts || []).length) {
+    return card("Calibration", meta, [el("div", { class: "mx-empty" }, [
+      el("div", { class: "mx-empty-title", text: "No stored forecasts to score yet" }),
+      el("div", { class: "mx-empty-detail", text: "Calibration appears once a stored forecast's tasks start finishing." }),
+    ])]);
+  }
+  const taskLevel = calibration.task_level || {};
+  return card("Calibration", meta, [
+    el("div", { class: "fc-cals" }, [
+      calibrationMeasure("Task hours", taskLevel.hours),
+      calibrationMeasure("Task cost", taskLevel.usd),
+      calibrationMeasure("Task tokens", taskLevel.tokens),
+    ]),
+    settlementLine(calibration),
+  ], "fc-calibration");
+}
 
 function hitRow(label, hits, target) {
   return el("tr", {}, [
@@ -873,23 +1042,27 @@ function versus(forecast, actual, fmt) {
   return `${formatForecastQuantileRange(forecast, fmt)} → ${actual == null ? "—" : fmt(actual)}`;
 }
 
-function calibrationCard() {
+// ---- collapsed detail -----------------------------------------------------
+
+function moreSection(key, title, meta, children) {
+  const panel = detailsPanel(`forecast:${key}`, { class: "fc-more" });
+  panel.append(el("summary", { class: "fc-more-summary" }, [
+    el("span", { class: "fc-more-title", text: title }),
+    meta ? el("span", { class: "fc-more-meta", text: meta }) : null,
+  ]));
+  panel.append(el("div", { class: "fc-more-body" }, children));
+  return panel;
+}
+
+function storedSection() {
   const calibration = lastPayload.calibration || {};
   const stored = lastPayload.stored || {};
   const forecasts = calibration.forecasts || [];
   const served = lastPayload.served_from === "stored";
   const latest = stored.latest_at ? `latest stored ${formatDateTime(stored.latest_at)}` : "none stored yet";
   const meta = served ? `${latest} · scored when stored` : latest;
-  const blurb = el("p", { class: "mx-blurb" }, [
-    `The default forecast is stored at most once every ${stored.min_interval_minutes ?? 60} minutes. Per-task calibration can score as tasks finish; whole-forecast totals follow each model's settlement rule. The default view shows that stored forecast with the calibration scored when it was stored; Refresh scores it now. A well-calibrated forecast has about 50% of actuals under p50 and 90% under p90. `,
-    infoHint("Removed or re-scoped tasks, and done tasks with no agent runs after the forecast, are left out and counted. Rejected and archived tasks are also excluded under model versions before 5; from version 5 they count as abandoned, with their post-forecast cost and token usage retained in actual totals. Before model version 9, a forecast is scored as a whole once no tasks are pending, at least one task is done or abandoned, and none was left out. From model version 9 onward, whole-forecast scoring stays provisional until 90 days after the forecast, even if its initial tasks finish earlier, so regression follow-ups observed during that window can be counted. At the cutoff, the cohort settles regardless of pending tasks and its whole actual is scored if no tasks were left out; unfinished work has no time-to-drain actual. Per-task hits can accrue before then. A settled cohort with an abandoned task is scored as not drained and has no time-to-drain actual."),
-  ]);
-  if (!forecasts.length) {
-    return card("Calibration", meta, [blurb, el("div", { class: "mx-empty" }, [
-      el("div", { class: "mx-empty-title", text: "No stored forecasts to score yet" }),
-      el("div", { class: "mx-empty-detail", text: "Calibration appears once a stored forecast's tasks start finishing." }),
-    ])]);
-  }
+  const blurb = el("p", { class: "mx-blurb", text: `${meta}. The default forecast is stored at most once every ${stored.min_interval_minutes ?? 60} minutes. Per-task calibration can score as tasks finish; whole-forecast totals follow each model's settlement rule. The default view shows that stored forecast with the calibration scored when it was stored; Refresh scores it now. A well-calibrated forecast has about 50% of actuals under p50 and 90% under p90.` });
+  if (!forecasts.length) return moreSection("stored", "Stored forecasts", "none yet", [blurb]);
   const versions = calibration.by_model_version || [];
   const current = calibration.model_version;
   const taskLevel = calibration.task_level || {};
@@ -942,7 +1115,7 @@ function calibrationCard() {
     el("span", { class: "fc-history-page-status", role: "status", "aria-live": "polite", text: `Showing ${firstRow + 1}–${lastRow} of ${forecasts.length} stored forecasts · Page ${calibrationHistoryPage + 1} of ${pageCount} · newest first` }),
     el("div", { class: "mx-seg", role: "group", "aria-label": "Stored forecast history" }, [newer, olderButton]),
   ]) : null;
-  return card("Calibration", meta, [
+  return moreSection("stored", "Stored forecasts", String(forecasts.length), [
     blurb,
     summary,
     byVersion,
@@ -950,4 +1123,72 @@ function calibrationCard() {
     history,
     pagination,
   ]);
+}
+
+function waitsSection() {
+  const waits = lastPayload.forecast?.wait_hours;
+  if (!waits || !lastPayload.forecast?.tasks) return null;
+  const rows = WAITS.map(([key, label, hint]) => el("tr", {}, [
+    el("th", { scope: "row" }, [label, " ", infoHint(hint)]),
+    el("td", { class: "num", text: formatForecastQuantileRange(waits[key], formatForecastHours) }),
+  ]));
+  const caption = "Summed over every waiting task, so hours add up across tasks and exceed the time to drain. A task counts under the first gate it fails.";
+  const head = [["Held back by"], ["Waiting", true]];
+  return moreSection("waits", "Wait breakdown by gate", "task-hours, p50 – p90", [
+    el("div", { class: "fc-waits" }, [
+      el("p", { class: "mx-blurb fc-waits-caption", text: caption }),
+      el("div", { class: "fc-waits-grid" }, [
+        table("First four waiting reasons", head, rows.slice(0, 4)),
+        table("Last three waiting reasons", head, rows.slice(4)),
+      ]),
+    ]),
+  ]);
+}
+
+function capacityText(inputs) {
+  const source = {
+    requested: "requested",
+    run_control: "the running drain's adjusted ceiling",
+    run_input: "the running drain's ceiling",
+    pull_run_control: "the pull drain's adjusted ceiling",
+    pull_run_input: "the pull drain's ceiling",
+    default: "the default ceiling; no drain is running",
+  }[inputs.concurrency_source] || inputs.concurrency_source;
+  return `${inputs.concurrency} leaf run${inputs.concurrency === 1 ? "" : "s"} at once (${source})`;
+}
+
+// The sample the forecast drew from: n deliveries, and how far back they reach.
+function historyText(inputs) {
+  const n = `n=${inputs.history_deliveries ?? 0} deliveries`;
+  const since = inputs.lookback_start ? ` since ${formatDateTime(inputs.lookback_start)}` : "";
+  if (inputs.history_tasks != null) return `${n}${since} (the newest ${inputs.history_tasks} completions)`;
+  return `${n}${since} (${inputs.lookback_days ?? "?"} days, at least the newest ${inputs.min_history_tasks ?? 50} completions)`;
+}
+
+const ADMISSION_TEXT = "Each simulated drain admits work as the drain does: in dispatch order, after its dependencies finish, never beside a task whose files overlap, an editing task without context files alone, and behind surfaces reserved by higher-priority work. Each attempt first draws a recorded attempt of the same pool: one that blocked, failed or was abandoned frees its slot when that attempt did, then requeues, waits for a return drawn from how long blocked work took to come back (or never does), or stops. Blocked tasks start out waiting for that return. Review and someday tasks are left out, and so is work that depends on them; in-progress tasks count only their remaining work. Review locks, static eligibility and arrivals' files are not modelled yet.";
+
+function methodSection() {
+  const inputs = lastPayload.inputs || {};
+  const backlog = lastPayload.backlog || {};
+  const meta = `${backlog.backlog ?? 0} backlog · ${backlog.in_progress ?? 0} in progress · ${backlog.blocked ?? 0} blocked · ${historyText(inputs)}`;
+  const predictions = lastPayload.forecast?.task_predictions || [];
+  return moreSection("method", "How this forecast is made", null, [
+    el("p", { class: "mx-blurb" }, [
+      `${meta}. Simulated ${inputs.iterations ?? 0} times on ${capacityText(inputs)}.`,
+      lastPayload.model_version != null ? ` Model v${lastPayload.model_version}.` : null,
+    ]),
+    el("h3", { class: "fc-sub-title", text: "Sampling and admission" }),
+    el("p", { class: "mx-blurb", text: samplingExplanation(inputs) }),
+    el("p", { class: "mx-blurb", text: ADMISSION_TEXT }),
+    predictions.length ? el("p", { class: "mx-blurb", text: scheduleCaption(scheduleShowsReview(predictions.slice(0, SCHEDULE_ROWS))) }) : null,
+    el("h3", { class: "fc-sub-title", text: "By complexity" }),
+    byComplexityTable(),
+    ...coverageChecklist(),
+    el("h3", { class: "fc-sub-title", text: "Calibration settlement" }),
+    el("p", { class: "mx-blurb", text: CALIBRATION_SETTLEMENT }),
+  ]);
+}
+
+function detailSections() {
+  return el("div", { class: "fc-more-list" }, [storedSection(), waitsSection(), methodSection()]);
 }

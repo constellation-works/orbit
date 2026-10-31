@@ -239,6 +239,7 @@ impl Outcome {
                 json!({
                     "id": item.task_id,
                     "title": item.title,
+                    "complexity": item.complexity,
                     "status": if item.in_progress {
                         "in-progress"
                     } else if item.proposed {
