@@ -272,7 +272,15 @@ spec:
            no other route.
        - **Orbit defect → friction_reported.** The cause is an Orbit defect
          with no supported recovery. Search for an existing friction first
-         (`orbit.search`, `orbit.friction.list`). Link it with
+         with `orbit.search` and `kind` `friction`: query one distinctive
+         token from the defect (`{"query":"<one distinctive token>",
+         "kind":"friction","all":true}`; friction matching is a single
+         case-insensitive substring, so use one token, not a multi-word
+         phrase), or list the corpus by omitting `query`
+         (`{"kind":"friction"}`), which lists every status in creation
+         order. If a listing's `notes` say it was truncated at `limit`,
+         more records exist: narrow it by `tag` or raise `limit` (up to
+         1000) and list again before concluding none matches. Link it with
          `{"action":"friction_reported","id":"<task-id>",
          "blocker":"<quoted>","friction_id":"<id>","reason":"<the specific
          human action>"}`, or file a new one in the same call with
