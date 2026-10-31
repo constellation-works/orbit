@@ -443,16 +443,13 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   test (except for an [affected-crates archive](#pr-test-selection)), and no
   partition selects a test outside the full list. A failure fails
   `Test build`, and so the Check job's wait, while the shards already run.
-  After the doctests below, the build job also runs one of the partitions
-  itself from the archive it built (no transfer), with the same ripgrep, uv
-  and Bubblewrap preparation and the same nextest command as a shard; the
-  shard jobs and the `Test extra partition` job run the remaining partitions. Its failure fails `Test build`
-  exactly like a shard failure, and it uploads its JUnit report as
-  `nextest-junit-build`.
   The build job then runs workspace doctests through `with-test-build-lint.sh`,
   using the same lint environment as the folded build. Calling the existing
   wrapper directly supports PR heads whose guard CLI predates the workflow;
   `ci-guardrails.sh --test-doctests` provides the same command for local replays.
+  Cargo unit timings from the folded compile (`--timings`) are uploaded as
+  `test-build-timings`, including when a later step fails. This separates
+  compilation critical paths from filter listing and archive time.
   It reuses those linked libraries;
   running doctests in Check would compile them again after its metadata-only
   production Clippy. This still runs every workspace doctest for an affected
@@ -471,12 +468,15 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   their concatenation with
   `ci-repack-nextest.py unpack SOURCE DESTINATION --parts N`, and runs
   `cargo nextest run --profile ci --partition count:k/N`
-  from it, where N is `NEXTEST_PARTITIONS` and k is the job's `PARTITION`
-  (the build job runs one more partition, above). The `Test extra partition`
-  job runs the same steps on a fourth runner with its own partition and
-  uploads `nextest-junit-extra`. It is not a `Test shard k/N` job, so it
-  leaves `NEXTEST_SHARDS` and the ruleset's names unchanged; the Check job
-  awaits it like a shard. Profile `ci`
+  from it, where N is `NEXTEST_PARTITIONS` and k is the job's `PARTITION`.
+  The `Test extra partition` and `Test partition 2` jobs run the same
+  steps on a fourth and fifth test runner, selecting partitions 5 and 2
+  and uploading `nextest-junit-extra` and `nextest-junit-partition-2`.
+  Both prepare during compilation and start after the final upload.
+  Partition 2 no longer waits for the build runner's coverage proof,
+  doctests and tool setup. Neither job is a `Test shard k/N` job, so
+  `NEXTEST_SHARDS` and the ruleset's names stay unchanged; the Check job
+  awaits both like shards. Profile `ci`
   starts the measured long tests first, using nextest's per-test priority
   (requires nextest 0.9.91 or newer).
   This changes scheduling within each shard, keeping every test identity,
@@ -505,11 +505,11 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   name needs the same ruleset change before merge. Requiring only
   `Check / Clippy / Test`, which awaits every shard, would not depend on the
   shard count. `scripts/test-pr-state-workflows.py` runs each shard's nextest
-  step and wait (the extra partition job's too), the build job's own
-  partition step and the Check job's wait with stub tools, and fails unless
+  step and wait (both additional partition jobs' too) and the Check
+  job's wait with stub tools, and fails unless
   those jobs together select `count:1/N` through `count:N/N` once each, each
   shard waits for the upload step ahead of the partition guard, and the Check
-  job's wait names the build, every shard, the extra partition job and `CI guardrails`. After a change to this layout, re-measure the budget over
+  job's wait names the build, every shard, both additional partition jobs and `CI guardrails`. After a change to this layout, re-measure the budget over
   the latest 20 completed PR runs with `scripts/ci-p90.py` (nearest-rank p90
   of the executed Check jobs against 400 s, with skipped and cancelled runs
   reported as gaps).
@@ -527,7 +527,8 @@ The test gate in `ci.yml` runs on parallel runners from one build:
 - `Check / Clippy / Test` runs `ci-guardrails.sh --checks`: formatting,
   production Clippy, documentation and the supply-chain gate, with no
   workspace test build, guard or nextest. It then
-  waits for `Test build`, every shard, `Test extra partition` and `CI guardrails`, and fails as soon as one of them
+  waits for `Test build`, every shard, `Test extra partition`, `Test partition 2`
+  and `CI guardrails`, and fails as soon as one of them
   completes without success. Its elapsed time therefore covers the whole gate,
   including any queue wait for the other jobs' runners. That is the time the
   400-second budget and the `ci-budget-watch` auto-task measure, and its
@@ -659,11 +660,70 @@ Cargo metadata cannot see a test reading another crate's files. The ones that ma
 
 `Test build` passes the mode to `ci-guardrails.sh --test-archive` as `CI_TEST_SCOPE`. For an `affected:` scope, `ci-test-affected.py --test-build-packages` checks the crates against the PR head's metadata and adds the unselected members that keep every dependency's resolved features equal to the workspace build's (`cargo tree`). Resolver 2 unifies features over the selected packages only, so a narrower set would rebuild dependencies the CI caches hold with the workspace's features. `orbit-cli` depends on every other crate, so it is in every selection, and `orbit-web`'s dev-dependency features on `tokio` and `rusqlite` usually add `orbit-web`. Both the folded build (`check-ci-macos.sh --workspace-build --packages`, which lists only the macOS workflow's filters for crates in the build) and `cargo nextest archive` then take `-p` for that set. A crate the head lacks, or a feature gap no member closes, builds the whole workspace. The archive's package list is written to `PATH.packages`, and the partition guard then runs with `--allow-empty`: an archive with few tests can leave a count partition empty, but every test must still be in exactly one shard.
 
-The archive holds the build set's tests, but every partition (the shards, the extra partition and the build job's own) passes `-E 'package(a) | package(b) …'` for the `affected:` crates, so a feature anchor's tests are built, not run; the partition guard lists the same filter. The shards keep their names and run with `--no-tests pass`, so a shard whose partition is empty runs nothing and passes. The full archive cannot have an empty shard, because its partition guard fails `Test build`. Shard 1's Linux sandbox/policy enforcement gate runs on every full run and on every `affected:` run that includes `orbit-exec`; without `orbit-exec`, neither the sandbox code nor its dependencies changed, and the gate is skipped. Production Clippy, doctests, documentation, the repository guards and the MSRV check stay workspace-wide, and every test job still runs: a failed or skipped one fails the `Check / Clippy / Test` wait.
+The archive holds the build set's tests, but every partition (the shards and both additional test runners) passes `-E 'package(a) | package(b) …'` for the `affected:` crates, so a feature anchor's tests are built, not run; the partition guard lists the same filter. The shards keep their names and run with `--no-tests pass`, so a shard whose partition is empty runs nothing and passes. The full archive cannot have an empty shard, because its partition guard fails `Test build`. Shard 1's Linux sandbox/policy enforcement gate runs on every full run and on every `affected:` run that includes `orbit-exec`; without `orbit-exec`, neither the sandbox code nor its dependencies changed, and the gate is skipped. Production Clippy, doctests, documentation, the repository guards and the MSRV check stay workspace-wide, and every test job still runs: a failed or skipped one fails the `Check / Clippy / Test` wait.
 
 A PR run can still miss a failure only the full suite shows, such as a test reading another crate's file through a path neither a dependency edge nor `FILE_READERS` records. The `agent-main` push run after the merge is the check of the merged tree and always tests every crate.
 
 `scripts/test-pr-state-workflows.py` replays the selection against a recorded crate graph (`scripts/fixtures/ci-crate-graph.json`): a leaf crate, a mid-graph and a core crate, workspace-level and toolchain files, a member manifest, non-crate paths, cross-crate fixture paths, a removed crate and a selection error. It also checks the push `skip` evidence and the shards' empty-partition and sandbox-gate conditions.
+
+### Hosted CI budget handoff
+
+After a CI scheduling change merges, the operator collects the latest 20
+completed `ci.yml` PR runs, waiting for a cohort that uses the merged layout.
+Record collection time, each run ID, reported head, conclusion and workflow
+revision. Save raw job timestamps and replay the same population offline:
+
+```bash
+mkdir -p .orbit/tmp/ci-budget-after
+# Collect the completed PR population, including executed failures.
+gh run list --workflow ci.yml --event pull_request --status completed \
+  --limit 20 --json databaseId,headSha,conclusion,createdAt \
+  > .orbit/tmp/ci-budget-after/list.json
+python3 - <<'PYTHON'
+import json
+import subprocess
+from pathlib import Path
+root = Path('.orbit/tmp/ci-budget-after')
+runs = []
+for entry in json.loads((root / 'list.json').read_text()):
+    run = str(entry['databaseId'])
+    # Keep the raw REST data: gh run view's job projection omits fields that
+    # may be useful when diagnosing scheduling, such as job created_at.
+    data = subprocess.run(['gh', 'api', '--paginate', '--slurp',
+        f'repos/{{owner}}/{{repo}}/actions/runs/{run}/jobs?filter=latest&per_page=100'],
+        capture_output=True, text=True, check=True).stdout
+    (root / f'{run}-jobs.json').write_text(data)
+    runs.append(dict(entry, jobs=[job for page in json.loads(data) for job in page['jobs']]))
+(root / 'runs.json').write_text(json.dumps(runs, indent=2) + '\n')
+PYTHON
+python3 scripts/ci-p90.py --from-json .orbit/tmp/ci-budget-after/runs.json \
+  --budget-seconds 400 > .orbit/tmp/ci-budget-after/p90.log
+```
+
+Preserve the p90 command's exit status: 0 means within budget, 1 over budget,
+2 no executed Check job. Report nearest-rank `ceil(0.9 * n)`, the ascending
+executed Check start-to-completion durations, median and maximum, with
+skipped, cancelled, missing/invalid jobs and executed failures counted
+separately. Never treat a gap as a zero-duration pass. Include earlier attempts
+separately if reruns occurred; the command above explicitly selects the latest
+attempt. Mixed workflow revisions and fewer than 20 usable runs are limits
+to disclose, not evidence to discard slow runs.
+
+Report queue wait independently from Check elapsed. When job `created_at`
+is available, record Check `started_at - created_at` separately. For each
+awaited job report its queue interval's overlap with Check's elapsed window:
+`max(0, min(job.started_at, check.completed_at) - max(job.created_at,
+check.started_at))`. Queue intervals overlap, so report each and their union,
+not their sum as extra elapsed time. Job creation can precede dependency
+readiness: label these intervals as scheduling/queue upper bounds unless an
+actual ready/queued timestamp is available. If the API lacks `created_at`,
+report exact queue wait as unavailable; `workflow.createdAt` to job start
+includes dependencies and is only an upper bound. Also report the lag from
+`Change scope` completion to each runner's start, which can reveal the
+additional test runner waiting for capacity. None of these fields subtracts
+queue time from the 400 s Check budget. Attach raw records, the replay log
+and gaps to the operator's measurement record. A p90 over 400 s requires a
+follow-up repair; it must not be recorded as restored.
 
 ## Filesystem writes
 

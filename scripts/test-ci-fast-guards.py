@@ -891,7 +891,7 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
         folded = ["test", "--workspace", "--lib", "--bins", "--tests", "--examples", "--locked",
-                  "--no-run", "--message-format", "json"]
+                  "--no-run", "--timings", "--message-format", "json"]
         self.assertIn(folded, calls)
         observed = [json.loads(line) for line in env_log.read_text().splitlines()]
         lint = {
@@ -968,11 +968,15 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
     def test_split_ci_modes_together_run_the_full_ci_work(self):
         """The hosted test-build and Check jobs split the full run between them."""
         self.prepare_ci()
+        # The Check runner installs cargo-deny. Make presence deterministic:
+        # an installed host tool previously made the empty-helper assertion
+        # fail, while hosts without it never exercised the supply-chain phase.
+        self.write_executable(self.bin / "cargo-deny", "#!/bin/sh\nexit 0\n")
         self.init_ci_git()
         env_log = self.root / "cargo-env.log"
         self.env["GUARD_TEST_ENV_LOG"] = str(env_log)
         folded = ["test", "--workspace", "--lib", "--bins", "--tests", "--examples", "--locked",
-                  "--no-run", "--message-format", "json"]
+                  "--no-run", "--timings", "--message-format", "json"]
         archive = str(self.root / "nextest-archive.tar.zst")
         archive_call = ["nextest", "archive", "--locked", "--workspace", "--lib", "--bins", "--tests",
                         "--archive-file", archive]
@@ -1005,8 +1009,8 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
                          "the partition guard neither builds nor archives; it extracts once")
         self.assertEqual((self.guard_calls / "check-nextest-partitions.py").read_text().splitlines(),
                          ["--shards", "3", *self.partition_listing(archive)])
-        # Hosted CI has three shard jobs but five partitions: the build job
-        # and the extra partition job run one each. An explicit partition
+        # Hosted CI has three required shard jobs but five partitions: two
+        # additional test runners run one each. An explicit partition
         # count takes precedence over the legacy shard-count fallback above.
         result = self.run_guard("ci-guardrails.sh", "--test-partitions", archive,
                                 env_overrides={"NEXTEST_SHARDS": "3", "NEXTEST_PARTITIONS": "5"})
@@ -1061,7 +1065,7 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         result = self.run_guard("ci-guardrails.sh", "--checks")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual({path.name for path in self.guard_calls.iterdir()} - {"require-python.sh"},
-                         set(), "the CI guardrails job runs the guards and self-tests")
+                         {"cargo-deny.sh"}, "Check runs the supply-chain helper; guards run in their own job")
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
         self.assertNotIn(folded, calls)
         self.assertFalse(any(call[:1] == ["nextest"] for call in calls), calls)
@@ -1070,7 +1074,7 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
             self.assertIn(expected, calls)
         self.assertFalse(any("--doc" in call for call in calls), calls)
         phases = dict(re.findall(r"ci-guardrails-phase: (\S+) wall_seconds=\d+ exit=(\d+)", result.stderr))
-        for phase in ("fmt", "clippy-production", "documentation"):
+        for phase in ("fmt", "clippy-production", "documentation", "supply-chain"):
             self.assertEqual(phases.get(phase), "0", result.stderr)
         self.assertNotIn("repository-guards", phases)
 
@@ -1121,7 +1125,7 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
                     "GUARD_TEST_BUILD_SET": build_set})
                 self.assertEqual(result.returncode, 0, result.stderr)
                 calls = [json.loads(line) for line in self.log.read_text().splitlines()]
-                self.assertIn(["test", *selection, "--bins", "--tests", "--examples", "--locked", "--no-run",
+                self.assertIn(["test", *selection, "--bins", "--tests", "--examples", "--locked", "--no-run", "--timings",
                                "--message-format", "json"], calls)
                 self.assertIn(["nextest", "archive", "--locked", *selection, "--bins", "--tests",
                                "--archive-file", archive], calls)
@@ -1255,7 +1259,7 @@ raise SystemExit(101)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("orbit-types fixture_test names a crate outside this build; not listed", result.stdout)
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
-        self.assertIn(["test", "-p", "orbit-web", "--bins", "--tests", "--examples", "--locked", "--no-run",
+        self.assertIn(["test", "-p", "orbit-web", "--bins", "--tests", "--examples", "--locked", "--no-run", "--timings",
                        "--message-format", "json"], calls)
         self.assertFalse(any(call[:1] == ["fixture-test-bin"] for call in calls), calls)
 

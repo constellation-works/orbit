@@ -274,6 +274,48 @@ In both runs the Check job's own checks (73–100 s) ended long before its wait,
 
 The recurring `test-quality-audit` creates evidence-backed proposed tasks for critical coverage gaps, weak assertions, duplication, flaky or slow fixtures and regressions against this budget. It searches existing tasks before filing, links each finding to the audit, and records concrete acceptance criteria. The audit leaves a durable report even when no new finding is confirmed; it does not treat a quota of findings or deletions as success.
 
+### Build-runner partition delay (2026-10-31)
+
+The budget-watch cohort measured 16 executed Check jobs in 20 completed PR
+runs (four skipped, no cancellations): nearest-rank p90 571 s, median
+492.5 s, maximum 732 s. The build job finished last in the three examined
+runs below. Its folded compile took 210–443 s; bounded successful logs did
+not retain Cargo unit timings, so these observations do not attribute that
+variance to a particular crate or compiler phase. The folded build now uses
+`--timings` and uploads `test-build-timings` for that investigation.
+
+A confirmed scheduling cost follows publication: partition 2 waited for the
+archive coverage proof, workspace doctests and tool setup on the build
+runner. It now runs as literal job `Test partition 2`, sharing every shard
+step and preparing beside compilation. The build still proves exact-once
+coverage of the original archive and runs every workspace doctest. The
+required Check job awaits the new runner as well as all existing jobs.
+
+| Hosted run | Compile s | Observed Check s | Partition 2 publication-to-start s | Existing shard publication-to-start s | Projected Check s |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 41183374048 | 263 | 565 | 31.067 | 18.599 | 552.531 |
+| 41183989799 | 443 | 732 | 30.347 | 22.126 | 723.779 |
+| 41183528773 | 210 | 395 | 33.579 | 15.128 | 376.549 |
+
+The after column is a scheduling counterfactual: keep the observed partition
+2 runtime, every other job end and Check's final polling/cleanup tail; replace
+partition 2's serial publication-to-command-start delay with shard 1's
+observed polling/download/repack delay. The task's `ci-budget/replay.py` and
+`ci-budget/timing-inputs.json` artifacts reproduce the arithmetic without
+load generation. They project savings of 8.2–18.5 s, not a restored p90.
+One additional runner and archive download cost runner time, and queueing or
+a slower replacement runner can erase the saving. Compilation remains a
+large part of the path; do not call the 400 s rule satisfied from this change
+or these three runs. No test was retired, skipped, retried or weakened, and
+all five count partitions, digest verification, namespace preparation and
+the shard-1 sandbox gate retain their existing guarantees.
+
+After merge the operator owns a fresh hosted measurement; see
+[hosted CI measurement](../DEVELOPMENT.md#hosted-ci-budget-handoff). A rolling
+sample containing old workflow revisions cannot establish the candidate's
+p90. Report exact run/head identities, executed/skipped/cancelled/missing
+counts, failures, queue gaps and the nearest-rank p90 against **400 s**.
+
 ## Why
 
 On 2026-10-03, unit tests under `crates/*/src/**` were about 295k lines and 7,675 test functions, more lines than the production code they covered. Crate-root integration tests were 37k lines. Most unit tests pinned internals, so a refactor that kept behaviour unchanged still broke dozens of them, and each break cost an agent tokens to repair a test rather than find a bug. A review of all of them kept 180 (2.3%).

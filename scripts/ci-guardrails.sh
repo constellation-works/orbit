@@ -174,8 +174,8 @@ fi
 # the archive, --test-partitions runs the partition guard over the archive
 # itself, so the guard proves what the shards receive while they already run.
 # NEXTEST_PARTITIONS (ci.yml) is the count-partition count: the shard jobs
-# and the extra partition job run all but one partition and the test-build
-# job runs the remaining one.
+# and the two additional partition jobs run every partition; the test-build
+# job runs the proof and doctests after the upload.
 # A caller that sets only the older NEXTEST_SHARDS gets that many partitions.
 #
 # CI_TEST_SCOPE is the Change scope job's mode. For `affected:<crate>,...` (a

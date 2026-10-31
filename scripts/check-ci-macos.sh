@@ -322,7 +322,7 @@ def workspace_test_executables() -> dict[str, list[TestBinary]]:
     build = run_listing(
         [str(repo_root / "scripts/with-test-build-lint.sh"),
          "cargo", "test", *selection, "--bins", "--tests", "--examples",
-         "--locked", "--no-run", "--message-format", "json"],
+         "--locked", "--no-run", "--timings", "--message-format", "json"],
         "workspace test build failed",
     )
     if build is None:
