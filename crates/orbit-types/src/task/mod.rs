@@ -114,6 +114,9 @@ pub use model::{
     unmet_task_dependencies_with_index, unsatisfiable_task_dependencies,
     unsatisfiable_task_dependencies_with_index, validate_task_dependencies_with,
 };
+pub(crate) use model::{
+    LazyTaskReferenceIndex, resolve_task_dependencies_lazily, resolve_task_relations_lazily,
+};
 pub use mutation_proposal::{
     MUTATION_PROPOSAL_ARTIFACT_DIR, MUTATION_PROPOSAL_SCHEMA_VERSION,
     MUTATION_RECEIPT_ARTIFACT_DIR, MutationProposal, MutationProposalDraft, MutationReceipt,

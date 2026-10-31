@@ -16,8 +16,9 @@ use std::collections::BTreeMap;
 use serde_json::{Map, Value, json};
 
 use crate::task::{
-    ArtifactManifestFileV2, Task, TaskOsRequirement, TaskStatus, resolve_task_dependencies,
-    resolve_task_relations, task_readiness_json,
+    ArtifactManifestFileV2, LazyTaskReferenceIndex, Task, TaskOsRequirement, TaskStatus,
+    resolve_task_dependencies, resolve_task_dependencies_lazily, resolve_task_relations_lazily,
+    task_readiness_json,
 };
 
 /// String-literal CSV of [`TASK_SHOW_PROJECTION_FIELDS`], for `concat!` in
@@ -234,9 +235,22 @@ pub fn task_show_reference_field_json(
     field: &str,
     status_by_id: &BTreeMap<String, TaskStatus>,
 ) -> Option<Value> {
+    reference_field_json(task, field, &LazyTaskReferenceIndex::new(status_by_id))
+}
+
+fn reference_field_json(
+    task: &Task,
+    field: &str,
+    reference_index: &LazyTaskReferenceIndex<'_>,
+) -> Option<Value> {
     match field {
-        "resolved_dependencies" => Some(json!(task_dependency_labels(task, status_by_id))),
-        "relations" => Some(json!(resolve_task_relations(task, status_by_id))),
+        "resolved_dependencies" => Some(json!(
+            resolve_task_dependencies_lazily(task, reference_index)
+                .into_iter()
+                .map(|dependency| dependency.label())
+                .collect::<Vec<_>>()
+        )),
+        "relations" => Some(json!(resolve_task_relations_lazily(task, reference_index))),
         _ => None,
     }
 }
@@ -266,13 +280,16 @@ pub fn task_base_json(
     status_by_id: &BTreeMap<String, TaskStatus>,
 ) -> Map<String, Value> {
     let mut object = Map::new();
+    // Both reference fields share one prefix index, built only if a target
+    // needs it: building it scans the whole status snapshot.
+    let reference_index = LazyTaskReferenceIndex::new(status_by_id);
     for &field in TASK_SHOW_PUBLIC_DTO_FIELDS {
         let value = match field {
             // Stored crew provenance; part of the record but not yet a
             // `--fields` selector.
             "crew_source" => json!(task.crew_source),
             _ => task_show_record_field_json(task, field)
-                .or_else(|| task_show_reference_field_json(task, field, status_by_id))
+                .or_else(|| reference_field_json(task, field, &reference_index))
                 .unwrap_or(Value::Null),
         };
         object.insert(field.to_string(), value);
