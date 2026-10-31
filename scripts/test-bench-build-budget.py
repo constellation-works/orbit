@@ -411,6 +411,93 @@ def scenario_cancellation(root, script):
     return errors
 
 
+def scenario_cancellation_spawn_window(root, script):
+    case, work, events, env = make_fixture(root, script, "cancellation-spawn-window", allow_rm=True)
+    block = case / "block"
+    block.mkdir()
+    os.mkfifo(block / "release")
+    os.mkfifo(block / "parent-release")
+    env["BENCH_BLOCK"] = str(block)
+    env["RACE_ROOT"] = str(block)
+    hook = case / "bash-env"
+    hook.write_text(
+        "set -T\n"
+        "race_hook() {\n"
+        "  if [[ \"$BASH_COMMAND\" == 'ARM_PGID=\"$group_pid\"' && \"$BASHPID\" == \"$$\" ]]; then\n"
+        "    trap - DEBUG\n"
+        "    printf '%s\\n' \"$group_pid\" > \"$RACE_ROOT/arm-pgid\"\n"
+        "    exec 9<> \"$RACE_ROOT/parent-release\"\n"
+        "    IFS= read -r -t 5 unused <&9 || true\n"
+        "  fi\n"
+        "}\n"
+        "trap race_hook DEBUG\n",
+        encoding="utf-8",
+    )
+    env["BASH_ENV"] = str(hook)
+    process = subprocess.Popen(
+        ["bash", str(script)], env=env, text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    errors = []
+    pids = []
+    pgid = None
+    try:
+        deadline = time.monotonic() + 20
+        while not ((block / "ready.json").exists() and (block / "arm-pgid").exists()):
+            if process.poll() is not None or time.monotonic() > deadline:
+                errors.append("benchmark did not reach the spawn-window (ready + arm identity)")
+                return errors
+            time.sleep(0.02)
+        try:
+            pgid = int((block / "arm-pgid").read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            errors.append("spawn-window arm identity was not recorded")
+            return errors
+        pids = json.loads((block / "ready.json").read_text(encoding="utf-8"))["pids"]
+        process.send_signal(signal.SIGTERM)
+        try:
+            process.communicate(timeout=20)
+        except subprocess.TimeoutExpired:
+            errors.append("benchmark did not exit after SIGTERM in the spawn window")
+            return errors
+        if process.returncode != 143:
+            errors.append(f"spawn-window cancellation did not report SIGTERM failure (exit {process.returncode})")
+        survivors = [pid for pid in pids if pid_alive(pid)]
+        if survivors:
+            errors.append(f"arm processes survived the spawn-window cancellation: {survivors}")
+        cleanup = [event for event in read_events(events) if event["tool"] == "rm"]
+        if not cleanup:
+            errors.append("owned directories were not cleaned after spawn-window cancellation")
+        if any(event.get("live_pids") for event in cleanup):
+            errors.append("cleanup removed owned directories while the arm was still running")
+        if any((work / name).exists() for name in ("trees", "targets", "locks")):
+            errors.append("owned directories survived spawn-window cancellation cleanup")
+    finally:
+        if pgid is None and (block / "arm-pgid").exists():
+            try:
+                pgid = int((block / "arm-pgid").read_text(encoding="utf-8").strip())
+            except (OSError, ValueError):
+                pgid = None
+        if pgid is not None:
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except OSError:
+                pass
+        for pid in pids:
+            if pid_alive(pid):
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except OSError:
+                    pass
+        if process.poll() is None:
+            process.kill()
+            try:
+                process.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+    return errors
+
+
 def main():
     script = Path(__file__).with_name("bench-build-budget.sh").resolve()
     scratch = Path(__file__).resolve().parent.parent / ".orbit" / "tmp"
@@ -424,6 +511,7 @@ def main():
         ("archive-failure", scenario_archive_failure),
         ("fresh-run", scenario_fresh_run),
         ("cancellation", scenario_cancellation),
+        ("cancellation-spawn-window", scenario_cancellation_spawn_window),
     )
     failures = 0
     with tempfile.TemporaryDirectory(prefix="bench-build-budget-", dir=scratch) as directory:

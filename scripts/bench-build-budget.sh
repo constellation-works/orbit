@@ -260,6 +260,8 @@ PY
 }
 OWNED_WORKDIR=1
 ARM_PGID=""
+ARM_SPAWNING=0
+PENDING_CANCEL=""
 
 # Stop this invocation's isolated arm (its own session/process group, led by the
 # pid measure() recorded) and join it, so nothing still runs in the trees,
@@ -282,6 +284,12 @@ stop_arm() {
 }
 
 cancel() {
+  if [[ "${ARM_SPAWNING:-0}" == 1 ]]; then
+    if [[ -z "${PENDING_CANCEL:-}" ]]; then
+      PENDING_CANCEL="$1"
+    fi
+    return 0
+  fi
   trap '' HUP INT TERM
   exit "$1"
 }
@@ -336,6 +344,8 @@ measure() {
   validate_owned_path "$arm.log" absent
   validate_owned_path "$(basename "$RESULT")" file
   start="$(date +%s.%N)"
+  ARM_SPAWNING=1
+  PENDING_CANCEL=""
   setsid /usr/bin/time -f '%U\t%S' -o "$timing" \
     env ORBIT_BUILD_BUDGET_BENCH_PACKAGE="$PACKAGE" \
     ORBIT_BUILD_BUDGET_BENCH_PROCESSES="$PROCESSES" \
@@ -347,6 +357,10 @@ measure() {
     "$SELF" __arm "$arm" >"$output" 2>&1 &
   local group_pid=$!
   ARM_PGID="$group_pid"
+  ARM_SPAWNING=0
+  if [[ -n "$PENDING_CANCEL" ]]; then
+    cancel "$PENDING_CANCEL"
+  fi
   peak=0
   while kill -0 "$group_pid" 2>/dev/null; do
     current="$(ps -eo pgid=,rss= | awk -v pgid="$group_pid" '$1 == pgid { total += $2 } END { print total + 0 }')"
