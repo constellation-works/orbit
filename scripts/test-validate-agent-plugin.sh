@@ -247,6 +247,28 @@ payload["mcpServers"]["helper"] = {
 (broken / "plugin" / "mcp.json").write_text(json.dumps(payload), encoding="utf-8")
 expect_failure(broken, "mcpServers.helper.cwd must be plugin-relative", "second server cwd traversal")
 
+# Every additional server must have a usable stdio launch.
+for label, launch in (
+    ("missing-command", {}),
+    ("blank-command", {"command": "  "}),
+    ("non-string-command", {"command": []}),
+    ("bad-args", {"command": "helper", "args": "not-an-array"}),
+    ("bad-arg-item", {"command": "helper", "args": [42]}),
+):
+    broken = clone_fixture(f"helper-{label}")
+    path = broken / "plugin" / "mcp.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["mcpServers"]["helper"] = {"type": "stdio", **launch}
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    expect_failure(broken, "mcpServers.helper.", f"helper {label}")
+
+good = clone_fixture("helper-valid")
+path = good / "plugin" / "mcp.json"
+payload = json.loads(path.read_text(encoding="utf-8"))
+payload["mcpServers"]["helper"] = {"type": "stdio", "command": "helper", "args": ["serve"]}
+path.write_text(json.dumps(payload), encoding="utf-8")
+expect_success(good, "valid helper with independent launch")
+
 # Positive: bare placeholders and safe descendants are accepted.
 for label, cwd in (
     ("bare-root", "${PLUGIN_ROOT}"),
