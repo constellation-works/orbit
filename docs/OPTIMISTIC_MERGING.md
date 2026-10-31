@@ -1,7 +1,7 @@
 ---
 type: context
 summary: "Optimistic Merging: Orbit's preferred delivery mode. Merge fast, review after landing, keep the queue draining"
-last_validated: 2026-10-29
+last_validated: 2026-10-31
 tags: [delivery, review, throughput, scheduling, philosophy]
 related_features: [review-gate, auto-tasks, routines, activity-job, distributed-drain]
 ---
@@ -38,9 +38,9 @@ Optimistic merging moves control earlier, to admission, rather than removing it.
 
 From [Orbit Positioning](POSITIONING.md):
 
-- Every change starts as a task, and its `task_id` is in the commit message, so intent stays traceable.
+- Every managed change starts as a task, and its `task_id` is in the commit message, so intent stays traceable.
 - Inspectable audit records cover commands, workflow runs, and captured provider/tool activity; the [auditability design](design/auditability/1_overview.md) describes coverage limits. When auditability conflicts with speed, ergonomics or features, auditability wins.
-- Execution is sandboxed by default, uses the operator's own credentials, and reports token and wall-clock cost.
+- Execution is sandboxed by default on supported platforms, uses the operator's own credentials, and reports token and wall-clock cost.
 
 ## Other review modes
 

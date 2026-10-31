@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Crate-Boundary Error Translation"
-last_validated: 2026-10-29
+last_validated: 2026-10-31
 ---
 # Crate-Boundary Error Translation
 
@@ -95,7 +95,7 @@ pub enum DispatchError {
 ```
 
 The translator lives next to the error. It preserves protocol skew, validation failures as
-`JobValidation`, recoverable VCS conflicts, and live-completion refusals; other dispatch errors
+`JobValidation`, recoverable VCS conflicts, live-completion refusals, and delivery refusals; other dispatch errors
 collapse to `InvalidInput`.
 
 ```rust
@@ -112,6 +112,14 @@ pub fn dispatch_error_to_orbit(error: DispatchError) -> OrbitError {
         DispatchError::TaskCompletionLiveRun { task_id, run_id } => {
             OrbitError::TaskCompletionLiveRun { task_id, run_id }
         }
+        DispatchError::DeliveryRefused {
+            action,
+            refusal,
+            message,
+        } => OrbitError::DeliveryRefused {
+            refusal,
+            message: format!("deterministic action `{action}` refused: {message}"),
+        },
         other => OrbitError::InvalidInput(format!("{other}")),
     }
 }
