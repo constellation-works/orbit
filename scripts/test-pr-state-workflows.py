@@ -551,38 +551,26 @@ class NextestShardWorkflowTests(unittest.TestCase):
                 partitions[partition] = job["name"]
                 [wait] = self.run_step(job, "Await the nextest archive")
                 self.assertEqual(wait[1:], ["--job", "Test build", "--step", upload])
-        # The test build runs the one partition no shard job runs, from the
-        # archive it built, after the last upload the shards wait for.
-        self.assertLess(build_steps.index(upload),
-                        build_steps.index("Run nextest partition on the test build"))
-        [build_nextest] = self.run_step(jobs["test-build"], "Run nextest partition on the test build")
-        self.assertEqual(build_nextest[:4], ["--label", "nextest", "--", "cargo"])
-        self.assertIn("--no-fail-fast", build_nextest)
-        self.assertNotIn("--run-ignored", build_nextest)
-        self.assertEqual(build_nextest[build_nextest.index("--archive-file") + 1], pack[2],
-                         "the test build runs its partition from the archive it built")
-        build_partition = build_nextest[build_nextest.index("--partition") + 1]
-        self.assertNotIn(build_partition, partitions, "the test build repeats a shard's partition")
-        partitions[build_partition] = jobs["test-build"]["name"]
         self.assertEqual(sorted(partitions),
                          sorted(f"count:{k}/{partition_count}" for k in range(1, partition_count + 1)),
-                         "the shard jobs and the test build must select every count partition "
+                         "the test runners must select every count partition "
                          "of NEXTEST_PARTITIONS")
-        # The literal shard names are the agent-main ruleset's; the extra
-        # partition job runs the shard steps under a name outside it.
-        self.assertEqual(sorted(name for name in partitions.values() if name != jobs["test-build"]["name"]),
+        # The literal shard names are the agent-main ruleset's; the two
+        # additional partition jobs run the shard steps under names outside it.
+        self.assertEqual(sorted(partitions.values()),
                          sorted([f"Test shard {k}/{shards}" for k in range(1, shards + 1)]
-                                + [jobs["test-extra"]["name"]]))
+                                + [jobs["test-extra"]["name"], jobs["test-partition-2"]["name"]]))
         [wait] = self.run_step(jobs["ci"], "Await the test build and nextest shards")
         self.assertEqual(wait[0], "scripts/ci-await-jobs.py")
         awaited = wait[2::2]
         self.assertEqual(wait[1::2], ["--job"] * len(awaited))
-        self.assertEqual(sorted(awaited), sorted({*partitions.values(), jobs["guardrails"]["name"]}),
+        required = {*partitions.values(), jobs["test-build"]["name"], jobs["guardrails"]["name"]}
+        self.assertEqual(sorted(awaited), sorted(required),
                          "the Check job's elapsed time must cover the test build, every shard and the guardrails")
 
     def test_repack_and_shard_failures_remain_failed_workflow_steps(self):
         for job, step in (("test-build", "Pack nextest archive for transfer"),
-                          ("test-build", "Run nextest partition on the test build"),
+                          ("test-partition-2", "Run nextest shard"),
                           ("test-1", "Restore native nextest archive"),
                           ("test-1", "Run nextest shard")):
             with self.subTest(step=step):
@@ -592,7 +580,7 @@ class NextestShardWorkflowTests(unittest.TestCase):
         jobs = self.document["jobs"]
         for job_id, step in (("test-1", "Run nextest shard"), ("test-2", "Run nextest shard"),
                              ("test-3", "Run nextest shard"), ("test-extra", "Run nextest shard"),
-                             ("test-build", "Run nextest partition on the test build")):
+                             ("test-partition-2", "Run nextest shard")):
             with self.subTest(job=job_id):
                 [nextest] = self.run_step(jobs[job_id], step)
                 # The full archive's partition guard fails the test build on an
@@ -805,7 +793,7 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
                 admitted = {name for name, job in jobs.items() if name != "pr-state" and evaluate(
                     job["if"], "push", dependency_skipped=True, bindings={SCOPE: mode})}
                 self.assertEqual(admitted, {"scope", "msrv", "ci", "guardrails", "test-build", "test-1", "test-2",
-                                            "test-3", "test-extra"})
+                                            "test-3", "test-extra", "test-partition-2"})
         self.assertEqual(self.push("docs/guide.md", same_tree=True, before_check="cancelled"), "skip",
                          "an exact tree that passed on the PR head is safe independently of BEFORE")
 
@@ -828,9 +816,9 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
         document = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
         jobs = document["jobs"]
         expected = {
-            "full": {"scope", "msrv", "ci", "guardrails", "test-build", "test-1", "test-2", "test-3", "test-extra"},
-            "affected:orbit-cli": {"scope", "msrv", "ci", "guardrails", "test-build", "test-1", "test-2", "test-3", "test-extra"},
-            "": {"scope", "msrv", "ci", "guardrails", "test-build", "test-1", "test-2", "test-3", "test-extra"},
+            "full": {"scope", "msrv", "ci", "guardrails", "test-build", "test-1", "test-2", "test-3", "test-extra", "test-partition-2"},
+            "affected:orbit-cli": {"scope", "msrv", "ci", "guardrails", "test-build", "test-1", "test-2", "test-3", "test-extra", "test-partition-2"},
+            "": {"scope", "msrv", "ci", "guardrails", "test-build", "test-1", "test-2", "test-3", "test-extra", "test-partition-2"},
             "docs": {"scope", "docs"},
             "skip": {"scope"},
         }
