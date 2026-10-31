@@ -877,6 +877,94 @@ Repair it by editing only the file the refusal names:
    a symptom of the crew rename; for a missing CLI, follow
    [Provider setup](providers.md#provider-setup).
 
+### Crew ladder
+
+The crew ladder runs shadow trials that ask whether a cheaper crew would hold
+up for one complexity tier. `workflow.crew_ladder.rungs` orders crews from
+cheapest to most capable. For each tier, the **floor** is the cheapest rung
+that is an enabled member of `workflow.<tier>_complexity_crews` with a positive
+weight, and the **candidate** is the rung directly below it. A tier with no
+rung in its pool, or whose floor is the bottom rung, has no candidate and runs
+no trial. With `mode = "off"`, or with no tiers listed, nothing runs and crew
+draws are unchanged.
+
+With `mode = "shadow"`, each tier in `tiers` that has a candidate keeps one
+standing experiment, owned by `system:crew-ladder` and named
+`crew-ladder-<tier>-<n>`. Its control arm keeps the tier's current pool. Its
+candidate arm gives the candidate rung `explore_rate` of the tier's tasks.
+Assignments are recorded, but no task's crew, crew source or run changes. The
+population is the tier's tasks, minus `exclude_types`.
+
+To set it in the workspace config, name only crews that are defined and enabled
+(`orbit config show` lists them). Trials start only while `experiments.enabled`
+is true, and they count toward `experiments.max_running`:
+
+```bash
+orbit config set experiments.enabled true
+orbit config set workflow.crew_ladder.rungs '["haiku", "sonnet", "opus"]'
+orbit config set workflow.crew_ladder.tiers '["low", "medium"]'
+orbit config set workflow.crew_ladder.mode shadow
+```
+
+The same settings in TOML:
+
+```toml
+[experiments]
+enabled = true
+
+[workflow.crew_ladder]
+mode = "shadow"
+rungs = ["haiku", "sonnet", "opus"]   # cheapest first
+tiers = ["low", "medium"]             # tiers that may run a trial
+```
+
+| Key | Default | What it does |
+|---|---|---|
+| `workflow.crew_ladder.mode` | `off` | `off` or `shadow`. `propose` and `auto` are refused at load. |
+| `workflow.crew_ladder.rungs` | `[]` | Crews, cheapest first. Each must be defined and enabled; an unknown or disabled crew fails load naming this key. |
+| `workflow.crew_ladder.tiers` | `[]` | Tiers (`low`, `medium`, `hard`, `xhard`) that may run a trial. Empty means none; `xhard` runs only when named. |
+| `workflow.crew_ladder.explore_rate` | `0.10` | Share of a tier's tasks given to the candidate arm, `0.02` to `0.25`. |
+| `workflow.crew_ladder.exclude_types` | `[]` | Task types (`feature`, `bug`, `refactor`, `chore`) left out of every trial. Excluding all four is refused. |
+| `workflow.crew_ladder.delivery_quality` | `off` | Only `off` is accepted; `shadow` and `guardrail` are refused at load. |
+
+`margin`, `look_every`, `max_sample`, `watch_window`, `retry_after_days`,
+`quality_grade_margin` and `min_grade_coverage` are validated now and recorded
+for later phases. This release does not act on them, so changing them alters
+no trial.
+
+Trials reconcile at each delivery admission, before the task is assigned, and
+read the ladder from config on disk. A change therefore takes effect at the
+next admission from any runtime:
+
+- A tier without a trial starts one while `experiments.max_running` has room.
+  Free slots go to `tiers` in order.
+- A trial whose candidate, arm weights or population no longer match the
+  ladder (a changed pool, `rungs`, `explore_rate` or `exclude_types`) concludes
+  with no winner, files no promotion task, and a new trial starts.
+- A tier covered by a running operator crew experiment gets no trial, and its
+  open trial concludes. Operator experiments come first.
+- With `mode = "off"`, open trials conclude and none start. A workspace that
+  never set the ladder writes nothing, and its draws do not change.
+
+To verify, use the read-only commands below. Neither writes anything:
+
+```bash
+orbit crew ladder
+orbit crew ladder --json
+orbit experiment list
+orbit experiment readout <id>
+```
+
+`orbit crew ladder` prints each tier's pool, floor, candidate and trial, with
+the trial's status and its would-be count (tasks assigned to the candidate arm).
+A tier with no trial gets a reason: `mode_off`, `tier_not_listed`,
+`no_ladder_rung`, `floor_is_bottom_rung`, `operator_experiment`,
+`experiments_disabled`, `max_running`, or `pending` until the next delivery
+admission. The read-only MCP tool `orbit.crew.ladder`, in the `analytics`
+toolset, returns the same payload. `orbit experiment list` shows each trial by
+its `crew-ladder-<tier>-<n>` name beside its `exp-` id. Pass that id to
+`orbit experiment readout` for per-arm outcomes.
+
 ## Executor definitions
 
 Four executor settings decide whether a crew can run on a host and how it

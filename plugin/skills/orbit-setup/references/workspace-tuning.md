@@ -331,6 +331,7 @@ Changes apply to deliveries recorded afterwards.
 | `[workflow.explore_brief]` | The task pilot should store context briefs for chosen tags | [Explore briefs](configuration.md#explore-briefs) |
 | `[lease]` | Interactive editors and agents share a checkout | [Path-lease policy](configuration.md#path-lease-policy) |
 | `machine.auto_concurrency.mode` | Admission should follow forecast fit; start in `shadow` | [Common settings](configuration.md#common-settings) |
+| `[workflow.crew_ladder]` | You want shadow evidence on whether a cheaper crew holds up for a tier; needs `experiments.enabled` | [Crew ladder](configuration.md#crew-ladder) |
 
 ## Roll it out
 
