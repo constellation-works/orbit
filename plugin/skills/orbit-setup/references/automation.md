@@ -116,7 +116,7 @@ on this host.
 | `dependabot-alert-sweep` | daily at 03:25 host-local time | `dependabot_alert_sweep_pipeline` | Collects Dependabot, code-scanning, and secret-scanning findings and files remediation tasks. |
 | `store-gc` | daily at 04:17 | `store_gc_pipeline` | Applies `orbit gc audit` and `orbit gc runs`: prunes audit rows older than `retention.audit_days` (this workspace and workspace ids that are no longer registered) and the audit blobs nothing names, and drops the pipeline state of terminal runs older than `retention.runs_days` and the per-minute resource history and admission forecasts older than 30 days, except the newest counted rows that stay at any age. Another registered workspace keeps its own window. Review both plans before enabling it — [maintenance.md](maintenance.md#store-retention). On a large store, consider `retention.runs_days = 30` first; smaller windows are refused to preserve 30-day reliability and forecast-accuracy evidence. |
 | `task-publication` | weekly Sunday at 04:47 host-local time (`47 4 * * 0`) | `task_publication_pipeline` | Disabled by default because publishing task prose to a remote is an operator decision. Publishes only this owned workspace; unbound workspaces record `skipped: publication_unbound`. Unchanged content is a recorded no-op. Attachments default to `omit` under `publication.routine_attachments`; `include` fails closed without the explicit unscanned opt-in. Replicas report it owner-only and never fire it. Missed runs skip; overlaps are forbidden — [publication.md](publication.md#weekly-publication-routine). |
-| `ux-rules` | daily at 06:40 | `ux_rules_pipeline` | Disabled by default. Runs the UX rules on each surface in `ux_rules.surfaces` through an operator-granted `ux_rules_runner` script step, then files proposed bug tasks for failing rules, capped by `ux_rules.max_new_tasks`. With no grant or no surfaces it does no work. |
+| `ux-rules` | daily at 06:40 | `ux_rules_pipeline` | Disabled by default. Runs the UX rules on each surface in `ux_rules.surfaces` through an operator-granted `ux_rules_runner` script step, then files proposed bug tasks for failing rules, capped by `ux_rules.max_new_tasks`. Grant the script with `orbit script grant ux_rules_runner` ([Workspace scripts](#workspace-scripts)). With no grant or no surfaces it does no work. |
 
 ### Crew performance snapshot
 
@@ -410,6 +410,78 @@ file where it is: the clock tick skips it, never as a load error, and
 `orbit routine list` and the dashboard hide it. `orbit routine list --all`
 lists it as `inactive` with a reason naming the plugin, and `orbit routine show
 <name>` still resolves it. Re-enabling brings it back with no re-seed.
+
+## Workspace scripts
+
+A workspace script is a program that a job step runs as `target: script:<name>`.
+Its manifest lives at `.orbit/resources/scripts/<name>.yaml`, and the manifest's
+`entry` names the program file in the workspace. A script step runs only while
+the script holds an operator grant on the host that runs it. Granting runs
+nothing; the step runs when a job reaches it.
+
+### Grants
+
+A grant is the operator's host-local consent to run one script at one set of
+content. It binds to the digests of both the manifest and the entry file.
+Editing either file makes the grant `stale`: the script does not run until an
+operator grants it again at the new digests.
+
+Only operators grant and revoke. An agent session can list, show, and read
+history, but must not grant, even when it can edit the manifest or the program.
+
+```bash
+orbit script grant <name>                          # grant at the current digests
+orbit script grant <name> --read-root /srv/reports --write-root /srv/out
+orbit script grant <name> --follower               # grant on a pull follower, not the owner
+orbit script revoke <name>                         # revoke this host's grant
+```
+
+| Grant flag | Meaning |
+|---|---|
+| `--network` | Network the grant allows: `none`, `https` or `any`. Default: what the manifest requests. |
+| `--read-root <path>` | Extra absolute read root to grant. Repeatable. |
+| `--write-root <path>` | Extra absolute write root to grant. Repeatable. |
+| `--env-pass <NAME>` | Extra environment variable name to pass to the script. Repeatable. |
+| `--follower` | Grant for a pull follower host instead of the workspace owner. |
+
+A granted script step runs only on Linux, under a sandbox with no network.
+Other hosts refuse the step. This build's script profile does not run network
+access or environment passthrough yet: a step is refused at run time when its
+manifest requests either, or when its grant allows network (`--network` other
+than `none`) or passes an environment variable (`--env-pass`). The grant still
+records them, and `orbit script history` shows each refusal. If the sandbox
+itself fails, see [Linux sandbox](linux-sandbox.md).
+
+### Grant states
+
+`orbit script list` and `orbit script show` report one of these states:
+
+| State | Meaning |
+|---|---|
+| `granted` | The grant's digests match the current manifest and entry file. |
+| `stale` | A verified grant whose digests no longer match: one of the files changed after granting. |
+| `ungranted` | A manifest with no grant. |
+| `orphaned` | A grant whose manifest no longer exists. |
+| `witness_refused` | The stored grant does not match the integrity record the grant command wrote, so it is not trusted. |
+
+### Verify a grant
+
+```bash
+orbit script list                  # NAME, ENTRY, GRANT, DIGEST for every script
+orbit script show <name>           # manifest and entry paths, current and granted digests, network, grantor, detail
+orbit script history <name>        # recent attempts, newest first, refusals included (--limit, default 20)
+```
+
+1. `orbit script list` should show `granted` in the GRANT column for each script
+   you expect to run. `stale`, `ungranted` or `orphaned` means the step will
+   not run.
+2. `orbit script show <name>` should report `grant state: granted`, with the
+   current manifest and entry digests equal to the granted ones. A difference
+   after an edit is the staleness above; grant again to accept the edited files.
+3. After a run, `orbit script history <name>` lists each attempt, including the
+   refused ones.
+
+For the ux-rules routine, verify `ux_rules_runner` in step 2 before enabling it.
 
 ## Tuning which tasks task-pilot prepares
 
