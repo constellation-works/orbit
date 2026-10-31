@@ -2723,6 +2723,7 @@ An experiment compares a control arm against one or more treatment arms, each an
 | `experiments.enabled` | `false` | Allow experiments to start in this workspace. While false, new assignments are disabled and `start` is refused with an error naming this key; drafts can still be defined, edited, shown and abandoned. |
 | `experiments.max_running` | `3` | **Advanced.** Experiments that may run at once in this workspace (`1`–`20`). `start` and `resume` are refused while that many are running; a paused experiment does not count. |
 | `experiments.config_keys` | `[]` | **Advanced.** Config keys an arm's `config` overlay may set. A key must also be on the typed code allowlist below. `start` refuses unknown keys, keys absent from either list, and values of the wrong type or outside their bounds. The default allows no config overlay. |
+| `experiments.min_delivered_rate` | `0.9` | **Advanced.** Share (`0`–`1`) of a treatment arm's settled tasks that must have received its treatment (every role its instructions, skills or tools target ran with the overlay and finished successfully) before a readout gives a verdict. Below it the verdict is `withheld`, with the reason `arm <arm> treatment delivered on <n>/<m> runs`. |
 
 ```toml
 [experiments]

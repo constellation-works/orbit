@@ -219,6 +219,25 @@ impl ExperimentOverlay {
         })
     }
 
+    /// The activity roles whose dispatches receive this overlay: the roles
+    /// of its instructions, skills and tools. Crew and config surfaces act
+    /// at admission or through workflow settings, not on a dispatch, so
+    /// they name none.
+    pub(crate) fn dispatch_roles(&self) -> BTreeSet<OverlayRole> {
+        let mut roles: BTreeSet<OverlayRole> = self.instructions.keys().copied().collect();
+        roles.extend(
+            self.skills
+                .iter()
+                .flat_map(|skills| skills.roles.iter().copied()),
+        );
+        roles.extend(
+            self.tools
+                .iter()
+                .flat_map(|tools| tools.roles.iter().copied()),
+        );
+        roles
+    }
+
     /// The config keys this overlay sets.
     pub(crate) fn config_keys(&self) -> impl Iterator<Item = &str> {
         self.config

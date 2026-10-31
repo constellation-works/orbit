@@ -793,6 +793,13 @@ macro_rules! with_tail_keys {
         tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<u32>| resolve_bounded_count(raw, 3, 20, "experiments.max_running"),
     },
+    experiments_min_delivered_rate: f64 => f64 {
+        key: "experiments.min_delivered_rate", value_type: "number",
+        description: "Share of a treatment arm's settled tasks that must have received its treatment before a readout gives a verdict (0-1).",
+        section: ConfigSection::Housekeeping, order: 163,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<f64>| resolve_experiments_min_delivered_rate(raw),
+    },
     seeding_routines: crate::SeedingPolicy => crate::seeding::RawSeedingPolicy {
         key: "seeding.routines", value_type: "string|array<string>",
         description: "Which shipped default routines this workspace seeds: all, none, or a list of their names.",

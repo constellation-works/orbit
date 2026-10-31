@@ -422,7 +422,7 @@ fn overlay_role(role: TagInstructionRole) -> OverlayRole {
     }
 }
 
-fn instruction_role(role: OverlayRole) -> TagInstructionRole {
+pub(super) fn instruction_role(role: OverlayRole) -> TagInstructionRole {
     match role {
         OverlayRole::Implement => TagInstructionRole::Implement,
         OverlayRole::Review => TagInstructionRole::Review,

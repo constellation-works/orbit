@@ -327,6 +327,7 @@ configuration value. The `[experiments]` table is workspace policy:
 | `experiments.enabled` | `false` | Boolean switch that permits experiments to start. |
 | `experiments.max_running` | `3` | Advanced integer from `1` to `20`; maximum running experiments in the workspace. |
 | `experiments.config_keys` | `[]` | Advanced list of config keys an experiment may override. Empty allows no config overlays. |
+| `experiments.min_delivered_rate` | `0.9` | Advanced share from `0` to `1`; below it in any treatment arm, a readout withholds its verdict because the treatment did not reach enough runs. |
 
 For workspace policy, add or merge this table in
 `<workspace>/.orbit/config.toml`:

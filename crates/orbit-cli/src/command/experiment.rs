@@ -186,6 +186,29 @@ fn experiment_blocks(value: &Value) -> Vec<Block> {
     blocks
 }
 
+/// An arm's delivered tasks over its settled ones, with the rate and any
+/// tasks still pending; blank for an arm without a delivery check.
+fn delivered_cell(delivery: &Value) -> String {
+    if !delivery.is_object() {
+        return String::new();
+    }
+    let settled = delivery["assigned"]
+        .as_u64()
+        .unwrap_or(0)
+        .saturating_sub(delivery["pending"].as_u64().unwrap_or(0));
+    let mut cell = format!("{}/{settled}", text(&delivery["delivered"]));
+    if let Some(rate) = delivery["rate"].as_f64() {
+        let _ = write!(cell, " ({:.0}%)", rate * 100.0);
+    }
+    if delivery["pending"]
+        .as_u64()
+        .is_some_and(|pending| pending > 0)
+    {
+        let _ = write!(cell, ", {} pending", text(&delivery["pending"]));
+    }
+    cell
+}
+
 fn readout_blocks(value: &Value) -> Vec<Block> {
     let experiment = &value["experiment"];
     let verdict = &value["verdict"];
@@ -244,6 +267,7 @@ fn readout_blocks(value: &Value) -> Vec<Block> {
         Column::new("WEIGHT").number(),
         Column::new("N").number(),
         Column::new("EXPLORER").number(),
+        Column::new("DELIVERED"),
         Column::new("SEGMENTS"),
         Column::new("CREW MIX"),
         Column::new("RECORDED EFFORT"),
@@ -275,6 +299,7 @@ fn readout_blocks(value: &Value) -> Vec<Block> {
             text(&arm["weight"]),
             text(&arm["n"]),
             text(&arm["tasks_with_explorer_call"]),
+            delivered_cell(&arm["delivery"]),
             segments,
             crews,
             arm["effort_breakdown"]
@@ -305,6 +330,41 @@ fn readout_blocks(value: &Value) -> Vec<Block> {
     }
     blocks.push(Block::text("\nArms:"));
     blocks.push(Block::table(arms));
+
+    let per_protocol = &value["per_protocol"];
+    if per_protocol.is_object() {
+        let metric = &per_protocol["metric"];
+        blocks.push(Block::text(format!(
+            "\nPrimary metric {}, {}; the tables below are intention-to-treat (every assigned run):",
+            text(&metric["metric"]),
+            text(&per_protocol["label"]),
+        )));
+        let mut table = Table::new(vec![
+            Column::new("ARM"),
+            Column::new("N").number(),
+            Column::new("MEAN [95%]"),
+            Column::new("DIFF VS CONTROL [95%]"),
+        ]);
+        for arm in metric["arms"].as_array().into_iter().flatten() {
+            let difference = metric["differences"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|difference| difference["arm"] == arm["arm"]);
+            table.add_row(vec![
+                text(&arm["arm"]),
+                text(&arm["n"]),
+                with_interval(&arm["mean"], &arm["mean_interval"]),
+                difference.map_or_else(String::new, |difference| {
+                    with_interval(
+                        &difference["overall"]["estimate"],
+                        &difference["overall"]["interval"],
+                    )
+                }),
+            ]);
+        }
+        blocks.push(Block::table(table));
+    }
 
     let mut empty = Vec::new();
     for metric in value["metrics"].as_array().into_iter().flatten() {

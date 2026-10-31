@@ -246,6 +246,31 @@ segment:
 - **Sample-ratio check.** A chi-square test of observed arm counts against the weights; below
   p = 0.001 the readout shows a warning and gives no verdict, because the assignment itself is
   suspect.
+- **Treatment delivery.** Intention-to-treat counts a task in its arm whether or not the
+  treatment reached it, so a treatment whose overlaid step fails on every run would be judged
+  on control's work ([ORB-20597]: every explorer call in exp-2b6d910d's treatment arm failed,
+  yet its primary interval excluded zero). Each treatment arm's overlay names its dispatch
+  roles: the roles of its instructions, skills and tools. Crew and config surfaces act at
+  admission or through settings, not on one dispatch, so an arm with only those (or an empty
+  overlay) has no delivery check (`delivery: null`). A task's treatment is **delivered** when,
+  for every dispatch role, a run of the task has an `experiment_overlay_applied` audit row for
+  this experiment's arm in that role whose step's last `step_finished` outcome in the same run
+  is `success`. The evidence is the durable run audit trail, never agent output, and the rule is
+  read from the overlay definition with no per-experiment or per-activity branch. A task not
+  delivered and still in flight is `pending`. Each arm reports `delivery` (`roles`, `assigned`,
+  `delivered`, `pending`, `rate` = delivered / (assigned − pending)). When any arm's rate is
+  below `experiments.min_delivered_rate` (default 0.9), or the horizon is reached with none of
+  its tasks settled, the verdict is `withheld` with the reason
+  ``arm `<arm>` treatment delivered on <n>/<m> runs`` and an `undelivered` warning, from the
+  first settled task on and over any would-be `winner` or `no difference`. At or above the
+  threshold the verdict rules are unchanged. Delivery proves the overlaid step ran and
+  succeeded, not that the agent acted on the instruction; explorer uptake
+  (`tasks_with_explorer_call`) remains the check for that.
+- **Per-protocol view.** Beside the intention-to-treat metrics, `per_protocol` (labelled
+  `per-protocol (delivered runs only)`) reports the primary metric with each checked treatment
+  arm reduced to its delivered tasks; control and unchecked arms keep all theirs. When the two
+  views disagree, the treatment's effect depends on whether it was delivered. The verdict is
+  read on intention-to-treat only.
 - **Verdict.** Withheld until every arm reaches `min_sample` or `max_days` passes (fixed
   horizon, so repeated looks do not inflate false wins). Then: `winner <arm>` when the primary
   metric's interval excludes zero in the better direction and no guardrail's point estimate is
@@ -396,6 +421,9 @@ Policy only. Experiment definitions are store records.
   applied to any run.
 - The readout reports per-arm n, estimates with intervals, differences from control overall and
   per complexity, sample-ratio and drift warnings, and withholds a verdict before the horizon.
+- A treatment arm whose overlaid step did not succeed on at least `experiments.min_delivered_rate`
+  of its settled tasks gets a `withheld` verdict naming the arm and its delivered count; the
+  readout also reports each arm's delivered rate and the primary metric per-protocol.
 - Concluding stores the readout snapshot and, with a winner, files one `proposed` promotion
   task; no configuration or repository file is changed by the conclusion itself.
 - With `experiments.enabled = false`, admission and runs are unchanged from today.
@@ -417,5 +445,7 @@ Policy only. Experiment definitions are store records.
 - [ORB-18479] — built the Analytics › Experiments dashboard page (phase 4)
 - [ORB-18480] — made conclude store the readout snapshot and file the promotion task (phase 5)
 - [ORB-19368] — added create, edit and start for experiments on the dashboard page (phase 4)
+- [ORB-20597] — withholds the verdict when a treatment arm's overlay was not delivered, and adds
+  the per-protocol view
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
