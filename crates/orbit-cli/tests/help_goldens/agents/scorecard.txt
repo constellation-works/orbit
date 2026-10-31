@@ -19,6 +19,12 @@ Options:
           
           [default: 10]
 
+      --execution <EXECUTION>
+          Which implementer tasks to count: managed, all or interactive
+          
+          [default: managed]
+          [possible values: managed, all, interactive]
+
       --by-type
           Show implementers split by task type within each tier
 

@@ -61,6 +61,12 @@ const ROLE: &[ParamSpec] = &[required(both(
     "The agent role to score",
 ))];
 
+const EXECUTIONS: &[EnumValue] = &[
+    EnumValue::plain("managed"),
+    EnumValue::plain("all"),
+    EnumValue::plain("interactive"),
+];
+
 /// The selection both verbs slice the workspace scan by.
 const SELECTION: &[ParamSpec] = &[
     defaulted(
@@ -82,6 +88,16 @@ const SELECTION: &[ParamSpec] = &[
             "Units of work a row needs before it is ranked",
         ),
         "10",
+    ),
+    defaulted(
+        both(
+            "execution",
+            ParamType::Enum(EXECUTIONS),
+            "Which tasks implementer counts read, by how each was executed (derived from its runs): managed (a job worked its final implementation attempt), all (managed and interactive) or interactive (reached review or done in an interactive session, without a job) as a separate series. Tasks neither yet are in none. Cost and run time count managed tasks whatever this says. Other roles ignore it. Default: managed.",
+            CliArgKind::flag("execution"),
+            "Which implementer tasks to count: managed, all or interactive",
+        ),
+        "managed",
     ),
 ];
 

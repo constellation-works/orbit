@@ -271,6 +271,12 @@
         "required": false
       },
       {
+        "name": "execution",
+        "description": "Which tasks implementer counts read, by how each was executed (derived from its runs): managed (a job worked its final implementation attempt), all (managed and interactive) or interactive (reached review or done in an interactive session, without a job) as a separate series. Tasks neither yet are in none. Cost and run time count managed tasks whatever this says. Other roles ignore it. Default: managed.",
+        "param_type": "string",
+        "required": false
+      },
+      {
         "name": "by_type",
         "description": "Split implementers into (crew, model, tier, type) cells using workflow.crew_performance_types, with two-level shrinkage; implementers only.",
         "param_type": "boolean",
@@ -333,6 +339,12 @@
         "name": "min_support",
         "description": "Units of the role's work a row needs before it is ranked, at least 1; rows below it are listed last without a rank. Default: 10.",
         "param_type": "integer",
+        "required": false
+      },
+      {
+        "name": "execution",
+        "description": "Which tasks implementer counts read, by how each was executed (derived from its runs): managed (a job worked its final implementation attempt), all (managed and interactive) or interactive (reached review or done in an interactive session, without a job) as a separate series. Tasks neither yet are in none. Cost and run time count managed tasks whatever this says. Other roles ignore it. Default: managed.",
+        "param_type": "string",
         "required": false
       },
       {

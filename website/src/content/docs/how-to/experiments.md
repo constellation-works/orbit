@@ -277,6 +277,11 @@ and the records Orbit already keeps. It is intention-to-treat by task:
 every enrolled, unforced task counts in its arm whatever its outcome.
 Forced assignments are left out and counted as `forced_excluded`;
 surface-conflict exclusions and unreadable task records are counted too.
+Only a job applies an arm's overlay, so a task worked in an interactive
+session (it reached review or done with no delivery run working it) was
+never treated: it is left out of every estimate and counted as
+`interactive_excluded`. A task not implemented yet stays in its arm with
+open outcomes.
 `--metric` reports only that metric, but the verdict is still read on the
 primary metric and the guardrails. The JSON carries `schema_version`.
 

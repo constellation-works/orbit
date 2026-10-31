@@ -9,7 +9,7 @@ doc_role: scope
 type: design
 summary: "Scope: weight crew pool draws by each crew's implementer score on the task's type within its complexity tier, either toward the crew that does that type best (absolute) or toward the type each crew does best relative to its own work (comparative)"
 tags: [crew-performance, crews, crew-pools, agent-scorecards, admission]
-last_updated: 2026-10-25
+last_updated: 2026-10-31
 last_validated: 2026-10-28
 ---
 
@@ -175,6 +175,10 @@ creation and every admission pass.
 - The scan writes a **performance snapshot** to the workspace store: one row per cell with its
   raw score, `n`, the shrunk score and the crew mean, plus the window, the type list's hash and
   `computed_at`.
+- The snapshot's cells read implementer execution scope `all`: managed and interactive tasks,
+  never unclassified ones ([agent-scorecards §5.2](../agent-scorecards/2_design.md#52-implementers)).
+  Cells carry outcome scores only, with no token, cost or run-time field, so the managed-only
+  cost rule has nothing to narrow here, and keeping interactive outcomes leaves draws unchanged.
 - A seeded routine refreshes it hourly. A dashboard scorecard scan refreshes it too.
 - A draw reads the snapshot. A missing snapshot, one older than 24 hours, or one built from a
   different type list is ignored, and every factor is 1 with a recorded reason.

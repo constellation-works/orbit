@@ -22,7 +22,9 @@ const sizeCurves = url => ({
     { crew: 'opus@high', models: ['model-b'], tasks: 6, regressed: 1, default_selected: false, buckets: [curveBucket(8, 6, 1, 0.0301, 0.5635)] },
   ],
 });
+const executions = new Set();
 answer(takeAll(), url => {
+  if (url.pathname.includes('/implementers/')) executions.add(url.searchParams.get('execution'));
   if (url.pathname.endsWith('/size-curves')) return response(sizeCurves(url));
   if (url.pathname.endsWith('/by-type')) return response(implementerMatrix());
   if (url.pathname.endsWith('/attribution')) return response(attribution);
@@ -36,7 +38,10 @@ assert.equal(byId['agents-count'].textContent, '6 rows · 5 ranked');
 assert.equal(part('ranking').querySelectorAll('tr.agents-row').length, 6);
 assert.equal(part('detail').querySelector('h3').textContent, 'sol');
 const body = byId['agents-body'];
-assert.deepEqual(body.children.map(node => node.dataset.key).filter(Boolean), ['strip', 'ranking', 'detail', 'how', 'panel']);
+assert.deepEqual(body.children.map(node => node.dataset.key).filter(Boolean), ['strip', 'ranking', 'detail', 'how', 'panel', 'execution']);
+assert.deepEqual([...executions], ['managed'], 'implementer scorecard, matrix and curves requests name the managed default');
+assert.equal(byId['agents-execution-control'].hidden, false, 'the execution control shows for implementers');
+assert.match(part('execution').textContent, /No interactive work/, 'a window without interactive work says so');
 const curves = part('panel');
 // SVG classes are attributes in this DOM; series groups carry `data-crew`.
 const svgClass = node => node.getAttribute('class') || '';

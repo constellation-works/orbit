@@ -126,7 +126,7 @@ pub fn agent_scorecard(
     let (fleet_average, scored) = match spec.rows {
         Some(rows) => score::score(
             spec.terms,
-            rows(facts, since, query.min_support),
+            rows(facts, since, query.min_support, query.execution),
             query.min_support,
         ),
         None => (None, Vec::new()),
@@ -168,7 +168,12 @@ pub fn agent_by_type_scorecard(
             }))
             .collect::<Vec<_>>()
     );
-    payload["cells"] = json!(roles::implementer_by_type_cells(facts, since, types));
+    payload["cells"] = json!(roles::implementer_by_type_cells(
+        facts,
+        since,
+        types,
+        query.execution
+    ));
     payload
 }
 
@@ -196,7 +201,7 @@ pub fn agent_size_curves(
     let since = query.since(facts);
     let mut payload = query.header(facts, since, cache_ttl);
     payload["role"] = json!(AgentRole::Implementers.as_str());
-    for (key, value) in roles::implementer_size_curves(facts, since, complexity) {
+    for (key, value) in roles::implementer_size_curves(facts, since, complexity, query.execution) {
         payload[key] = value;
     }
     Ok(payload)
@@ -226,7 +231,12 @@ pub fn agent_per_task_export(
             }))
             .collect::<Vec<_>>()
     );
-    payload["tasks"] = json!(roles::implementer_per_task_rows(facts, since, types));
+    payload["tasks"] = json!(roles::implementer_per_task_rows(
+        facts,
+        since,
+        types,
+        query.execution
+    ));
     payload
 }
 
@@ -252,7 +262,7 @@ pub fn agent_detail(
     let (fleet_average, scored) = match spec.rows {
         Some(rows) => score::score(
             spec.terms,
-            rows(facts, since, query.min_support),
+            rows(facts, since, query.min_support, query.execution),
             query.min_support,
         ),
         None => (None, Vec::new()),

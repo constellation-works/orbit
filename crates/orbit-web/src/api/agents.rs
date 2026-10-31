@@ -42,6 +42,10 @@ pub(super) struct AgentScorecardQuery {
     /// every tier when omitted.
     #[serde(default)]
     complexity: Option<String>,
+    /// Which implementer tasks count by derived execution: `managed`
+    /// (default), `all` or `interactive`.
+    #[serde(default)]
+    execution: Option<String>,
 }
 
 pub(super) async fn agent_scorecard(
@@ -177,7 +181,8 @@ pub(super) async fn agent_attribution(
 }
 
 fn selection(query: &AgentScorecardQuery) -> Result<AgentQuery, OrbitError> {
-    AgentQuery::parse(query.window.as_deref(), query.min_support)
+    AgentQuery::parse(query.window.as_deref(), query.min_support)?
+        .with_execution(query.execution.as_deref())
 }
 
 /// A bad selection is the caller's 400; anything else is a runtime error.

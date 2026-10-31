@@ -36,6 +36,7 @@ const ROLE_LABELS = {
 // data adds `fetch(window)`, read beside the scorecard on every fetch, and
 // `hash()`, which rebuilds the panel when that data or its controls change;
 // its `render` gets `rerender()` to redraw after a control changes.
+// `fetch` also gets the implementer execution scope as its second argument.
 const ROLE_PANELS = {
   orchestrators: orchestratorsPanel,
   implementers: implementersPanel,
@@ -69,6 +70,10 @@ let scorecard = null;
 let attribution = null;
 let implementerMatrix = null;
 let implementerTier = "";
+// Which implementer tasks count by derived execution: managed (the server's
+// default), all or interactive. Other roles ignore it.
+const EXECUTIONS = ["managed", "all", "interactive"];
+let execution = "managed";
 // The selected row of each role, as `rowKey(row)`.
 const selected = new Map();
 let countsRequest = 0;
@@ -87,8 +92,12 @@ export function setAgentsRole(next) {
   resetView();
 }
 
+function executionParam(forRole) {
+  return forRole === "implementers" ? `&execution=${encodeURIComponent(execution)}` : "";
+}
+
 function scorecardPath(forRole, selectedWindow) {
-  return `/api/agents/${forRole}/scorecard?window=${encodeURIComponent(selectedWindow)}&min_support=${MIN_SUPPORT}`;
+  return `/api/agents/${forRole}/scorecard?window=${encodeURIComponent(selectedWindow)}&min_support=${MIN_SUPPORT}${executionParam(forRole)}`;
 }
 
 function attributionPath(selectedWindow) {
@@ -154,6 +163,27 @@ export function wireAgentControls() {
     panelWindows: AGENT_COUNT_WINDOWS,
     onPanelWindow: setCountWindow,
   });
+  const executions = $("agents-execution-selector");
+  if (executions) {
+    executions.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-execution]");
+      if (!button || !EXECUTIONS.includes(button.dataset.execution) || button.dataset.execution === execution) return;
+      execution = button.dataset.execution;
+      syncExecutionSelector();
+      fetchAndRenderAgents();
+    });
+  }
+}
+
+function syncExecutionSelector() {
+  const control = $("agents-execution-control");
+  if (control) control.hidden = role !== "implementers";
+  for (const button of document.querySelectorAll("#agents-execution-selector [data-execution]")) {
+    const on = button.dataset.execution === execution;
+    button.classList.toggle("on", on);
+    button.setAttribute("aria-selected", on ? "true" : "false");
+    button.tabIndex = on ? 0 : -1;
+  }
 }
 
 export function fetchAndRenderAgents() {
@@ -171,20 +201,23 @@ export function fetchAndRenderAgents() {
     resetView();
   }
   refreshRoleCounts(activeRole, selectedWindow, revision);
-  const current = () => role === activeRole && getWorkspaceRevision() === revision && agentWindow() === selectedWindow;
+  const activeExecution = execution;
+  const current = () => role === activeRole && getWorkspaceRevision() === revision && agentWindow() === selectedWindow
+    && execution === activeExecution;
   const panel = ROLE_PANELS[activeRole];
   return requestPanel(BODY_ID, path, () => Promise.all([fetchJson(path), fetchJson(attributionPath(selectedWindow)),
-    activeRole === "implementers" ? fetchJson(`/api/agents/implementers/by-type?window=${encodeURIComponent(selectedWindow)}&min_support=${MIN_SUPPORT}`).catch(() => null) : null,
-    panel && panel.fetch ? panel.fetch(selectedWindow) : null,
+    activeRole === "implementers" ? fetchJson(`/api/agents/implementers/by-type?window=${encodeURIComponent(selectedWindow)}&min_support=${MIN_SUPPORT}${executionParam(activeRole)}`).catch(() => null) : null,
+    panel && panel.fetch ? panel.fetch(selectedWindow, execution) : null,
   ]), ([payload, strip, matrix]) => {
     if (!current()) return;
-    if (!payload || payload.role !== activeRole || payload.requested_window !== selectedWindow) {
+    if (!payload || payload.role !== activeRole || payload.requested_window !== selectedWindow
+      || (activeRole === "implementers" && (payload.execution ?? "managed") !== activeExecution)) {
       console.error(`agent scorecard for ${payload && payload.role} ${payload && payload.requested_window} rejected under ${activeRole} ${selectedWindow}`);
       return;
     }
     scorecard = payload;
     attribution = strip;
-    implementerMatrix = matrix?.requested_window === selectedWindow && Array.isArray(matrix.cells) ? matrix : null;
+    implementerMatrix = matrix?.requested_window === selectedWindow && (matrix.execution ?? "managed") === activeExecution && Array.isArray(matrix.cells) ? matrix : null;
     if (!implementerMatrix) implementerTier = "";
     setRoleCount(activeRole, payload);
     syncSelection();
@@ -371,6 +404,7 @@ function contribution(term, row) {
 }
 
 function render() {
+  syncExecutionSelector();
   const body = $(BODY_ID);
   if (!body || !scorecard) return;
   const ranking = rows();
@@ -388,6 +422,7 @@ function render() {
       ? `${units} ${scorecard.unit} in ${windowLabel()} · fleet average ${number(role === "implementers" && implementerTier ? 100 : scorecard.fleet_average)}`
         + ` · ${role === "implementers" && implementerTier ? `${implementerTier} tier · ` : ""}rows under ${scorecard.min_support} ${scorecard.unit} are greyed and unranked`
         + (ranking.some((row) => row.unjudged) ? " · unjudged rows are listed last, without a score" : "")
+        + (role === "implementers" ? ` · counting ${EXECUTION_LABELS[scorecard.execution] || "managed"} tasks` : "")
       : `${ROLE_LABELS[role]} are not computed yet · window ${windowLabel()}`;
   }
   const panel = ROLE_PANELS[role];
@@ -409,7 +444,49 @@ function render() {
   }
   nodes.push(howNode());
   if (panel && scorecard.status === "ok" && ranking.length) nodes.push(rolePanelNode(panel));
+  if (role === "implementers" && scorecard.status === "ok") nodes.push(executionSplitNode());
   syncNodes(body, nodes);
+}
+
+const EXECUTION_LABELS = { managed: "managed", all: "managed and interactive", interactive: "interactive" };
+
+// Interactive work per crew and model, whatever the execution scope, so the
+// tasks the default leaves out stay visible: each row's managed, interactive
+// and unclassified tasks with the interactive ones' outcomes.
+function executionSplitNode() {
+  const split = Array.isArray(scorecard.execution_split) ? scorecard.execution_split : [];
+  const shown = split.filter((row) => row.interactive_tasks || row.unclassified_tasks);
+  const content = shown.length
+    ? el("div", { class: "agents-table-wrap", role: "region", "aria-label": "Interactive work by crew" }, [
+      el("table", { class: "agents-table" }, [
+        el("thead", {}, [el("tr", {}, [
+          el("th", { text: "Crew · model" }),
+          el("th", { class: "agents-num", text: "Managed", title: "Tasks a job worked" }),
+          el("th", { class: "agents-num", text: "Interactive", title: "Tasks that reached review or done without a job" }),
+          el("th", { class: "agents-num", text: "Interactive landed" }),
+          el("th", { class: "agents-num", text: "Interactive regressed", title: "Interactive tasks a regression_from link names" }),
+          el("th", { class: "agents-num", text: "Unclassified", title: "Worked without a job and not yet in review: counted in neither population" }),
+        ])]),
+        el("tbody", {}, shown.map((row) => el("tr", {}, [
+          el("td", {}, [el("span", { class: "agents-crew", text: row.crew }), " ", el("span", { class: "agents-model", text: row.model })]),
+          el("td", { class: "agents-num", text: String(row.managed_tasks) }),
+          el("td", { class: "agents-num", text: String(row.interactive_tasks) }),
+          el("td", { class: "agents-num", text: String(row.interactive_landed) }),
+          el("td", { class: "agents-num", text: String(row.interactive_regressed) }),
+          el("td", { class: "agents-num", text: String(row.unclassified_tasks) }),
+        ]))),
+      ]),
+    ])
+    : el("p", { class: "agents-execution-none", text: `No interactive work in ${windowLabel()}: every counted task was worked by a job.` });
+  if (shown.length) content.tabIndex = 0;
+  const node = el("section", { class: "agents-execution", "aria-label": "Interactive work by crew" }, [
+    el("h3", { text: "Interactive work by crew" }),
+    el("p", { class: "agents-execution-note", text: "Tasks worked in an interactive session have no job run, so no cost, tokens or run time. They are left out of the counts above unless the execution control includes them; cost and run time always count managed tasks only." }),
+    content,
+  ]);
+  node.dataset.key = "execution";
+  node.dataset.hash = JSON.stringify([split, scorecard.since]);
+  return node;
 }
 
 function bannerNode(content) {

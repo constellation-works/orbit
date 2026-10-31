@@ -27,7 +27,7 @@ use crate::application::agents::facts::{
     Finding, FindingState, RejectOutcome, Review, TaskFacts, filing_attempt,
 };
 use crate::application::agents::score::{Occurrence, RowInput, Stat, Tally, Term, number};
-use crate::application::agents::{AgentFacts, AgentRole, Problem};
+use crate::application::agents::{AgentFacts, AgentRole, ExecutionScope, Problem};
 use crate::application::task::FindingVerdict;
 
 pub(super) const ROLE: RoleSpec = RoleSpec {
@@ -179,7 +179,12 @@ impl<'a> Row<'a> {
 
 /// One row per reviewer crew and model with a review settled, or a review
 /// job attempt started, since `since`.
-fn rows(facts: &AgentFacts, since: DateTime<Utc>, _min_support: usize) -> Vec<RowInput<'_>> {
+fn rows(
+    facts: &AgentFacts,
+    since: DateTime<Utc>,
+    _min_support: usize,
+    _execution: ExecutionScope,
+) -> Vec<RowInput<'_>> {
     let lookback = facts.computed_at - Duration::days(MISS_LOOKBACK_DAYS);
     let by_id: HashMap<&str, &TaskFacts> = facts
         .tasks

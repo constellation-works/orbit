@@ -7,7 +7,8 @@
 //! full follow-up period behind their completion. A task regressed when any
 //! `regression_from` link against it was observed by the end of that
 //! period. Sizes fall in `floor(log2(1 + lines))` buckets, each with a
-//! Wilson 95% interval.
+//! Wilson 95% interval. The selection's execution scope narrows the cohort
+//! as it narrows the scorecard (managed tasks by default).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -15,9 +16,8 @@ use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use serde_json::{Value, json};
 
 use super::performance::{counted, tier};
-use crate::application::agents::AgentFacts;
-use crate::application::agents::CREW_UNKNOWN;
 use crate::application::agents::facts::{Attempt, TaskFacts};
+use crate::application::agents::{AgentFacts, CREW_UNKNOWN, ExecutionScope};
 
 /// Days after completion a regression link is looked for, and the follow-up
 /// a task needs before it counts.
@@ -63,11 +63,12 @@ fn wilson(k: usize, n: usize) -> (f64, f64) {
 }
 
 /// The size curves for the window starting at `since`, narrowed to one
-/// tier when `complexity` names one.
+/// tier when `complexity` names one and to the tasks `execution` admits.
 pub(in crate::application::agents) fn size_curves(
     facts: &AgentFacts,
     since: DateTime<Utc>,
     complexity: Option<&str>,
+    execution: ExecutionScope,
 ) -> serde_json::Map<String, Value> {
     let mature_by = facts.computed_at - Duration::days(FOLLOW_UP_DAYS);
     let mut observed: BTreeMap<&str, Vec<DateTime<Utc>>> = BTreeMap::new();
@@ -80,7 +81,11 @@ pub(in crate::application::agents) fn size_curves(
     let mut tiers: BTreeMap<&str, usize> = TIERS.iter().map(|tier| (*tier, 0)).collect();
     let (mut immature, mut no_size) = (0, 0);
     let mut series: BTreeMap<String, Series> = BTreeMap::new();
-    for task in &facts.tasks {
+    for task in facts
+        .tasks
+        .iter()
+        .filter(|task| execution.admits(task.execution))
+    {
         let Some((attempt, landed_at)) = final_counted(task, since) else {
             continue;
         };

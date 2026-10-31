@@ -447,8 +447,14 @@ fn vision_probe_blocks(value: &Value) -> Vec<Block> {
 }
 
 fn selection_line(value: &Value) -> String {
+    // Only implementer counts read the execution scope; the shadow report,
+    // which reads draws, carries none.
+    let execution = match value["execution"].as_str() {
+        Some(scope) if value["role"] == "implementers" => format!(" · {scope} tasks"),
+        _ => String::new(),
+    };
     format!(
-        "{} · window {} · minimum support {} · {} tasks scanned · computed {}",
+        "{} · window {} · minimum support {}{execution} · {} tasks scanned · computed {}",
         text(&value["role"]),
         text(&value["window"]),
         number(&value["min_support"]),

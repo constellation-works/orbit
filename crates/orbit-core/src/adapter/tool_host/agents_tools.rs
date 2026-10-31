@@ -17,7 +17,8 @@ pub(super) fn dispatch(
     let query = AgentQuery::parse(
         input.optional_string("window")?.as_deref(),
         input.optional_count("min_support")?,
-    )?;
+    )?
+    .with_execution(input.optional_string("execution")?.as_deref())?;
     let by_type = input.optional_bool("by_type")?.unwrap_or(false);
     let shadow = input.optional_bool("shadow")?.unwrap_or(false);
     let per_task = input.optional_bool("per_task")?.unwrap_or(false);

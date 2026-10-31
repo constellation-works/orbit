@@ -12,10 +12,13 @@ mod reviewers;
 use chrono::{DateTime, Utc};
 
 use super::score::{RowInput, Term};
-use super::{AgentFacts, AgentRole};
+use super::{AgentFacts, AgentRole, ExecutionScope};
 
-/// Builds a role's rows for the window and requested minimum support.
-pub(super) type Rows = for<'a> fn(&'a AgentFacts, DateTime<Utc>, usize) -> Vec<RowInput<'a>>;
+/// Builds a role's rows for the window, requested minimum support and
+/// execution scope. Only implementers read the scope: the other roles score
+/// review, authorship and assessment, not how a task was executed.
+pub(super) type Rows =
+    for<'a> fn(&'a AgentFacts, DateTime<Utc>, usize, ExecutionScope) -> Vec<RowInput<'a>>;
 
 /// Role-level fields a role adds to every response header for the window
 /// starting at `since`.
@@ -42,16 +45,18 @@ pub(super) fn implementer_per_task_rows(
     facts: &AgentFacts,
     since: DateTime<Utc>,
     types: &[orbit_config::CrewPerformanceType],
+    execution: ExecutionScope,
 ) -> Vec<serde_json::Value> {
-    implementers::per_task_rows(facts, since, types)
+    implementers::per_task_rows(facts, since, types, execution)
 }
 
 pub(super) fn implementer_by_type_cells(
     facts: &AgentFacts,
     since: DateTime<Utc>,
     types: &[orbit_config::CrewPerformanceType],
+    execution: ExecutionScope,
 ) -> Vec<serde_json::Value> {
-    implementers::by_type_cells(facts, since, types)
+    implementers::by_type_cells(facts, since, types, execution)
 }
 
 /// The implementer regression rate by landed change size, per crew
@@ -60,8 +65,9 @@ pub(super) fn implementer_size_curves(
     facts: &AgentFacts,
     since: DateTime<Utc>,
     complexity: Option<&str>,
+    execution: ExecutionScope,
 ) -> serde_json::Map<String, serde_json::Value> {
-    implementers::size_curves(facts, since, complexity)
+    implementers::size_curves(facts, since, complexity, execution)
 }
 
 /// The tiers [`implementer_size_curves`] can narrow to.

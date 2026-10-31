@@ -6,6 +6,13 @@
 //! The tag is judged as of each attempt's start, so retagging a task after
 //! work began cannot move that attempt out of scoring, and an untagged
 //! task that ends with no diff still counts in full.
+//!
+//! Every count reads the tasks the selection's execution scope admits:
+//! managed tasks by default, managed and interactive together, or
+//! interactive ones alone. Cost and run time count managed tasks whatever
+//! the scope, and the header's `execution_split` shows each row's managed,
+//! interactive and unclassified tasks, so interactive work stays visible
+//! while it is left out of the default counts.
 
 mod context;
 mod evidence;
@@ -20,5 +27,5 @@ pub(super) const ROLE: super::RoleSpec = super::RoleSpec {
     terms: performance::TERMS,
     term_units: &[],
     rows: Some(performance::rows),
-    header: None,
+    header: Some(performance::execution_header),
 };

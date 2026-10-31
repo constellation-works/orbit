@@ -525,6 +525,16 @@ MCP it is in the `analytics` toolset.
   with its crew, model, tier, configured type, tags, context-file selectors, path
   prefixes and per-term counts, plus the type list used. Without these switches,
   the ranking is returned.
+- **Execution.** Each task's execution is derived from its runs, never set by
+  an agent: `managed` when a job (a local delivery run or a pulled claim)
+  worked its final implementation attempt, `interactive` when it reached review
+  or done without one, `unclassified` otherwise. Implementer counts read managed
+  tasks by default; `execution: all` adds interactive tasks and
+  `execution: interactive` shows them alone. Unclassified tasks count in
+  neither. Cost and run time count managed tasks whatever the scope, and the
+  implementers header's `execution_split` lists each crew and model's managed,
+  interactive and unclassified tasks with the interactive ones' landed and
+  regressed counts. Other roles ignore the scope.
 - **Recorded effort.** Each ranking/detail row includes `effort_breakdown` of
   completed invocations by immutable dispatch crew, model and reasoning effort,
   with counts, linked tasks, duration, tokens and provider-reported cost.

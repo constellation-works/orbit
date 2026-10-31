@@ -6,9 +6,9 @@ use orbit_types::workflow::ReviewVerdict;
 use serde_json::{Value, json};
 
 use crate::application::agents::attribution::{Charge, Credit, Owner, row_key};
-use crate::application::agents::facts::{Attempt, Problem, Review, TaskFacts};
+use crate::application::agents::facts::{Attempt, ExecutionMode, Problem, Review, TaskFacts};
 use crate::application::agents::score::{Occurrence, RowInput, Stat, Tally, Term, number};
-use crate::application::agents::{AgentFacts, AgentRole};
+use crate::application::agents::{AgentFacts, AgentRole, ExecutionScope};
 
 pub(super) const TERMS: &[Term] = &[
     Term {
@@ -76,14 +76,19 @@ pub(super) fn counted(attempt: &Attempt, since: DateTime<Utc>) -> bool {
     attempt.start >= since && !attempt.no_diff()
 }
 
-/// Each row's counted tasks: one task per row, however many counted
-/// attempts that row started in the window.
+/// Each row's counted tasks whose execution `execution` admits: one task
+/// per row, however many counted attempts that row started in the window.
 pub(super) fn work_by_row(
     facts: &AgentFacts,
     since: DateTime<Utc>,
+    execution: ExecutionScope,
 ) -> BTreeMap<Key, Vec<&TaskFacts>> {
     let mut work: BTreeMap<Key, Vec<&TaskFacts>> = BTreeMap::new();
-    for task in &facts.tasks {
+    for task in facts
+        .tasks
+        .iter()
+        .filter(|task| execution.admits(task.execution))
+    {
         let keys: BTreeSet<_> = task
             .attempts
             .iter()
@@ -101,8 +106,9 @@ pub(super) fn rows(
     facts: &AgentFacts,
     since: DateTime<Utc>,
     _min_support: usize,
+    execution: ExecutionScope,
 ) -> Vec<RowInput<'_>> {
-    let work = work_by_row(facts, since);
+    let work = work_by_row(facts, since, execution);
     let mut charges: BTreeMap<&str, Vec<&Charge>> = BTreeMap::new();
     let mut credits: BTreeMap<&str, Vec<&Credit>> = BTreeMap::new();
     for charge in &facts.charges {
@@ -176,6 +182,69 @@ pub(super) fn rows(
         }
     }
     rows
+}
+
+/// The implementer header's `execution_split`: per row (crew and model) with
+/// a counted attempt in the window, whatever the selection's scope, its
+/// tasks by derived execution mode, and the interactive tasks' outcomes
+/// (landed, and regressed by any `regression_from` link), so interactive
+/// work stays visible while the default counts leave it out.
+pub(super) fn execution_header(
+    facts: &AgentFacts,
+    since: DateTime<Utc>,
+) -> serde_json::Map<String, Value> {
+    #[derive(Default)]
+    struct Split {
+        managed: usize,
+        interactive: usize,
+        unclassified: usize,
+        interactive_landed: usize,
+        interactive_regressed: usize,
+    }
+    let regressed: BTreeSet<&str> = facts
+        .regressions
+        .iter()
+        .map(|link| link.culprit.as_str())
+        .collect();
+    let mut splits: BTreeMap<Key, Split> = BTreeMap::new();
+    for task in &facts.tasks {
+        let keys: BTreeSet<_> = task
+            .attempts
+            .iter()
+            .filter(|a| counted(a, since))
+            .map(key)
+            .collect();
+        for row in keys {
+            let split = splits.entry(row).or_default();
+            match task.execution {
+                ExecutionMode::Managed => split.managed += 1,
+                ExecutionMode::Unclassified => split.unclassified += 1,
+                ExecutionMode::Interactive => {
+                    split.interactive += 1;
+                    split.interactive_landed += usize::from(task.landed);
+                    split.interactive_regressed +=
+                        usize::from(regressed.contains(task.id.as_str()));
+                }
+            }
+        }
+    }
+    let rows: Vec<Value> = splits
+        .into_iter()
+        .map(|((crew, model), split)| {
+            json!({
+                "crew": crew,
+                "model": model,
+                "managed_tasks": split.managed,
+                "interactive_tasks": split.interactive,
+                "unclassified_tasks": split.unclassified,
+                "interactive_landed": split.interactive_landed,
+                "interactive_regressed": split.interactive_regressed,
+            })
+        })
+        .collect();
+    let mut header = serde_json::Map::new();
+    header.insert("execution_split".into(), Value::Array(rows));
+    header
 }
 
 /// A later accept cannot erase an earlier reject of this row's candidate.
@@ -303,7 +372,6 @@ fn row_input<'a>(
         .iter()
         .filter(|task| first_review(task, &row, since).is_some())
         .count();
-    let landed = tallies.get("weighted_landed").map_or(0.0, Tally::count);
     let mut tiers: BTreeMap<&str, usize> = BTreeMap::new();
     let mut durations = Vec::new();
     let mut run_ids = BTreeSet::new();
@@ -313,13 +381,24 @@ fn row_input<'a>(
     // walks, attempt by attempt rather than by distinct run: a run shared
     // by two attempts covers both, and one attempt without a priced run
     // suppresses the complete-cohort average below. Display only; it
-    // never enters tallies, denominators or scores.
+    // never enters tallies, denominators or scores. Cost and run time count
+    // managed tasks only, whatever the scope: an interactive session
+    // records neither, so its tasks would only read as missing runs.
     let mut cost_attempts = 0usize;
     let mut cost_measured_attempts = 0usize;
     let mut cost_unpriced_attempts = 0usize;
     let mut cost_missing_run_attempts = 0usize;
+    let mut managed_landed = 0usize;
     for &task in tasks {
         *tiers.entry(tier(task)).or_default() += 1;
+        if task.execution != ExecutionMode::Managed {
+            continue;
+        }
+        managed_landed += usize::from(
+            tallies
+                .get("weighted_landed")
+                .is_some_and(|tally| tally.task_counts().any(|(landed, _)| landed.id == task.id)),
+        );
         for attempt in task
             .attempts
             .iter()
@@ -380,8 +459,8 @@ fn row_input<'a>(
             stat(
                 "cost_per_weighted_landed",
                 "Cost per landed task (USD)",
-                cost.filter(|_| landed > 0.0)
-                    .map(|cost| json!(cost / landed))
+                cost.filter(|_| managed_landed > 0)
+                    .map(|cost| json!(cost / managed_landed as f64))
                     .unwrap_or(Value::Null),
             ),
             stat(

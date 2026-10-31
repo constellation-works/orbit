@@ -2,11 +2,16 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use chrono::{DateTime, Utc};
 use orbit_store::contracts::JobRunQuery;
-use orbit_types::task::{Task, TaskHistoryEntry};
+use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
 use serde_json::Value;
 
-use super::model::{IMPLEMENTATION_JOBS, RunRecord, Runner};
+use super::super::records::{landed, run_spans};
+use super::model::{ExecutionMode, IMPLEMENTATION_JOBS, RunRecord, Runner};
 use crate::OrbitRuntime;
+
+/// The status event a claim's pull writes when it opens an attempt on
+/// another machine.
+const PULLED_BY_EVENT: &str = "pulled_by";
 
 /// The implementation job runs active since `horizon`, by the task their
 /// input names, oldest first. Read without their steps.
@@ -95,7 +100,7 @@ pub(super) fn assigned_runner(
 ) -> Runner {
     let note = history
         .iter()
-        .find(|entry| entry.at == start && entry.event == "pulled_by")
+        .find(|entry| entry.at == start && entry.event == PULLED_BY_EVENT)
         .and_then(|entry| entry.note.as_deref())
         .and_then(|note| serde_json::from_str::<Value>(note).ok());
     let field = |pointer: &str| {
@@ -128,4 +133,100 @@ pub(super) fn assigned_runner(
 pub(super) fn assigned_crew(note: &str) -> Option<String> {
     let last = note.split('`').skip(1).step_by(2).last()?;
     (!last.is_empty() && !last.starts_with(['(', '<'])).then(|| last.to_string())
+}
+
+/// Whether a claim's pull opened the attempt starting at `start`: a job on
+/// another machine worked it, even when the pull recorded no run id.
+pub(super) fn opened_by_claim(history: &[TaskHistoryEntry], start: DateTime<Utc>) -> bool {
+    history
+        .iter()
+        .any(|entry| entry.at == start && entry.event == PULLED_BY_EVENT)
+}
+
+/// When the task last moved to done.
+pub(super) fn landed_at(history: &[TaskHistoryEntry]) -> Option<DateTime<Utc>> {
+    history
+        .iter()
+        .rev()
+        .find(|entry| entry.to_status == Some(TaskStatus::Done))
+        .map(|entry| entry.at)
+}
+
+/// The attempt whose candidate landed: the last one started before the task
+/// was done, else the last one. `None` for a task that did not land.
+pub(super) fn final_attempt(
+    landed: bool,
+    landed_at: Option<DateTime<Utc>>,
+    starts: &[DateTime<Utc>],
+) -> Option<usize> {
+    if !landed {
+        return None;
+    }
+    match landed_at {
+        Some(at) => starts.iter().rposition(|start| *start <= at),
+        None => starts.len().checked_sub(1),
+    }
+}
+
+/// How a task was executed, from whether a job worked each attempt (`jobs`,
+/// in start order): managed when its final attempt (the landed one, else the
+/// latest) was a job's, or when history records no attempt but an
+/// implementation run (`job_run`) names the task; interactive when it reached
+/// review or done without that; unclassified otherwise.
+pub(super) fn execution_mode(
+    status: TaskStatus,
+    history: &[TaskHistoryEntry],
+    jobs: &[bool],
+    final_attempt: Option<usize>,
+    job_run: bool,
+) -> ExecutionMode {
+    let managed = match final_attempt.or(jobs.len().checked_sub(1)) {
+        Some(index) => jobs[index],
+        None => job_run,
+    };
+    if managed {
+        return ExecutionMode::Managed;
+    }
+    let reviewed = |status: TaskStatus| matches!(status, TaskStatus::Review | TaskStatus::Done);
+    if reviewed(status)
+        || history
+            .iter()
+            .any(|entry| entry.to_status.is_some_and(reviewed))
+    {
+        ExecutionMode::Interactive
+    } else {
+        ExecutionMode::Unclassified
+    }
+}
+
+/// The execution mode of each of `tasks` (with its history), derived as the
+/// agent scan derives it, from the implementation job runs active since
+/// `since`. For readers outside the scan, such as experiment readouts.
+pub(crate) fn task_execution_modes(
+    runtime: &OrbitRuntime,
+    since: DateTime<Utc>,
+    tasks: &[(&Task, &[TaskHistoryEntry])],
+    now: DateTime<Utc>,
+) -> BTreeMap<String, ExecutionMode> {
+    let mut runs = implementation_runs(runtime, since);
+    tasks
+        .iter()
+        .map(|(task, history)| {
+            let id = task.id.to_string();
+            let task_runs = runs.remove(&id).unwrap_or_default();
+            let spans = run_spans(history);
+            let jobs: Vec<bool> = spans
+                .iter()
+                .map(|span| {
+                    runner(&task_runs, span.start, span.end.or(Some(now))).is_some()
+                        || opened_by_claim(history, span.start)
+                })
+                .collect();
+            let starts: Vec<_> = spans.iter().map(|span| span.start).collect();
+            let landed = landed(task.status, history);
+            let last = final_attempt(landed, landed_at(history), &starts);
+            let mode = execution_mode(task.status, history, &jobs, last, !task_runs.is_empty());
+            (id, mode)
+        })
+        .collect()
 }

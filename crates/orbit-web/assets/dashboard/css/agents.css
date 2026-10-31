@@ -42,6 +42,11 @@
 /* Without rows there is no detail column for the disclosure to sit beside. */
 .agents-state ~ .agents-how { grid-column: 1 / -1; }
 .agents-role-panel { grid-area: panel; }
+/* Interactive work spans the body under everything else. */
+.agents-execution { grid-column: 1 / -1; min-width: 0; }
+.agents-execution h3 { margin: 0 0 4px; font-size: 13px; }
+.agents-execution-note,
+.agents-execution-none { margin: 0 0 8px; color: var(--fg-dim); font-size: 12px; line-height: 1.5; max-width: 820px; }
 /* The panel row exists only with a panel, or its empty track keeps a gap. */
 .agents-body:has(> .agents-role-panel) {
   grid-template-areas:

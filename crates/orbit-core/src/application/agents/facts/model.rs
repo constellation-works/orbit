@@ -142,6 +142,10 @@ pub(in crate::application::agents) struct Attempt {
     pub(in crate::application::agents) start: DateTime<Utc>,
     pub(in crate::application::agents) end: Option<DateTime<Utc>>,
     pub(in crate::application::agents) runner: Runner,
+    /// Whether a job worked the attempt: a local implementation run matched
+    /// it, or a claim's `pulled_by` opened it on another machine. An attempt
+    /// an interactive session opened by moving the task has neither.
+    pub(in crate::application::agents) job: bool,
     /// The task's tags as of this attempt's start, replayed from its
     /// `tags_changed` history: a tag added later does not reclassify work
     /// already admitted.
@@ -153,6 +157,32 @@ impl Attempt {
     /// admitted: not implementation, so it counts on no implementer row.
     pub(in crate::application::agents) fn no_diff(&self) -> bool {
         is_no_diff_expected(&self.tags)
+    }
+}
+
+/// How a task was executed, derived from its implementation attempts; no
+/// agent sets it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ExecutionMode {
+    /// Its final implementation attempt (the landed one, else the latest)
+    /// was worked by a job.
+    Managed,
+    /// It reached review or done, but its final attempt had no job: the work
+    /// was done in an interactive session, which records no run telemetry.
+    Interactive,
+    /// Neither yet: not implemented, or worked interactively and not yet in
+    /// review. Counted in no execution population.
+    Unclassified,
+}
+
+impl ExecutionMode {
+    /// The mode's wire name.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ExecutionMode::Managed => "managed",
+            ExecutionMode::Interactive => "interactive",
+            ExecutionMode::Unclassified => "unclassified",
+        }
     }
 }
 
@@ -320,6 +350,8 @@ pub(in crate::application::agents) struct TaskFacts {
     /// The attempt whose candidate landed: the last one started before the
     /// task was done.
     pub(in crate::application::agents) final_attempt: Option<usize>,
+    /// Managed, interactive or unclassified, from the attempts.
+    pub(in crate::application::agents) execution: ExecutionMode,
     /// When the task was last done.
     pub(in crate::application::agents) landed_at: Option<DateTime<Utc>>,
     pub(in crate::application::agents) records: Vec<Record>,
