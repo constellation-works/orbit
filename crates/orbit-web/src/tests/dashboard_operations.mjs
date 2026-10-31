@@ -1783,7 +1783,7 @@ for (const mode of ['empty', 'error', 'missing']) {
   const missed = backlogLink();
   const wantReason = mode === 'empty' ? 'empty' : 'transport';
   const wantText = mode === 'empty' ? /no backlog/i : /couldn't load/i;
-  assert(forecastCard()?.querySelectorAll('.drain-backlog-forecast').length === 1 && missed?.classList.contains('unavailable') && missed.dataset.forecastReason === wantReason && wantText.test(missed.textContent), `${mode}: one explained muted line (${wantReason}): ${missed?.textContent}`);
+  assert(forecastCard()?.querySelectorAll('.drain-backlog-forecast').length === 1 && missed?.classList.contains('unavailable') && missed.dataset.forecastReason === wantReason && wantText.test(missed.textContent) && missed.querySelector('.drain-backlog-forecast-baseline')?.textContent === '', `${mode}: one muted line, blank, explained in its tooltip (${wantReason}): ${missed?.textContent}`);
   assert(missed.getAttribute('href')?.includes('#analytics/forecast') || String(missed.href || '').includes('analytics/forecast'), `${mode}: the explained line stays a link to Analytics › Forecast`);
   assert(forecastTextIncludesAdmission() && get('auto-drain-body').querySelector('.drain-capacity'), `${mode}: the drain card still renders`);
 }
@@ -1791,8 +1791,11 @@ backlogForecastMode = 'regression';
 await fetchAndRenderAutoDrainPane();
 await tick();
 const regressionLink = backlogLink();
-assert(regressionLink?.dataset.forecastReason === 'regression_history_missing' && /regression/i.test(regressionLink.querySelector('.drain-backlog-forecast-reason')?.textContent || ''), `regression gap explains itself visibly on the drain card: ${regressionLink?.textContent}`);
-assert(/pre-regression baseline/i.test(regressionLink.textContent) && /excludes unsupported regression/i.test(regressionLink.textContent) && regressionLink.textContent.includes('2.7h') && /p90 unknown/i.test(regressionLink.textContent), `regression baseline is labelled and keeps p90 unknown: ${regressionLink?.textContent}`);
+// The visible line is only the baseline's figures; the reason and the
+// baseline's caveat stay in the tooltip and accessible text [ORB-20453].
+const regressionFigures = regressionLink?.querySelector('.drain-backlog-forecast-baseline')?.textContent || '';
+assert(regressionLink?.dataset.forecastReason === 'regression_history_missing' && /^Time to drain /.test(regressionFigures) && regressionFigures.includes('2.7h') && /p90 unknown/i.test(regressionFigures), `regression gap shows the baseline figures and keeps p90 unknown: ${regressionLink?.textContent}`);
+assert(/regression/i.test(regressionLink.title) && /pre-regression baseline/i.test(regressionLink.querySelector('.visually-hidden')?.textContent || ''), `the reason and baseline caveat stay in the tooltip and accessible text: ${regressionLink.title}`);
 assert(!/90-day horizon/i.test(regressionLink.textContent), `regression gap is not a horizon exceedance: ${regressionLink?.textContent}`);
 backlogForecastMode = 'horizon';
 await fetchAndRenderAutoDrainPane();

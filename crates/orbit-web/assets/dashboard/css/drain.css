@@ -150,8 +150,7 @@
 .drain-backlog-forecast-figures { flex: 1 1 auto; color: var(--fg); font-variant-numeric: tabular-nums; }
 .drain-backlog-forecast-go { color: var(--fg-mute); }
 .drain-backlog-forecast.unavailable { color: var(--fg-mute); }
-.drain-backlog-forecast-reason { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
-.drain-backlog-forecast-baseline { flex: 1 1 100%; color: var(--fg-dim); overflow-wrap: anywhere; }
+.drain-backlog-forecast-baseline { flex: 1 1 auto; min-width: 0; color: var(--fg-dim); overflow-wrap: anywhere; }
 /* In a narrow card the figures drop under the chart, right-aligned. */
 @container drain-card (max-width: 520px) {
   .drain-forecast-peaks { grid-template-columns: 56px minmax(0, 1fr); row-gap: 6px; }

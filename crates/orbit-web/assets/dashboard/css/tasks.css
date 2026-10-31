@@ -40,6 +40,11 @@
 .panel > header.tasks-head .count { font-size: 13.5px; line-height: 20px; color: var(--fg-mute); }
 .panel > header.tasks-head .task-search-wrap { flex: 1 1 220px; max-width: 300px; min-width: 0; }
 .task-search-wrap { position: relative; }
+/* Below about 1202px the list toolbar keeps only its heading: the search box,
+   Settle merged PRs and New task are hidden [ORB-20453]. */
+@media (max-width: 1201.98px) {
+  .panel > header.tasks-head :is(.task-search-wrap, #tasks-settle-merged, #task-create-open) { display: none; }
+}
 .task-search-wrap #task-search {
   width: 100%;
   height: 42px;
