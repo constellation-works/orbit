@@ -23,6 +23,7 @@ use crate::contracts::routine::{
 use crate::contracts::session_log::{SessionLogAppendParams, SessionLogEntry, SessionLogFilter};
 use crate::contracts::v2_audit::{
     V2AuditEventFilter, V2AuditEventInsertParams, V2AuditEventRow, V2AuditEventTailPage,
+    V2AuditKindForwardPayloads, V2AuditKindForwardQuery,
 };
 use crate::contracts::{
     AuditActorAggregate, AuditAttributionAggregate, AuditEventFilter, AuditEventInsertParams,
@@ -330,6 +331,17 @@ pub trait V2AuditStoreBackend: Send + Sync {
         body_kind: Option<&str>,
         per_run_limit: usize,
     ) -> Result<Vec<V2AuditEventRow>, OrbitError>;
+    /// Payload text for a kind-filtered forward scan, from one read snapshot.
+    ///
+    /// The window is the oldest `query.scan_limit` rows for the workspace,
+    /// run and source. Payloads come back only for `canonical_event_type` and
+    /// for event types outside `known_event_types`. `past_scan_limit` is
+    /// whether a further raw row exists; it does not depend on which payloads
+    /// were returned.
+    fn list_v2_audit_kind_forward_payloads(
+        &self,
+        query: &V2AuditKindForwardQuery<'_>,
+    ) -> Result<V2AuditKindForwardPayloads, OrbitError>;
     /// Run ids in `run_ids` that have at least one reconstructable v2 envelope
     /// row. Used to distinguish `unavailable` from `not_attempted`.
     fn list_v2_audit_run_ids_with_events(

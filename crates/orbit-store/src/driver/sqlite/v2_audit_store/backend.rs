@@ -6,6 +6,7 @@ use crate::Store;
 
 use crate::contracts::{
     V2AuditEventFilter, V2AuditEventInsertParams, V2AuditEventRow, V2AuditEventTailPage,
+    V2AuditKindForwardPayloads, V2AuditKindForwardQuery,
 };
 
 impl crate::contracts::V2AuditStoreBackend for Store {
@@ -47,6 +48,13 @@ impl crate::contracts::V2AuditStoreBackend for Store {
             body_kind,
             per_run_limit,
         )
+    }
+
+    fn list_v2_audit_kind_forward_payloads(
+        &self,
+        query: &V2AuditKindForwardQuery<'_>,
+    ) -> Result<V2AuditKindForwardPayloads, OrbitError> {
+        Self::list_v2_audit_kind_forward_payloads(self, query)
     }
 
     fn list_v2_audit_run_ids_with_events(
