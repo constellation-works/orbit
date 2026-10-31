@@ -102,6 +102,8 @@ mod reliability;
 mod resource_profiles;
 #[path = "http_api/runs.rs"]
 mod runs;
+#[path = "http_api/schedule_edit_guards.rs"]
+mod schedule_edit_guards;
 #[path = "http_api/support.rs"]
 mod support;
 #[path = "http_api/task_auto_fix.rs"]

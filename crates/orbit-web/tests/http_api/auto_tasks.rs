@@ -16,10 +16,14 @@ use super::support::{Fixture, isolated, json_ok, write_json};
 const URL: &str = "/api/auto-tasks?workspace=ws_http_fixture";
 
 fn definition(fixture: &Fixture, name: &str) {
-    definition_with_schedule(fixture, name, AutoTaskSchedule::every_minutes(60));
+    seed_auto_task_with_schedule(fixture, name, AutoTaskSchedule::every_minutes(60));
 }
 
-fn definition_with_schedule(fixture: &Fixture, name: &str, schedule: AutoTaskSchedule) {
+pub(super) fn seed_auto_task_with_schedule(
+    fixture: &Fixture,
+    name: &str,
+    schedule: AutoTaskSchedule,
+) {
     fixture
         .runtime
         .auto_task_add(AutoTaskAddParams {
@@ -85,7 +89,7 @@ fn seed(
             }}))
             .unwrap()
         };
-        definition_with_schedule(fixture, &name, schedule);
+        seed_auto_task_with_schedule(fixture, &name, schedule);
         let tasks = (0..20)
             .map(|_| {
                 let task = instance(fixture, vec![auto_task_tag(&name)], TaskStatus::Backlog);
@@ -293,7 +297,7 @@ fn list_reports_effective_enabled_and_the_ownership_skip() {
                     "max_items": 50, "retries": 0,
                 }}))
                 .unwrap();
-                definition_with_schedule(&fixture, name, schedule);
+                seed_auto_task_with_schedule(&fixture, name, schedule);
             }
             fixture.runtime.auto_task_toggle("elsewhere", true).unwrap();
             // Leave the consumer as the seed does: added disabled and written
@@ -367,11 +371,11 @@ fn list_keeps_delivery_schedules_independent_of_corrupt_time_cursors() {
                 ("disabled", Some("hm_elsewhere"), false),
                 ("inactive", Some("hm_elsewhere"), true),
             ] {
-                definition_with_schedule(&fixture, name, deliveries(owner));
+                seed_auto_task_with_schedule(&fixture, name, deliveries(owner));
                 fixture.runtime.auto_task_toggle(name, enabled).unwrap();
             }
             definition(&fixture, "interval");
-            definition_with_schedule(&fixture, "cron", AutoTaskSchedule::cron("* * * * *"));
+            seed_auto_task_with_schedule(&fixture, "cron", AutoTaskSchedule::cron("* * * * *"));
             // The missing seeding plugin makes the enabled definition inactive.
             let inactive = fixture.work.join("auto_tasks/inactive.yaml");
             let body = fs::read_to_string(&inactive).unwrap();
@@ -498,8 +502,8 @@ fn disable_legacy_enabled_consumer_stamps_the_operator_and_keeps_raw_cas() {
         "auto_tasks::disable_legacy_enabled_consumer_stamps_the_operator_and_keeps_raw_cas",
         || {
             let fixture = Fixture::new();
-            definition_with_schedule(&fixture, "delivery-code-review", deliveries(None));
-            definition_with_schedule(&fixture, "parked", deliveries(None));
+            seed_auto_task_with_schedule(&fixture, "delivery-code-review", deliveries(None));
+            seed_auto_task_with_schedule(&fixture, "parked", deliveries(None));
             definition(&fixture, "nightly");
             strip_operator_stamp(&fixture, "delivery-code-review");
             let config = fixture.global.join("config.toml");

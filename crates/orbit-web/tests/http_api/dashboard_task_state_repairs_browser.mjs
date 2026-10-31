@@ -28,21 +28,22 @@ const base = {
   status_transitions: [], history: [], artifacts: [], tags: [],
   description: 'Original description.', acceptance_criteria: ['Original criterion'],
 };
+const owed = () => [1, 2].map(criterion => ({ criterion, state: 'owed', host: 'deploy-host', command: 'measure', target: 'passed' }));
 const tasks = [
   { ...base, id: 'PIL-1', title: 'Proposed task held by pilot warnings', status: 'proposed', comments: [],
     escalation_triage: { available: true, subject: 'hold', run_id: null },
     pilot_warnings: [{ kind: 'utility_warnings', text: 'A held finding' }] },
-  { ...base, id: 'DOC-1', title: 'Task with a long thread', status: 'backlog', resolvable_pilot_admission_hold: true,
+  { ...base, id: 'DOC-1', title: 'Task with a long thread', status: 'backlog', resolvable_pilot_admission_hold: true, owed_criteria: owed(),
     comments: Array.from({ length: 10 }, (_, i) => ({ at, by: 'operator', message: longComment(i + 1) })),
     relations: [{ type: 'related_to', target: 'DOC-2' }, { type: 'regression_from', target: 'DOC-2', regression: { nature: 'defect_in_new', escape: 'no_test' } }] },
   { ...base, id: 'DOC-2', title: 'Related task', status: 'backlog', comments: [{ at, by: 'operator', message: 'Only comment.' }] },
-  { ...base, id: 'DOC-3', title: 'Finished task outside the filter', status: 'done', resolvable_pilot_admission_hold: true, comments: [{ at, by: 'operator', message: 'Done.' }] },
+  { ...base, id: 'DOC-3', title: 'Finished task outside the filter', status: 'done', resolvable_pilot_admission_hold: true, owed_criteria: owed(), comments: [{ at, by: 'operator', message: 'Done.' }] },
   { ...base, id: 'RUN-1', title: 'Running task owned elsewhere', status: 'in-progress', job_run_id: 'jrun-owned', job_run_navigable: true,
     workspace_id: 'second-owner', comments: [], started_at: at,
     job_run: { run_id: 'jrun-owned', state: 'running', step_id: 'implement', step_index: 1, step_count: 5, started_at: at } },
 ];
 const fx = globalThis.fx = {
-  copied, posts: [], patches: [], runPolls: 0, refuseAdmission: true, holdPatch: null, patchRelease: null,
+  copied, posts: [], patches: [], runPolls: 0, refuseAdmission: true, holdPatch: null, patchRelease: null, holdRecord: false, recordRelease: null, refuseRecord: false,
 };
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 globalThis.fetch = async (input, options = {}) => {
@@ -73,6 +74,14 @@ globalThis.fetch = async (input, options = {}) => {
     if (sub[2] === '/pilot' || sub[2] === '/triage') {
       fx.posts.push(api);
       return json({ run_id: 'jrun-' + sub[2].slice(1) + '-1', state: 'submitted' });
+    }
+    if (sub[2] === '/post-deploy') {
+      const body = JSON.parse(options.body);
+      fx.posts.push({ api, body });
+      if (fx.refuseRecord) return json({ code: 'authorization_denied', error: 'Operator authority required' }, 403);
+      if (fx.holdRecord) await new Promise(resolve => { fx.recordRelease = resolve; });
+      task.owed_criteria.find(entry => entry.criterion === body.criterion).state = 'met';
+      return json(task);
     }
     if (sub[2] === '/pilot-admission') {
       fx.posts.push({ api, body: JSON.parse(options.body) });
@@ -108,6 +117,7 @@ async function scenario(name, run) {
     await run();
     results[name] = { passed: true };
   } catch (error) {
+    console.error(name, error);
     results[name] = { passed: false, message: String(error.message || error).split('\n')[0] };
   }
 }
@@ -294,7 +304,7 @@ try {
       await tab('overview');
     }
     await clear.click();
-    await detail.locator('.operator-record-refusal', { hasText: 'authorization_denied' }).waitFor();
+    await detail.locator('.pilot-admission-hold .operator-record-refusal', { hasText: 'authorization_denied' }).waitFor();
     assert.equal(await clear.isEnabled(), true, `${item.name}: Clear hold must be actionable`);
     assert.equal(await detail.locator('.pilot-admission-approve-anyway').isEnabled(), true, `${item.name}: Approve anyway must be actionable`);
     if (item.draft) {
@@ -314,6 +324,67 @@ try {
     assert.deepEqual(errors, []);
     await context.close();
   });
+  // A successful record owns only its criterion (or the pilot decision pair).
+  // Deferred replies make the retained comment/field draft and focus explicit.
+  for (const id of ['DOC-1', 'DOC-3']) for (const draft of ['comment', 'field']) {
+    await scenario(`independent records ${id} ${draft}`, async () => {
+      const { page, errors, context } = await open(`#tasks?status=backlog&open=${id}`);
+      const detail = page.locator('#task-detail-body');
+      await detail.locator('.pilot-admission-clear').waitFor();
+      if (draft === 'comment') {
+        await detail.locator('[id$="-tab-comments"]').click();
+        await detail.locator('button.action.comment').first().click();
+        await detail.locator('.comment-form textarea').fill('Keep independent record draft');
+        await detail.locator('[id$="-tab-overview"]').click();
+      } else {
+        await detail.locator('.description-block button.field-edit').first().click();
+        await detail.locator('.description-block textarea').fill('Keep independent record draft');
+      }
+      const textarea = detail.locator(draft === 'comment' ? '.comment-form textarea' : '.description-block textarea');
+      const marks = detail.locator('.post-deploy-mark-met');
+      assert.equal(await marks.count(), 2);
+      // A control disabled by its own editor must stay disabled through success.
+      const owned = detail.locator(draft === 'comment' ? '.comment-form button.action.comment' : '.description-block button.action.save');
+      await owned.evaluate(node => { node.disabled = true; });
+      await page.evaluate(() => { fx.refuseRecord = true; });
+      await marks.nth(0).click();
+      await detail.locator('.owed-criteria .operator-record-refusal', { hasText: 'authorization_denied' }).waitFor();
+      assert.equal(await marks.nth(0).isEnabled(), true);
+      assert.equal(await marks.nth(1).isEnabled(), true);
+      assert.equal(await owned.isEnabled(), false);
+      await page.evaluate(() => { fx.refuseRecord = false; fx.holdRecord = true; fx.refuseAdmission = false; });
+      await marks.nth(0).click();
+      await page.waitForFunction(() => Boolean(fx.recordRelease));
+      assert.equal(await marks.nth(1).isEnabled(), false, 'pending record holds the other controls');
+      if (draft === 'comment') await detail.locator('[id$="-tab-comments"]').click();
+      await textarea.focus();
+      await page.evaluate(() => { fx.holdRecord = false; fx.recordRelease(); });
+      await page.waitForFunction(() => document.querySelector('#task-detail-body .pilot-admission-clear')?.disabled === false);
+      assert.equal(await marks.nth(0).isEnabled(), false, 'settled criterion cannot be recorded twice');
+      assert.equal(await marks.nth(1).isEnabled(), true, 'independent owed criterion remains actionable');
+      assert.equal(await owned.isEnabled(), false, 'pre-existing disabled state is preserved');
+      assert.equal(await textarea.inputValue(), 'Keep independent record draft');
+      assert.equal(await textarea.evaluate(node => document.activeElement === node), true, 'refresh preserves draft focus');
+      if (draft === 'comment') await detail.locator('[id$="-tab-overview"]').click();
+      await marks.nth(0).evaluate(node => node.click());
+      assert.equal(await page.evaluate(() => fx.posts.filter(post => post.api?.endsWith('/post-deploy')).length), 2);
+      assert.equal(await detail.locator('.owed-criteria .operator-record-refusal').count(), 0, 'success clears a retained refusal');
+      // Settling the pilot pair must also give back the independent criterion.
+      await detail.locator('.pilot-admission-clear').click();
+      await page.waitForFunction(() => document.querySelectorAll('#task-detail-body .post-deploy-mark-met')[1]?.disabled === false);
+      assert.equal(await detail.locator('.pilot-admission-approve-anyway').isEnabled(), false);
+      assert.equal(await marks.nth(0).isEnabled(), false);
+      await page.screenshot({ path: path.join(evidence, `operator-records-${id}-${draft}-dark-1440.png`) });
+      await page.setViewportSize({ width: 375, height: 812 });
+      await marks.nth(1).scrollIntoViewIfNeeded();
+      await page.screenshot({ path: path.join(evidence, `operator-records-${id}-${draft}-dark-375.png`) });
+      await marks.nth(1).click();
+      await page.waitForFunction(() => fx.posts.filter(post => post.api?.endsWith('/post-deploy')).length === 3);
+      assert.equal(await marks.nth(1).isEnabled(), false);
+      assert.deepEqual(errors, []);
+      await context.close();
+    });
+  }
   fs.writeFileSync(path.join(evidence, 'task-state-repairs-result.json'), JSON.stringify(results, null, 2));
   const failed = Object.entries(results).filter(([, result]) => !result.passed);
   assert.deepEqual(failed, [], `Task state repair scenarios failed:\n${JSON.stringify(failed, null, 2)}`);

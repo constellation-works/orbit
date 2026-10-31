@@ -150,10 +150,18 @@ function deliveryDraft(delivery = {}) {
   };
 }
 
+// Guards are outside this timing form. Preserve both presence and exact
+// values; the server validates their compatibility if the trigger kind changes.
+function scheduleGuardFields(value) {
+  return Object.fromEntries(['when', 'guard_miss']
+    .filter(key => Object.hasOwn(value, key)).map(key => [key, value[key]]));
+}
+
 /** A routine's trigger as an editor draft. */
 export function routineDraft(trigger = {}) {
   const state = trigger.state || {};
   return {
+    guard: scheduleGuardFields(trigger),
     kind: trigger.state ? "state" : trigger.deliveries_landed ? "deliveries_landed" : "cron",
     cron: trigger.cron || "",
     missed_run: trigger.missed_run || "skip",
@@ -178,6 +186,7 @@ export function routineDraft(trigger = {}) {
 /** An auto-task's schedule as an editor draft. */
 export function autoTaskDraft(schedule = {}) {
   return {
+    guard: scheduleGuardFields(schedule),
     kind: schedule.deliveries_landed ? "deliveries_landed" : schedule.every_minutes != null ? "every_minutes" : "cron",
     cron: schedule.cron || "",
     every_minutes: schedule.every_minutes ?? "",
@@ -198,11 +207,11 @@ function deliveryValue(draft) {
 export function routineTriggerValue(draft) {
   if (draft.kind === "cron") {
     const problem = cronProblem(draft.cron);
-    return problem ? { problem } : { value: { cron: draft.cron.trim().split(/\s+/).join(" "), missed_run: draft.missed_run } };
+    return problem ? { problem } : { value: { ...draft.guard, cron: draft.cron.trim().split(/\s+/).join(" "), missed_run: draft.missed_run } };
   }
   if (draft.kind === "deliveries_landed") {
     const delivery = deliveryValue(draft.delivery);
-    return delivery.problem ? delivery : { value: { deliveries_landed: delivery.value, missed_run: draft.missed_run } };
+    return delivery.problem ? delivery : { value: { ...draft.guard, deliveries_landed: delivery.value, missed_run: draft.missed_run } };
   }
   const state = draft.state;
   if (!state.kind) return { problem: "Choose what task state fires this routine." };
@@ -216,21 +225,21 @@ export function routineTriggerValue(draft) {
     if (extras.eligibility) value.eligibility = extras.eligibility;
     if (extras.freshness && Object.keys(extras.freshness).length) value.freshness = extras.freshness;
   }
-  return { value: { state: value, missed_run: draft.missed_run } };
+  return { value: { ...draft.guard, state: value, missed_run: draft.missed_run } };
 }
 
 /** The schedule an auto-task draft describes, or the first problem with it. */
 export function autoTaskScheduleValue(draft) {
   if (draft.kind === "cron") {
     const problem = cronProblem(draft.cron);
-    return problem ? { problem } : { value: { cron: draft.cron.trim().split(/\s+/).join(" ") } };
+    return problem ? { problem } : { value: { ...draft.guard, cron: draft.cron.trim().split(/\s+/).join(" ") } };
   }
   if (draft.kind === "every_minutes") {
     const minutes = wholeNumber(draft.every_minutes, { min: 1 });
-    return minutes.ok ? { value: { every_minutes: minutes.value } } : { problem: "Interval must be a whole number of minutes, 1 or more." };
+    return minutes.ok ? { value: { ...draft.guard, every_minutes: minutes.value } } : { problem: "Interval must be a whole number of minutes, 1 or more." };
   }
   const delivery = deliveryValue(draft.delivery);
-  return delivery.problem ? delivery : { value: { deliveries_landed: delivery.value } };
+  return delivery.problem ? delivery : { value: { ...draft.guard, deliveries_landed: delivery.value } };
 }
 
 // ---------------------------------------------------------------------------

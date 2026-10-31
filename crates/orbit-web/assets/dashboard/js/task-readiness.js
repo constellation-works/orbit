@@ -201,6 +201,7 @@ export function buildPilotAdmissionHold(task, detail, context) {
   actions.appendChild(approve);
   content.appendChild(actions);
   content.dataset.operatorRecord = "true";
+  content.dataset.operatorRecordFeedback = "true";
   const refusal = operatorRecordRefusalNode(task);
   if (refusal) content.appendChild(refusal);
   return el("section", { class: "task-attention warning pilot-admission-hold", "aria-label": "Pilot admission hold" }, [
@@ -227,7 +228,7 @@ export function operatorRecordRefusalNode(task) {
 // the note a refused record leaves appears, and a cleared one goes.
 export function refreshOperatorRecordFeedback(wrap, task) {
   const refusal = operatorRecordSignature(task);
-  for (const host of wrap.querySelectorAll("[data-operator-record]")) {
+  for (const host of wrap.querySelectorAll("[data-operator-record-feedback]")) {
     const shown = host.querySelector(":scope > .operator-record-refusal");
     if ((shown ? shown.textContent : "") === refusal) continue;
     if (shown) shown.remove();
@@ -244,7 +245,8 @@ export function refreshOperatorRecordFeedback(wrap, task) {
 export async function runOperatorRecord(task, detail, btnNode, context, request) {
   const visit = captureWorkspaceVisit();
   const key = taskShared.taskDispatchIdentity(task);
-  if (!taskShared.canMutateTask(task)) return;
+  if (btnNode.disabled || !taskShared.canMutateTask(task)) return;
+  const recordHost = btnNode.closest("[data-operator-record]");
   let suffix;
   let body;
   let successText;
@@ -312,12 +314,13 @@ export async function runOperatorRecord(task, detail, btnNode, context, request)
     }, OPERATOR_RECORD_REFUSAL_MS);
     return;
   }
+  // A retained detail keeps only the settled record's controls disabled:
+  // one criterion row, or both alternatives for the same pilot decision.
+  // Release before refreshing so a failed read cannot strand unrelated actions.
+  for (const b of held) if (!recordHost || b.closest("[data-operator-record]") !== recordHost) b.disabled = false;
   if (!visit.isCurrent()) return;
   taskShared.taskState.taskActionNotice = successText;
   await taskShared.refreshTasks(context);
-  // A detail kept for a draft still shows the settled record's own controls
-  // (its hold or criterion); everything else it holds is usable again.
-  for (const b of held) if (!b.closest("[data-operator-record]")) b.disabled = false;
 }
 
 // The readiness dot beside a backlog task's ID: the pool colour, its words as

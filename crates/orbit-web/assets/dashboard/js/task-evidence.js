@@ -171,7 +171,7 @@ async function answerDecision(task, detail, requestId, answer, note, btnNode, co
 
 export function buildOwedCriteria(owed, task, detail, context) {
   const wrap = el("div", { class: "owed-criteria" });
-  if (task && detail && context) wrap.dataset.operatorRecord = "true";
+  if (task && detail && context) wrap.dataset.operatorRecordFeedback = "true";
   for (const entry of owed) {
     const parts = [
       `${entry.criterion}. [${entry.state}] on ${entry.host}: ${entry.command} (target ${entry.target})`,
@@ -181,6 +181,7 @@ export function buildOwedCriteria(owed, task, detail, context) {
     const row = el("div", { class: "owed-criterion" }, [
       el("span", { text: parts.join(" · ") }),
     ]);
+    if (task && detail && context) row.dataset.operatorRecord = "true";
     if (task && detail && context && entry.state !== "met") {
       const mutable = taskShared.canMutateTask(task);
       const mark = el("button", {
