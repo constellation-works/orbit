@@ -561,13 +561,17 @@ escalated blocks. It replaced the hourly `blocked-task-triage` auto-task
   one hard-tier triager per task exactly as for a pilot warning, with no
   author to pass over. `triage_escalation` branches on the subject.
 - **Decision.** The triager calls `orbit.task.block_triage` without
-  `subject`: `requeue` as a final-recovery requeue counted against the shared
-  bound (2 per 24 hours) and refused for a run another machine executed or a
-  `security`/`security-review` tag; `propose` with one options comment; or
-  `report` naming the human action. A block whose cause is an Orbit defect
-  gets one friction record and is reported. Members settle applied from the
-  `blocked_task_triaged` marker; one the run left untriaged fails
-  `no_triage_marker` and is retried within the routine's budget.
+  `subject`, choosing one of six dispositions: `requeue` as a final-recovery
+  requeue, `resume_run` on the episode's own failed run, or `rerun_ci`, which
+  re-requests the failed checks on the pull request at the inspected head and
+  then requeues. Those three share the final-recovery bound (2 per 24 hours) and
+  are refused for a run another machine executed or a `security`/`security-review`
+  tag; `rerun_ci` is also refused for a moved head, no failed required check, or
+  a head whose failure history records as inherited from the base. `friction_reported` links or files one friction record
+  for an Orbit defect and leaves the task blocked, outside the bound. `propose`
+  records one options comment; `report` names the human action. Members settle
+  applied from the `blocked_task_triaged` marker; one the run left untriaged
+  fails `no_triage_marker` and is retried within the routine's budget.
 - **Auto-task retirement.** `orbit workspace sync` retires a seeded copy of
   the `blocked-task-triage` auto-task by its retired template's provenance,
   preserves an operator-edited copy and reports when an enabled copy is
