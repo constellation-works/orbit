@@ -1,8 +1,8 @@
 ---
 title: "Spec: Auto-task steps and durable waiting"
 owner: codex
-last_updated: 2026-10-30
-last_validated: 2026-10-30
+last_updated: 2026-10-31
+last_validated: 2026-10-31
 status: Draft
 feature: activity-job
 type: design
@@ -487,9 +487,15 @@ enablement, provider work and release timing remain operator decisions.
   can still pass parks while any branch is parked; its join semantics are
   unchanged.
 - **Start guard.** A minted task starts only while its step admits it. Local
-  submission and owner pull-claim admission recheck the run (not finished),
+  submission and owner pull-claim admission recheck the live run,
   the binding, the step (not settled or expired), the definition and
-  `wait_until`. Bound existing work is never restricted.
+  `wait_until`. After interruption or failure, the unique live descendant
+  linked by `retry_source_run_id` may admit the original child only when its
+  checkpoint preserves the frozen definition, binding, action key, input
+  digest, activation and reservation times, and original deadline. The
+  creation receipt keeps naming the minting run. A lineage with no live
+  continuation, ambiguous or unreadable lineage, or a changed obligation
+  holds the child. Bound existing work is never restricted.
 - **Older writers.** The checkpoint carries a version, and a binary refuses
   to rewrite a newer one. A workspace this binary opens is at layout version
   7 (`auto-task-job-checkpoints`, a breaking migration), so a binary that

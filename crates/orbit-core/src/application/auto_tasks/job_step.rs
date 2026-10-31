@@ -20,13 +20,14 @@ use orbit_common::fs::io::with_exclusive_file_lock;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_engine::activity_job::load_job_asset;
 use orbit_engine::{AutoTaskAdmission, AutoTaskObservation, AutoTaskReadiness};
+use orbit_store::contracts::JobRunQuery;
 use orbit_types::task::{JobStepInvocation, Task, TaskDecision, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::automation::ConditionScope;
 use orbit_types::workflow::{
     AUTO_TASK_CHECKPOINT_VERSION, AUTO_TASK_TAG_PREFIX, AutoTaskDefinition, AutoTaskReceipt,
     AutoTaskRunCheckpoint, AutoTaskSchedule, AutoTaskStepRecord, AutoTaskStepStatus, DedupePolicy,
-    FrozenAutoTaskTarget, JobRunState, JobV2, JobV2Step, JobV2StepBody, ParkedWait, PipelineState,
-    RunStateUpdate, auto_task_tag,
+    FrozenAutoTaskTarget, JobRun, JobRunState, JobV2, JobV2Step, JobV2StepBody, ParkedWait,
+    PipelineState, RunStateUpdate, auto_task_tag,
 };
 use serde_json::{Value, json};
 
@@ -323,7 +324,7 @@ fn admit_step_fenced(
     })
 }
 
-/// Why a task an auto-task step minted may not start now: its run ended, its
+/// Why a task an auto-task step minted may not start now: its lineage ended, its
 /// step settled or expired, its definition holds, or the step's readiness no
 /// longer holds. `None` for every other task: binding existing work never
 /// restricts it. An unreadable parent holds rather than admits. History is
@@ -360,18 +361,39 @@ pub(crate) fn step_bound_admission_hold(
         Ok(None) => return hold("its run no longer exists".into()),
         Err(error) => return hold(format!("its run is unreadable: {error}")),
     };
-    if run.state.is_terminal() {
-        return hold(format!(
-            "its run ended {}; a finished job admits no further children",
-            run.state
-        ));
-    }
-    let step = match StepContext::load(runtime, &invocation.run_id, &invocation.step_id) {
+    let mut step = match StepContext::load(runtime, &invocation.run_id, &invocation.step_id) {
         Ok(step) => step,
         Err(error) => return hold(format!("its checkpoint is unreadable: {error}")),
     };
     if step.record.as_ref().map(|record| record.task_id.as_deref()) != Some(Some(&task.id)) {
         return hold(format!("the step is not bound to {}", task.id));
+    }
+    if !step.record.as_ref().is_some_and(|record| {
+        record.action_key == invocation.action_key
+            && record.input_digest == invocation.input_digest
+            && record.auto_task == invocation.auto_task
+    }) {
+        return hold("the checkpoint does not match its creation receipt".into());
+    }
+    if run.state.is_terminal() {
+        let continuation = match live_invocation_continuation(runtime, &run) {
+            Ok(Some(continuation)) => continuation,
+            Ok(None) => return hold(format!("its run ended {}; no live continuation", run.state)),
+            Err(error) => return hold(format!("its continuation is unreadable: {error}")),
+        };
+        let continued = match StepContext::load(runtime, &continuation.run_id, &invocation.step_id)
+        {
+            Ok(continued) => continued,
+            Err(error) => {
+                return hold(format!(
+                    "its continuation checkpoint is unreadable: {error}"
+                ));
+            }
+        };
+        if !step.preserves_step_obligation(&continued) {
+            return hold("its continuation does not preserve the original step obligation".into());
+        }
+        step = continued;
     }
     if let Some(record) = step
         .record
@@ -399,6 +421,69 @@ pub(crate) fn step_bound_admission_hold(
     None
 }
 
+/// Resolve only explicit descendants, never an unrelated execution of this
+/// job. Admission chooses no winner when stored lineage is ambiguous or
+/// unreadable. Read active rows without hydrating historical step outputs.
+fn live_invocation_continuation(
+    runtime: &OrbitRuntime,
+    source: &JobRun,
+) -> Result<Option<JobRun>, OrbitError> {
+    const SCAN_LIMIT: usize = 500;
+    const MAX_HOPS: usize = 64;
+    let candidates = runtime
+        .stores()
+        .jobs()
+        .list_job_runs_filtered(&JobRunQuery {
+            job_id: Some(source.job_id.clone()),
+            states: vec![
+                JobRunState::Pending,
+                JobRunState::Running,
+                JobRunState::Retrying,
+            ],
+            limit: Some(SCAN_LIMIT),
+            include_steps: false,
+            input_keys: Some(&[]),
+            ..Default::default()
+        })?;
+    if candidates.len() == SCAN_LIMIT {
+        return Err(OrbitError::InvalidInput(
+            "live continuation scan is incomplete".into(),
+        ));
+    }
+    let mut continuation = None;
+    for candidate in candidates {
+        let mut cursor = candidate.clone();
+        let mut seen = BTreeSet::new();
+        loop {
+            if seen.len() >= MAX_HOPS || !seen.insert(cursor.run_id.clone()) {
+                return Err(OrbitError::InvalidInput(
+                    "retry lineage is cyclic or too deep".into(),
+                ));
+            }
+            if cursor.job_id != source.job_id {
+                return Err(OrbitError::InvalidInput(
+                    "retry lineage changes job identity".into(),
+                ));
+            }
+            if cursor.run_id == source.run_id {
+                if continuation.replace(candidate).is_some() {
+                    return Err(OrbitError::InvalidInput(
+                        "multiple live continuations".into(),
+                    ));
+                }
+                break;
+            }
+            let Some(parent) = cursor.retry_source_run_id else {
+                break;
+            };
+            cursor = runtime.get_job_run_backend(&parent)?.ok_or_else(|| {
+                OrbitError::InvalidInput("retry lineage has a missing parent".into())
+            })?;
+        }
+    }
+    Ok(continuation)
+}
+
 /// One step of a frozen execution, as its checkpoint records it.
 struct StepContext {
     state: PipelineState,
@@ -409,6 +494,28 @@ struct StepContext {
 }
 
 impl StepContext {
+    /// A resume can change observation and settlement, but cannot acquire a
+    /// different child's binding or reset either the job or step wait clock.
+    fn preserves_step_obligation(&self, continued: &Self) -> bool {
+        let Some((original, next)) = self.record.as_ref().zip(continued.record.as_ref()) else {
+            return false;
+        };
+        !original.status.is_settled()
+            && self.checkpoint.frozen_job == continued.checkpoint.frozen_job
+            && self.checkpoint.started_at == continued.checkpoint.started_at
+            && self.checkpoint.expires_at == continued.checkpoint.expires_at
+            && self.checkpoint.source_revision == continued.checkpoint.source_revision
+            && self.checkpoint.frozen_targets.get(&original.auto_task)
+                == continued.checkpoint.frozen_targets.get(&original.auto_task)
+            && original.auto_task == next.auto_task
+            && original.action_key == next.action_key
+            && original.input_digest == next.input_digest
+            && original.task_id == next.task_id
+            && original.activated_at == next.activated_at
+            && original.reserved_at == next.reserved_at
+            && original.minted == next.minted
+    }
+
     fn load(runtime: &OrbitRuntime, run_id: &str, step_id: &str) -> Result<Self, OrbitError> {
         let state = runtime.read_run_state(run_id)?.ok_or_else(|| {
             OrbitError::InvalidInput(format!("run {run_id} has no state; nothing was admitted"))
