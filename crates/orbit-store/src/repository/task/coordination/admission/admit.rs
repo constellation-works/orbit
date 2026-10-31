@@ -1,223 +1,23 @@
-//! Owner admission foundation. Reached only through `orbit-core`'s trusted
-//! owner seams — the `orbit.task.pull` tool and the owner-local drain adapter —
-//! which supply the caller identity from the session, never from the request.
+//! Admission decision: the admit entry points and the exclusive section that
+//! decides each candidate.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_common::fs::selector::canonical_selector_in_workspace;
-use orbit_common::security::release::sha256_hex;
-use orbit_types::task::{Task, TaskComment, TaskHistoryEntry, TaskStatus};
-use serde::{Deserialize, Serialize};
+use orbit_types::task::TaskStatus;
 
-use super::TaskCommitBoundary;
-use super::lifecycle::fresh_offer_history;
-use super::selection::{AdmissionSnapshot, DependencyReach, Screen};
+use super::super::TaskCommitBoundary;
+use super::super::lifecycle::fresh_offer_history;
+use super::super::selection::{AdmissionSnapshot, DependencyReach, Screen};
+use super::{
+    ADMISSION_RESERVATION_TTL_SECONDS, AdmissionGuidanceCapture, CLAIM_KIND, RECEIPT_KIND,
+    StoredReceipt, ValidationHold, admission_refusal, decode, digest, encode, receipt_key, row,
+};
 use crate::contracts::*;
 use crate::repository::task::v2::{TaskV2Store, task_comment_from_row, task_history_from_events};
 
-mod retention;
-
-/// The in-section re-check of assessment-scoped holds a caller gives
-/// [`TaskCommitBoundary::admit_task`]: the candidate with the comments and
-/// history read with it, to the hold's diagnostic, or `None` when it is free.
-pub type ValidationHold<'a> =
-    dyn Fn(&Task, &[TaskComment], &[TaskHistoryEntry]) -> Result<Option<String>, OrbitError> + 'a;
-
-/// Owner callback invoked only for the selected task, before claim persistence.
-pub type AdmissionGuidanceCapture<'a> =
-    dyn Fn(&Task) -> Result<AdmissionTaskGuidance, OrbitError> + 'a;
-
-pub(super) const RECEIPT_KIND: &str = "distributed-admission-receipt-v1";
-const CLAIM_KIND: &str = "distributed-execution-claim-v1";
-pub const ADMISSION_RESERVATION_TTL_SECONDS: u32 = 14_400;
-
-#[derive(Serialize, Deserialize)]
-#[serde(tag = "state", rename_all = "snake_case")]
-pub(super) enum StoredReceipt {
-    Full {
-        receipt: Box<AdmissionReceipt>,
-    },
-    Tombstone {
-        machine_id: String,
-        request_id: String,
-        input_digest: String,
-    },
-}
-
-fn encode<T: Serialize>(value: &T) -> Result<String, OrbitError> {
-    serde_json::to_string(value).map_err(|e| OrbitError::Store(e.to_string()))
-}
-fn decode<T: serde::de::DeserializeOwned>(value: &str) -> Result<T, OrbitError> {
-    serde_json::from_str(value).map_err(|e| OrbitError::Store(e.to_string()))
-}
-pub(super) fn digest<T: Serialize>(value: &T) -> Result<String, OrbitError> {
-    Ok(sha256_hex(encode(value)?.as_bytes()))
-}
-fn receipt_key(machine: &str, request: &str) -> Result<String, OrbitError> {
-    digest(&(machine, request))
-}
-fn row<T: Serialize>(kind: &str, id: &str, value: &T) -> Result<TaskCoordinationRow, OrbitError> {
-    Ok(TaskCoordinationRow {
-        kind: kind.into(),
-        row_id: id.into(),
-        payload_json: encode(value)?,
-    })
-}
-pub(super) fn canonical_footprint(
-    files: &[String],
-    root: &Path,
-) -> Result<Vec<String>, OrbitError> {
-    files
-        .iter()
-        .map(|f| {
-            canonical_selector_in_workspace(f, root)
-                .map_err(|e| OrbitError::InvalidInput(format!("invalid context selector {f}: {e}")))
-        })
-        .collect::<Result<BTreeSet<_>, _>>()
-        .map(|files| files.into_iter().collect())
-}
 impl TaskCommitBoundary {
-    pub(crate) fn guard_ordinary_footprint(
-        &self,
-        status: TaskStatus,
-        files: &[String],
-    ) -> Result<(), OrbitError> {
-        if status != TaskStatus::InProgress {
-            return Ok(());
-        }
-        let claims = self.execution_claims()?;
-        if claims.is_empty() {
-            return Ok(());
-        }
-        let checkout = self
-            .registry
-            .find_workspace_checkout(&self.workspace_id)?
-            .ok_or_else(|| OrbitError::Store("claimed workspace checkout is unavailable".into()))?;
-        if files.is_empty() {
-            return Ok(());
-        } // legacy no-context chore semantics
-        let canonical = canonical_footprint(files, &checkout.repo_root)?;
-        let lock_modes = self.store.footprint_lock_modes();
-        if let Some(conflicting_claim) = claims.iter().find(|claim| {
-            claim.phase.protects_footprint()
-                && lock_modes.footprints_block(&canonical, &claim.footprint)
-        }) {
-            return Err(OrbitError::InvalidInput(format!(
-                "task footprint overlaps an execution claim (task {}, run {})",
-                conflicting_claim.task_id, conflicting_claim.run_context.run_id
-            )));
-        }
-        Ok(())
-    }
-
-    pub(crate) fn refuse_unscoped_claim_write(&self, task_id: &str) -> Result<(), OrbitError> {
-        if let Some(claim) = self.protecting_claim_for_task(task_id)? {
-            return Err(OrbitError::InvalidInput(format!(
-                "active execution claim requires a claim-scoped mutation (task {}, run {})",
-                claim.task_id, claim.run_context.run_id
-            )));
-        }
-        Ok(())
-    }
-
-    pub(crate) fn frozen_claim_conflicts(
-        &self,
-        files: &[String],
-    ) -> Result<Vec<TaskLockConflict>, OrbitError> {
-        let lock_modes = self.store.footprint_lock_modes();
-        Ok(self
-            .execution_claims()?
-            .iter()
-            .filter(|claim| claim.phase.protects_footprint())
-            .flat_map(|claim| {
-                files
-                    .iter()
-                    .filter(|file| {
-                        lock_modes.footprints_block(std::slice::from_ref(*file), &claim.footprint)
-                    })
-                    .map(|file| TaskLockConflict {
-                        file: file.clone(),
-                        held_by: TaskLockHolder::Task,
-                        held_by_id: claim.task_id.clone(),
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect())
-    }
-
-    fn receipt_row(
-        &self,
-        machine: &str,
-        request: &str,
-    ) -> Result<Option<TaskCoordinationRow>, OrbitError> {
-        let key = receipt_key(machine, request)?;
-        self.coordination_row(RECEIPT_KIND, &key)
-    }
-
-    pub fn execution_claims(&self) -> Result<Vec<ExecutionClaim>, OrbitError> {
-        self.enter_ordinary(|| {
-            self.coordination_rows(CLAIM_KIND)?
-                .iter()
-                .map(|row| decode(&row.payload_json))
-                .collect()
-        })
-    }
-
-    /// One claim by its indexed identity, after settling any pending commit.
-    fn execution_claim(&self, claim_id: &str) -> Result<Option<ExecutionClaim>, OrbitError> {
-        self.coordination_row(CLAIM_KIND, claim_id)?
-            .map(|row| decode(&row.payload_json))
-            .transpose()
-    }
-
-    /// Narrow in SQL before decoding; keep the exact task and phase checks
-    /// because a payload may mention the task in another field as well.
-    pub(crate) fn protecting_claim_for_task(
-        &self,
-        task_id: &str,
-    ) -> Result<Option<ExecutionClaim>, OrbitError> {
-        for row in self.coordination_rows_mentioning(CLAIM_KIND, task_id)? {
-            let claim: ExecutionClaim = decode(&row.payload_json)?;
-            if claim.task_id == task_id && claim.phase.protects_footprint() {
-                return Ok(Some(claim));
-            }
-        }
-        Ok(None)
-    }
-
-    /// Reconciliation does not reapply old binary or ship compatibility checks.
-    /// The caller must authenticate and authorize the identity on every call.
-    ///
-    /// A pure read, so it shares the boundary with ordinary participants: a
-    /// receipt and its claim are published together by an admission, which
-    /// excludes this read until both have landed.
-    pub fn lookup_admission(
-        &self,
-        identity: &AdmissionIdentity,
-        request_id: &str,
-    ) -> Result<AdmissionLookup, OrbitError> {
-        self.enter_ordinary(|| {
-            let Some(row) = self.receipt_row(&identity.location().machine_id, request_id)? else {
-                return Ok(AdmissionLookup::NotFound);
-            };
-            match decode::<StoredReceipt>(&row.payload_json)? {
-                StoredReceipt::Tombstone { .. } => Ok(AdmissionLookup::Expired),
-                StoredReceipt::Full { receipt } => {
-                    let current_claim = match &receipt.claim {
-                        None => None,
-                        Some(original) => self.execution_claim(&original.claim_id)?,
-                    };
-                    Ok(AdmissionLookup::Found {
-                        receipt,
-                        current_claim: current_claim.map(Box::new),
-                    })
-                }
-            }
-        })
-    }
-
     /// One internal owner admission. Identity and resolved ship authority are
     /// trusted arguments supplied after authorization, never payload identity.
     /// No local run, worktree, branch or public pull endpoint is created here.
@@ -328,7 +128,7 @@ impl TaskCommitBoundary {
             snapshot.backlog.clear();
         }
         #[cfg(test)]
-        super::selection::after_selection::run();
+        super::super::selection::after_selection::run();
         let census = identity.is_remote().then(|| ExecutorCensusEntry {
             machine_id: identity.location().machine_id.clone(),
             capability: ExecutorCapability::of_request(request),
@@ -633,129 +433,6 @@ impl TaskCommitBoundary {
         self.lookup_admission(identity, &request.request_id)
             .map(Some)
     }
-
-    /// Upsert `entry` as its machine's census row [ORB-17304].
-    pub fn record_executor_census(&self, entry: &ExecutorCensusEntry) -> Result<(), OrbitError> {
-        self.store.upsert_executor_census(&self.workspace_id, entry)
-    }
-
-    /// Every census row of this workspace, however old.
-    pub fn recorded_executor_census(&self) -> Result<Vec<ExecutorCensusEntry>, OrbitError> {
-        self.store.executor_census_rows(&self.workspace_id)
-    }
-
-    /// The census rows live at `now`: each seen within
-    /// [`EXECUTOR_CENSUS_LIVENESS_SECONDS`], or of a machine still holding a
-    /// claimed or running claim. Claims are read only when a row has gone
-    /// stale.
-    pub fn live_executor_census(
-        &self,
-        now: chrono::DateTime<chrono::Utc>,
-    ) -> Result<Vec<ExecutorCensusEntry>, OrbitError> {
-        let (mut live, stale): (Vec<_>, Vec<_>) = self
-            .store
-            .executor_census_rows(&self.workspace_id)?
-            .into_iter()
-            .partition(|entry| entry.fresh(now));
-        if !stale.is_empty() {
-            let claiming = self
-                .execution_claims()?
-                .into_iter()
-                .filter(|claim| {
-                    matches!(
-                        claim.phase,
-                        ExecutionClaimPhase::Claimed | ExecutionClaimPhase::Running
-                    )
-                })
-                .map(|claim| claim.executed_on.machine_id)
-                .collect::<BTreeSet<_>>();
-            live.extend(
-                stale
-                    .into_iter()
-                    .filter(|entry| claiming.contains(&entry.machine_id)),
-            );
-        }
-        Ok(live)
-    }
-}
-
-/// The ordered pre-admission ladder, shared by admission and the read-only
-/// preflight probe.
-///
-/// Selector resolution, session capability, and trusted invocation context are
-/// decided by the calling surface before this function is reached; identity
-/// here is already trusted. Order is the spec's: input shape, then
-/// version/schema, then ship mode, then before-PR review. Evaluating it returns a
-/// verdict and writes nothing, so a probe and an admission cannot disagree
-/// about what would be refused.
-pub fn admission_refusal(
-    identity: &AdmissionIdentity,
-    request: &AdmissionRequest,
-    owner_version: &str,
-) -> Option<AdmissionRefusal> {
-    if request
-        .caller_fingerprint
-        .as_deref()
-        .is_some_and(|caller| caller != crate::contracts::distributed_drain_protocol_fingerprint())
-    {
-        return Some(AdmissionRefusal::ProtocolSkew);
-    }
-    if [
-        &identity.location().machine_id,
-        &request.request_id,
-        &request.caller_version,
-        &request.run_context.run_id,
-        &request.run_context.job_name,
-    ]
-    .iter()
-    .any(|v| v.trim().is_empty())
-        || request.crews_malformed()
-    {
-        return Some(AdmissionRefusal::InvalidInput);
-    }
-    if request.caller_schema == 0
-        || request.ship.base_branch.trim().is_empty()
-        || request.ship.landing_branch.trim().is_empty()
-        || !matches!(request.ship.completion.as_str(), "review" | "done")
-        || (request.ship.completion == "done"
-            && request
-                .ship
-                .authorization_reference
-                .as_deref()
-                .is_none_or(|r| r.trim().is_empty()))
-        || !request.ship.review_contract_consistent()
-    {
-        return Some(AdmissionRefusal::InvalidInput);
-    }
-    if request.caller_schema != DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA {
-        return Some(AdmissionRefusal::ProtocolMismatch);
-    }
-    if request.caller_version != owner_version {
-        return Some(AdmissionRefusal::VersionMismatch);
-    }
-    if !matches!(request.ship.mode.as_str(), "pr" | "local")
-        || (identity.is_remote() && request.ship.mode == "local")
-    {
-        return Some(AdmissionRefusal::ShipModeUnsupported);
-    }
-    // An owner that captured a `review.timing` of `before_pr` or `before_landing`
-    // admits only a leaf that runs the gate its ship contract carries, so
-    // nothing is delivered unreviewed [ORB-13908] [ORB-14849]. The claim's captured contract decides: the executor's own
-    // switch never gates a claimed leaf. Only the PR route runs the gate.
-    // After-landing review is owner-side and never refuses.
-    if (request.ship.before_pr || request.ship.before_landing)
-        && !(request.review_gate && request.ship.mode == "pr")
-    {
-        return Some(AdmissionRefusal::BeforePrUnsupported);
-    }
-    // An active selective policy is refused to an executor that cannot
-    // evaluate it on the PR route: dropping it would deliver unreviewed.
-    if request.ship.selective_policy().is_some()
-        && !(request.selective_review && request.review_gate && request.ship.mode == "pr")
-    {
-        return Some(AdmissionRefusal::SelectiveUnsupported);
-    }
-    None
 }
 
 fn validate_request(

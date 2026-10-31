@@ -404,7 +404,7 @@ handoff state; completion still requires explicit authorization and verified lan
 
 **Recorded:** 2026-10-04 · [ORB-13908], at Daniel's direction to run the [ORB-13989] reviewer model
 on claimed leaves, gated on the `review.before_pr` the claim captured ([ORB-13992], [ORB-13895]).
-**Code anchors:** `crates/orbit-store/src/repository/task/coordination/admission.rs::admission_refusal`,
+**Code anchors:** `crates/orbit-store/src/repository/task/coordination/admission/refusal.rs::admission_refusal`,
 `crates/orbit-store/src/driver/sqlite/job_run_store/pull.rs` (`CreateLeaf`, `claim_review_admission`),
 `crates/orbit-core/src/application/review/gate/context.rs::claimed_leaf_claim`,
 `crates/orbit-core/src/application/review/gate/settle.rs::handoff_evidence`,
