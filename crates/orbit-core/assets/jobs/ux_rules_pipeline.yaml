@@ -21,6 +21,8 @@ spec:
     surfaces: []
     ui_base_url: "http://127.0.0.1:7878"
     runner: "scripts/ux-rules/run.mjs"
+    orbit: null
+    browser_kit: null
     max_new_tasks: null
   steps:
     - id: run
@@ -29,6 +31,8 @@ spec:
         surfaces: "{{ input.surfaces }}"
         ui_base_url: "{{ input.ui_base_url }}"
         runner: "{{ input.runner }}"
+        orbit: "{{ input.orbit }}"
+        browser_kit: "{{ input.browser_kit }}"
     - id: file
       target: activity:file_rule_findings
       default_input:
