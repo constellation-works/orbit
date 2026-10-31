@@ -2,7 +2,7 @@
 title: Automation Triggers — Overview
 owner: codex
 last_updated: 2026-10-29
-last_validated: 2026-10-29
+last_validated: 2026-10-31
 status: Draft
 stage: shipped
 next: "—"
