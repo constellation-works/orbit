@@ -148,6 +148,20 @@ orbit audit list --json --limit 100
 orbit audit stats --since 7d
 ```
 
+To inspect one invocation, list matching events as JSON and take the numeric
+`id` from the event object. The JSON list is an array; filters such as
+`--since` and `--status` can narrow it to the event you need:
+
+```bash
+orbit audit list --json --since 1h --status failure
+orbit audit show <event_id> --json
+```
+
+Replace `<event_id>` with the selected event's `id`. Confirm that the `id` in
+the returned detail matches, then review its command, timestamp, status, exit
+code and any error or target fields relevant to the investigation. `show`
+returns the full event record, while the default list view is a summary.
+
 Use `orbit log tail` for trace events, `orbit audit` for persistent invocation
 metadata, and the run commands below for a single pipeline's detailed audit
 trail.
