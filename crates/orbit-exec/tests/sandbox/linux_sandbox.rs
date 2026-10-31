@@ -1944,6 +1944,32 @@ fn create_in_managed_child(
     guard
 }
 
+/// A forbidden scratch symlink is removed as an entry, without deleting its target.
+#[test]
+fn post_run_guard_removes_scratch_symlink_not_target() {
+    let (_temp, workspace, scratch) = scratch_workspace();
+    let guard = LinuxBwrapPostRunGuard::capture(&scratch_policy_profile(&workspace))
+        .expect("capture")
+        .expect("guard");
+    let target = scratch.join("allowed.txt");
+    let link = scratch.join("forbidden.env");
+    fs::write(&target, "keep").unwrap();
+    symlink(&target, &link).unwrap();
+    let removed = guard.verify(Some(&scratch)).unwrap();
+    assert_eq!(removed.len(), 1);
+    assert_eq!(removed[0].path, link);
+    assert_eq!(fs::read_to_string(&target).unwrap(), "keep");
+    assert!(fs::symlink_metadata(&link).is_err());
+    assert!(guard.verify(Some(&scratch)).unwrap().is_empty());
+
+    let outside = workspace.join("outside.txt");
+    fs::write(&outside, "keep outside").unwrap();
+    symlink(&outside, &link).unwrap();
+    assert!(guard.verify(Some(&scratch)).is_err());
+    assert!(fs::symlink_metadata(&link).is_ok());
+    assert_eq!(fs::read_to_string(outside).unwrap(), "keep outside");
+}
+
 /// Post-run guard rows: a denyModify match created only under run scratch is
 /// removed and reported instead of failing the run, while a committable match
 /// fails the run even when scratch also holds one; [ORB-14337] the `.orbit/tmp`

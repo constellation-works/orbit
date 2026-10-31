@@ -152,11 +152,11 @@ loopback, and a pid namespace whose teardown kills every descendant (§4, leftov
 
 ### 3.3 Network
 
-**Decision: two phases, network only in `fetch`, and only outbound TCP to port 443.**
+**Decision: two phases, network only in `fetch`. Linux restricts TCP to outbound port 443; UDP remains unrestricted.**
 
 | Phase | Runs | Network | Writable |
 |---|---|---|---|
-| `fetch` (optional) | `spec.build.fetch` | Outbound TCP to remote port 443, plus name resolution. No listening, no other ports | `{{build_dir}}` |
+| `fetch` (optional) | `spec.build.fetch` | Linux: TCP connections to port 443, no TCP binds; UDP is unrestricted | `{{build_dir}}` |
 | `build` | `spec.build.command` | None | `{{build_dir}}` |
 
 - **Linux `fetch`:** bwrap with `--share-net` plus a Landlock ABI 4 network ruleset applied
@@ -384,7 +384,7 @@ deterministic, matching the archive-digest finding that already exists.
 
 | Case | What the attacker does | Decision | Residual |
 |---|---|---|---|
-| Malicious build script | `build.rs`, a postinstall hook or the command reads secrets, plants persistence or attacks the network | Deny-by-default reads (§3.2), empty environment (§3.5), build directory as the only write root (§3.4), no network in `build` and port 443 only in `fetch` (§3.3), declared outputs only | It can produce a malicious backend. That backend is bounded by the backend sandbox and grants (scope §4.3), as an archive's is. On Linux, during `fetch` it can send what it can read (source, toolchain) over 443 or UDP. macOS runs no `fetch` |
+| Malicious build script | `build.rs`, a postinstall hook or the command reads secrets, plants persistence or attacks the network | Deny-by-default reads (§3.2), empty environment (§3.5), build directory as the only write root (§3.4), no network in `build` and TCP port 443 only in `fetch` (§3.3), declared outputs only | It can produce a malicious backend. That backend is bounded by the backend sandbox and grants (scope §4.3), as an archive's is. On Linux, during `fetch` it can send what it can read (source, toolchain) over 443 or UDP. macOS runs no `fetch` |
 | Hostile output paths | `outputs[].from` symlinked to `~/.ssh/id_ed25519`, or `to` set to `../../bin/orbit` or `plugin.yaml` | Physical resolution with no links inside `{{build_dir}}`, `to` confined to the plugin root, no `plugin.yaml`, no overwrite of pristine files, special mode bits cleared | None beyond the hostile backend above |
 | Dependency confusion | A public package shadows an internal name, or a registry serves altered bytes | No private-registry credentials or user registry config (§3.5); toolchain locked mode against the lockfile in the pinned commit; the `fetch` argv is shown verbatim at consent; optional pin `artifact_digest` | Orbit does not parse lockfiles. A source with no lockfile or no `--locked` gets whatever the registry serves at build time. The consent plan makes that visible, and an `artifact_digest` pin catches drift on later hosts |
 | TOCTOU on the source | A tag or branch moves after review; the local tree changes mid-build; the build rewrites the manifest it was reviewed by | Full commit required and verified (§3.1); Orbit's own pristine scratch; the sandbox works on a copy; the installed root comes from the pristine copy (§3.4) | The repository host can refuse or delay the commit, but not substitute it, short of a SHA-1 collision on a SHA-1 repository |

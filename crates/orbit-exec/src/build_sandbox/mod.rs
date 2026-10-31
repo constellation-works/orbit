@@ -59,8 +59,10 @@ pub const BUILD_FETCH_PHASE_SUPPORTED: bool = cfg!(not(target_os = "macos"));
 pub enum BuildPhaseNetwork {
     /// The `build` phase: no network.
     None,
-    /// The `fetch` phase: outbound TCP to [`PLUGIN_BUILD_FETCH_PORT`] and name
-    /// resolution, nothing else.
+    /// Linux `fetch` permits TCP connections only to [`PLUGIN_BUILD_FETCH_PORT`],
+    /// including loopback, denies TCP binds, and does not restrict UDP (including
+    /// DNS). macOS
+    /// refuses fetch phases; other platforms do not support builds.
     Https,
 }
 
