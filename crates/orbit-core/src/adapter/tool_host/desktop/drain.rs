@@ -129,9 +129,9 @@ pub(in crate::adapter::tool_host) fn control(
                 "completion":completion.as_input_value(),"approve_proposed":approve_proposed,"submitted_at":run.submitted_at});
             started["review"] = runtime.run_review_layer(&run.run_id)?;
             started["auto_concurrency"] = runtime.run_auto_concurrency(&run.run_id)?;
-            runtime
-                .submission_notices(SubmissionKind::Drain)
-                .insert_into(&mut started);
+            let notices = runtime.submission_notices(SubmissionKind::Drain);
+            runtime.record_submission_notices(&run.run_id, &notices.warnings(), &notices.notes());
+            notices.insert_into(&mut started);
             started
         }
         "stop" => {

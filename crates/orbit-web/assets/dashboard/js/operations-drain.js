@@ -1,6 +1,7 @@
 import { captureWorkspaceVisit, requestPanel, el, fetchJson, formatDateTime, getWorkspaceRevision, postJson } from './common.js';
 import { drainCrewNote, drainPilotNote, setDrainReadiness, setDrainReadinessFailure } from './drain-waits.js';
 import { AUTO_DRAIN_APPROVE_RULE } from './drain-start.js';
+import { setSubmissionNotices } from './dock-warnings.js';
 import { autoDrainForecast, refreshBacklogForecast } from './operations-forecast.js';
 import { configureOperationsFleetCallbacks, loadFleetSnapshot, paintAggregateFleet, renderFleetIndicator } from './operations-fleet.js';
 import { $, feedback, operationsState, pendingOperations, registerOperationsReset, runLink, selectedWorkspace, workspaceReadOnlyReason } from './operations-shared.js';
@@ -248,6 +249,9 @@ function autoDrainApprovals(approvals) {
 function renderAutoDrain(payload) {
   operationsState.lastAutoDrain = payload;
   setDrainReadiness(payload);
+  // The live window's Start warnings and notes stay in the warnings box above
+  // the dock's tabs until the window ends [ORB-20446].
+  setSubmissionNotices(payload?.capacity?.submission_notices ?? null);
   const body = $("auto-drain-body");
   if (!body) return;
   // A poll or a control click rebuilds both cards; keep keyboard focus on the
@@ -289,6 +293,7 @@ function clearStartCard(id) {
 
 registerOperationsReset(() => {
   announcedDrainState = null;
+  setSubmissionNotices(null);
   updateDrainIndicators("idle", "idle");
   clearStartCard("auto-drain-quick-start");
 });

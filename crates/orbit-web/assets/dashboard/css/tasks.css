@@ -886,7 +886,9 @@ main.tasks-layout.task-pane-open > .tasks-dock > #side-dock { display: none; }
 .tasks-dock > .tasks-messages {
   flex: 0 0 auto;
   height: var(--tasks-dock-lead);
-  padding-bottom: 12px;
+  /* Clamped to the lead, so a dock whose warnings box fills the room above
+     the first card can start level with the list toolbar [ORB-20446]. */
+  padding-bottom: min(12px, var(--tasks-dock-lead));
 }
 .tasks-messages > :empty { display: none; }
 #tasks-notices { display: flex; flex-direction: column; gap: 6px; }

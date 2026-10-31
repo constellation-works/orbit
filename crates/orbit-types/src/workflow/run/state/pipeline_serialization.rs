@@ -69,6 +69,7 @@ impl Serialize for PipelineState {
             trigger: &self.trigger => self.trigger.is_none(),
             env_pass_unset: &self.env_pass_unset => self.env_pass_unset.is_empty(),
             crew_env_unset: &self.crew_env_unset => self.crew_env_unset.is_empty(),
+            submission_notices: &self.submission_notices => self.submission_notices.is_none(),
             root_cause: &self.root_cause => self.root_cause.is_none(),
             steering_watermarks: &self.steering_watermarks => self.steering_watermarks.is_empty(),
             steering_rounds: &self.steering_rounds => self.steering_rounds.is_empty(),

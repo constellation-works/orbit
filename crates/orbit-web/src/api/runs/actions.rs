@@ -429,9 +429,9 @@ pub(in crate::api) async fn auto_drain_workflow_action(
         started["allowed_crews"] = recorded_allowed_crews(&runtime, &invoke.run_id)?;
         started["auto_concurrency"] = runtime.run_auto_concurrency(&invoke.run_id)?;
         started["review"] = runtime.run_review_layer(&invoke.run_id)?;
-        runtime
-            .submission_notices(SubmissionKind::Drain)
-            .insert_into(&mut started);
+        let notices = runtime.submission_notices(SubmissionKind::Drain);
+        runtime.record_submission_notices(&invoke.run_id, &notices.warnings(), &notices.notes());
+        notices.insert_into(&mut started);
         Ok(started)
     })
     .await
@@ -486,13 +486,12 @@ fn pull_drain_start(
     started["allowed_crews"] = recorded_allowed_crews(runtime, &invoke.run_id)?;
     let notices = runtime.submission_notices(SubmissionKind::PullDrain);
     notices.insert_into(&mut started);
+    let mut warnings = notices.warnings();
     if let Some(drift) = runtime.pull_gate_drift(&invoke.run_id)? {
-        let warning = match started.get("warning").and_then(Value::as_str) {
-            Some(existing) => format!("{existing}\n{drift}"),
-            None => drift,
-        };
-        started["warning"] = json!(warning);
+        warnings.push(drift);
+        started["warning"] = json!(warnings.join("\n"));
     }
+    runtime.record_submission_notices(&invoke.run_id, &warnings, &notices.notes());
     Ok(started)
 }
 
