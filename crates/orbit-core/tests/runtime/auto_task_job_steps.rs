@@ -424,8 +424,102 @@ fn receipts_respect_step_expiry_after_downtime() {
     }
 }
 
+/// A later auto-task step waiting on an ordinary branch of an earlier
+/// completed parallel block reads the branch's durable outcome: a succeeded
+/// branch is `done`, a `when:`-skipped branch stays `skipped`, and a branch
+/// checkpoint under a still-live block does not masquerade as done.
+fn nested_parallel_branch_waits_observe_durable_outcomes() {
+    use chrono::{Duration, Utc};
+    use orbit_engine::{AutoTaskReadiness, AutoTaskStepRequest, RuntimeHost};
+    use orbit_types::workflow::{
+        AUTO_TASK_CHECKPOINT_VERSION, AutoTaskRunCheckpoint, JobRunState, PipelineState,
+    };
+
+    fn observe(
+        lint_when: &str,
+        expected_status: &str,
+        branch_output: Value,
+        checks_completed: bool,
+    ) -> AutoTaskReadiness {
+        let runtime = OrbitRuntime::in_memory().unwrap();
+        add_auto_task(&runtime, "full-qa-sweep");
+        let started = Utc::now() - Duration::hours(1);
+        let yaml = format!(
+            "schemaVersion: 3\nkind: Job\nmetadata: {{ name: nested-wait }}\nspec:\n  state: enabled\n  expire_when: \"now >= job.started_at + duration('24h')\"\n  steps:\n    - id: checks\n      parallel:\n        join: {{ mode: all }}\n        branches:\n          - id: lint\n            target: activity:agent_assess_diff\n{lint_when}    - id: qa\n      target: auto-task:full-qa-sweep\n      wait_until: \"steps['lint'].status == '{expected_status}'\"\n"
+        );
+        let jobs = orbit_store::compose::workspace_job_run_store(
+            runtime.sqlite_store().unwrap(),
+            runtime.workspace_id().unwrap(),
+        );
+        let run = jobs
+            .insert_job_run("nested-wait", 1, started, Some(json!({})), None)
+            .unwrap();
+        jobs.mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
+            .unwrap();
+        let mut state = PipelineState::new(run.run_id.clone(), run.job_id.clone(), json!({}));
+        if checks_completed {
+            state.record_step(
+                0,
+                JobRunState::Success,
+                Some(json!([{"branch_id": "lint", "outcome": "success"}])),
+                None,
+            );
+        }
+        state.auto_task = Some(AutoTaskRunCheckpoint {
+            version: AUTO_TASK_CHECKPOINT_VERSION,
+            frozen_job: yaml,
+            frozen_targets: Default::default(),
+            started_at: started,
+            source_revision: None,
+            expires_at: started + Duration::hours(24),
+            steps: Default::default(),
+            branches: [(
+                "checks".to_string(),
+                [("lint".to_string(), branch_output)].into(),
+            )]
+            .into(),
+            parked: None,
+        });
+        jobs.write_run_state(&run.run_id, &state).unwrap();
+        RuntimeHost::observe_auto_task_step(
+            &runtime,
+            &run.run_id,
+            &AutoTaskStepRequest {
+                step_id: "qa".into(),
+                auto_task: "full-qa-sweep".into(),
+            },
+        )
+        .unwrap()
+        .readiness
+    }
+
+    assert_eq!(
+        observe("", "done", json!({"lint": "ok"}), true),
+        AutoTaskReadiness::Ready,
+        "a succeeded ordinary branch of a completed parallel block is done"
+    );
+    assert_eq!(
+        observe(
+            "            when: \"{{{{ input.run_lint }}}}\"\n",
+            "skipped",
+            Value::Null,
+            true,
+        ),
+        AutoTaskReadiness::Ready,
+        "a skipped ordinary branch remains skipped, not done"
+    );
+    assert!(
+        matches!(
+            observe("", "done", json!({"lint": "ok"}), false),
+            AutoTaskReadiness::Waiting(_)
+        ),
+        "a branch checkpoint under a still-live parallel block is not done"
+    );
+}
+
 crate::scenario_table!(
     auto_task_job_steps_scenarios,
+    nested_parallel_branch_waits_observe_durable_outcomes,
     receipts_respect_step_expiry_after_downtime,
     a_disabled_auto_task_job_loads_explains_and_is_not_submitted,
     ill_typed_auto_task_jobs_do_not_load,
