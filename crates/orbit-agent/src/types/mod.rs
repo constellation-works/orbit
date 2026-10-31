@@ -3,6 +3,7 @@ mod response;
 
 pub use request::{AgentOperation, AgentRequest};
 pub(crate) use response::request_usage;
+pub(crate) use response::tool_calls_in_documents;
 pub use response::{AgentInvocationSpec, AgentResponseStatus};
 pub use response::{DeclaredResponseFailure, ParsedStdout};
 pub use response::{

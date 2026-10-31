@@ -27,6 +27,7 @@ pub use usage_window::provider_usage_windows;
 use std::borrow::Cow;
 
 use crate::types::AgentInvocationSpec;
+use orbit_types::telemetry::{InvocationTrace, ToolCallTrace};
 use serde_json::Value;
 
 /// Builds the `AgentInvocationSpec` for a provider, combining CLI args and stdin.
@@ -72,7 +73,36 @@ pub fn normalize_cli_stdout<'a>(provider: &str, stdout: &'a [u8]) -> Cow<'a, [u8
         "copilot" => Cow::Owned(copilot::normalize_copilot_stdout(stdout)),
         "antigravity" | "agy" => Cow::Owned(antigravity::normalize_antigravity_stdout(stdout)),
         "muse" => Cow::Owned(muse::normalize_muse_stdout(stdout)),
+        // A streaming-json capture reduces to the `end` event's spend fields
+        // so per-response `usage` lines are not added to that total. Tool
+        // calls stay on the raw stream; [`assign_recorded_tool_calls`] reads
+        // them. A json wrapper is unchanged.
+        "grok" => {
+            grok::normalize_grok_stdout(stdout).map_or_else(|| Cow::Borrowed(stdout), Cow::Owned)
+        }
         _ => Cow::Borrowed(stdout),
+    }
+}
+
+/// Tool calls the answer and usage reductions drop.
+///
+/// `None` leaves the calls parsed from normalized stdout in place. Codex
+/// `file_change` frames are in that stdout, so Codex returns `None`.
+pub fn recorded_tool_calls(provider: &str, stdout: &[u8]) -> Option<Vec<ToolCallTrace>> {
+    match provider {
+        "claude" => claude::recorded_claude_tool_calls(stdout),
+        "muse" => muse::recorded_muse_tool_calls(stdout),
+        "grok" => grok::recorded_grok_tool_calls(stdout),
+        _ => None,
+    }
+}
+
+/// Replace `trace.tool_calls` when [`recorded_tool_calls`] has a provider
+/// reading. Usage, model and cost on `trace` stay as normalized stdout
+/// parsed them.
+pub fn assign_recorded_tool_calls(provider: &str, stdout: &[u8], trace: &mut InvocationTrace) {
+    if let Some(calls) = recorded_tool_calls(provider, stdout) {
+        trace.tool_calls = calls;
     }
 }
 

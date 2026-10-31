@@ -6,10 +6,10 @@ use std::time::Duration;
 
 use orbit_agent::{
     ParsedStdout, antigravity_background_task_diagnostic, antigravity_print_timeout_diagnostic,
-    antigravity_terminal_error_diagnostic, muse_terminal_failure_diagnostic, normalize_cli_stdout,
-    project_cli_response, provider_authentication_failure, provider_capacity_exhausted,
-    provider_content_refusal, provider_invocation_diagnostic, provider_long_prompt_requests,
-    provider_usage_limit,
+    antigravity_terminal_error_diagnostic, assign_recorded_tool_calls,
+    muse_terminal_failure_diagnostic, normalize_cli_stdout, project_cli_response,
+    provider_authentication_failure, provider_capacity_exhausted, provider_content_refusal,
+    provider_invocation_diagnostic, provider_long_prompt_requests, provider_usage_limit,
 };
 use orbit_common::process::build_budget::BuildBudgetWaits;
 use orbit_common::security::redaction::{PatternRedactor, redact_all_json};
@@ -286,7 +286,11 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
     // which the totals above cannot show. Codex identifies its rollout from
     // thread.started, which can live in the redacted retained prefix after
     // truncation; answer projection above stays on protocol_bytes().
+    // Usage stays on the reduced document. Claude's and Muse's reductions
+    // drop the tool frames, and Grok's streaming-json reduction keeps only
+    // the end event, so the calls are read from the raw capture.
     let trace = trace.map(|mut trace| {
+        assign_recorded_tool_calls(&provider, stdout.protocol_bytes(), &mut trace);
         trace.long_prompt_requests = provider_long_prompt_requests(
             &provider,
             stdout.bytes(),

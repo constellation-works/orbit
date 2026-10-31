@@ -347,6 +347,12 @@ Read the warnings before the verdict:
   outcomes remain open. These values contribute no samples to estimates,
   comparisons, the primary metric's chart, or the verdict and its guardrails.
   Other metrics remain available.
+- **Explorer uptake.** Each arm reports `tasks_with_explorer_call`: how many
+  of its analysed tasks recorded at least one explorer-delegation call during
+  an implement invocation at or after they were assigned. A task counts once.
+  The stored name matches `orbit.agent.invoke` or `orbit_agent_invoke`,
+  including an MCP name whose last segment is one of those. The count is read
+  from the invocation's recorded tool calls.
 
 The readout is descriptive, not a significance oracle. It reports no
 p-value for the treatment difference itself; the interval excluding zero

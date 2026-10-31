@@ -593,6 +593,11 @@ function armCards(experiment, readout, primary, color) {
         estimate ? ` · ${estimate.n} settled` : "",
         estimate?.open ? ` · ${estimate.open} open` : "",
       ]),
+      el("span", {
+        class: "mx-sc-foot",
+        text: `Explorer: ${arm.tasks_with_explorer_call ?? 0} of ${arm.n ?? 0} tasks`,
+        title: "Analysed tasks with at least one explorer-delegation call during implement, at or after assignment. A task counts once.",
+      }),
       coverage ? el("span", {
         class: "mx-sc-foot ex-arm-cost",
         text: `Cost: ${coverage.reported} reported · ${coverage.estimated} estimated · ${coverage.unmeasured} unmeasured`,

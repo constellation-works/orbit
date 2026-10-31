@@ -19,8 +19,26 @@ use chrono::{DateTime, Utc};
 use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource, TokenUsage};
 use serde_json::{Map, Value};
 
+use orbit_types::telemetry::ToolCallTrace;
+
 use super::super::usage_window::{percent, top_level_frames};
-use crate::types::request_usage;
+use crate::types::{request_usage, tool_calls_in_documents};
+
+/// Tool calls on a Claude message stream.
+///
+/// `None` for a single `--output-format json` result document, which has no
+/// stream of tool frames. The answer and usage projections stay on the
+/// terminal `result`; this reads the raw stream the projection drops.
+pub(crate) fn recorded_claude_tool_calls(stdout: &[u8]) -> Option<Vec<ToolCallTrace>> {
+    let frames: Vec<Value> = top_level_frames(stdout).map(|(_, frame)| frame).collect();
+    let stream = frames.iter().any(|frame| {
+        matches!(
+            frame.get("type").and_then(Value::as_str),
+            Some(kind) if kind != "result"
+        )
+    });
+    stream.then(|| tool_calls_in_documents(&frames))
+}
 
 /// Return the terminal `result` frame when `stdout` is a Claude message
 /// stream.

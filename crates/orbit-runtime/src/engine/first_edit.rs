@@ -43,6 +43,8 @@ const FILE_MUTATING: &[&str] = &[
     "str_replace",
     "strreplace",
     "search_replace",
+    // Grok's hashline file toolset records this edit under its own name.
+    "hashline_edit",
     "edit_file",
     "write_file",
     "create_file",

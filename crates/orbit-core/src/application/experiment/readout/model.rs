@@ -82,6 +82,10 @@ pub struct ReadoutArm {
     pub weight: u32,
     pub retired_segment: Option<u32>,
     pub n: usize,
+    /// Analysed tasks that recorded at least one explorer-delegation call
+    /// during an implement invocation at or after assignment. A task counts
+    /// once, however many such calls it recorded.
+    pub tasks_with_explorer_call: usize,
     pub segments: Vec<SegmentCount>,
     /// Tasks per implementing crew, most first.
     pub crew_mix: Vec<CrewCount>,
