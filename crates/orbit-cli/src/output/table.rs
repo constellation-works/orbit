@@ -177,8 +177,9 @@ impl Table {
     }
 
     /// Write the list to stdout in the sink's mode, or the empty-state line to
-    /// stderr when there are no records. Notices about dropped columns go to
-    /// stderr so that they never land in a consumer's record stream. This
+    /// stderr when there are no records. Notices about dropped columns and
+    /// terminal overflow go to stderr so that they never land in a consumer's
+    /// record stream. This
     /// table's own trailing notices (a truncation count, say) are printed to
     /// stderr after the body in both table and plain modes (ORB-12206), and
     /// after the empty-state line when there is no body.
@@ -324,7 +325,7 @@ impl Table {
         } else {
             body
         };
-        let notices = if dropped.is_empty() {
+        let mut notices = if dropped.is_empty() {
             Vec::new()
         } else {
             vec![format!(
@@ -332,6 +333,18 @@ impl Table {
                 dropped.join(", ")
             )]
         };
+        // An all-fixed layout can still be wider than the sink: nothing was
+        // squeezed or hidden, so say the table does not fit and where the
+        // full row lives. Fixed cells are never cut, so identifiers stay
+        // whole; the plain and JSON forms carry them untruncated.
+        if let Some(limit) = sink_width {
+            let width = total_width(&layout);
+            if width > limit {
+                notices.push(format!(
+                    "table wider than the terminal ({width} columns for a {limit}-column terminal): use --format plain or --json for the full row"
+                ));
+            }
+        }
         let truncated = !dropped.is_empty()
             || layout.iter().any(|(index, width)| {
                 visible
