@@ -191,6 +191,10 @@ impl LinuxBwrapPostRunGuard {
     /// `scratch` is the run's canonical scratch root, resolved before the
     /// child started so the child cannot redirect it. A match anywhere else
     /// fails the run before anything is removed. `None` exempts nothing.
+    ///
+    /// A dangling link already present at capture is not new while it keeps
+    /// its contents; creating its target or retargeting it makes it a new
+    /// match like any other.
     pub fn verify(
         &self,
         scratch: Option<&Path>,
@@ -204,10 +208,13 @@ impl LinuxBwrapPostRunGuard {
         }
         let in_scratch =
             |path: &Path| scratch.is_some_and(|root| path != root && path.starts_with(root));
-        if let Some(path) = created
-            .keys()
-            .find(|path| !in_scratch(&path.entry) || !in_scratch(&path.target))
-        {
+        if let Some(path) = created.keys().find(|path| {
+            !in_scratch(&path.entry)
+                || path
+                    .target
+                    .resolved()
+                    .is_some_and(|target| !in_scratch(target))
+        }) {
             return Err(OrbitError::PolicyDenied(format!(
                 "linux-bwrap child created a path forbidden by denyModify before commit: {}",
                 path.entry.display()
