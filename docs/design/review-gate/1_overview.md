@@ -11,7 +11,7 @@ doc_role: overview
 type: design
 summary: Independent automatic review with captured timing and exact-tree coverage; shipped staged before-PR deprecation and shipped selective before-landing risk/path rules (default off) preserve existing runs and evidence.
 tags: [review-gate, review-policy, automation, delivery]
-paths: ["crates/orbit-config/src/operation.rs", "crates/orbit-core/src/application/review/**", "crates/orbit-store/src/driver/sqlite/review/**", "crates/orbit-automation/src/review/**", "crates/orbit-engine/src/executor/automation/vcs/review_gate.rs"]
+paths: ["crates/orbit-config/src/operation/**", "crates/orbit-core/src/application/review/**", "crates/orbit-store/src/driver/sqlite/review/**", "crates/orbit-automation/src/review/**", "crates/orbit-engine/src/executor/automation/vcs/review_gate.rs"]
 related_features: [automation-triggers, activity-job, auditability]
 related_artifacts: [ORB-11333, ORB-11528, ORB-11545, ORB-13989, ORB-13992, ORB-14849, ORB-20087, ORB-20099]
 ---
