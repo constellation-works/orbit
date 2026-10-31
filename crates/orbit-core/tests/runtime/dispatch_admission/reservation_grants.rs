@@ -351,6 +351,34 @@ fn closing_rescued_blocked_task_through_the_task_tool_succeeds_without_force_whi
         );
     }
 
+    // A proposed pickup must report the approval that precedes a refused start.
+    let proposed = seed(
+        &runtime,
+        Seed {
+            title: "proposed candidate",
+            status: TaskStatus::Proposed,
+            context_files: Some(&["file:shared.txt"]),
+            ..Seed::default()
+        },
+    );
+    let refusal = task_update(
+        McpCapability::Agent,
+        json!({"id": proposed.id, "status": "in-progress", "plan": "Implement the work", "model": "claude"}),
+    )
+    .expect_err("an overlapping claim refuses the pickup");
+    assert_names_claim(&refusal, "a proposed pickup");
+    assert_eq!(
+        runtime.get_task(&proposed.id).unwrap().status,
+        TaskStatus::Backlog
+    );
+    let message = refusal.to_string();
+    assert!(
+        message.contains("approval was recorded")
+            && message.contains("backlog")
+            && message.contains("drain"),
+        "partial approval and recovery must be explicit: {message}"
+    );
+
     // A drain-side start of other work on the same files is refused too.
     let candidate = seed(
         &runtime,

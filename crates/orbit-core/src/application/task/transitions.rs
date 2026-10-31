@@ -480,11 +480,8 @@ impl OrbitRuntime {
                 // the status it actually left, instead of stamping `started`
                 // with `proposed` after a hand-built approval entry.
                 //
-                // Every gate has already run by here, so the approval only
-                // lands for a start that was going to be allowed. If the start
-                // write then fails, the task rests in `backlog` with its
-                // approval recorded — a state history can explain, and one a
-                // retry starts cleanly from.
+                // The start write can still be refused after approval, for
+                // example by a concurrent claim. Report that partial outcome.
                 if approved_from_proposed {
                     self.stores().task_records().update(
                         id,
@@ -534,6 +531,24 @@ impl OrbitRuntime {
                         approved_from_proposed,
                     },
                 ))
+            }).map_err(|error| {
+                if !approved_from_proposed {
+                    return error;
+                }
+                let state = match self.get_task(id) {
+                    Ok(current) if current.status == TaskStatus::Proposed => return error,
+                    Ok(current) => format!(
+                        "approval was recorded; fresh task status is '{}'. A backlog task may be selected by a drain; if work must not start, promptly move it to blocked, then resolve the refusal before retrying",
+                        current.status
+                    ),
+                    Err(read_error) => format!(
+                        "approval may have been recorded, but the fresh task status could not be read ({read_error}); inspect the task before retrying because backlog work may be selected by a drain"
+                    ),
+                };
+                match error {
+                    OrbitError::InvalidInput(message) => OrbitError::InvalidInput(format!("{message}; {state}")),
+                    other => OrbitError::Execution(format!("{other}; {state}")),
+                }
             })?);
             Ok(())
         })?;
