@@ -66,9 +66,10 @@ try {
             id: release.querySelector('h2').id,
             date: release.querySelector('time')?.dateTime,
             open: release.open,
+            labels: [...release.querySelectorAll('a[href*="/pulls?q="]')].map((link) => link.getAttribute('aria-label')),
           })),
           links: [...root.querySelectorAll('a[href*="/pulls?q="]')].map((link) => ({
-            href: link.href, text: link.textContent,
+            href: link.href, text: link.textContent, label: link.getAttribute('aria-label'),
           })),
         };
       });
@@ -89,6 +90,10 @@ try {
       assert.deepEqual(result.links.map(({ href }) => new URL(href).searchParams.get('q')),
         references.map((id) => `is:pr is:merged "${id}"`));
       assert.ok(result.links.every(({ text }) => !/[\[\]]|[A-Z]+-\d+/.test(text)), 'Public labels must not display internal IDs');
+      assert.ok(result.links.every(({ text, label }) => label?.startsWith(text) && !/[A-Z][A-Z0-9]{1,15}-\d{1,8}/.test(label)), 'Pull-request names must start with the visible text and show no internal IDs');
+      for (const release of result.releases) {
+        assert.equal(new Set(release.labels).size, release.labels.length, `Pull-request names must be unique in release ${release.id}`);
+      }
       assert.ok(!/\[[A-Z]+-\d+\]/.test(result.text), 'Bracketed references must become links');
       assert.equal(await page.locator('.orbit-version').textContent(), `v${versions[0]}`, 'The global release badge must remain version-only');
       evidence.viewports.push({ width, colorScheme, height: result.height });
@@ -144,6 +149,8 @@ try {
   assert.equal(await fixturePage.locator('h2').getAttribute('id'), '987', 'Future dated headings must keep their version anchors');
   assert.equal(await fixturePage.locator('time').getAttribute('datetime'), '2026-10-07');
   assert.equal(await fixturePage.locator('a[href*="/pulls?q="]').count(), 2, 'Multiple references in one text node must become separate links');
+  const fixtureLabels = await fixturePage.locator('a[href*="/pulls?q="]').evaluateAll((links) => links.map((link) => link.getAttribute('aria-label')));
+  assert.equal(new Set(fixtureLabels).size, 2, 'Several references in one entry must keep distinct names');
   assert.equal(await fixturePage.locator('code').textContent(), '[TASK-1111]', 'Code examples must remain literal');
   assert.equal(await fixturePage.locator('a[href="https://example.com"]').count(), 1, 'Existing links must remain intact');
   const untouched = await markdownToHtml(fixture, { ...options, fileURL: new URL('../src/content/docs/example.md', import.meta.url) });
@@ -153,7 +160,7 @@ try {
   await assert.rejects(async () => markdownToHtml('## 9.8.6 — 2026-02-30', options), /needs an ISO date/);
   await assert.rejects(async () => markdownToHtml('## 9.8.6 — 2026-13-01', options), /needs an ISO date/);
   await fixturePage.close();
-  evidence.checks = 'Loaded web fonts, explicit site themes, preserved notes, links, dates, stable version/subsection anchors, keyboard/no-JS disclosures, future dated headings, transform scoping and release badge passed.';
+  evidence.checks = 'Loaded web fonts, explicit site themes, preserved notes, links, distinct per-release link names, dates, stable version/subsection anchors, keyboard/no-JS disclosures, future dated headings, transform scoping and release badge passed.';
   await writeFile(path.join(evidenceDir, 'changelog-browser.json'), JSON.stringify(evidence, null, 2) + '\n');
   console.log(JSON.stringify(evidence));
 } finally {
