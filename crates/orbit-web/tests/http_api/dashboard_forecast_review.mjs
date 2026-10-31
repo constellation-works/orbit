@@ -393,9 +393,14 @@ for (const [flags, kind] of [[{ risk_unestimated: true }, 'risk_unestimated'], [
 
 const horizonFixture = payload();
 horizonFixture.forecast.time_to_drain_hours = { p50: null, p90: null };
+horizonFixture.forecast.completion_probability = null;
+horizonFixture.forecast.not_expected_to_drain = null;
 await render(horizonFixture);
 assert.ok(/beyond the 90-day horizon/i.test(kpiFoot('Time to drain')), `true horizon exceedance is named on the KPI: ${kpiFoot('Time to drain')}`);
-assert.equal(forecast.backlogForecastSummary(horizonFixture).reasonKind, 'horizon');
+const horizonSummary = forecast.backlogForecastSummary(horizonFixture);
+assert.equal(horizonSummary.reasonKind, 'horizon');
+assert.ok(/beyond the 90-day horizon/i.test(forecast.drainBacklogForecastLink(horizonSummary).querySelector('.visually-hidden')?.textContent || ''), 'censoring evidence is explained in the dock row accessible text');
+assert.ok(/Drains within 90d in 90% of runs/i.test(body().querySelector('.fc-odds')?.textContent || ''), 'the available drain probability explains the horizon');
 
 const metricFixture = payload({ coverage: { uncosted: 2, uncovered_model: 3 } });
 metricFixture.forecast.usd = { p50: null, p90: null };
@@ -422,11 +427,27 @@ assert.equal(forecast.backlogForecastSummary(noHistoryFixture).reasonKind, 'no_h
 const unknownSummary = forecast.backlogForecastSummary({});
 assert.equal(unknownSummary.reasonKind, 'unknown');
 assert.ok(/unavailable/i.test(compactLink(unknownSummary).textContent), 'sparse older payload falls back truthfully');
-const olderNullFixture = payload({ review: false });
+const olderNullFixture = payload({ review: false, tasks: [task({ id: 'ORB-11' }), task({ id: 'ORB-12' }), task({ id: 'ORB-13' })] });
 delete olderNullFixture.forecast.unavailable;
+olderNullFixture.forecast.time_to_drain_hours = { p50: null, p90: null };
+olderNullFixture.forecast.usd = { p50: null, p90: null };
+olderNullFixture.forecast.tokens = { p50: null, p90: null };
+delete olderNullFixture.forecast.drain_probability;
+delete olderNullFixture.forecast.completion_probability;
+delete olderNullFixture.forecast.not_expected_to_drain;
 assert.ok(!('pre_regression_baseline' in olderNullFixture.forecast), 'older fixture omits baseline');
 await render(olderNullFixture);
 assert.ok(!body().querySelector('.fc-unavailable') && !body().querySelector('.fc-baseline'), 'older payload without unavailable flags invents no reason or baseline');
+assert.ok(/forecast unavailable, reason not reported/i.test(kpiFoot('Time to drain')), `older null-quantile payload names the missing reason neutrally: ${kpiFoot('Time to drain')}`);
+assert.ok(!/90-day horizon/i.test(kpiFoot('Time to drain')), `older null-quantile payload does not invent horizon censoring: ${kpiFoot('Time to drain')}`);
+assert.equal(body().querySelector('.fc-odds'), null, 'missing probabilities do not render an all-dashes probability sentence');
+const olderNullSummary = forecast.backlogForecastSummary(olderNullFixture);
+assert.equal(olderNullSummary.reasonKind, 'unknown');
+assert.equal(olderNullSummary.reason, 'Forecast unavailable, reason not reported');
+const olderNullLink = forecast.drainBacklogForecastLink(olderNullSummary);
+const olderNullAccessibleText = olderNullLink.querySelector('.visually-hidden')?.textContent || '';
+assert.ok(/forecast unavailable, reason not reported/i.test(olderNullAccessibleText), `dock row accessible text explains the unknown reason: ${olderNullAccessibleText}`);
+assert.ok(!/90-day horizon/i.test(olderNullAccessibleText), `dock row accessible text does not invent horizon censoring: ${olderNullAccessibleText}`);
 
 const failureLink = compactLink(forecast.backlogForecastFailureSummary());
 assert.equal(failureLink.dataset.forecastReason, 'transport');
