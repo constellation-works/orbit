@@ -65,13 +65,24 @@ pub(super) fn mint(
     )
 }
 
-/// An intake socket path that fits `sun_path` (108 bytes with the NUL), and
-/// the directory that holds it, which the caller keeps alive. A managed run's
-/// TMPDIR can be too long for that, so the socket takes the first of the
-/// process temp dir and `/dev/shm` that fits. The token store stays under the
+/// `sun_path` size with the NUL: 104 bytes on macOS, 108 on Linux. A socket
+/// path must be shorter than this.
+#[cfg(target_os = "macos")]
+const SUN_PATH_BYTES: usize = 104;
+#[cfg(not(target_os = "macos"))]
+const SUN_PATH_BYTES: usize = 108;
+
+/// An intake socket path that fits `sun_path`, and the directory that holds
+/// it, which the caller keeps alive. A managed run's TMPDIR can be too long for
+/// that, so the socket takes the first of the process temp dir, `/dev/shm`
+/// (absent on macOS) and `/tmp` that fits. The token store stays under the
 /// fixture's own tempdir.
 pub(super) fn short_intake_socket() -> (tempfile::TempDir, PathBuf) {
-    for parent in [std::env::temp_dir(), PathBuf::from("/dev/shm")] {
+    for parent in [
+        std::env::temp_dir(),
+        PathBuf::from("/dev/shm"),
+        PathBuf::from("/tmp"),
+    ] {
         let Ok(dir) = tempfile::Builder::new()
             .prefix("intake")
             .tempdir_in(&parent)
@@ -79,7 +90,7 @@ pub(super) fn short_intake_socket() -> (tempfile::TempDir, PathBuf) {
             continue;
         };
         let socket = dir.path().join("intake.sock");
-        if socket.as_os_str().as_encoded_bytes().len() < 108 {
+        if socket.as_os_str().as_encoded_bytes().len() < SUN_PATH_BYTES {
             return (dir, socket);
         }
     }
