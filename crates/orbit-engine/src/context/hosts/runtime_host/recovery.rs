@@ -207,8 +207,8 @@ macro_rules! recovery_methods {
             proc_allowed_programs: Option<&[String]>,
         ) -> ToolContext;
 
-        /// Record one dispatch's invocation: its provider, model, crew account
-        /// and trace.
+        /// Record one dispatch's launch identity before its provider starts.
+        /// This includes the provider, model, and crew account.
         fn begin_agent_execution(
             &self,
             run_id: &str,
@@ -218,6 +218,8 @@ macro_rules! recovery_methods {
             identity: &orbit_types::telemetry::AgentExecutionIdentity,
         ) -> Result<Option<i64>, OrbitError>;
 
+        /// Record one dispatch's invocation: its provider, model, crew account
+        /// and trace.
         fn persist_invocation_trace(
             &self,
             job_run_id: &str,
