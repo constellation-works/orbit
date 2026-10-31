@@ -947,15 +947,26 @@ calibration, with the detail collapsed underneath.
   every task's.
 
 **Calibration** checks earlier forecasts. While **Forecast** is open on its
-defaults, one forecast an hour is kept. As its tasks finish, each task's
-actual time, cost, and tokens are compared with its own p50 and p90, and once
-every task is done, so are the whole drain's. A forecast that is well
-calibrated has about half of actuals under p50 and nine in ten under p90: the
-bars mark those targets and turn amber when a share is off. Tasks since
-rejected, archived, removed, or moved to another complexity are left out and
-counted. **Stored forecasts** lists every kept forecast against what
-happened. A new workspace needs a few days of finished work before there is
-anything to score.
+defaults, one forecast an hour is kept. As each task finishes, its actual
+time, cost, and tokens are compared with its own p50 and p90, so per-task
+scores accrue as work lands. The scoring rules change by model version, and
+the whole drain is scored once its forecast settles. Before model version 9,
+that is once no task is pending and at least one is done or abandoned. From
+model version 9 on, it is 90 days after the forecast, even if its initial
+tasks finished sooner, so regression follow-ups filed in that window are
+counted. Removed or re-scoped tasks, and done tasks with no agent run after
+the forecast, are left out and counted; a forecast with any left-out task is
+not scored as a whole. Before model version 5, rejected and archived tasks are
+left out the same way. From model version 5 they count as abandoned: they
+never deliver, so their hours are not scored, but the spend they made after
+the forecast still counts toward its token and cost totals. A settled forecast
+with an abandoned task is scored as not drained, so it has no time-to-drain
+actual. Unfinished work has none either. A forecast that is well calibrated
+has about half of actuals under p50 and nine in ten under p90: the bars mark
+those targets and turn amber when a share is off. **Stored forecasts** lists
+every kept forecast against what happened. A new workspace needs a few days
+of finished work before there are per-task scores, and a forecast from model
+version 9 on gets its whole-drain score 90 days after it was made.
 
 ### Cost
 
