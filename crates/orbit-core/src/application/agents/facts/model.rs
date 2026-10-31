@@ -370,6 +370,9 @@ pub struct AgentFacts {
     pub(in crate::application::agents) charges: Vec<Charge>,
     pub(in crate::application::agents) run_costs: BTreeMap<String, Option<f64>>,
     pub(in crate::application::agents) credits: Vec<Credit>,
+    /// Every typed `regression_from` link in the workspace, each observed
+    /// when its regressing task was created.
+    pub(in crate::application::agents) regressions: Vec<RegressionLink>,
     /// Lines added plus deleted from the experiment outcome's landed diff rows.
     pub(in crate::application::agents) landed_lines: BTreeMap<String, u64>,
     /// The configured task types used for comparable diff sizes.

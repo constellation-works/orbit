@@ -311,6 +311,10 @@ pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state
         // Observe › Agents: one scorecard per agent role ranked by crew and
         // model, and who each problem counts against, from one cached scan.
         .route("/agents/implementers/by-type", get(agents::agent_by_type))
+        .route(
+            "/agents/implementers/size-curves",
+            get(agents::agent_size_curves),
+        )
         .route("/agents/attribution", get(agents::agent_attribution))
         .route("/agents/{role}/scorecard", get(agents::agent_scorecard))
         .route("/agents/{role}/detail", get(agents::agent_detail))
