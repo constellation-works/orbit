@@ -59,8 +59,10 @@ template:
       read its `pilot-block-cursor.json` and `pilot-block-report.json` with
       `orbit.task.artifact.get` only after `artifacts` from `orbit.task.show` lists those
       paths. Record the new scan start, the moment this scan starts, before reading any
-      task. A prior pass whose artifacts can't be read is reported, and this pass compares
-      against nothing and is a first pass.
+      task. That instant is this pass's report `scan_start`. It becomes the cursor's
+      `cursor` only when section 6 says so. A resume pass does not write it as
+      `cursor`. A prior pass whose artifacts can't be read is reported, and this pass
+      compares against nothing and is a first pass.
     - **First pass (no prior cursor): the 3 days before scan start.** A pass with no
       readable cursor uses this shorter window, not 14 days, so an existing backlog drains
       over a few passes.
@@ -68,9 +70,17 @@ template:
       start.** Report occurrences since the prior cursor separately; they decide whether a
       cause is still firing.
     - **Resume pass (the prior cursor has `resume_after`).** Do not advance the window.
-      Keep that cursor's `cursor` value as the window end and continue with events strictly
-      after `resume_after`, oldest first. A later pass advances the window only after a pass
-      finishes it (`partial` false and no `resume_after`).
+      The window end is the prior cursor's `cursor` value. Write that same value as this
+      pass's `cursor`, not this pass's scan start. The window start is the prior pass's
+      `pilot-block-report.json` field `window_start`: read it from that artifact in the
+      cursor step above, and write that same value as the window start this pass
+      continued (the report's `window_start`, and the cursor's `window_start` when this
+      pass is still capped). Do not recompute the start from this scan. Continue with
+      events strictly after `resume_after`, oldest first, and not past that window end.
+      Each later capped resume reads the window start from the prior report's
+      `window_start` and again writes the same `cursor`, so the chain keeps one fixed
+      window. A later pass advances the window only after a pass finishes it (`partial`
+      false and no `resume_after`).
 
     ## 2. Collect
 
@@ -90,7 +100,8 @@ template:
       fields in Rules. When candidates remain, the pass is partial: stop reading, finish
       sections 3–6 for what you read, and still succeed. Set `partial` to true and set
       `resume_after` to the time of the last occurrence you processed. The next pass
-      continues from that `resume_after`.
+      continues from that `resume_after` inside this same window. It does not move the
+      window end or the window start.
 
     For every task you read, record each in-window occurrence with its task id, time and
     source record. Start from the records `escalation_triage_pipeline` already left: its
@@ -200,13 +211,26 @@ template:
 
     A capped pass sets `"partial": true` and `resume_after` to the last processed event
     time. Counts cover only the tasks this pass read. A finished window sets `"partial":
-    false` and `resume_after` to null.
+    false` and `resume_after` to null. A first or steady pass sets `window_start` from
+    section 1 (3 days or 14 days before this scan start). A resume pass sets
+    `window_start` to the window start it continued: the prior report's `window_start`,
+    read from that prior `pilot-block-report.json`. It sets `scan_start` to the moment
+    this scan starts and does not recompute `window_start` from that instant.
 
     Write the cursor to `.orbit/tmp/pilot-block-cursor.json` and attach it as
     `pilot-block-cursor.json` on every completed owner pass, including an empty one and a
-    partial one. A finished window is `{"schema_version":1,"cursor":"<scan start>"}`. A
-    capped pass is
+    partial one. A finished first or steady pass is
+    `{"schema_version":1,"cursor":"<scan start>"}`. A finished resume pass is
+    `{"schema_version":1,"cursor":"<prior cursor's cursor>"}`: `cursor` is the prior
+    cursor's `cursor` value, not this pass's scan start. A capped first or steady pass is
     `{"schema_version":1,"cursor":"<scan start>","resume_after":"<last processed event time>"}`.
+    A capped resume pass is
+    `{"schema_version":1,"cursor":"<prior cursor's cursor>","resume_after":"<last processed event time>","window_start":"<prior report's window_start>"}`.
+    That `cursor` is the prior cursor's `cursor` value, not this pass's scan start, and
+    that `window_start` is the window start read from the prior pass's
+    `pilot-block-report.json`. The next capped resume reads the window start from the
+    prior report's `window_start` (this cursor stores the same value) and writes that
+    same `cursor` again, so a chain of capped resume passes keeps one fixed window.
     Hitting the collection cap completes the pass: attach both artifacts. An unfinished
     window is not a reason to end without them.
 
@@ -219,7 +243,7 @@ template:
   - Run-failure groups were only commented on an open `run-failure-patterns` task or filed as one tagged `run-failure-patterns`; no failure-rate measurement task was filed.
   - No blocked or pilot-held task was edited, requeued, commented on or triaged; the only writes on other tasks were comments on open fix tasks covering a group.
   - Every group carries its change against the prior pass, and every fix this auto-task filed that reached done in the last 30 days has an effectiveness verdict, with a regression task filed for each `not effective` fix.
-  - The pass ran on the owning machine and attached `pilot-block-report.json` and `pilot-block-cursor.json`, including `resume_after` when `partial` is true, or stopped with `wrong_host` in the execution summary without filing and without attaching a cursor.
+  - The pass ran on the owning machine and attached `pilot-block-report.json` and `pilot-block-cursor.json`, including `resume_after` when `partial` is true. When this pass resumed, the attached cursor's `cursor` is the prior cursor's `cursor` (not this scan start) and the report's `window_start` is the window start read from the prior report's `window_start`. Or the pass stopped with `wrong_host` in the execution summary without filing and without attaching a cursor.
   task_type: chore
   tags:
   - pilot-block-patterns
