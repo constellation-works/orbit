@@ -862,6 +862,159 @@ fn readout_counts_tasks_with_a_recorded_explorer_call() {
     }
 }
 
+/// [ORB-20573] Exactly 100,000 newer unrelated implement invocations must
+/// not evict an enrolled task's recorded explorer call from the readout.
+#[test]
+fn readout_counts_explorer_call_beyond_workspace_invocation_scan_limit() {
+    if !super::dispatch_admission::isolated(
+        "experiment_readout::readout_counts_explorer_call_beyond_workspace_invocation_scan_limit",
+    ) {
+        return;
+    }
+
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("home/.orbit");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(
+        workspace.join("config.toml"),
+        "[experiments]\nenabled = true\n",
+    )
+    .unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let actor = ExperimentActor {
+        actor: "readout-test".into(),
+        reason: None,
+    };
+    let experiment = runtime
+        .create_experiment(
+            "explorer-uptake-beyond-scan-limit",
+            ExperimentDefinitionInput {
+                arms: Some(json!([
+                    { "name": "control", "control": true },
+                    { "name": "treatment" }
+                ])),
+                primary_metric: Some("implement_tokens".into()),
+                ..ExperimentDefinitionInput::default()
+            },
+            actor.clone(),
+        )
+        .unwrap();
+    runtime
+        .change_experiment(&experiment.id, ExperimentChange::Start, actor)
+        .unwrap();
+
+    let seed = |activity: &str, tool_name: &str, suffix: &str| {
+        let task_id = enroll_arm_task(&runtime, &experiment.id, "treatment", TaskComplexity::Low);
+        runtime
+            .insert_invocation_trace_record(&InvocationInsertParams {
+                agent_execution_id: None,
+                job_run_id: format!("explorer-cap-{task_id}-{suffix}"),
+                account: None,
+                activity_id: activity.into(),
+                agent: "codex".into(),
+                provider: None,
+                model: Some("gpt-6.1-sol".into()),
+                task_ids: vec![task_id.clone()],
+                trace: InvocationTrace {
+                    tool_calls: vec![ToolCallTrace {
+                        seq: 0,
+                        tool_name: tool_name.into(),
+                        result_bytes: 0,
+                        ..ToolCallTrace::default()
+                    }],
+                    ..InvocationTrace::default()
+                },
+            })
+            .unwrap();
+        task_id
+    };
+
+    // Counted once, however many post-assignment implement calls it made.
+    let counted = seed("agent_implement", "orbit.agent.invoke", "counted");
+    runtime
+        .insert_invocation_trace_record(&InvocationInsertParams {
+            agent_execution_id: None,
+            job_run_id: format!("explorer-cap-{counted}-counted-again"),
+            account: None,
+            activity_id: "agent_implement".into(),
+            agent: "codex".into(),
+            provider: None,
+            model: Some("gpt-6.1-sol".into()),
+            task_ids: vec![counted.clone()],
+            trace: InvocationTrace {
+                tool_calls: vec![ToolCallTrace {
+                    seq: 0,
+                    tool_name: "mcp__orbit__orbit_agent_invoke".into(),
+                    result_bytes: 0,
+                    ..ToolCallTrace::default()
+                }],
+                ..InvocationTrace::default()
+            },
+        })
+        .unwrap();
+    runtime.archive_task(&counted).unwrap();
+
+    // An explorer call recorded before assignment does not count.
+    let before_assignment = seed("agent_implement", "orbit_agent_invoke", "before-assignment");
+    let store = runtime.sqlite_store().unwrap();
+    store
+        .connection()
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE invocations SET ts = ?1 WHERE job_run_id = ?2",
+            rusqlite::params![
+                (Utc::now() - Duration::hours(2)).to_rfc3339(),
+                format!("explorer-cap-{before_assignment}-before-assignment")
+            ],
+        )
+        .unwrap();
+    runtime.archive_task(&before_assignment).unwrap();
+
+    // An explorer call outside an implement activity does not count.
+    let review_only = seed("review", "orbit_agent_invoke", "review-only");
+    runtime.archive_task(&review_only).unwrap();
+
+    // An implement invocation without an explorer call does not count.
+    let no_explorer = seed("agent_implement", "orbit_task_show", "no-explorer");
+    runtime.archive_task(&no_explorer).unwrap();
+
+    // One bounded fixture batch: exactly the old scan limit of newer,
+    // unrelated (unlinked) implement invocations, in a transaction.
+    let newer = Utc::now() + Duration::days(1);
+    {
+        let connection = store.connection();
+        let mut connection = connection.lock().unwrap();
+        let tx = connection.transaction().unwrap();
+        tx.execute(
+            "WITH RECURSIVE fixture(n) AS (
+                VALUES(1) UNION ALL SELECT n + 1 FROM fixture WHERE n < 100000
+             ) INSERT INTO invocations(ts, workspace_id, job_run_id, activity_id, agent)
+             SELECT ?1, ?2, 'explorer-cap-unrelated-' || n, 'agent_implement', 'codex'
+             FROM fixture",
+            rusqlite::params![newer.to_rfc3339(), runtime.workspace_id().unwrap()],
+        )
+        .unwrap();
+        tx.commit().unwrap();
+    }
+
+    let readout = runtime.experiment_readout(&experiment.id, None).unwrap();
+    assert_eq!(readout.enrollment.analysed, 4);
+    let treatment = readout
+        .arms
+        .iter()
+        .find(|arm| arm.name == "treatment")
+        .unwrap();
+    assert_eq!(treatment.n, 4);
+    assert_eq!(
+        treatment.tasks_with_explorer_call, 1,
+        "100,000 newer unrelated invocations must not evict the enrolled \
+         task's post-assignment implement explorer call, and it counts once"
+    );
+}
+
 #[test]
 fn first_edit_readout_excludes_a_retry_when_same_timestamp_paging_stalls() {
     if !super::dispatch_admission::isolated(
