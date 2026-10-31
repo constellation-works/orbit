@@ -94,3 +94,6 @@ drain, set its `context_files` to the files the work will touch as you claim
 it, and keep them current as the change grows. Drains schedule around a
 task's `context_files`, so an interactive claim without them collides with
 queued work.
+Set the task's `crew` to the crew reference that actually does the work,
+with its effort (for example `opus@medium`), replacing whatever filing
+assigned. Crew analytics attribute outcomes by that field.
