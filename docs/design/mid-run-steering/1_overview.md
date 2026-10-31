@@ -1,9 +1,9 @@
 ---
 title: Mid-Run Operator Steering — Overview
 owner: codex
-last_updated: 2026-10-18
-last_validated: 2026-10-28
-status: Accepted
+last_updated: 2026-10-31
+last_validated: 2026-10-31
+status: Implemented
 stage: shipped
 next: "—"
 feature: mid-run-steering
@@ -42,6 +42,13 @@ The mechanism ships in both owner delivery pipelines and their claimed counterpa
 |---------|------|------|
 | Prompt construction and watermark capture | [task_context.rs](../../../crates/orbit-core/src/adapter/engine_host/actions/task_context.rs) | [ORB-10499] |
 | Step dispatch, recovery and safe points | [docs/design/activity-job/](../activity-job/) | [ORB-10499] |
+| Default-off setting and durable snapshot watermark | [2_design.md §1](./2_design.md#1-snapshot-watermark) | [ORB-16601] |
+| Operator comment delivery at prompt safe points | [2_design.md §2](./2_design.md#2-delivery-at-safe-points) | [ORB-16602] |
+| Promotion gate, bounded rounds and hold | [2_design.md §3](./2_design.md#3-promotion-gate) | [ORB-16603] |
+| Owner-authoritative records for claimed leaves | [2_design.md §3](./2_design.md#3-promotion-gate) | [ORB-16604] |
+| Claimed-worker checkpoint and terminal behavior | [2_design.md §2](./2_design.md#2-delivery-at-safe-points) | [ORB-16605] |
+| Carried-candidate baseline from its source run | [2_design.md §3](./2_design.md#3-promotion-gate) | [ORB-16715] |
+| Operator comment-only writes during a live claim | [2_design.md §3](./2_design.md#3-promotion-gate) | [ORB-16723] |
 | Motivating missed comment | — (task record) | [ORB-16577] |
 | Incident replay and migration coverage | [replay.rs](../../../crates/orbit-core/tests/runtime/mid_run_steering/replay.rs) | [ORB-16606] |
 | Delivery invariants | [specs/steering-delivery.md](./specs/steering-delivery.md) | [ORB-16577] |
@@ -49,6 +56,13 @@ The mechanism ships in both owner delivery pipelines and their claimed counterpa
 ## Task References
 
 - [ORB-16606] — completed integration evidence, migration checks and design closeout; steering remains default off.
+- [ORB-16601] — added the default-off setting and durable prompt snapshot watermark.
+- [ORB-16602] — delivered operator comments at prompt-building safe points.
+- [ORB-16603] — gated promotion and added bounded steering rounds and holds.
+- [ORB-16604] — made claimed-leaf delivery and gate reads owner-authoritative.
+- [ORB-16605] — extended the in-step checkpoint and terminal checks to steering.
+- [ORB-16715] — made a carried candidate inherit its source run's steering baseline.
+- [ORB-16723] — allowed operator comment-only writes during a live execution claim.
 
 - [ORB-16577] — added the Muse executor lane; its implement run missed an operator comment written seven minutes after dispatch, which motivated this design.
 - [ORB-10499] — made an implement invocation able to cancel itself when its task stops accepting writes, and established the re-read-through-`orbit.task.show` checkpoint contract this design extends from status to comments.

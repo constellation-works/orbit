@@ -222,8 +222,8 @@ a conservative title/status fallback.
 | [Host Registry](./design/host-registry/1_overview.md) | The live host-registry feature is a machine-local identity and workspace catalog. | Implemented | codex |
 | [Human Decision Channel](./design/human-decision-channel/1_scope.md) | Scope: a core decision-request record and delegated-human channel, with email as a plugin transport, so held Orbit work can be decided by replying to an email | Draft | claude |
 | [Orbit MCP](./design/mcp-bridge/1_overview.md) | One authoritative Orbit MCP server, reached by local stdio, a byte-transparent direct SSH stdio proxy, or a loopback-default TCP listener. | Draft | codex |
-| [MCP Session Context](./design/mcp-session-context/1_overview.md) | ToolSessionContext is Orbit's transport-to-Core invocation envelope. | Accepted | codex |
-| [Mid-Run Operator Steering](./design/mid-run-steering/1_overview.md) | Default-off delivery of operator comments written after dispatch to the running agent, gated on the durable task record | Accepted | codex |
+| [MCP Session Context](./design/mcp-session-context/1_overview.md) | ToolSessionContext is Orbit's transport-to-Core invocation envelope. | Implemented | codex |
+| [Mid-Run Operator Steering](./design/mid-run-steering/1_overview.md) | Default-off delivery of operator comments written after dispatch to the running agent, gated on the durable task record | Implemented | codex |
 | [Operations as Data](./design/operations-as-data/1_overview.md) | One spec per operation drives the CLI, MCP, and runtime adapters; dashboard routes remain separately wired. Kernel v2 serves friction, auto-task, drain, workspace claim, task, workflow-run, search, codebase operations, and agent scorecards; deprecated orchestrator scorecard aliases share the registry. | Accepted | claude |
 | [Orbit Core](./design/orbit-core/1_overview.md) | Directional runtime, application, adapter, bootstrap, and composition boundaries across orbit-runtime and orbit-core. | Accepted | codex |
 | [Task Search](./design/orbit-search/1_overview.md) | Lexical task search using SQLite FTS5 BM25. | Accepted | codex |
