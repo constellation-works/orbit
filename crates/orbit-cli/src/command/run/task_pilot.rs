@@ -1,7 +1,7 @@
 //! `orbit run task-pilot` CLI entrypoint.
 
 use clap::Args;
-use orbit_core::{OrbitError, OrbitRuntime, TaskStatus};
+use orbit_core::{OrbitError, OrbitRuntime, TaskStatus, find_workflow};
 use serde_json::{Value, json};
 
 use crate::command::{CommandOut, Execute};
@@ -9,6 +9,9 @@ use crate::command::{CommandOut, Execute};
 use super::support::{WaitArgs, dispatch_workflow, workflow_dispatch_payload};
 
 pub(super) const TASK_PILOT_WORKFLOW: &str = "task-pilot";
+/// The shipped task-pilot job's `max_tasks`, which prepare also applies when
+/// the job's default input declares none.
+const SHIPPED_MAX_TASKS: u64 = 50;
 
 #[derive(Args)]
 #[command(
@@ -34,6 +37,28 @@ pub struct TaskPilotCommand {
     pub max_partition_size: Option<u32>,
     #[command(flatten)]
     pub(super) wait: WaitArgs,
+}
+
+impl TaskPilotCommand {
+    /// The total cap on an explicit selection: `--max-tasks` when given, else
+    /// the `max_tasks` default of the job the run executes, so a custom
+    /// definition's default applies here as it does at preparation.
+    fn effective_max_tasks(&self, runtime: &OrbitRuntime) -> Result<u64, OrbitError> {
+        if let Some(max_tasks) = self.max_tasks {
+            return Ok(u64::from(max_tasks));
+        }
+        let job_id = find_workflow(TASK_PILOT_WORKFLOW)
+            .map(|workflow| workflow.job_id)
+            .ok_or_else(|| {
+                OrbitError::InvalidInput(format!("unknown workflow '{TASK_PILOT_WORKFLOW}'"))
+            })?;
+        let default_input = runtime.job_default_input(job_id)?;
+        Ok(default_input
+            .as_ref()
+            .and_then(|input| input.get("max_tasks"))
+            .and_then(Value::as_u64)
+            .unwrap_or(SHIPPED_MAX_TASKS))
+    }
 }
 
 impl Execute for TaskPilotCommand {
@@ -74,12 +99,14 @@ impl Execute for TaskPilotCommand {
                 unsupported.join(", ")
             )));
         }
-        let max_tasks = self.max_tasks.unwrap_or(50);
-        if self.task_ids.len() > max_tasks as usize {
-            return Err(OrbitError::InvalidInput(format!(
-                "explicit task-pilot selection contains {} tasks, exceeding max_tasks {max_tasks}",
-                self.task_ids.len()
-            )));
+        if !self.task_ids.is_empty() {
+            let max_tasks = self.effective_max_tasks(runtime)?;
+            if self.task_ids.len() as u64 > max_tasks {
+                return Err(OrbitError::InvalidInput(format!(
+                    "explicit task-pilot selection contains {} tasks, exceeding max_tasks {max_tasks}",
+                    self.task_ids.len()
+                )));
+            }
         }
         let selections = if self.task_ids.is_empty() {
             vec![Vec::new()]
