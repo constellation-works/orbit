@@ -3076,7 +3076,59 @@
         "## Rules and command surfaces"
       ],
       "digest": "38520fde8aed419e17d8dd953840cef63bafe24c25c694613b9b0b8ca40a0eb0",
-      "revision": "9d3ceb2bb7a2113154e9ff3746b10e1e8d04bc2a",
+      "revision": "a6fbefcb59c5c6f37a0814ba5f7ca2f8d7e668da",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "40 6 * * *"
+        },
+        "tags": [
+          "pilot-block-patterns",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## 1. Windows",
+        "## 2. Collect",
+        "## 3. Group by cause and route to the source",
+        "## 4. Dedupe and file",
+        "## 5. Check earlier fixes",
+        "## 6. Report and cursor",
+        "## Rules and command surfaces"
+      ],
+      "digest": "a89f847d0c4dd71ded1c5bc430e9110828441b583e2926219940d0e00abe2638",
+      "revision": "29332f977acf6c2b26d96e07c6650ff6835060b5",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "40 6 * * *"
+        },
+        "tags": [
+          "pilot-block-patterns",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## 1. Windows",
+        "## 2. Collect",
+        "## 3. Group by cause and route to the source",
+        "## 4. Dedupe and file",
+        "## 5. Check earlier fixes",
+        "## 6. Report and cursor",
+        "## Rules and command surfaces"
+      ],
+      "digest": "baf35172a80a79107670d2ded11785a9af07f6cf5494a754471f195551a29c9c",
+      "revision": "8ddebfced5cb3a395fc8b7902f9db0d322f1cb8e",
       "settings": {
         "complexity": "medium",
         "dedupe": "skip_if_open",
@@ -4124,6 +4176,32 @@
       "settings": {
         "complexity": "medium",
         "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "20 7 * * 1"
+        },
+        "tags": [
+          "run-failure-patterns",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## 1. Windows",
+        "## 2. Measure the rate",
+        "## 3. Find the classes that drive it",
+        "## 4. Check coverage and effectiveness",
+        "## 5. Filing",
+        "## 6. Report and cursor",
+        "## Rules and command surfaces"
+      ],
+      "digest": "9b81f2feac58a43e3962b89191564af51cb9abd0584f44621f60e4feeaa73c36",
+      "revision": "2fc392151b33d73e0d2285a804b5f712b4a0bd06",
+      "settings": {
+        "complexity": "medium",
         "dedupe": "skip_if_open",
         "enabled": false,
         "priority": "medium",
