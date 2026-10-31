@@ -324,8 +324,8 @@ export function forecastBaselineFigures(baseline) {
 }
 
 // The baseline's figures as one sentence ("Time to drain p50 … · Tokens …."),
-// the drain card's whole visible Backlog line when the adjusted forecast is
-// unavailable [ORB-20453]; "" when there are none.
+// for the drain card's tooltip when the adjusted forecast is unavailable
+// [ORB-20453]; "" when there are none.
 function baselineFigureText(figures) {
   if (!figures) return "";
   const parts = [figures.time && `Time to drain ${figures.time}`, figures.cost && `Cost ${figures.cost}`, figures.tokens && `Tokens ${figures.tokens}`].filter(Boolean);
@@ -354,7 +354,7 @@ export function backlogForecastSummary(payload) {
   const info = forecastUnavailableInfo(forecast, payload);
   if (info) {
     const figures = forecastBaselineFigures(forecast.pre_regression_baseline);
-    return { unavailable: true, reasonKind: info.kind, reason: info.label, detail: info.detail, reasons: info.reasons, baseline: figures, baselineText: baselineText(figures), counts, freshness, drain: null, cost: null, exactCost: null, tokens: null };
+    return { unavailable: true, reasonKind: info.kind, reason: info.label, detail: info.detail, reasons: info.reasons, baseline: figures, baselineText: baselineText(figures), baselineBars: figures ? backlogBarQuantiles(forecast.pre_regression_baseline) : null, counts, freshness, drain: null, cost: null, exactCost: null, tokens: null };
   }
   if (num(forecast.tasks) === 0) {
     return { unavailable: true, reasonKind: "empty", reason: "No backlog to forecast", detail: "No backlog or in-progress tasks in this workspace.", baseline: null, baselineText: "", counts, freshness, drain: null, cost: null, exactCost: null, tokens: null };
@@ -367,6 +367,8 @@ export function backlogForecastSummary(payload) {
       cost: costed ? formatForecastQuantileRange(forecast.usd, wholeUsd) : null,
       exactCost: costed ? formatForecastQuantileRange(forecast.usd, formatForecastUsd) : null,
       tokens: quantilePair(forecast.tokens) ? formatForecastQuantileRange(forecast.tokens, formatForecastTokens) : null,
+      bars: backlogBarQuantiles(forecast),
+      references: backlogBarReferences(forecast.pre_regression_baseline),
       counts, freshness,
     };
   }
@@ -382,7 +384,90 @@ export function backlogForecastSummary(payload) {
   else if (forecast.schedulable_subset) { reasonKind = "subset"; reason = "Not every task can be scheduled"; detail = "Some tasks depend on work the drain cannot start, so there is no full total."; }
   else if (tasks != null && tasks > 0 && hasHorizonCensoringEvidence(forecast)) { reasonKind = "horizon"; reason = "Beyond the 90-day horizon"; detail = "The simulated backlog did not drain within the 90-day horizon."; }
   const figures = forecastBaselineFigures(forecast.pre_regression_baseline);
-  return { unavailable: true, reasonKind, reason, detail, baseline: figures, baselineText: baselineText(figures), counts, freshness, drain: null, cost: null, exactCost: null, tokens: null };
+  return { unavailable: true, reasonKind, reason, detail, baseline: figures, baselineText: baselineText(figures), baselineBars: figures ? backlogBarQuantiles(forecast.pre_regression_baseline) : null, counts, freshness, drain: null, cost: null, exactCost: null, tokens: null };
+}
+
+// The backlog card's bar rows: key, label, forecast field and figure format.
+// Cost is whole dollars so the row fits; the tooltip keeps the cents.
+const BACKLOG_BAR_METRICS = [
+  ["drain", "Time to drain", "time_to_drain_hours", formatForecastHours],
+  ["cost", "Cost", "usd", wholeUsd],
+  ["tokens", "Tokens", "tokens", formatForecastTokens],
+];
+
+// Each metric's p50 and p90 as numbers (null when unknown). A metric with
+// neither quantile is null, so its row is left out rather than drawn empty.
+function backlogBarQuantiles(source) {
+  const bars = {};
+  for (const [key, , field] of BACKLOG_BAR_METRICS) {
+    bars[key] = quantilePair(source?.[field]) ? { p50: num(source[field].p50), p90: num(source[field].p90) } : null;
+  }
+  return bars;
+}
+
+// The reference tick per metric: the pre-regression baseline's p50, which
+// sits on the same quantile as the solid fill, so the gap between the fill's
+// end and the tick is the regression follow-up work the adjusted forecast
+// adds. Core sends a baseline only beside an unavailable adjusted forecast
+// today, so a ready summary normally has no ticks. Null when there is none.
+function backlogBarReferences(baseline) {
+  if (!baseline || typeof baseline !== "object") return null;
+  const references = {};
+  for (const [key, , field] of BACKLOG_BAR_METRICS) references[key] = num(baseline[field]?.p50);
+  return Object.values(references).some((value) => value != null) ? references : null;
+}
+
+// Share of the line the largest figure may reach, so a p90 never reads as a
+// value pinned to a limit when there is no limit.
+const BACKLOG_BAR_SPAN = 0.9;
+
+// One row beside the CPU and Memory meters: label, line and figures. The
+// distribution sits on a flat line: a dot at p50, with colour strongest there
+// and fading outward to p90. The forecast has no p10, so the fade to the left
+// of p50 mirrors the right half as a visual falloff and is not a figure. Each
+// line is scaled to its own largest figure (its p90, or the tick when that is
+// further), since the three metrics share no unit. A missing quantile reads
+// "unknown" and draws nothing in its place: no p50 draws no row mark, and no
+// p90 leaves the dot without a spread.
+function backlogBarRow([key, label, , fmt], quantiles, reference, caveat) {
+  const { p50, p90 } = quantiles;
+  const top = Math.max(p50 ?? 0, p90 ?? 0, reference ?? 0);
+  const at = (value) => (top > 0 ? Math.max(0, value) / top * BACKLOG_BAR_SPAN * 100 : 0);
+  const share = (value) => `${at(value).toFixed(2)}%`;
+  const figures = `${p50 == null ? "unknown" : fmt(p50)} – ${p90 == null ? "unknown" : fmt(p90)}`;
+  let band = null;
+  if (p50 != null && p90 != null && p90 > p50) {
+    const start = Math.max(0, p50 - (p90 - p50));
+    band = el("span", { class: "drain-backlog-forecast-band", style: { left: share(start), width: share(p90 - start) } });
+    band.style.setProperty("--center", `${((p50 - start) / (p90 - start) * 100).toFixed(2)}%`);
+  }
+  const meter = el("span", { class: "drain-backlog-forecast-meter", "aria-hidden": "true" }, [
+    band,
+    reference != null ? el("span", { class: "drain-forecast-tick", style: { left: share(reference) } }) : null,
+    p50 != null ? el("span", { class: "drain-backlog-forecast-p50", style: { left: share(p50) } }) : null,
+  ].filter(Boolean));
+  const spoken = [`${label} p50 ${p50 == null ? "unknown" : fmt(p50)}, p90 ${p90 == null ? "unknown" : fmt(p90)}`,
+    reference != null ? `pre-regression baseline p50 ${fmt(reference)}` : "", caveat].filter(Boolean).join(", ");
+  const row = el("div", { class: "drain-forecast-peak drain-backlog-forecast-row" }, [
+    el("dt", { text: label }),
+    el("dd", { class: "drain-forecast-bar" }, [meter]),
+    el("dd", { class: "drain-forecast-figure" }, [
+      el("span", { class: "drain-forecast-figure-main mono", "aria-hidden": "true", text: figures }),
+      el("span", { class: "visually-hidden", text: spoken }),
+    ]),
+  ]);
+  row.dataset.metric = key;
+  return row;
+}
+
+// The rows for every metric with a known quantile, or null when none has one.
+function backlogBarList(bars, references, caveat) {
+  if (!bars) return null;
+  const rows = BACKLOG_BAR_METRICS
+    .filter(([key]) => bars[key])
+    .map((metric) => backlogBarRow(metric, bars[metric[0]], references?.[metric[0]] ?? null, caveat));
+  if (!rows.length) return null;
+  return el("dl", { class: "drain-forecast-peaks drain-backlog-forecast-bars" }, rows);
 }
 
 // Whole dollars, so the dock line fits; the tooltip keeps the cents.
@@ -391,12 +476,13 @@ function wholeUsd(value) {
   return n == null ? "—" : `$${Math.round(n).toLocaleString()}`;
 }
 
-/// Compact link to Analytics › Forecast: p50 – p90 time to drain and cost,
-/// with a freshness label for all the snapshot's figures. Counts, tokens and
-/// exact cost are in its tooltip and accessible text. When the adjusted
-/// forecast is unavailable the line shows only the baseline's figures, or
-/// nothing; the reason and the baseline's caveat stay in the tooltip and
-/// accessible text [ORB-20453].
+/// Compact link to Analytics › Forecast: time to drain, cost and tokens as
+/// rows (p50 marked on a flat line, shading out to p90, figures beside), with a
+/// freshness label for all the snapshot's figures. Counts and exact cost are
+/// in its tooltip and accessible text. When the adjusted forecast is
+/// unavailable the rows draw the pre-regression baseline, muted and labelled
+/// as such, or there are no rows; the reason and the baseline's caveat stay
+/// in the tooltip and accessible text [ORB-20453].
 export function drainBacklogForecastLink(summary) {
   const unavailable = !summary || Boolean(summary.unavailable);
   const link = el("a", { class: unavailable ? "drain-backlog-forecast unavailable" : "drain-backlog-forecast" });
@@ -406,31 +492,33 @@ export function drainBacklogForecastLink(summary) {
     const detail = [reason, summary?.detail, summary?.baselineText, summary?.counts].filter(Boolean).join(" ");
     link.title = `${detail}\nAnalytics › Forecast`;
     if (summary) link.dataset.forecastReason = summary.reasonKind || "unknown";
+    const bars = backlogBarList(summary?.baselineBars, null, "pre-regression baseline");
+    if (bars) bars.classList.add("baseline");
     for (const child of [
       el("span", { class: "drain-section-label", text: "Backlog" }),
-      el("span", { class: "drain-backlog-forecast-baseline", text: baselineFigureText(summary?.baseline) }),
+      bars ? el("span", { class: "drain-forecast-meta drain-backlog-forecast-basis", text: "pre-regression baseline" }) : null,
+      bars,
       el("span", { class: "visually-hidden", text: ` ${detail}` }),
       el("span", { class: "drain-backlog-forecast-go", text: "›", "aria-hidden": "true" }),
     ]) if (child) link.append(child);
     return link;
   }
-  const figures = [summary.drain, summary.cost].filter(Boolean).join(" · ");
   const detail = [
     summary.freshness, summary.counts,
     summary.drain && `Time to drain ${summary.drain}`, summary.cost && `Cost ${summary.cost}`,
     summary.tokens && `Tokens ${summary.tokens}`, summary.exactCost && `Exact cost ${summary.exactCost}`,
   ].filter(Boolean).join(" · ");
-  const accessibleDetail = [
-    summary.counts, summary.tokens && `Tokens ${summary.tokens}`, summary.exactCost && `Exact cost ${summary.exactCost}`,
-  ].filter(Boolean).join(" · ");
+  const accessibleDetail = [summary.counts, summary.exactCost && `Exact cost ${summary.exactCost}`].filter(Boolean).join(" · ");
   link.title = `p50 – p90 · ${detail}\nAnalytics › Forecast`;
-  link.append(
+  const bars = backlogBarList(summary.bars, summary.references, "");
+  link.append(...[
     el("span", { class: "drain-section-label", text: "Backlog" }),
     el("span", { class: "drain-forecast-meta drain-backlog-forecast-freshness", text: summary.freshness }),
-    el("span", { class: "drain-backlog-forecast-figures", text: figures }),
+    bars,
+    summary.references ? el("span", { class: "drain-backlog-forecast-legend", text: "pre-regression baseline p50" }) : null,
     el("span", { class: "visually-hidden", text: ` p50 – p90, ${accessibleDetail}` }),
     el("span", { class: "drain-backlog-forecast-go", text: "›", "aria-hidden": "true" }),
-  );
+  ].filter(Boolean));
   return link;
 }
 

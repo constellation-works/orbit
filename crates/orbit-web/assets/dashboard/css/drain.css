@@ -136,25 +136,38 @@
 .drain-forecast-task.held { color: var(--warn-fg); }
 .drain-forecast-task a { font-family: var(--font-mono); font-size: 11.5px; }
 .drain-forecast-retained:not(:first-child) { padding-top: 10px; border-top: 1px dashed var(--hair); }
-/* The default backlog forecast under the admission block: one line, the
-   whole of it a link to Analytics › Forecast; a miss is the same link, muted. */
+/* The default backlog forecast under the admission block, the whole of it a
+   link to Analytics › Forecast: the label row, then time to drain, cost and
+   tokens beside the peaks above. Each is a flat line with a dot at p50 and
+   colour strongest there, fading outward to p90; a tick, when there is one,
+   is the pre-regression baseline's p50. A miss is the same link, muted, with
+   no rows; a baseline-only forecast draws its rows in grey. */
 .drain-backlog-forecast {
   display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; padding-top: 10px;
   border-top: 1px dashed var(--hair); color: inherit; font-size: 12.5px; line-height: 1.45;
   text-decoration: none;
 }
 .drain-backlog-forecast:hover { text-decoration: none; }
-.drain-backlog-forecast:hover .drain-backlog-forecast-figures,
 .drain-backlog-forecast:hover .drain-backlog-forecast-go { color: var(--accent); }
 .drain-backlog-forecast:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
-/* The figures (or the baseline line) take the row under the label, ordered
-   after the arrow, so the arrow ends the label row instead of wrapping alone
-   beside a full-width figures line [ORB-20480]. */
-.drain-backlog-forecast-figures { order: 1; flex: 1 1 100%; color: var(--fg); font-variant-numeric: tabular-nums; }
+/* The rows take the line under the label, ordered after the arrow, so the
+   arrow ends the label row instead of wrapping alone [ORB-20480]. */
 .drain-backlog-forecast-go { margin-left: auto; color: var(--fg-mute); }
 .drain-backlog-forecast.unavailable { color: var(--fg-mute); }
-.drain-backlog-forecast-baseline { order: 1; flex: 1 1 100%; min-width: 0; color: var(--fg-dim); overflow-wrap: anywhere; }
-.drain-backlog-forecast-baseline:empty { display: none; }
+.drain-backlog-forecast .drain-forecast-peaks.drain-backlog-forecast-bars { order: 1; flex: 1 1 100%; grid-template-columns: max-content minmax(0, 1fr) auto; gap: 10px 14px; margin-top: 8px; }
+.drain-backlog-forecast .drain-backlog-forecast-bars .drain-forecast-figure { grid-column: auto; min-width: 0; }
+.drain-backlog-forecast-meter { --mark: var(--accent); position: relative; display: block; height: 10px; }
+.drain-backlog-forecast-meter::before { content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 1px; background: var(--hair); }
+.drain-backlog-forecast-band {
+  position: absolute; top: 2px; bottom: 2px; border-radius: 3px;
+  background: linear-gradient(to right, transparent, color-mix(in srgb, var(--mark) 70%, transparent) var(--center, 50%), transparent);
+}
+.drain-backlog-forecast-p50 { position: absolute; top: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: 50%; background: var(--mark); box-shadow: 0 0 0 2px var(--bg); }
+.drain-backlog-forecast-bars.baseline .drain-backlog-forecast-meter { --mark: var(--fg-dim); }
+.drain-backlog-forecast-bars.baseline .drain-forecast-figure-main { color: var(--fg-dim); }
+.drain-backlog-forecast:hover .drain-backlog-forecast-bars:not(.baseline) .drain-forecast-figure-main { color: var(--accent); }
+.drain-backlog-forecast-legend { order: 2; flex: 1 1 100%; color: var(--fg-mute); font-size: 12px; text-align: right; }
+.drain-backlog-forecast-legend::before { content: ""; display: inline-block; width: 2px; height: 10px; margin-right: 6px; vertical-align: -1px; border-radius: 1px; background: var(--fg); }
 /* In a narrow card the figures drop under the chart, right-aligned. */
 @container drain-card (max-width: 520px) {
   .drain-forecast-peaks { grid-template-columns: 56px minmax(0, 1fr); row-gap: 6px; }
