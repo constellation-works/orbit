@@ -231,14 +231,24 @@ fn readiness_lines(payload: &Value, formatter: &WaitingTaskFormatter) -> Vec<Str
                     | "awaiting_footprint"
                     | "awaiting_exclusive_slot"
             )
-            .then(|| task["detail"].as_str())
+            .then(|| {
+                if reason == "host_os_mismatch" {
+                    task["host_os_wait"]
+                        .as_str()
+                        .or_else(|| task["detail"].as_str())
+                } else {
+                    task["detail"].as_str()
+                }
+            })
             .flatten()
             .map(|detail| format!(": {detail}"))
             .unwrap_or_default();
-            // A host-OS wait also names the registered hosts of that OS and
-            // whether each is pulling, and one hidden behind an unmet
-            // dependency is named beside it.
-            let host = match (task["host_os_wait"].as_str(), task["host_fleet"].as_str()) {
+            // The primary OS wait already carries its local scope above.
+            // Keep an OS wait behind another blocker as a secondary note.
+            let secondary_os_wait = task["host_os_wait"]
+                .as_str()
+                .filter(|_| reason != "host_os_mismatch");
+            let host = match (secondary_os_wait, task["host_fleet"].as_str()) {
                 (Some(wait), Some(fleet)) => format!("{host}; then {wait}; {fleet}"),
                 (Some(wait), None) => format!("{host}; then {wait}"),
                 (None, Some(fleet)) => format!("{host}; {fleet}"),
