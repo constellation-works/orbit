@@ -555,7 +555,7 @@
         "## Rules and command surfaces"
       ],
       "digest": "056d3731b18016e117492104b5b48a2c06c85ce7e052712b8a4fedfe21f7620f",
-      "revision": "e3ff70284f99f648b777cbd736fa0d41923f9493",
+      "revision": "24b6b558b82e38df74aa6c412a5e02d5d51ff57d",
       "settings": {
         "complexity": "hard",
         "dedupe": "skip_if_open",
@@ -1810,7 +1810,7 @@
     {
       "comments": [],
       "digest": "c6d5cf74ee4dfccd1932f33d33e7e436ecc479b892343265e76a6e1b49490ffb",
-      "revision": "e3ff70284f99f648b777cbd736fa0d41923f9493",
+      "revision": "24b6b558b82e38df74aa6c412a5e02d5d51ff57d",
       "settings": {
         "complexity": "hard",
         "dedupe": "skip_if_open",
@@ -2311,7 +2311,7 @@
         "## Rules and command surfaces"
       ],
       "digest": "ede77797981ebeb75806adf171f534d66691b5b7cd3561184500877d31f87d19",
-      "revision": "e3ff70284f99f648b777cbd736fa0d41923f9493",
+      "revision": "24b6b558b82e38df74aa6c412a5e02d5d51ff57d",
       "settings": {
         "complexity": "medium",
         "dedupe": "skip_if_open",
@@ -2796,7 +2796,7 @@
         "## Rules and command surfaces"
       ],
       "digest": "36a5ad887c5fd9374c97979b2b113999fea38721cb5f3d03eb87c74232ad2b6a",
-      "revision": "e3ff70284f99f648b777cbd736fa0d41923f9493",
+      "revision": "24b6b558b82e38df74aa6c412a5e02d5d51ff57d",
       "settings": {
         "complexity": "medium",
         "dedupe": "skip_if_open",
@@ -3064,6 +3064,34 @@
       }
     }
   ],
+  "pilot-block-patterns": [
+    {
+      "comments": [
+        "## 1. Windows",
+        "## 2. Collect",
+        "## 3. Group by cause and route to the source",
+        "## 4. Dedupe and file",
+        "## 5. Check earlier fixes",
+        "## 6. Report and cursor",
+        "## Rules and command surfaces"
+      ],
+      "digest": "38520fde8aed419e17d8dd953840cef63bafe24c25c694613b9b0b8ca40a0eb0",
+      "revision": "9d3ceb2bb7a2113154e9ff3746b10e1e8d04bc2a",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "40 6 * * *"
+        },
+        "tags": [
+          "pilot-block-patterns",
+          "no-diff-expected"
+        ]
+      }
+    }
+  ],
   "qa-full-sweep": [
     {
       "comments": [
@@ -3128,7 +3156,7 @@
         "## Rules and command surfaces"
       ],
       "digest": "253387452e6b01057f9e4450858880b0e70ce8675ed6cbe6d89e01022fe3f6c5",
-      "revision": "e3ff70284f99f648b777cbd736fa0d41923f9493",
+      "revision": "24b6b558b82e38df74aa6c412a5e02d5d51ff57d",
       "settings": {
         "complexity": "medium",
         "dedupe": "skip_if_open",
@@ -3606,7 +3634,7 @@
         "## Record the cursor"
       ],
       "digest": "659d8561cc0743c0d699b2ebf8512011c6f553da18d062e9d13ca0d9e6901cf5",
-      "revision": "e3ff70284f99f648b777cbd736fa0d41923f9493",
+      "revision": "24b6b558b82e38df74aa6c412a5e02d5d51ff57d",
       "settings": {
         "complexity": "medium",
         "dedupe": "skip_if_open",
@@ -4443,7 +4471,7 @@
         "## Rules and command surfaces"
       ],
       "digest": "b1d9bcc6e59a61a5bd170c72444b2f6c1cbf6a51ae61435ef55252cdd1e08b9c",
-      "revision": "e3ff70284f99f648b777cbd736fa0d41923f9493",
+      "revision": "24b6b558b82e38df74aa6c412a5e02d5d51ff57d",
       "settings": {
         "complexity": "hard",
         "dedupe": "skip_if_open",
