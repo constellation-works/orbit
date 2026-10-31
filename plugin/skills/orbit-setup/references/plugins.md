@@ -16,6 +16,11 @@ section: see [What enabling installs](#what-enabling-installs).
 Nothing here is required for task tracking or agent execution. Add a plugin
 only when the user asks for the capability it provides.
 
+For a login service acting on explicit approvals, use [scoped application
+authority](applications.md). It binds host-issued credentials to an exact
+workspace, tool inputs, manifest digest and completion callbacks without
+granting the service Operator/Runner or making approval tools agent-callable.
+
 ## Two halves: the machine installs, the checkout pins
 
 A plugin lives once per machine under `~/.orbit/plugins/<ns>/<version>/`.

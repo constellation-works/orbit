@@ -133,6 +133,8 @@ pub struct AuditActorAggregate {
 /// have to name a field that can only ever be `None` for them.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AuditInvocationFields<'a> {
+    /// Host-verified application consent, separate from client attribution.
+    pub application: Option<&'a orbit_types::tool::ApplicationInvocation>,
     /// Per-invocation correlation ID minted by the accepting process.
     pub trace_id: Option<&'a str>,
     /// Caller network address observed by the accepting process. Audit

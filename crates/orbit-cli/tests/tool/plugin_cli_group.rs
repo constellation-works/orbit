@@ -2289,3 +2289,7 @@ fn write_greet_conformance_files(root: &Path, namespace: &str) {
     )
     .expect("write golden");
 }
+
+#[cfg(unix)]
+#[path = "application_authority.rs"]
+mod application_authority;
