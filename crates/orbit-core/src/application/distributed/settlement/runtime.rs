@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use orbit_common::{OrbitError, RemoteToolCode};
 use orbit_store::contracts::{ClaimMutation, LocalPullPhase};
+use orbit_types::identity::same_crew_family;
 use orbit_types::workflow::{
     CrewExclusion, CrewExclusionSource, PullAuthExclusion, PullCrewPreflight,
 };
@@ -295,8 +296,9 @@ impl crate::OrbitRuntime {
             // excluded; [ORB-17288] of that provider account, that is: a crew
             // that sets `env` is its own account and alone excluded, and a
             // crew without one excludes the provider's other crews without
-            // one. Capacity stays on the named crew: another model may
-            // still have room. Provider labels are parsed, so `anthropic`
+            // one. Capacity stays on the named crew's family (its base and
+            // `@<effort>` references [ORB-20400]): another model may still
+            // have room. Provider labels are parsed, so `anthropic`
             // groups with `claude`. [ORB-14697] A usage limit excludes nothing
             // here: the leaf recorded it in this host's provider-limit store,
             // whose reading excludes the provider's crews below until it
@@ -436,9 +438,9 @@ impl crate::OrbitRuntime {
             }
         }
         let timed = |crew: &str| {
-            excluded
-                .iter()
-                .any(|exclusion| exclusion.crew == crew && exclusion.until.is_some())
+            excluded.iter().any(|exclusion| {
+                same_crew_family(&exclusion.crew, crew) && exclusion.until.is_some()
+            })
         };
         // The crews the window can run once every timed exclusion lifts.
         // Review is not delivery admission, so a provider limit does not
@@ -449,9 +451,9 @@ impl crate::OrbitRuntime {
                 .runnable
                 .iter()
                 .filter(|crew| {
-                    !excluded
-                        .iter()
-                        .any(|exclusion| &exclusion.crew == *crew && exclusion.until.is_none())
+                    !excluded.iter().any(|exclusion| {
+                        same_crew_family(&exclusion.crew, crew) && exclusion.until.is_none()
+                    })
                 })
                 .cloned()
                 .collect()
@@ -484,7 +486,11 @@ impl crate::OrbitRuntime {
                 None => allowlist
                     .names()
                     .into_iter()
-                    .filter(|crew| !excluded.iter().any(|exclusion| exclusion.crew == *crew))
+                    .filter(|crew| {
+                        !excluded
+                            .iter()
+                            .any(|exclusion| same_crew_family(&exclusion.crew, crew))
+                    })
                     .map(ToOwned::to_owned)
                     .collect(),
             }),
@@ -576,7 +582,9 @@ impl crate::OrbitRuntime {
     /// as a crew that sets `env` is its own account, that shares `failed`'s
     /// account. A crew with `env` is alone on its account; one without
     /// shares the provider's default login with the others without. An
-    /// unparsable or unknown crew stays a single name.
+    /// unparsable or unknown crew stays a single name. [ORB-20400] The window
+    /// matches each name by crew family, so excluding `opus` also keeps every
+    /// `opus@<effort>` reference off the failed account.
     fn crews_sharing_account(&self, failed: &str) -> Vec<String> {
         let registry = self.context.settings().crews();
         let Some((provider, account)) = orbit_types::identity::find_crew(failed, registry)

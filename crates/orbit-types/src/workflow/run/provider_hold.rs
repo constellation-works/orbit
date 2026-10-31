@@ -24,6 +24,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::identity::same_crew_family;
+
 use super::state::{
     PROVIDER_CAPACITY_MARKER, PROVIDER_LIMIT_MARKER, PROVIDER_REFUSAL_MARKER,
     PROVIDER_UNAVAILABLE_MARKER, is_provider_capacity_exhausted, is_provider_limit,
@@ -329,13 +331,16 @@ impl ProviderFailureHold {
     }
 
     /// Whether `crew` is excluded by this hold on the machine it names, or
-    /// on every machine when it names none.
+    /// on every machine when it names none. [ORB-20400] A crew reference and
+    /// its `<crew>@<effort>` references share the crew's model and account,
+    /// so excluding any one of them excludes the whole family: `opus` and
+    /// `opus@medium` exclude each other.
     #[must_use]
     pub fn excludes(&self, crew: &str) -> bool {
         self.excluded_crews
             .iter()
             .chain(&self.carried_crews)
-            .any(|excluded| excluded == crew)
+            .any(|excluded| same_crew_family(excluded, crew))
     }
 
     /// [ORB-16379] Whether `excluded_crews` are excluded on `machine`. An

@@ -3,6 +3,7 @@
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_store::contracts::{AdmissionCrewCapability, AdmissionCrewPressure, LocalPullPhase};
+use orbit_types::identity::same_crew_family;
 use orbit_types::workflow::{CrewExclusion, CrewExclusionSource, PullAuthExclusion};
 use serde::Serialize;
 
@@ -19,6 +20,11 @@ use super::entries::RefusedPullSettlement;
 /// outside that restriction [ORB-14174]. Derived from the drain's run input
 /// and its own admission records, so it survives a follower restart and a
 /// resume, and ends with the drain.
+///
+/// [ORB-20400] Every name match counts a crew's family: an exclusion of
+/// `opus` keeps `opus@medium` off the window too, and a capacity backoff of
+/// `opus@medium` backs off `opus` and its other effort references, which
+/// share the model and account.
 ///
 /// [ORB-14697] Each pass also excludes the crews this host's provider-limit
 /// store finds at their usage limit, until the reading lapses. The reason
@@ -96,7 +102,9 @@ impl PullCrewWindow {
             .filter(|exclusion| exclusion.source != CrewExclusionSource::ProviderLimit)
             .cloned()
             .collect();
-        if let Some(exclusion) = excluded.iter().find(|exclusion| exclusion.crew == crew)
+        if let Some(exclusion) = excluded
+            .iter()
+            .find(|exclusion| same_crew_family(&exclusion.crew, crew))
             && let Some(until) = exclusion.until
         {
             return Some(format!(
@@ -143,10 +151,9 @@ impl PullCrewWindow {
             (Some(allowed), None) => allowed
                 .iter()
                 .filter(|crew| {
-                    !self
-                        .excluded
-                        .iter()
-                        .any(|exclusion| &exclusion.crew == *crew && exclusion.until.is_none())
+                    !self.excluded.iter().any(|exclusion| {
+                        same_crew_family(&exclusion.crew, crew) && exclusion.until.is_none()
+                    })
                 })
                 .map(String::as_str)
                 .collect(),
@@ -154,9 +161,9 @@ impl PullCrewWindow {
         };
         !candidate_crews.is_empty()
             && candidate_crews.iter().all(|crew| {
-                self.excluded
-                    .iter()
-                    .any(|exclusion| exclusion.crew == *crew && exclusion.until.is_some())
+                self.excluded.iter().any(|exclusion| {
+                    same_crew_family(&exclusion.crew, crew) && exclusion.until.is_some()
+                })
             })
     }
 

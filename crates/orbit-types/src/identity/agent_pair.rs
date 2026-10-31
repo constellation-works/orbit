@@ -275,6 +275,15 @@ pub fn crew_reference_base(reference: &str) -> &str {
         .map_or(reference, |(base, _)| base.trim())
 }
 
+/// [ORB-20400] Whether two crew references name the same crew family: the
+/// same `[crews.<name>]` table, at its own effort or any `@<effort>`. A family
+/// shares one model and account, so a provider hold or exclusion on one
+/// member applies to every other: `opus`, `opus@medium` and `opus@high`.
+#[must_use]
+pub fn same_crew_family(left: &str, right: &str) -> bool {
+    crew_reference_base(left) == crew_reference_base(right)
+}
+
 /// Resolve a crew reference from the active registry.
 ///
 /// A reference is a crew name, or `<crew>@<effort>`. The latter resolves to a

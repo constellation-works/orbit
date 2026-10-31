@@ -394,6 +394,93 @@ fn capacity_and_unavailability_hold_the_task_with_the_run_crew_excluded() {
     );
 }
 
+/// [ORB-20400] A pool whose `opus@medium` member shares `opus`'s model and
+/// account, beside `sonnet` on the same Claude login and `sol` on Codex. A
+/// limited explicit crew redraws from the pool, as the other classes do.
+const EFFORT_POOL: &str = r#"[workflow]
+default_crew = "sol"
+medium_complexity_crews = ["opus@medium", "opus", "sonnet", "sol"]
+provider_limit_explicit_crews = "pool"
+
+[crews.opus]
+provider = "claude"
+model = "claude-opus"
+
+[crews.sonnet]
+provider = "claude"
+model = "claude-sonnet"
+
+[crews.sol]
+provider = "codex"
+model = "sol-model"
+"#;
+
+/// [ORB-20400] A hold excludes each crew it names by family: a run as
+/// `opus@medium` that hits a usage limit, a refusal, a capacity failure or an
+/// unusable login keeps `opus@medium` and `opus` out of the next draw. Limits
+/// and refusals still select every crew of the failing account or provider,
+/// while capacity and unavailability on the run's own account exclude only
+/// the run crew's family, so `sonnet` stays drawable.
+fn a_hold_after_an_effort_reference_run_excludes_the_crews_whole_family() {
+    for (class, detail, sonnet_drawable) in [
+        (
+            ProviderFailureClass::Limit,
+            "You've hit your usage limit. Try again later.",
+            false,
+        ),
+        (
+            ProviderFailureClass::Refusal,
+            "claude provider refused the request: stop_reason refusal",
+            false,
+        ),
+        (
+            ProviderFailureClass::Capacity,
+            "claude provider reported the selected model at capacity",
+            true,
+        ),
+        (
+            ProviderFailureClass::Unavailable,
+            "claude provider authentication failure (HTTP 401): token expired",
+            true,
+        ),
+    ] {
+        let fx = fixture(EFFORT_POOL);
+        let task = fx.task("opus@medium");
+        assert!(
+            fx.admitted(&task, &["opus@medium"]),
+            "{class:?}: an effort reference is drawable before the failure"
+        );
+        let run = fx.admit(&task, "opus@medium");
+        fx.fail(
+            &run,
+            &format!(
+                "step `implement_one`: {}",
+                provider_failure_text(class, "claude", detail)
+            ),
+        );
+
+        assert_eq!(fx.status(&task), TaskStatus::Backlog, "{class:?}");
+        let hold = fx.last_hold(&task);
+        assert_eq!(hold.class, class, "{hold:?}");
+        for crew in ["opus@medium", "opus", "opus@high"] {
+            assert!(hold.excludes(crew), "{class:?} excludes {crew}: {hold:?}");
+            assert!(
+                !fx.admitted(&task, &[crew]),
+                "{class:?}: {crew} is not drawn under the hold: {hold:?}"
+            );
+        }
+        assert_eq!(
+            fx.admitted(&task, &["sonnet"]),
+            sonnet_drawable,
+            "{class:?}: the account's other crew: {hold:?}"
+        );
+        assert!(
+            fx.admitted(&task, &["sol"]),
+            "{class:?}: another provider takes it: {hold:?}"
+        );
+    }
+}
+
 /// When the hold excludes every crew the task could run as, the drain defers
 /// it with the reason and time; once not-before passes it is admitted again.
 fn a_hold_that_excludes_every_crew_defers_the_task_until_not_before() {
@@ -829,5 +916,6 @@ crate::scenario_table!(
     capacity_and_unavailability_hold_the_task_with_the_run_crew_excluded,
     a_hold_that_excludes_every_crew_defers_the_task_until_not_before,
     a_providerless_failure_with_no_crew_to_exclude_defers_until_not_before,
-    an_unavailable_login_keeps_this_host_off_the_crew_for_every_task
+    an_unavailable_login_keeps_this_host_off_the_crew_for_every_task,
+    a_hold_after_an_effort_reference_run_excludes_the_crews_whole_family
 );

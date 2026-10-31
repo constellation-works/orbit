@@ -1502,6 +1502,58 @@ model = \"gpt-sol\"
     );
 }
 
+/// [ORB-20400] A crew window matches by crew family. `opus@medium` shares
+/// `opus`'s model and account, so it is runnable while `opus` is, and an
+/// authentication failure on `opus` keeps it out of the window too, for
+/// delivery and for review.
+fn a_provider_auth_failure_excludes_the_crews_effort_references_too() {
+    let config = "\
+[workflow]
+default_crew = \"sol\"
+
+[crews.opus]
+provider = \"claude\"
+model = \"claude-opus\"
+
+[crews.sol]
+provider = \"codex\"
+model = \"gpt-sol\"
+";
+    let pair = Pair::with_configs(config, config, &[Some("opus"), Some("sol")]);
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    assert_eq!(pair.claimed_task(&leaf), pair.tasks[0]);
+    let healthy = crew_window(&pair, &drain).capability();
+    assert_eq!(
+        healthy.unrunnable_reason(Some("opus@medium")),
+        None,
+        "an effort reference is runnable while its crew is: {healthy:#?}"
+    );
+
+    pair.leaf_fails_with(
+        &leaf,
+        "[provider_unavailable] claude provider authentication failure (HTTP 401): \
+         Failed to authenticate: OAuth token revoked. Please log in again or contact your administrator.",
+    );
+    pair.pass(&drain);
+
+    let window = crew_window(&pair, &drain);
+    let capability = window.capability();
+    for crew in ["opus", "opus@medium", "opus@high"] {
+        assert!(
+            capability
+                .unrunnable_reason(Some(crew))
+                .is_some_and(|reason| reason.contains("is excluded on the executor")
+                    && reason.contains("OAuth token revoked")),
+            "{crew}: {window:#?}"
+        );
+        assert!(
+            window.reviewer_unrunnable_reason(crew).is_some(),
+            "{crew} cannot review either: {window:#?}"
+        );
+    }
+}
+
 /// [ORB-14258] A claimed leaf whose required validation failed on its base
 /// exactly as on the candidate releases its claim with the hold. The owner's
 /// task returns to the backlog under that hold, and the failure breaker does
@@ -2573,6 +2625,7 @@ crate::scenario_table!(
     a_provider_capacity_failure_releases_the_claim_and_excludes_the_crew_for_the_window_scenarios,
     a_provider_capacity_failure_releases_the_claim_and_excludes_the_crew_for_the_window,
     a_provider_auth_failure_excludes_every_crew_of_that_provider,
+    a_provider_auth_failure_excludes_the_crews_effort_references_too,
     a_red_base_failure_releases_the_claim_until_the_command_passes,
     a_throttled_pull_drain_keeps_settling_and_pulls_again_below_resume,
     a_pull_claim_is_gated_by_the_follower_host_never_the_owner,

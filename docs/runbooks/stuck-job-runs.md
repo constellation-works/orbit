@@ -1443,7 +1443,8 @@ provider. See
 A `[provider_unavailable]` failure (an expired login, say) is the host's. Its
 hold names the host's machine, so a follower whose login works may still pull
 the task on that crew. The host also records a crew outage: until the hold's
-backoff ends, its local drain draws no task onto that crew, and moving the held
+backoff ends, its local drain draws no task onto that crew or its `@<effort>`
+references, and moving the held
 task through another status does not lift that. Sign the provider in again on
 the host; tasks draw the crew once the outage lapses (30 minutes after the
 first failure, longer when the failed task was held before).
