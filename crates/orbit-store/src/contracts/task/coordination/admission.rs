@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 
+use orbit_types::identity::same_crew_family;
 use serde::{Deserialize, Serialize};
 
 use super::{ClaimCandidateRef, ExecutionClaim};
@@ -383,7 +384,10 @@ pub struct AdmissionCrewCapability {
 
 impl AdmissionCrewCapability {
     /// Why a task whose own crew is `task_crew` cannot run on this executor,
-    /// or `None` when it can.
+    /// or `None` when it can. [ORB-20400] Names match by crew family: an
+    /// exclusion or runnable entry for `opus` covers `opus@medium` too, and
+    /// one for `opus@medium` covers `opus`, since they share a model and
+    /// account.
     #[must_use]
     pub fn unrunnable_reason(&self, task_crew: Option<&str>) -> Option<String> {
         let named = task_crew.map(str::trim).filter(|crew| !crew.is_empty());
@@ -400,7 +404,7 @@ impl AdmissionCrewCapability {
         if let Some(exclusion) = self
             .excluded
             .iter()
-            .find(|exclusion| exclusion.crew == crew)
+            .find(|exclusion| same_crew_family(&exclusion.crew, crew))
         {
             return Some(format!(
                 "crew `{crew}`{via} is excluded on the executor: {}",
@@ -408,9 +412,9 @@ impl AdmissionCrewCapability {
             ));
         }
         match &self.runnable {
-            Some(runnable) if !runnable.iter().any(|name| name == crew) => Some(format!(
-                "crew `{crew}`{via} is not runnable on the executor"
-            )),
+            Some(runnable) if !runnable.iter().any(|name| same_crew_family(name, crew)) => Some(
+                format!("crew `{crew}`{via} is not runnable on the executor"),
+            ),
             _ => None,
         }
     }

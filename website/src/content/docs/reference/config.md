@@ -401,7 +401,9 @@ still follows: `hard_complexity_crews = ["opus@medium:100", "opus:100"]`.
   inline setting; a reference without `@` behaves exactly as before.
 - `opus@medium` and `opus` are separate pool members, with their own weights,
   and runs, scorecards, experiments and the crew ladder record them separately.
-  They share the crew's account, limits and holds.
+  They share the crew's account, limits and holds: a provider failure hold,
+  including a capacity or unavailability one, or a pull drain's exclusion on
+  either one covers the crew and all of its effort references.
 - An effort the provider or model does not accept, such as `grok@max`, is
   refused when the config loads and by `orbit config set`, naming the accepted
   values. Unlike a crew table's `effort`, it is never silently ignored.

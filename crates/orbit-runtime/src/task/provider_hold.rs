@@ -17,6 +17,14 @@
 //! reset a limit reported, else a backoff that grows with each consecutive
 //! hold.
 //!
+//! [ORB-20400] A hold names the crews these rules select, by registry name or
+//! the run's crew reference, and matches each by family
+//! (`ProviderFailureHold::excludes`): naming `opus` or `opus@medium` excludes
+//! `opus` and every `opus@<effort>` reference, which share its model and
+//! account. So a capacity or unavailability hold after a run as
+//! `opus@medium` excludes the whole `opus` family, but not the account's other
+//! crews.
+//!
 //! The hold is the task's latest status decision; any later status change
 //! supersedes it. While it stands, admission draws the task's crew from the
 //! crews it does not exclude — its own crew or pool, then its complexity
