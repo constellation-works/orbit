@@ -388,7 +388,7 @@ const DELETE: OperationSpec<ExperimentVerb> = OperationSpec {
     verb: ExperimentVerb::Delete,
     cli_path: &["delete"],
     tool_name: "orbit.experiment.delete",
-    tool_description: "Delete a draft, concluded or abandoned experiment with its arms, events and assignments. Refused for a running or paused experiment, for one that ran live and assigned tasks to arms (their crews and runs cite it), and for one concluded with an arm (its promotion task names it). Shadow experiments, such as crew-ladder trials, applied nothing and can be deleted. Operator CLI only.",
+    tool_description: "Delete a draft, concluded or abandoned experiment with its arms, events and assignments. Refused for a running or paused experiment, for one that ran live and assigned tasks to arms (their crews and runs cite it), and for any experiment concluded with an arm (its promotion task names it), including shadow experiments. Shadow experiments concluded without an arm applied nothing and can be deleted, such as crew-ladder trials. Operator CLI only.",
     cli_about: "Delete a finished experiment that never applied a treatment",
     cli_help: CliHelp::NONE,
     effect: Effect::Write,
