@@ -1,7 +1,7 @@
 ---
 title: Agent Scorecards — Design
 owner: claude
-last_updated: 2026-10-29
+last_updated: 2026-10-30
 last_validated: 2026-10-29
 status: Draft
 feature: agent-scorecards
@@ -555,6 +555,8 @@ All routes are GET, scoped by `workspace`, follow the host picker through `/api/
 GET /api/agents/{role}/scorecard?window=&min_support=
 GET /api/agents/{role}/detail?window=&min_support=&crew=&model=
 GET /api/agents/attribution?window=
+GET /api/agents/implementers/by-type?window=&min_support=
+GET /api/agents/implementers/size-curves?window=&complexity=
 ```
 
 `{role}` is `orchestrators`, `implementers`, `reviewers` or `pilots`. For orchestrators, `crew` names the orchestrator attribution and `model` the task's recorded `orchestrator_model`. `model` is the literal `model unknown` for an unknown model. It may be omitted when the crew has one row, and is required when it has several.
@@ -573,6 +575,8 @@ GET /api/agents/attribution?window=
 Each row carries `crew`, `model`, `units`, `below_support`, `unjudged` (§4.3; only reviewer rows can be true), `rank` (null below support or unjudged), `counts` and `per_100` (term key to number), `raw` and `score` (null on an unjudged row), `runs_without_model`, `provisional` (reviewers), and `stats` (the not-scored context: key, label, value). An implementers row also carries `reviewed_units`, the count of its tasks with a settled first review: a display-only denominator for the radar's review-derived axes (§1.1), never a scoring denominator. A row of a role with per-term denominators (pilots) also carries `term_units` (term key to its own units) and `provisional_terms` (the keys below their own minimum support). Calibration support counts placed tasks and uses `min_support`; warning support counts settled assessments and uses `warning_min_support`.
 
 **Detail** carries the scorecard header, `fleet_average`, `provisional`, the selected `row`, and `terms`. Each term carries its key, label, weight, group, count, `per_100`, contribution and `tasks`, largest count first, plus `units` and `provisional` when it has its own denominator. Each task carries `task_id`, `title`, `status`, `count` and `occurrences` (`at`, `detail`, `run_id`).
+
+**Size curves** (implementers only, display only) slice the same cached scan into escaped-regression rate by landed change size. The cohort is the landed tasks whose final implementation attempt counts for implementers in the window (it started in the window and the task was not `no-diff-expected` work), with a recorded landed diff size and at least 7 days since completion. A task regressed when any `regression_from` link against it, whatever its nature or escape, was observed (its regressing task created) no later than 7 days after completion. Each series is one crew reference as the run dispatched it, so `opus@medium` and `opus@high` are separate. `complexity` (`low`, `medium`, `hard`, `xhard` or `unassessed`) narrows the cohort to one tier; any other value is a 400. The response carries the selection header plus `role`, `complexity`, `complexities` (each tier's task count before the filter), `follow_up_days` (7), `mature_by`, `min_bucket_tasks` (10), `min_series_tasks` (30), `sparse_outcomes` (5), `excluded` (`immature`, landed too recently; `no_size`, no recorded diff size) and `series`, largest first. Each series carries `crew`, `models`, `tasks`, `regressed`, `default_selected` (at least `min_series_tasks` tasks and a drawn bucket) and `buckets`, each with `bucket` (`floor(log2(1 + lines))`), `lines_from`, `lines_to`, `tasks`, `regressed`, `rate`, the Wilson 95% `low` and `high`, `drawn` (at least `min_bucket_tasks` tasks) and `sparse` (fewer than `sparse_outcomes` regressed tasks).
 
 **Attribution** answers `window`, `requested_window`, `since`, `computed_at`, `cache_ttl_seconds`, `total`, `owners` and `charged`. `owners` maps each of `orchestrators`, `implementers`, `reviewers` and `pilots` to a count, plus `not_scored` as `{count, reasons}`. `charged` maps each role to its rows, each with `crew`, `model` and `problems`.
 

@@ -172,6 +172,36 @@ pub fn agent_by_type_scorecard(
     payload
 }
 
+/// The implementer regression rate by landed change size for `query`: one
+/// series per crew reference as dispatched, each with its
+/// `floor(log2(1 + lines))` buckets, task and regressed counts, rate and
+/// Wilson 95% interval, flagged `drawn` once a bucket has enough tasks and
+/// `sparse` under five outcomes. `complexity` narrows the cohort to one
+/// tier; an unknown tier is invalid input.
+pub fn agent_size_curves(
+    facts: &AgentFacts,
+    query: &AgentQuery,
+    complexity: Option<&str>,
+    cache_ttl: Duration,
+) -> Result<Value, OrbitError> {
+    let complexity = complexity.map(str::trim).filter(|tier| !tier.is_empty());
+    if let Some(tier) = complexity
+        && !roles::SIZE_CURVE_TIERS.contains(&tier)
+    {
+        return Err(OrbitError::InvalidInput(format!(
+            "complexity must be one of {}; got '{tier}'",
+            roles::SIZE_CURVE_TIERS.join(", ")
+        )));
+    }
+    let since = query.since(facts);
+    let mut payload = query.header(facts, since, cache_ttl);
+    payload["role"] = json!(AgentRole::Implementers.as_str());
+    for (key, value) in roles::implementer_size_curves(facts, since, complexity) {
+        payload[key] = value;
+    }
+    Ok(payload)
+}
+
 /// The per-task implementer export for `query`: one row per implemented
 /// task and the crew and model that worked it, with the type list the
 /// tasks were classified with. The offline counterpart of the cell

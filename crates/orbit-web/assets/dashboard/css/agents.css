@@ -356,3 +356,61 @@ a.agents-cause-note { display: inline-flex; align-items: center; min-height: 44p
 
 /* Recorded effort populations wrap inside the existing crew identity column. */
 .agents-effort { display: block; white-space: normal; max-width: 30ch; overflow-wrap: anywhere; }
+
+/* Implementers: regression rate by change size. Eight categorical series
+   colours, assigned by a series' place in the window's list so toggling one
+   crew never recolours another; each set uses `currentColor`. */
+.agents-curve-s0 { color: #7aa7ff; }
+.agents-curve-s1 { color: #f2b24c; }
+.agents-curve-s2 { color: #5cd6b0; }
+.agents-curve-s3 { color: #e08ad8; }
+.agents-curve-s4 { color: #c6d65c; }
+.agents-curve-s5 { color: #ff8f80; }
+.agents-curve-s6 { color: #a99bff; }
+.agents-curve-s7 { color: #6fcbee; }
+.agents-curves-control { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 10px; }
+.agents-curves-control select { min-height: 44px; color: var(--fg); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; font: inherit; }
+.agents-curves-cohort { margin-top: 8px; }
+.agents-curves-picker { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.agents-curves-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  font-size: 12.5px;
+  color: var(--fg);
+  cursor: pointer;
+}
+.agents-curves-pick:has(input:checked) { border-color: var(--accent-line); background: var(--accent-wash); }
+.agents-curves-pick:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.agents-curves-pick.is-undrawn .agents-curves-crew { color: var(--fg-mute); }
+.agents-curves-pick input { margin: 0; accent-color: var(--accent); }
+.agents-curves-swatch { width: 12px; height: 3px; border-radius: 1px; background: currentColor; }
+.agents-curves-crew { font-family: var(--font-mono); overflow-wrap: anywhere; }
+.agents-curves-n { color: var(--fg-mute); font-family: var(--font-mono); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.agents-curves-chart { margin-top: 10px; }
+.agents-curves-plot { display: block; width: 100%; height: auto; }
+.agents-curves-grid { stroke: var(--hair); stroke-width: 1; }
+.agents-curves-tick { fill: var(--fg-mute); font-family: var(--font-mono); font-size: 10.5px; }
+.agents-curves-axis { fill: var(--fg-dim); font-size: 11px; }
+.agents-curves-band { fill: currentColor; fill-opacity: 0.14; stroke: none; }
+.agents-curves-line { fill: none; stroke: currentColor; stroke-width: 2; stroke-linejoin: round; }
+.agents-curves-whisker { stroke: currentColor; stroke-width: 2; stroke-opacity: 0.5; }
+.agents-curves-marker { fill: currentColor; stroke: var(--bg-elev); stroke-width: 1.5; }
+.agents-curves-marker.is-sparse { fill: var(--bg-elev); stroke: currentColor; stroke-width: 2; }
+.agents-curves-empty { margin: 10px 0 0; color: var(--fg-dim); font-size: 12.5px; }
+.agents-curves-data { margin-top: 10px; font-size: 12.5px; }
+.agents-curves-table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 3px; }
+.agents-curves-table-wrap:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.agents-curves-table { width: max-content; min-width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.agents-curves-table th,
+.agents-curves-table td { padding: 6px 8px; border-bottom: 1px solid var(--hair); text-align: left; white-space: nowrap; }
+.agents-curves-table thead th { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--fg-dim); font-weight: 500; }
+.agents-curves-table tbody th { color: var(--fg); font-family: var(--font-mono); font-weight: 400; }
+.agents-curves-table .agents-num { text-align: right; font-variant-numeric: tabular-nums; }
+.agents-curves-table .agents-row-below td { color: var(--fg-mute); }
+.agents-curves-data summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; color: var(--fg-dim); }

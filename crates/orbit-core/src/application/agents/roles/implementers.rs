@@ -75,6 +75,9 @@ const TERMS: &[Term] = &[
 ];
 
 mod context;
+mod size_curves;
+
+pub(super) use size_curves::{TIERS as SIZE_CURVE_TIERS, size_curves};
 
 type Key = (String, String);
 

@@ -1,5 +1,7 @@
-//! `GET /api/agents/{role}/scorecard`, `/api/agents/{role}/detail` and
-//! `/api/agents/attribution`: the agent scorecards behind Observe › Agents.
+//! `GET /api/agents/{role}/scorecard`, `/api/agents/{role}/detail`,
+//! `/api/agents/attribution` and the implementer slices
+//! (`/api/agents/implementers/by-type` and `/size-curves`): the agent
+//! scorecards behind Analytics › Agents.
 //!
 //! The scan, attribution and scores are the core agent scorecard service.
 //! One scan per workspace runtime is cached for [`AGENT_SCAN_TTL`]; the role,
@@ -36,6 +38,10 @@ pub(super) struct AgentScorecardQuery {
     /// when the crew has one row.
     #[serde(default)]
     model: Option<String>,
+    /// One tier the implementer size curves narrow to; `/size-curves` only,
+    /// every tier when omitted.
+    #[serde(default)]
+    complexity: Option<String>,
 }
 
 pub(super) async fn agent_scorecard(
@@ -86,6 +92,32 @@ pub(super) async fn agent_by_type(
             )),
         )
             .into_response(),
+        Err(error) => error_response(error),
+    }
+}
+
+/// The implementer regression rate by change size, sliced from the same
+/// cached scan.
+pub(super) async fn agent_size_curves(
+    State(state): State<DashboardState>,
+    Ws(runtime): Ws,
+    Query(query): Query<AgentScorecardQuery>,
+) -> Response {
+    let selection = match selection(&query) {
+        Ok(selection) => selection,
+        Err(error) => return error_response(error),
+    };
+    let served = match facts(&state, runtime).await {
+        Ok(served) => served,
+        Err(error) => return error_response(error),
+    };
+    match agents::agent_size_curves(
+        &served.body,
+        &selection,
+        query.complexity.as_deref(),
+        AGENT_SCAN_TTL,
+    ) {
+        Ok(value) => (served.age_header(), Json(value)).into_response(),
         Err(error) => error_response(error),
     }
 }

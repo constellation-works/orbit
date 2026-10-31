@@ -15,6 +15,7 @@ import { el, syncNodes, fetchJson, getWindow, wireWindowSelector, requestPanel, 
 import { orchestratorsPanel } from './agents-orchestrators.js';
 import { reviewersPanel } from './agents-reviewers.js';
 import { pilotsPanel } from './agents-pilots.js';
+import { implementersPanel } from './agents-implementers.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -31,9 +32,13 @@ const ROLE_LABELS = {
 // returns the tags shown under a row's name, `scoreNote(row)` returns
 // `{ text, detail }` shown beside the row's score (the short text in the
 // ranking, the sentence in the detail column) or null, and `how` lists
-// paragraphs "How the score works" adds for the role.
+// paragraphs "How the score works" adds for the role. A panel with its own
+// data adds `fetch(window)`, read beside the scorecard on every fetch, and
+// `hash()`, which rebuilds the panel when that data or its controls change;
+// its `render` gets `rerender()` to redraw after a control changes.
 const ROLE_PANELS = {
   orchestrators: orchestratorsPanel,
+  implementers: implementersPanel,
   reviewers: reviewersPanel,
   pilots: pilotsPanel,
 };
@@ -167,8 +172,10 @@ export function fetchAndRenderAgents() {
   }
   refreshRoleCounts(activeRole, selectedWindow, revision);
   const current = () => role === activeRole && getWorkspaceRevision() === revision && agentWindow() === selectedWindow;
+  const panel = ROLE_PANELS[activeRole];
   return requestPanel(BODY_ID, path, () => Promise.all([fetchJson(path), fetchJson(attributionPath(selectedWindow)),
     activeRole === "implementers" ? fetchJson(`/api/agents/implementers/by-type?window=${encodeURIComponent(selectedWindow)}&min_support=${MIN_SUPPORT}`).catch(() => null) : null,
+    panel && panel.fetch ? panel.fetch(selectedWindow) : null,
   ]), ([payload, strip, matrix]) => {
     if (!current()) return;
     if (!payload || payload.role !== activeRole || payload.requested_window !== selectedWindow) {
@@ -928,10 +935,10 @@ function ownUnitText() {
 function rolePanelNode(panel) {
   const node = el("section", { class: `agents-role-panel agents-role-panel-${role}`, "aria-label": panel.title }, [
     el("h3", { text: panel.title }),
-    ...panel.render({ scorecard, rows: rows(), roleHref }),
+    ...panel.render({ scorecard, rows: rows(), roleHref, rerender: render }),
   ]);
   node.dataset.key = "panel";
-  node.dataset.hash = JSON.stringify([role, scorecard.rows]);
+  node.dataset.hash = JSON.stringify([role, scorecard.rows, panel.hash ? panel.hash() : null]);
   return node;
 }
 
