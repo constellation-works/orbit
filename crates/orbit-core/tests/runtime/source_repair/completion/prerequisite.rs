@@ -428,9 +428,8 @@ fn assert_resumed_merge(
         .filter(|line| line.contains(token))
         .count();
     assert_eq!(
-        later,
-        usize::from(reread),
-        "the resumed completion reads the provider again only when that read is still required: {requests:#?}"
+        later, 1,
+        "the resumed completion reads the prerequisite once on the fresh mergeable head: {requests:#?}"
     );
     assert_eq!(
         requests
