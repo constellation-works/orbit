@@ -8,10 +8,11 @@
 //! message for the row to render verbatim, and every accepted write records a
 //! `config.set` audit event naming the key, both values, and the file.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use axum::extract::{Path as UrlPath, Query, State};
+use axum::http::header;
 use axum::response::{IntoResponse, Json, Response};
 use orbit_common::governance::authorization::DASHBOARD_CONFIG_SET;
 use orbit_core::OrbitRuntime;
@@ -121,7 +122,12 @@ pub(super) async fn get_config_file(
 /// Workspace-scoped like the rest of the API so `?workspace=` selection keeps
 /// working, even though the registry itself is machine-wide.
 pub(super) async fn get_config_keys(Ws(_runtime): Ws) -> Response {
-    Json(key_catalog()).into_response()
+    // The catalog is built once per process, so its serialized bytes are
+    // too; a `serde_json::Value` tree always serializes, hence the empty
+    // fallback is unreachable.
+    static BODY: OnceLock<Vec<u8>> = OnceLock::new();
+    let body = BODY.get_or_init(|| serde_json::to_vec(key_catalog()).unwrap_or_default());
+    ([(header::CONTENT_TYPE, "application/json")], body.clone()).into_response()
 }
 
 /// `PUT /api/config/keys/:key` — admit and write one key.

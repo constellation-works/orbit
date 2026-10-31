@@ -1,4 +1,5 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use orbit_config::{
     CONFIG_KEY_REGISTRY, ConfigKeyDescriptor, ConfigScope, ConfigSection, ConfigSnapshot,
@@ -45,6 +46,52 @@ pub(super) const CREW_POOL_KEYS: &[&str] = &[
     "workflow.purpose_crews.explorer",
 ];
 
+/// FNV-1a over `bytes`, for cache keys within this process only.
+pub(super) fn fnv1a_hash(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+/// Hash of the process environment. Config resolution admits environment
+/// defaults, so every cache of resolved values in this module keys on it:
+/// a changed environment can never be served the previous one's values.
+pub(super) fn environment_hash() -> u64 {
+    let mut vars: Vec<(std::ffi::OsString, std::ffi::OsString)> = std::env::vars_os().collect();
+    vars.sort();
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for (name, value) in &vars {
+        for byte in format!("{name:?}={value:?};").as_bytes() {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    hash
+}
+
+/// The built-in JSON value of every registry key under `environment_hash`.
+///
+/// `ConfigSnapshot::default()` admits the whole registry against the
+/// environment, which a file view used to repeat per request only to read
+/// one value per row. The projection is cached under the environment that
+/// produced it; the next view in a different environment rebuilds it.
+pub(super) fn built_in_values(environment_hash: u64) -> Arc<HashMap<&'static str, JsonValue>> {
+    type BuiltInCache = Mutex<Option<(u64, Arc<HashMap<&'static str, JsonValue>>)>>;
+    static CACHE: BuiltInCache = Mutex::new(None);
+    let mut cache = CACHE.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some((cached_hash, values)) = cache.as_ref()
+        && *cached_hash == environment_hash
+    {
+        return Arc::clone(values);
+    }
+    let values = Arc::new(ConfigSnapshot::default().all_values().into_iter().collect());
+    *cache = Some((environment_hash, Arc::clone(&values)));
+    values
+}
+
 /// Keys whose global value the workspace file did not inherit, so the caller
 /// can badge the section that owns them.
 pub(super) fn not_inherited_keys(values: &[EffectiveConfigValue]) -> JsonValue {
@@ -87,7 +134,8 @@ pub(super) fn effective_sections(values: &[EffectiveConfigValue]) -> JsonValue {
                     Vec::new()
                 } else {
                     ordered_keys(*section)
-                        .into_iter()
+                        .iter()
+                        .copied()
                         .filter_map(|descriptor| {
                             values.iter().find(|entry| entry.key == descriptor.key)
                         })
@@ -104,6 +152,20 @@ pub(super) fn file_sections(
     context: &FileRowContext<'_>,
     settings: &[(&'static str, JsonValue)],
 ) -> JsonValue {
+    // Keyed once, so each registry key finds its value without scanning every setting.
+    let settings: HashMap<&str, &JsonValue> =
+        settings.iter().map(|(key, value)| (*key, value)).collect();
+    // Rows consult the layered entry of their own key; keyed once here so a
+    // row never rescans every layered value.
+    let layered: HashMap<&str, &EffectiveConfigValue> = context
+        .layered
+        .map(|values| {
+            values
+                .iter()
+                .map(|entry| (entry.key.as_str(), entry))
+                .collect()
+        })
+        .unwrap_or_default();
     JsonValue::Array(
         ConfigSection::ORDER
             .iter()
@@ -112,12 +174,18 @@ pub(super) fn file_sections(
                     Vec::new()
                 } else {
                     ordered_keys(*section)
-                        .into_iter()
+                        .iter()
+                        .copied()
                         .filter_map(|descriptor| {
-                            settings
-                                .iter()
-                                .find(|(key, _)| *key == descriptor.key)
-                                .map(|(key, value)| file_row(context, descriptor, key, value))
+                            settings.get(descriptor.key).map(|value| {
+                                file_row(
+                                    context,
+                                    descriptor,
+                                    descriptor.key,
+                                    value,
+                                    layered.get(descriptor.key).copied(),
+                                )
+                            })
                         })
                         .collect::<Vec<_>>()
                 };
@@ -130,7 +198,7 @@ pub(super) fn file_sections(
 fn section_json(section: ConfigSection, rows: Vec<JsonValue>) -> JsonValue {
     let count = |state: &str| {
         rows.iter()
-            .filter(|row| row["state"] == json!(state))
+            .filter(|row| row["state"].as_str() == Some(state))
             .count()
     };
     let not_inherited = rows
@@ -139,11 +207,11 @@ fn section_json(section: ConfigSection, rows: Vec<JsonValue>) -> JsonValue {
             row["shadowed_by"].as_array().is_some_and(|shadows| {
                 shadows
                     .iter()
-                    .any(|shadow| shadow["reason"] == json!("not-inherited"))
+                    .any(|shadow| shadow["reason"].as_str() == Some("not-inherited"))
             })
         })
         .count();
-    json!({
+    let mut view = json!({
         "token": section.token(),
         "title": section.title(),
         "blurb": section.blurb(),
@@ -156,8 +224,11 @@ fn section_json(section: ConfigSection, rows: Vec<JsonValue>) -> JsonValue {
             "total": rows.len(),
         },
         "not_inherited": not_inherited,
-        "keys": rows,
-    })
+        "keys": JsonValue::Null,
+    });
+    // `json!` copies the rows it is given; move them in instead.
+    view["keys"] = JsonValue::Array(rows);
+    view
 }
 
 pub(super) fn effective_row(entry: &EffectiveConfigValue) -> JsonValue {
@@ -215,7 +286,8 @@ pub(super) struct FileRowContext<'a> {
     pub(super) layer: ConfigValueSourceKind,
     /// The layered values, or `None` when the layers do not load.
     pub(super) layered: Option<&'a [EffectiveConfigValue]>,
-    pub(super) built_in: ConfigSnapshot,
+    /// The built-in value of every registry key; see [`built_in_values`].
+    pub(super) built_in: Arc<HashMap<&'static str, JsonValue>>,
 }
 
 fn file_row(
@@ -223,12 +295,14 @@ fn file_row(
     descriptor: &'static ConfigKeyDescriptor,
     key: &str,
     value: &JsonValue,
+    entry: Option<&EffectiveConfigValue>,
 ) -> JsonValue {
     let store = context.store;
     let mut row = base_row(key, Some(descriptor), value);
+    let is_set = store.is_key_set(key);
     // One file has one layer: it either defines the key, or the row shows the
     // built-in value that would apply if this file were the only one.
-    let (layer, state) = if store.is_key_set(key) {
+    let (layer, state) = if is_set {
         (store.scope().label(), ConfigValueState::Set)
     } else if value.is_null() {
         (
@@ -246,19 +320,20 @@ fn file_row(
         "source".to_string(),
         json!({
             "layer": layer,
-            "path": store.is_key_set(key).then(|| path_cell(store.path())),
+            "path": is_set.then(|| path_cell(store.path())),
         }),
     );
     row.insert("shadowed_by".to_string(), JsonValue::Array(Vec::new()));
 
-    let built_in = context.built_in.value_for(key).unwrap_or(JsonValue::Null);
+    let built_in = context
+        .built_in
+        .get(key)
+        .cloned()
+        .unwrap_or(JsonValue::Null);
     row.insert(
         "built_in".to_string(),
         super::provenance::built_in_json(&built_in),
     );
-    let entry = context
-        .layered
-        .and_then(|values| values.iter().find(|entry| entry.key == key));
     // Only a value this file sets can be removed or compared.
     let (fallback, equals, reach) = match entry {
         _ if state != ConfigValueState::Set => (JsonValue::Null, JsonValue::Null, JsonValue::Null),
@@ -296,6 +371,42 @@ fn file_row(
 }
 
 fn base_row(
+    key: &str,
+    descriptor: Option<&'static ConfigKeyDescriptor>,
+    value: &JsonValue,
+) -> Map<String, JsonValue> {
+    // Every field but `value` comes from the compiled-in registry, so a
+    // registry row starts from the template built once per process. Dynamic
+    // keys (crews, plugins) have no descriptor row and build directly.
+    if let Some(descriptor) = descriptor
+        && descriptor.key == key
+        && let Some(template) = row_templates().get(key)
+    {
+        let mut row = template.clone();
+        row.insert("value".to_string(), value.clone());
+        return row;
+    }
+    build_base_row(key, descriptor, value)
+}
+
+/// The registry-only fields of every row, keyed by config key, built by the
+/// same `build_base_row` a dynamic row uses so the shapes cannot drift.
+fn row_templates() -> &'static HashMap<&'static str, Map<String, JsonValue>> {
+    static TEMPLATES: OnceLock<HashMap<&'static str, Map<String, JsonValue>>> = OnceLock::new();
+    TEMPLATES.get_or_init(|| {
+        CONFIG_KEY_REGISTRY
+            .iter()
+            .map(|descriptor| {
+                (
+                    descriptor.key,
+                    build_base_row(descriptor.key, Some(descriptor), &JsonValue::Null),
+                )
+            })
+            .collect()
+    })
+}
+
+fn build_base_row(
     key: &str,
     descriptor: Option<&'static ConfigKeyDescriptor>,
     value: &JsonValue,
@@ -478,14 +589,30 @@ fn render_value(value: &JsonValue) -> String {
     }
 }
 
-/// Registry rows for one section, most relevant first.
-fn ordered_keys(section: ConfigSection) -> Vec<&'static ConfigKeyDescriptor> {
-    let mut keys = CONFIG_KEY_REGISTRY
+/// Registry rows for one section, most relevant first. The order comes from
+/// the compiled-in registry, so it is sorted once per process.
+fn ordered_keys(section: ConfigSection) -> &'static [&'static ConfigKeyDescriptor] {
+    static ORDERED: OnceLock<Vec<Vec<&'static ConfigKeyDescriptor>>> = OnceLock::new();
+    let ordered = ORDERED.get_or_init(|| {
+        ConfigSection::ORDER
+            .iter()
+            .map(|section| {
+                let mut keys = CONFIG_KEY_REGISTRY
+                    .iter()
+                    .filter(|descriptor| descriptor.section == *section)
+                    .collect::<Vec<_>>();
+                keys.sort_by(|left, right| {
+                    left.order.cmp(&right.order).then(left.key.cmp(right.key))
+                });
+                keys
+            })
+            .collect()
+    });
+    let index = ConfigSection::ORDER
         .iter()
-        .filter(|descriptor| descriptor.section == section)
-        .collect::<Vec<_>>();
-    keys.sort_by(|left, right| left.order.cmp(&right.order).then(left.key.cmp(right.key)));
-    keys
+        .position(|candidate| *candidate == section)
+        .unwrap_or(0);
+    ordered.get(index).map_or(&[], Vec::as_slice)
 }
 
 fn label_for(section: Option<ConfigSection>, key: &str) -> String {

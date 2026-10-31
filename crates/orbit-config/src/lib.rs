@@ -153,7 +153,9 @@ pub use persistence::PersistenceConfig;
 pub use plugin_enablement::{
     load_workspace_plugin_enablement, plugin_enablement_key, workspace_config_sets_policy,
 };
-pub use plugins::{PluginConfigSchema, register_plugin_config_schemas};
+pub use plugins::{
+    PluginConfigSchema, plugin_config_schema_generation, register_plugin_config_schemas,
+};
 pub use provider_limit::{
     CrewSelection, DEFAULT_PROVIDER_LIMIT_MAX_USED_PCT, DEFAULT_USAGE_PRESSURE_CAP,
     DEFAULT_USAGE_PRESSURE_STRENGTH, ProviderLimitBudget, ProviderLimitBudgetUnit,
