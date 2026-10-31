@@ -340,6 +340,53 @@ fn script_grants_cannot_override_state_or_git_protections() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn script_read_grants_cannot_expose_enclosing_state() {
+    use orbit_exec::{ScriptSandboxSpec, compile_linux_script_argv};
+    use std::fs;
+
+    let dir = tempfile::tempdir().expect("fixture");
+    let workspace = dir.path().join("workspace");
+    let state = workspace.join(".orbit");
+    let cwd = state.join("state/worktrees/run");
+    let sibling = state.join("state/tasks");
+    let other = dir.path().join("other");
+    let scratch = dir.path().join("scratch");
+    for path in [&cwd, &sibling, &other, &scratch] {
+        fs::create_dir_all(path).expect("fixture directory");
+    }
+    let alias = dir.path().join("workspace-alias");
+    std::os::unix::fs::symlink(&workspace, &alias).expect("alias");
+    let masked = vec![state.clone()];
+    let compile = |readable: &[std::path::PathBuf]| {
+        let spec = ScriptSandboxSpec {
+            cwd: &cwd,
+            cwd_writable: true,
+            scratch: &scratch,
+            readable,
+            writable: &[],
+            masked: &masked,
+            home: None,
+        };
+        compile_linux_script_argv(&spec, &[], &["/bin/true".into()])
+    };
+    for root in [&workspace, &alias, &state, &sibling] {
+        assert!(
+            compile(std::slice::from_ref(root)).is_err(),
+            "read root {} must not expose the enclosing state tree",
+            root.display()
+        );
+    }
+    let args = compile(&[other.clone(), cwd.join("sub")]).expect("unrelated read root");
+    let other = other.to_str().expect("path");
+    assert!(
+        args.windows(3)
+            .any(|triple| triple[0] == "--ro-bind" && triple[1] == other && triple[2] == other),
+        "an unrelated read root stays bound"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn script_profile_preserves_masks_with_overlapping_grant() {
     use orbit_exec::{ScriptRunEnd, ScriptSandboxRequest, ScriptSandboxSpec, run_script_sandboxed};
     use std::fs;
