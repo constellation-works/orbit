@@ -392,6 +392,104 @@ fn a_crew_budget_gates_the_crew_from_its_own_ledger_spend() {
     );
 }
 
+/// Two model crews that set the same credential share the default-login
+/// usage-bar row. A crew with a different credential stays its own account,
+/// and a provider that still has a default-login crew marks nobody.
+fn shared_credential_model_crews_merge_on_the_usage_bar() {
+    unsafe {
+        std::env::set_var("SHARED_CLAUDE_KEY", "shared-claude-fixture");
+        std::env::set_var("CREDITS_CLAUDE_KEY", "credits-claude-fixture");
+    }
+    let fx = fixture_with_global(
+        r#"[crews.fable]
+provider = "claude"
+model = "claude-fable"
+env = ["ANTHROPIC_API_KEY=SHARED_CLAUDE_KEY"]
+
+[crews.haiku]
+provider = "claude"
+model = "claude-haiku"
+env = ["ANTHROPIC_API_KEY=SHARED_CLAUDE_KEY"]
+
+[crews.opus-credits]
+provider = "claude"
+model = "claude-opus"
+env = ["ANTHROPIC_API_KEY=CREDITS_CLAUDE_KEY"]
+"#,
+        "[workflow]\ndefault_crew = \"fable\"\n",
+    );
+    let now = Utc::now();
+    fx.runtime
+        .record_provider_limit(&ProviderLimitObservation {
+            provider: "claude".into(),
+            account: None,
+            model: None,
+            window: Some("seven_day".into()),
+            exhausted: false,
+            source: ProviderLimitSource::Event,
+            resets_at: Some(now + Duration::days(7)),
+            used_percent: Some(19.0),
+            window_minutes: Some(10080),
+            gating: true,
+            partial: false,
+            observed_at: now,
+            run_id: None,
+            crew: None,
+            detail: String::new(),
+        })
+        .unwrap();
+    let view = fx.runtime.provider_limits_view(Utc::now());
+    let status = |account: Option<&str>| {
+        view.providers
+            .iter()
+            .find(|status| status.provider == "claude" && status.account.as_deref() == account)
+            .unwrap_or_else(|| panic!("missing claude account {account:?} in {view:?}"))
+    };
+    assert!(status(Some("fable")).shares_default_login);
+    assert!(status(Some("haiku")).shares_default_login);
+    assert!(!status(Some("opus-credits")).shares_default_login);
+    assert!(
+        view.providers.iter().all(|status| status.account.is_some()),
+        "readiness and doctor keep one status per crew account: {view:?}"
+    );
+    assert_eq!(
+        status(Some("fable")).usage.pressure,
+        1.0,
+        "a per-crew status does not take the default login's reading"
+    );
+    let bar = view
+        .bar_pressures
+        .iter()
+        .find(|status| status.provider == "claude" && status.account.is_none())
+        .expect("the bar has the shared login's pressure");
+    assert!(!bar.shares_default_login);
+    let window = bar
+        .usage
+        .pressure_window
+        .as_ref()
+        .expect("the bar pressure is the weekly reading");
+    assert_eq!(
+        (window.used_percent, window.window.as_deref()),
+        (19.0, Some("seven_day"))
+    );
+    assert!(
+        bar.usage.pressure < 1.0,
+        "19% of the week used is below neutral: {}",
+        bar.usage.pressure
+    );
+
+    let plain = fixture(&workspace(""));
+    let plain_view = plain.runtime.provider_limits_view(Utc::now());
+    assert!(
+        plain_view
+            .providers
+            .iter()
+            .all(|status| !status.shares_default_login),
+        "a default-login crew keeps env accounts unmarked: {plain_view:?}"
+    );
+    assert_eq!(plain_view.bar_pressures.len(), plain_view.providers.len());
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     crew_account_scenarios,
@@ -400,5 +498,6 @@ crate::scenario_table!(
     a_usage_limit_holds_only_the_crews_of_the_failing_account,
     a_hold_stored_before_accounts_were_named_applies_as_written,
     a_default_login_reading_does_not_limit_a_crew_account,
-    a_crew_budget_gates_the_crew_from_its_own_ledger_spend
+    a_crew_budget_gates_the_crew_from_its_own_ledger_spend,
+    shared_credential_model_crews_merge_on_the_usage_bar
 );

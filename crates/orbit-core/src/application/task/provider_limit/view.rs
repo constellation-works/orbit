@@ -10,7 +10,12 @@
 //!
 //! [ORB-17288] A crew that sets `env` is its own provider account, so its
 //! readings, and the status of its account, are listed apart from its
-//! provider's default login's, under `provider/crew`.
+//! provider's default login's, under `provider/crew`. The usage bar is the
+//! exception: per-model crews that set the same credential, when no crew of
+//! that provider uses the default login, are marked
+//! [`ProviderUsageStatus::shares_default_login`] and merged into that login's
+//! row. [`ProviderLimitsView::bar_pressures`] is the list the bar reads;
+//! readiness and doctor keep [`ProviderLimitsView::providers`].
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -179,6 +184,14 @@ pub struct ProviderUsageStatus {
     pub usage: UsagePressure,
     /// Its enabled configured crews.
     pub crews: Vec<String>,
+    /// Whether the usage bar merges this account into the provider's
+    /// default-login row. True only for an `env` account whose credential
+    /// mapping is shared by another enabled crew of the provider, and only
+    /// when no enabled crew of that provider uses the default login.
+    /// Admission, readiness and doctor still list the crew as its own
+    /// account. Omitted from JSON when false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub shares_default_login: bool,
 }
 
 impl ProviderUsageStatus {
@@ -230,6 +243,13 @@ pub struct ProviderLimitsView {
     /// Every provider account an enabled configured crew uses, by provider
     /// and account.
     pub providers: Vec<ProviderUsageStatus>,
+    /// Pressures for the usage bar: [`Self::providers`], plus one
+    /// default-login row when per-model crews share a credential and no
+    /// enabled crew of that provider uses the default login. That row's
+    /// pressure is the account-wide weekly pressure of the default login
+    /// and of those sharing accounts. Not part of readiness or doctor.
+    #[serde(skip)]
+    pub bar_pressures: Vec<ProviderUsageStatus>,
     /// Each configured crew some live gating reading covers, by name.
     pub crews: Vec<CrewProviderLimit>,
     /// Display-only weekly pressure for every enabled crew.
@@ -320,27 +340,35 @@ impl ProviderLimitsView {
                 .or_default()
                 .insert(crew.name.clone());
         }
+        let shares_default_login = accounts_sharing_default_login(&crews);
         let providers = providers
             .into_iter()
-            .map(|((provider, account), crews)| ProviderUsageStatus {
-                usage: UsagePressure::from_readings(
-                    observations.iter().filter(|reading| {
-                        canonical_provider(&reading.provider) == provider
-                            && reading.account == account
-                            && reading.model.is_none()
+            .map(|((provider, account), crews)| {
+                let shares_default_login = account.as_ref().is_some_and(|name| {
+                    shares_default_login.contains(&(provider.clone(), name.clone()))
+                });
+                ProviderUsageStatus {
+                    usage: UsagePressure::from_readings(
+                        observations.iter().filter(|reading| {
+                            canonical_provider(&reading.provider) == provider
+                                && reading.account == account
+                                && reading.model.is_none()
+                        }),
+                        now,
+                    ),
+                    reports_usage: USAGE_REPORTING_PROVIDERS.contains(&provider.as_str()),
+                    threshold: policy.account_threshold(&provider, account.as_deref()),
+                    gated: readings.iter().any(|reading| {
+                        reading.gated && reading.provider == provider && reading.account == account
                     }),
-                    now,
-                ),
-                reports_usage: USAGE_REPORTING_PROVIDERS.contains(&provider.as_str()),
-                threshold: policy.account_threshold(&provider, account.as_deref()),
-                gated: readings.iter().any(|reading| {
-                    reading.gated && reading.provider == provider && reading.account == account
-                }),
-                crews: crews.into_iter().collect(),
-                provider,
-                account,
+                    crews: crews.into_iter().collect(),
+                    shares_default_login,
+                    provider,
+                    account,
+                }
             })
-            .collect();
+            .collect::<Vec<_>>();
+        let bar_pressures = usage_bar_pressures(&providers, observations, &readings, &policy, now);
 
         let crew_pressures = crews
             .iter()
@@ -414,6 +442,7 @@ impl ProviderLimitsView {
             as_of: now,
             readings,
             providers,
+            bar_pressures,
             crews: crew_limits,
             crew_pressures,
             ungated_lanes,
@@ -500,6 +529,104 @@ fn tightest(readings: &[ProviderLimitReading], crew: &Crew) -> Option<CrewProvid
         gated: reading.gated,
         until: reading.until,
     })
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+/// Accounts `(provider, crew base name)` the usage bar merges into the
+/// provider's default-login row: an `env` mapping shared by at least two
+/// enabled crew base names, and only when no enabled crew of that provider
+/// has an empty `env`.
+fn accounts_sharing_default_login(crews: &[&Crew]) -> BTreeSet<(String, String)> {
+    let mut by_provider: BTreeMap<String, Vec<&Crew>> = BTreeMap::new();
+    for crew in crews.iter().copied().filter(|crew| crew.enabled) {
+        by_provider
+            .entry(canonical_provider(&crew.assignment.provider))
+            .or_default()
+            .push(crew);
+    }
+    let mut sharing = BTreeSet::new();
+    for (provider, group) in by_provider {
+        if group.iter().any(|crew| crew.env.is_empty()) {
+            continue;
+        }
+        let mut by_signature: BTreeMap<Vec<String>, BTreeSet<&str>> = BTreeMap::new();
+        for crew in &group {
+            let mut signature: Vec<String> = crew.env.iter().map(ToString::to_string).collect();
+            signature.sort();
+            by_signature
+                .entry(signature)
+                .or_default()
+                .insert(crew.base_name());
+        }
+        for names in by_signature.values() {
+            if names.len() < 2 {
+                continue;
+            }
+            for name in names {
+                sharing.insert((provider.clone(), (*name).to_string()));
+            }
+        }
+    }
+    sharing
+}
+
+/// `providers`, plus a default-login pressure for each provider whose
+/// per-model crews share a credential and that has no default-login status.
+/// The added pressure covers account-wide weekly observations of the default
+/// login and of those sharing accounts, so the bar does not show a per-crew
+/// neutral value beside the login's own readings.
+fn usage_bar_pressures(
+    providers: &[ProviderUsageStatus],
+    observations: &[ProviderLimitObservation],
+    readings: &[ProviderLimitReading],
+    policy: &orbit_config::ProviderLimitPolicy,
+    now: DateTime<Utc>,
+) -> Vec<ProviderUsageStatus> {
+    let mut bar = providers.to_vec();
+    let sharing_providers: BTreeSet<&str> = providers
+        .iter()
+        .filter(|status| status.shares_default_login)
+        .map(|status| status.provider.as_str())
+        .collect();
+    for provider in sharing_providers {
+        if providers
+            .iter()
+            .any(|status| status.provider == provider && status.account.is_none())
+        {
+            continue;
+        }
+        let sharing_accounts: BTreeSet<&str> = providers
+            .iter()
+            .filter(|status| status.provider == provider && status.shares_default_login)
+            .filter_map(|status| status.account.as_deref())
+            .collect();
+        bar.push(ProviderUsageStatus {
+            usage: UsagePressure::from_readings(
+                observations.iter().filter(|reading| {
+                    canonical_provider(&reading.provider) == provider
+                        && reading.model.is_none()
+                        && reading
+                            .account
+                            .as_deref()
+                            .is_none_or(|account| sharing_accounts.contains(&account))
+                }),
+                now,
+            ),
+            reports_usage: USAGE_REPORTING_PROVIDERS.contains(&provider),
+            threshold: policy.account_threshold(provider, None),
+            gated: readings.iter().any(|reading| {
+                reading.gated && reading.provider == provider && reading.account.is_none()
+            }),
+            crews: Vec::new(),
+            shares_default_login: false,
+            provider: provider.to_string(),
+            account: None,
+        });
+    }
+    bar
 }
 
 fn canonical_provider(provider: &str) -> String {
