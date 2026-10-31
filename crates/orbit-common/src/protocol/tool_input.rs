@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
-use crate::OrbitError;
+use crate::{OrbitError, text};
 
 /// Top-level keys that are transport/session wrappers, not tool arguments.
 ///
@@ -78,7 +78,8 @@ fn suggest_tool_field<'a>(unknown: &str, allowed: &[&'a str]) -> Option<&'a str>
 
     let mut best: Option<(&'a str, usize)> = None;
     for name in allowed {
-        let distance = levenshtein(unknown, name).min(levenshtein(&normalized, name));
+        let distance = text::unicode_edit_distance(unknown, name)
+            .min(text::unicode_edit_distance(&normalized, name));
         if best.is_none_or(|(_, best_distance)| distance < best_distance) {
             best = Some((*name, distance));
         }
@@ -124,23 +125,6 @@ fn normalize_tool_field_name(raw: &str) -> String {
         normalized.push(ch);
     }
     normalized
-}
-
-fn levenshtein(left: &str, right: &str) -> usize {
-    let right_chars = right.chars().collect::<Vec<_>>();
-    let mut previous = (0..=right_chars.len()).collect::<Vec<_>>();
-    let mut current = vec![0; right_chars.len() + 1];
-    for (i, left_ch) in left.chars().enumerate() {
-        current[0] = i + 1;
-        for (j, right_ch) in right_chars.iter().enumerate() {
-            let cost = usize::from(left_ch != *right_ch);
-            current[j + 1] = (previous[j + 1] + 1)
-                .min(current[j] + 1)
-                .min(previous[j] + cost);
-        }
-        std::mem::swap(&mut previous, &mut current);
-    }
-    previous[right_chars.len()]
 }
 
 pub fn required_string(

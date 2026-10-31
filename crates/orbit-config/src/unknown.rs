@@ -6,6 +6,7 @@ use std::sync::{Mutex, OnceLock};
 
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_home_dir;
+use orbit_common::text;
 
 use crate::operation::REVIEW_HOST_EVIDENCE_KEY;
 use crate::registry::{
@@ -131,7 +132,7 @@ fn visit(
             let key = display_path(path);
             let suggestion = suggestions
                 .iter()
-                .map(|candidate| (distance(&key, candidate), candidate))
+                .map(|candidate| (text::unicode_edit_distance(&key, candidate), candidate))
                 .min()
                 .filter(|(distance, candidate)| {
                     *distance
@@ -175,23 +176,6 @@ fn display_path(segments: &[String]) -> String {
         })
         .collect::<Vec<_>>()
         .join(".")
-}
-
-fn distance(left: &str, right: &str) -> usize {
-    let right: Vec<_> = right.chars().collect();
-    let mut row: Vec<_> = (0..=right.len()).collect();
-    for (index, left) in left.chars().enumerate() {
-        let mut diagonal = row[0];
-        row[0] = index + 1;
-        for (column, right) in right.iter().enumerate() {
-            let previous = row[column + 1];
-            row[column + 1] = (diagonal + usize::from(left != *right))
-                .min(previous + 1)
-                .min(row[column] + 1);
-            diagonal = previous;
-        }
-    }
-    row[right.len()]
 }
 
 pub(crate) fn warn_unknown_keys(document: &toml::Value, path: &Path) {
