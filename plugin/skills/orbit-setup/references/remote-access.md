@@ -137,8 +137,8 @@ them is the whole migration. `orbit mcp callers` no longer exists.
 
 ### Remote host-agent invocation
 
-Deprecated: the operator invocation will be removed and is no longer listed to
-operator MCP sessions. Prefer tasks and `orbit run ship`. Until removal, a
+Deprecated: the operator invocation will be removed and is listed only by a
+server started with `--toolset agent-invoke`. Prefer tasks and `orbit run ship`. Until removal, a
 direct call still behaves as below.
 
 Remote `orbit_agent_invoke` is admitted when the session holds `operator` — the

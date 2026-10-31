@@ -242,7 +242,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": "default"
+    "mcp_toolset": "agent-invoke"
   },
   {
     "name": "orbit.agents.scorecard",

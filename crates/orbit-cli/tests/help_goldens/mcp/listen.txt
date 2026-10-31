@@ -19,7 +19,7 @@ Options:
           Allow a bind address other hosts can reach. Anyone who reaches the socket gets this machine's agent-accessible tools, so pass this only where the network path is already restricted
 
       --toolset <TOOLSETS>
-          Advertise these opt-in toolsets beside the default one, as `orbit mcp serve --toolset` takes them: `leases`, `experiments`, `analytics`, `decision-channel`, or `all`. Replaces the `machine.mcp.toolsets` host config for this listener
+          Advertise these opt-in toolsets beside the default one, as `orbit mcp serve --toolset` takes them: `leases`, `experiments`, `analytics`, `decision-channel`, `agent-invoke`, or `all`. Replaces the `machine.mcp.toolsets` host config for this listener
 
   -h, --help
           Print help (see a summary with '-h')

@@ -111,11 +111,12 @@ Every tool schema a server lists costs context in each agent session, so
 
 | Toolset | Tools |
 |---|---|
-| `default` (always on) | Tasks, workflows and runs, `orbit.pipeline.invoke`, `orbit.agent.invoke` (listed only to a server a managed run launched), routines and auto-tasks, `orbit.automation.explain`, `orbit.decision.list` and `orbit.decision.show`, codebase, friction, search, the UI and visual tools, `orbit.command.exec` and workspace discovery. |
+| `default` (always on) | Tasks, workflows and runs, `orbit.pipeline.invoke`, routines and auto-tasks, `orbit.automation.explain`, `orbit.decision.list` and `orbit.decision.show`, codebase, friction, search, the UI and visual tools, `orbit.command.exec` and workspace discovery. |
 | `leases` | `orbit.lease.*` |
 | `experiments` | `orbit.experiment.*` |
 | `analytics` | `orbit.agents.*`, `orbit.orchestrator.show`, `orbit.orchestrator.scorecard` and `orbit.crew.ladder` |
 | `decision-channel` | `orbit.decision.submit` and `orbit.decision.digest`, which only the bound channel plugin or the operator may call |
+| `agent-invoke` | `orbit.agent.invoke`. A managed implement or review-repair run that is offered explorer delegation enables it on its own server; the operator invocation is deprecated. |
 
 Enable groups per server with `--toolset`, or for every server on the host
 with the global `machine.mcp.toolsets` config key; the flag replaces the

@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use clap::{Args, Subcommand, ValueEnum};
+use orbit_common::security::child_env::ACTIVITY_MCP_TOOLSETS_ENV;
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_mcp::{McpSessionAuthority, RemoteProxyArgs};
 use orbit_types::tool::McpToolsetSelection;
@@ -184,7 +185,7 @@ pub struct ServeArgs {
     pub orchestrator: Option<String>,
     /// Advertise these opt-in toolsets beside the default one, as a
     /// comma-separated list: `leases`, `experiments`, `analytics`,
-    /// `decision-channel`, or `all`.
+    /// `decision-channel`, `agent-invoke`, or `all`.
     ///
     /// The default toolset (tasks, workflows and runs, automation, decision
     /// list and show, codebase, friction, search, the UI and visual tools,
@@ -192,7 +193,9 @@ pub struct ServeArgs {
     /// `leases` adds the lease tools; `experiments` the experiment tools;
     /// `analytics` the agent and orchestrator scorecards and the crew
     /// ladder; `decision-channel` a decision channel's submit and digest,
-    /// which only the bound channel plugin or the operator may call.
+    /// which only the bound channel plugin or the operator may call;
+    /// `agent-invoke` agent invocation, which a managed run offered explorer
+    /// delegation enables on its own server.
     ///
     /// Replaces the `machine.mcp.toolsets` host config for this server. A
     /// toolset changes only what this server lists and dispatches: a call to a
@@ -290,11 +293,36 @@ impl ServeArgs {
 }
 
 /// The toolsets a server advertises: `--toolset` when given, else the
-/// `machine.mcp.toolsets` host config, else the default toolset alone.
+/// `machine.mcp.toolsets` host config, else the default toolset alone, plus
+/// any a managed run's dispatch stamped in `ORBIT_ACTIVITY_MCP_TOOLSETS`.
 ///
-/// An unreadable host config falls back to the default toolset with a warning
+/// An unreadable host config or stamp falls back without it, with a warning,
 /// rather than refusing to serve: a toolset trims context, it grants nothing.
 pub(super) fn resolve_mcp_toolsets(
+    global_root: &Path,
+    flag: Option<&str>,
+) -> Result<McpToolsetSelection, OrbitError> {
+    let selection = configured_mcp_toolsets(global_root, flag)?;
+    let Some(stamped) = std::env::var(ACTIVITY_MCP_TOOLSETS_ENV)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return Ok(selection);
+    };
+    match McpToolsetSelection::parse_list(&stamped) {
+        Ok(stamped) => Ok(selection.union(&stamped)),
+        Err(error) => {
+            tracing::warn!(
+                target: "orbit.mcp",
+                %error,
+                "ignoring {ACTIVITY_MCP_TOOLSETS_ENV}"
+            );
+            Ok(selection)
+        }
+    }
+}
+
+fn configured_mcp_toolsets(
     global_root: &Path,
     flag: Option<&str>,
 ) -> Result<McpToolsetSelection, OrbitError> {

@@ -29,16 +29,20 @@ pub enum McpToolset {
     Analytics,
     /// A decision channel's own callbacks (submit and digest).
     DecisionChannel,
+    /// Agent invocation (`orbit.agent.invoke`). A managed implement or
+    /// review-repair run that is offered explorer delegation enables it.
+    AgentInvoke,
 }
 
 impl McpToolset {
     /// Every toolset, in declaration order.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Default,
         Self::Leases,
         Self::Experiments,
         Self::Analytics,
         Self::DecisionChannel,
+        Self::AgentInvoke,
     ];
 
     /// The name a selection uses.
@@ -49,6 +53,7 @@ impl McpToolset {
             Self::Experiments => "experiments",
             Self::Analytics => "analytics",
             Self::DecisionChannel => "decision-channel",
+            Self::AgentInvoke => "agent-invoke",
         }
     }
 
@@ -129,6 +134,12 @@ impl McpToolsetSelection {
     /// Parse one comma-separated selection, as `--toolset` takes it.
     pub fn parse_list(raw: &str) -> Result<Self, McpToolsetError> {
         Self::from_names(raw.split(','))
+    }
+
+    /// This selection with every toolset `other` enables added.
+    pub fn union(mut self, other: &Self) -> Self {
+        self.enabled.extend(other.enabled.iter().copied());
+        self
     }
 
     /// Whether a definition in `toolset` is advertised.

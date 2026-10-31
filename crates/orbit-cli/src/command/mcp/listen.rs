@@ -29,7 +29,7 @@ pub struct ListenArgs {
     pub allow_non_loopback: bool,
     /// Advertise these opt-in toolsets beside the default one, as
     /// `orbit mcp serve --toolset` takes them: `leases`, `experiments`,
-    /// `analytics`, `decision-channel`, or `all`. Replaces the
+    /// `analytics`, `decision-channel`, `agent-invoke`, or `all`. Replaces the
     /// `machine.mcp.toolsets` host config for this listener.
     #[arg(long, value_name = "TOOLSETS")]
     pub toolset: Option<String>,
