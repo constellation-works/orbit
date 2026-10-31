@@ -471,7 +471,8 @@ pub(super) fn has_matching_candidate_rerun<H: RuntimeHost + ?Sized>(
 }
 
 /// Surface the base-wide suspicion once per owning task and exact failure,
-/// independent of poll count or PR head. This spends no repair reservation.
+/// keyed by head, check and signature, even when the base advances.
+/// This spends no repair reservation.
 pub(super) fn record_base_suspect<H: RuntimeHost + ?Sized>(
     host: &H,
     tasks: &[String],
@@ -484,7 +485,14 @@ pub(super) fn record_base_suspect<H: RuntimeHost + ?Sized>(
         if host
             .get_task_history(task)?
             .iter()
-            .any(|entry| entry.event == "ci_base_suspect" && entry.note.as_deref() == Some(&note))
+            .filter(|entry| entry.event == "ci_base_suspect")
+            .filter_map(|entry| entry.note.as_deref())
+            .filter_map(|note| serde_json::from_str::<Value>(note).ok())
+            .any(|prior| {
+                ["head", "check", "signature"]
+                    .iter()
+                    .all(|key| evidence[*key].as_str().is_some() && prior[*key] == evidence[*key])
+            })
         {
             continue;
         }

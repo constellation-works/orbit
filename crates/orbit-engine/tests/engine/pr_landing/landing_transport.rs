@@ -87,8 +87,8 @@ fn required_check_transport_preserves_retry_budget_and_merge_authority() {
                 );
                 assert_eq!(
                     calls(&fx, REQUIRED_READ),
-                    2,
-                    "required-check evidence recovers before landing"
+                    3,
+                    "required-check evidence recovers and is rechecked on the mergeable head"
                 );
                 assert_eq!(mutations(&fx), "merge\n");
                 assert_eq!(steps(&host), landed_steps());

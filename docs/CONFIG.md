@@ -1965,7 +1965,15 @@ existing recovery activities, final validation and push do the repair:
   required check that current branch policy names and a freshly pushed head
   has not reported yet also waits; it is never treated as passed. An
   unclassified or optional pending check grants no wait. Review gates and
-  unreadable or stale evidence still stop the watcher. A failed required check
+  unreadable or stale evidence still stop the watcher. Untouched-file or
+  flaky attribution does not delay auto-fix: unless the known-red-base path
+  applies, a source failure goes to repair on its first completion poll,
+  without an unchanged-head rerun or eligible-set authorization. Suspicion
+  alone never records `pr_auto_fix_base_red`. Every mergeable head is checked
+  against its latest head-bound required-check results before merge. A red
+  required result stays blocking regardless of attribution; only a later
+  passing run on that same head or on the repaired head clears it. Skipped or
+  neutral reruns do not clear a failed required check. A failed required check
   whose job log shows a code failure is compared with the current base
   before a repair is admitted. Orbit reads the latest push run of the same
   workflow on the exact base tip. When that run skipped the job (a docs-only

@@ -86,10 +86,8 @@ fn bounded_dependency_failure_authenticates_and_reruns_once() {
                             }
                         );
                     }
-                    let mut input = fx.complete_ungated_input();
-                    input["auto_fix"] = json!(true);
-                    input["completion"] = json!("review");
-                    let result = complete_with_logical_clock(&host, &input);
+                    let claimed = claimed(&fx, &host);
+                    let result = land_claimed_retry(&claimed);
                     assert!(result.is_ok(), "raw={raw}: {result:?}");
                     assert_eq!(
                         fx.forge_lines("retry-sends"),
@@ -301,6 +299,18 @@ fn bounded_nextest_retry_observes_results_and_never_resends_unknown_replies() {
                         ),
                     )
                     .unwrap();
+                    // Runner failure still takes the one bounded retry. A
+                    // later source failure goes straight to auto-fix, even
+                    // when its signature differs from the original attempt.
+                    fs::write(
+                        &path,
+                        fs::read_to_string(&path).unwrap().replace(
+                            "error: source failure",
+                            "error: source failure; TLS handshake timeout",
+                        ),
+                    )
+                    .unwrap();
+                    request["roots"][0]["classification"] = json!("transient");
                     request["roots"][0]["signature"] = json!(
                         orbit_engine::ci_log_signature::error_signature(
                             &fs::read_to_string(&path).unwrap(),
@@ -310,7 +320,13 @@ fn bounded_nextest_retry_observes_results_and_never_resends_unknown_replies() {
                     );
                     let plan = run_private_vcs_operation("ci.rerun_plan", &request).unwrap();
                     assert!(plan["plan"]["authentication"]["logs"][0]["proof"]["failure_regions"]["byte_ranges"].is_array());
-                    fs::copy(&path, fx.forge.join("retry-log-1010")).unwrap();
+                    fs::write(
+                        fx.forge.join("retry-log-1010"),
+                        fs::read_to_string(&path)
+                            .unwrap()
+                            .replace("; TLS handshake timeout", ""),
+                    )
+                    .unwrap();
                     fs::copy(
                         fx.forge.join("retry-log-1001"),
                         fx.forge.join("retry-log-1011"),
@@ -339,7 +355,7 @@ fn bounded_nextest_retry_observes_results_and_never_resends_unknown_replies() {
                     let result = complete_with_logical_clock(&host, &input);
                     if case == "pass" {
                         assert!(result.is_ok(), "{result:?}");
-                    } else if case == "repeat" {
+                    } else if matches!(case, "repeat" | "different_signature") {
                         let error = result.expect_err(case);
                         assert!(
                             orbit_types::workflow::is_pr_auto_fix_check_repair(&error.to_string()),

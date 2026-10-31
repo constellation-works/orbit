@@ -115,9 +115,9 @@ impl DeferredLogRead {
 /// any other check no workflow job answers (an external status, a policy
 /// gate) is not. An unreadable job or log proves nothing; a log that shows
 /// the runner or the network failing is not the candidate's. Each stops without a repair.
-/// An untouched-file failure also needs task history proving that this head
-/// repeated the same check and signature after the earlier failed attempt;
-/// a passing base job alone only authorizes that PR rerun. A log read the
+/// Independent job recovery requires repeated-failure evidence for an untouched
+/// file. Auto-fix sets `allow_suspect_repair`: suspicion does not gate its repair
+/// admission; its caller separately preserves the known-red-base hold. A log read the
 /// provider throttled is [`HeadCheckEvidence::ReadDeferred`]; `deadline_ms`,
 /// when set, bounds the log read by the completion's absolute deadline.
 #[allow(clippy::too_many_arguments)]
@@ -130,7 +130,7 @@ pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost +
     base_branch: Option<&str>,
     failed: &[(Option<String>, String)],
     required: &RequiredChecks,
-    allow_candidate_sibling: bool,
+    allow_suspect_repair: bool,
     deadline_ms: Option<u64>,
 ) -> HeadCheckEvidence {
     let jobs = match commit_jobs(host, workspace, head) {
@@ -208,23 +208,25 @@ pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost +
                 job_label(job)
             ));
         }
-        match super::suspect::watcher_suspicion(
-            host,
-            workspace,
-            tasks,
-            head,
-            base_branch,
-            job,
-            &log,
-            &signature.text,
-            pr.parse::<u64>().ok(),
-        ) {
-            Ok(Some(reason)) => {
-                waits.push(reason);
-                continue;
+        if !allow_suspect_repair {
+            match super::suspect::watcher_suspicion(
+                host,
+                workspace,
+                tasks,
+                head,
+                base_branch,
+                job,
+                &log,
+                &signature.text,
+                pr.parse::<u64>().ok(),
+            ) {
+                Ok(Some(reason)) => {
+                    waits.push(reason);
+                    continue;
+                }
+                Err(reason) => return HeadCheckEvidence::Stop(reason),
+                Ok(None) => {}
             }
-            Err(reason) => return HeadCheckEvidence::Stop(reason),
-            Ok(None) => {}
         }
         details.push(format!(
             "'{}' failed in step `{}` on head {head} (run {run_id}, job {job_id}) with signature `{}`; log excerpt:\n{}",
@@ -234,7 +236,7 @@ pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost +
             excerpt(&log)
         ));
     }
-    if !waits.is_empty() && (details.is_empty() || !allow_candidate_sibling) {
+    if !waits.is_empty() {
         return HeadCheckEvidence::WaitForBase(waits.join("; "));
     }
     if details.is_empty() {
@@ -353,9 +355,8 @@ pub(super) fn classify_logged_job<H: RuntimeHost + ?Sized>(
 /// fails the same way, and either `tip` has not moved past `base` or the
 /// moved tip cannot yet prove whether the base fixed it.
 ///
-/// A base-suspect failure (its log cites only files the candidate did not
-/// change, and no base run newer than it passes the same job) holds too,
-/// and is recorded once per watched task.
+/// Untouched-file suspicion and passing-base classifications do not hold
+/// auto-fix: only established inheritance can suppress its repair.
 ///
 /// `Ok(Some(reason))` is that hold: auto-fix waits and spends no repair. A
 /// moved tip holds while a same job on it has not concluded, while one of
@@ -379,9 +380,7 @@ pub(in crate::executor::automation::vcs) fn unmoved_red_base<H: RuntimeHost + ?S
     base: &str,
     tip: &str,
     base_branch: &str,
-    tasks: &[String],
     failed: &[(Option<String>, String)],
-    pr_number: Option<u64>,
     deadline_ms: Option<u64>,
 ) -> Result<Option<String>, CheckReadGap> {
     let head_jobs = commit_jobs(host, workspace, head).map_err(|error| error.to_string())?;
@@ -390,7 +389,6 @@ pub(in crate::executor::automation::vcs) fn unmoved_red_base<H: RuntimeHost + ?S
     let mut tip_jobs = None;
     let mut reasons = Vec::new();
     let mut inconclusive = None;
-    let mut suspect = false;
     let mut candidate_owned = false;
     for check in failed {
         let Some(job) = head_jobs
@@ -404,7 +402,7 @@ pub(in crate::executor::automation::vcs) fn unmoved_red_base<H: RuntimeHost + ?S
         };
         let label = job_label(job);
         let log = prerequisite_log(host, workspace, head, job, run_id, job_id, deadline_ms)?;
-        let (class, why, _, signature) = classify_logged_job(
+        let (class, why, _, _) = classify_logged_job(
             host,
             workspace,
             job,
@@ -420,38 +418,7 @@ pub(in crate::executor::automation::vcs) fn unmoved_red_base<H: RuntimeHost + ?S
         .map_err(CheckReadGap::Deferred)?;
         match class {
             CheckFailureClass::Inherited => reasons.push(why),
-            CheckFailureClass::BaseSuspect => {
-                let evidence = serde_json::json!({
-                    "base": tip, "head": head, "check": label, "signature": signature,
-                    "run_id":run_id, "job_id":job_id, "run_attempt":job["run_attempt"], "pr_number":pr_number, "event":job["event"],
-                    "started_at":job["started_at"], "completed_at":job["completed_at"], "reason": why,
-                });
-                super::suspect::record_base_suspect(host, tasks, &evidence, None)
-                    .map_err(|error| error.to_string())?;
-                suspect = true;
-                reasons.push(why);
-            }
-            CheckFailureClass::Flaky
-                if super::suspect::has_matching_candidate_rerun(
-                    host, tasks, head, job, &label, &signature, pr_number,
-                ) =>
-            {
-                candidate_owned = true;
-            }
-            CheckFailureClass::Flaky => {
-                let why = format!(
-                    "base-suspect: a successful same-check run on the accepted base ancestry is not enough by itself; waiting for the unchanged pull-request head to fail the same signature again ({signature})"
-                );
-                let evidence = serde_json::json!({
-                    "base": tip, "head": head, "check": label, "signature": signature,
-                    "run_id":run_id, "job_id":job_id, "run_attempt":job["run_attempt"], "pr_number":pr_number, "event":job["event"],
-                    "started_at":job["started_at"], "completed_at":job["completed_at"], "reason": why,
-                });
-                super::suspect::record_base_suspect(host, tasks, &evidence, None)
-                    .map_err(|error| error.to_string())?;
-                suspect = true;
-                reasons.push(why);
-            }
+            CheckFailureClass::BaseSuspect | CheckFailureClass::Flaky => return Ok(None),
             // Only an independently source-attributed candidate overrides
             // the hold. A diagnostic-only aggregate must not cancel its
             // leaf's suspicion while dependency evidence is unproven.
@@ -468,9 +435,6 @@ pub(in crate::executor::automation::vcs) fn unmoved_red_base<H: RuntimeHost + ?S
     }
     if candidate_owned {
         return Ok(None);
-    }
-    if suspect {
-        return Ok(Some(reasons.join("; ")));
     }
     if let Some(gap) = inconclusive {
         return Err(gap.into());

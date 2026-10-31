@@ -434,6 +434,7 @@ impl std::fmt::Display for CheckWaitRefusal {
     }
 }
 
+/// Require green required checks even on a provider-reported mergeable head.
 /// Refine BLOCKED only from authenticated current policy on the observed head,
 /// or an actually running check captured as owner-owed. A completed
 /// neutral/skipped result is never pending. An absent check is pending only
@@ -441,6 +442,8 @@ impl std::fmt::Display for CheckWaitRefusal {
 /// policy is unreadable, owner consumers get the bounded unsettled-poll grace
 /// auto-fix already applies. This grants only another bounded observation
 /// within the caller's deadline; only the provider's mergeable state can merge.
+/// `None` performs the bounded immediate read used by zero-wait completion;
+/// a watch always passes its original absolute deadline.
 pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
@@ -448,7 +451,7 @@ pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?S
     status: &PullRequestStatus,
     wait: BlockedCheckWait<'_>,
     unreported: &mut UnreportedChecks,
-    deadline_ms: u64,
+    deadline_ms: Option<u64>,
 ) -> Result<PrMergeState, CheckWaitRefusal> {
     unreported.last = UnreportedWait::None;
     unreported.required_observation = json!({"state":"not_collected"});
@@ -457,8 +460,9 @@ pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?S
     // A draft is already refused. Refining BLOCKED into a check wait would
     // hand it to auto-merge or repair [ORB-16342].
     if status.is_draft
-        || status.merge_state_status.as_deref() != Some("BLOCKED")
-        || !matches!(state, PrMergeState::Blocked(_))
+        || !(matches!(state, PrMergeState::Mergeable)
+            || (status.merge_state_status.as_deref() == Some("BLOCKED")
+                && matches!(state, PrMergeState::Blocked(_))))
     {
         return Ok(state);
     }
@@ -474,9 +478,10 @@ pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?S
     })?;
     let owed = match wait {
         BlockedCheckWait::Owner(owed) => {
-            if checks
-                .iter()
-                .any(|check| check.state == Some(CheckState::Failed))
+            if !matches!(state, PrMergeState::Mergeable)
+                && checks
+                    .iter()
+                    .any(|check| check.state == Some(CheckState::Failed))
             {
                 return Ok(state);
             }
@@ -484,12 +489,11 @@ pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?S
         }
         BlockedCheckWait::AutoFix => &[],
     };
-    let response = host.run_private_vcs_operation(
-        operations::PR_REQUIRED_CHECKS,
-        json!({
-            "pr":pr,"workspace_path":workspace.to_string_lossy(),"deadline_ms":deadline_ms,
-        }),
-    );
+    let mut required_input = json!({"pr":pr,"workspace_path":workspace.to_string_lossy()});
+    if let Some(deadline_ms) = deadline_ms {
+        required_input["deadline_ms"] = json!(deadline_ms);
+    }
+    let response = host.run_private_vcs_operation(operations::PR_REQUIRED_CHECKS, required_input);
     let required = RequiredChecks::observe_response(response, &mut unreported.required_observation)
         .map_err(|error| CheckWaitRefusal {
             reason: format!("required-check evidence is unavailable: {error}"),
@@ -508,6 +512,18 @@ pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?S
     for check in &required.checks {
         match check.state {
             Some(CheckState::Pending) => pending = true,
+            Some(CheckState::Passed)
+                if matches!(state, PrMergeState::Mergeable)
+                    && check.owed_state != Some(CheckState::Passed) =>
+            {
+                // Branch protection accepts skipped/neutral conclusions, but
+                // neither is a passing rerun of a failed required check. A
+                // refusal also prevents delegating this head to auto-merge.
+                failed = Some(format!(
+                    "required check '{}' has no successful run on the current head",
+                    check.name.as_deref().unwrap_or_default()
+                ));
+            }
             Some(CheckState::Passed) => {}
             Some(CheckState::Failed) => {
                 failed = Some(format!(
@@ -537,6 +553,9 @@ pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?S
     }
     if let Some(reason) = failed {
         return Ok(PrMergeState::Blocked(reason.into()));
+    }
+    if matches!(state, PrMergeState::Mergeable) {
+        return Ok(state);
     }
     // A failed check keeps its existing recovery or stop.
     if checks
@@ -577,8 +596,10 @@ fn unreported_required_checks<H: RuntimeHost + ?Sized>(
     workspace: &Path,
     pr: &str,
     status: &PullRequestStatus,
-    deadline_ms: u64,
+    deadline_ms: Option<u64>,
 ) -> Result<Vec<String>, String> {
+    let deadline_ms =
+        deadline_ms.ok_or("no completion wait budget remains for required-check policy")?;
     let (Some(head), Some(branch), Some(base)) = (
         status.head_sha.as_deref(),
         status.head_branch.as_deref(),
