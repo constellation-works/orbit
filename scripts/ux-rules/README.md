@@ -53,6 +53,13 @@ A UI `check(ctx)` reads `ctx.page` and `ctx.target`, and returns results built w
 | `ui.accessible-name` | Visible buttons, links, inputs, selects, textareas and images have a name (text, `aria-label`/`aria-labelledby`, label, `alt`, or title); decorative images (`alt=""`) pass. |
 | `ui.console-clean` | No page errors, console errors, failed same-origin requests, off-loopback requests, or blocked non-GET requests while rendering. |
 | `ui.forecast-unavailable-reason` | API-shaped fixture rule: when `GET /api/diagnostics/backlog_forecast` (fetched in the page's workspace scope) reports unavailable reasons, the view carries `data-forecast-reason` with a known kind (`regression_history_missing`, `risk_unestimated`, `arrival_conflict_unknown`, …) and visible reason text. |
+| `ui.text-occlusion` | Text sampled inside its own glyph line boxes with `elementFromPoint` is not painted over by an opaque element or another text run. |
+| `ui.text-overflow` | Content wider than its container is not cut by a clipping ancestor or run into a sibling; bounded scroll wrappers, `text-overflow: ellipsis`, screen-reader-only 1px boxes and collapsed boxes are exempt. |
+| `ui.cramped-wrap` | A 2–5 word label does not stack to 3+ lines at ~1 word per line (≤1.5 words per line); a single wrap to two lines is normal. |
+| `ui.cramped-padding` | Own-text glyphs keep at least a 4px inset (within a pixel for subpixel noise) from the nearest bordered or filled block-level container's border box, on sides with a drawn edge (border, padding or a differing fill); pills, chips, buttons, table parts and absolutely positioned runs are out of scope. |
+| `ui.tight-leading` | Multi-line text (2+ line boxes) has a numeric `line-height` of at least 1.3× its font size; `normal` is recorded, never failed. |
+| `ui.undersized-text` | Content tags (`p`, `li`, `td`, `th`, `dd`, `dt`, buttons, links, labels, headings) meet the 11px dashboard minimum (the theme's smallest named content size, 11px column heads); uppercase tracked overlines are exempt. |
+| `ui.heading-rhythm` | Rendered space above a section heading (nearest block above through the ancestor chain, plus the larger adjoining margin when the boxes touch) is at least the space below it. |
 
 ## Rule module
 
