@@ -378,9 +378,8 @@ impl OrbitRuntime {
 
         let counts =
             store.count_invocations_by_activity(&workspace_id, window.since, window.until)?;
-        let roles = self.catalog_activity_roles()?;
-        // The distinct-run denominator has to come from the store: distinct
-        // counts do not sum across activities.
+        let roles = self.job_activity_roles()?;
+        // Distinct counts do not sum across activities.
         let recovery_ids = roles.recovery_only().into_iter().collect::<Vec<_>>();
         let coverage = store.count_invocation_job_runs(
             &workspace_id,
@@ -395,20 +394,6 @@ impl OrbitRuntime {
             job_runs,
             recovery,
         })
-    }
-
-    /// Unions the activity roles declared by every job in the catalog.
-    ///
-    /// Disabled jobs are included: a job disabled midway through the window
-    /// still produced the invocations being counted.
-    fn catalog_activity_roles(&self) -> Result<JobActivityRoles, OrbitError> {
-        use crate::application::job::JobCatalogFilter;
-
-        let mut roles = JobActivityRoles::default();
-        for (entry, _) in self.list_job_catalog_with_last_run(true, JobCatalogFilter::All)? {
-            roles.merge(&entry.spec.activity_roles());
-        }
-        Ok(roles)
     }
 
     /// `run_id -> leaf_run_id` for failed runs that recorded a root cause.

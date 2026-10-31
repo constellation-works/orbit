@@ -7,6 +7,7 @@ pub(crate) use crate::runtime::assets::DEFAULT_JOB_FILES;
 mod layers;
 mod loading;
 mod projection;
+mod roles;
 
 pub use layers::CatalogReferenceLayer;
 

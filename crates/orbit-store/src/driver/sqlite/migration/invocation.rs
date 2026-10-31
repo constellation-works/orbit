@@ -265,3 +265,18 @@ pub(super) fn apply_invocation_long_prompt_requests(conn: &Connection) -> Result
     }
     add_column_if_missing(conn, "invocations", "long_prompt_requests_json", "TEXT")
 }
+
+/// Cover reliability's workspace/time filter and both invocation projections.
+/// Index-only and additive: existing writers and readers remain compatible.
+pub(super) fn apply_invocation_reliability_window_index(
+    conn: &Connection,
+) -> Result<(), OrbitError> {
+    if !table_has_column(conn, "invocations", "workspace_id")? {
+        return Ok(());
+    }
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_invocations_reliability_window
+         ON invocations(workspace_id, ts, job_run_id, activity_id);",
+    )
+    .map_err(sqlite_store_error)
+}
