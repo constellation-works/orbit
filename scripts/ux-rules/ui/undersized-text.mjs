@@ -4,9 +4,11 @@
 // `base.css`) and its smallest named content size is 11px column heads
 // (meta and rail counts sit at 12px). Only content tags count (`p`, `li`,
 // `td`, `th`, `dd`, `dt`, `button`, links, labels, headings): micro spans,
-// pills and timestamps are not content. Uppercase overlines with tracking
-// (column heads, field labels) are the theme's intentional small text, not a
-// defect, so they are exempt. Anything else under 11px fails.
+// pills and timestamps are not content. Overlines (column
+// heads, field labels) are the theme's intentional small text, not a defect,
+// so they are exempt, but only the full treatment: uppercase AND tracked
+// (letter-spacing >= 5% of the font size). Either style alone is ordinary
+// prose. Anything else under 11px fails.
 import { measureInPage, verdict } from "../lib/ui-context.mjs";
 
 export const MIN_FONT_PX = 11;
@@ -66,8 +68,10 @@ export async function check(ctx) {
       const style = getComputedStyle(el);
       const size = H.px(style.fontSize);
       if (!(size > 0)) continue;
+      // The overline treatment is both together: uppercase alone or
+      // tracking alone is still ordinary prose.
       const overline =
-        style.textTransform === "uppercase" ||
+        style.textTransform === "uppercase" &&
         H.px(style.letterSpacing) >= size * 0.05;
       rows.push({
         selector: H.selectorOf(el),
