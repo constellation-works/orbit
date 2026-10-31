@@ -35,6 +35,16 @@ model = "claude-opus-5-5"
 env = ["ANTHROPIC_API_KEY=CREW_ACCOUNT_FIXTURE_KEY"]
 "#;
 
+/// The fixture with `opus-credits`'s env source set, so admission treats it
+/// as runnable rather than excluding it as `crew_env_unset` [ORB-20409].
+fn fixture(config: &str) -> Fixture {
+    // Each scenario row runs alone in an isolated child.
+    unsafe {
+        std::env::set_var("CREW_ACCOUNT_FIXTURE_KEY", "crew-account-fixture-value");
+    }
+    fixture_with_global(GLOBAL, config)
+}
+
 /// The task's pool holds a crew of each account; `pool` lets a limit hold
 /// redraw a task whose crew is its own choice [ORB-14697].
 fn workspace(extra: &str) -> String {
@@ -108,7 +118,7 @@ fn spend(fx: &Fixture, account: Option<&str>, cost: f64) {
 /// reports holds only it. An authentication failure of the credits crew
 /// keeps this host off that crew alone.
 fn a_usage_limit_holds_only_the_crews_of_the_failing_account() {
-    let fx = fixture_with_global(GLOBAL, &workspace(""));
+    let fx = fixture(&workspace(""));
 
     let subscription = fx.task("opus");
     let run = fx.admit(&subscription, "opus");
@@ -177,7 +187,7 @@ fn a_credits_run_holds_only_its_failing_subscription_activity() {
 }
 
 fn mixed_account_auth_failure(run_crew: &str, account: Option<&str>, excluded: &[&str]) {
-    let mut fx = fixture_with_global(GLOBAL, &workspace(""));
+    let mut fx = fixture(&workspace(""));
     fx.runtime = fx
         .runtime
         .with_automation_machine_identity(Some("hm_this_host".into()));
@@ -252,7 +262,7 @@ fn mixed_account_auth_failure(run_crew: &str, account: Option<&str>, excluded: &
 /// A hold stored before accounts were named carries no account and keeps
 /// excluding exactly the crews it lists, the credits crew included.
 fn a_hold_stored_before_accounts_were_named_applies_as_written() {
-    let fx = fixture_with_global(GLOBAL, &workspace(""));
+    let fx = fixture(&workspace(""));
     let task = fx.task("opus");
     let not_before = (Utc::now() + Duration::hours(2)).to_rfc3339();
     let legacy = format!(
@@ -297,7 +307,7 @@ fn a_hold_stored_before_accounts_were_named_applies_as_written() {
 /// credits crew, even when the credits crew's run recorded it before
 /// accounts were named; a reading of the credits account limits it alone.
 fn a_default_login_reading_does_not_limit_a_crew_account() {
-    let fx = fixture_with_global(GLOBAL, &workspace(""));
+    let fx = fixture(&workspace(""));
     let task = fx.tagged_task(&[], None).id;
     fx.runtime
         .record_provider_limit(&exhausted(None, "opus-credits"))
@@ -345,10 +355,9 @@ fn a_default_login_reading_does_not_limit_a_crew_account() {
 /// spend leaves it at zero, its own gates it at the threshold, and it gates
 /// nothing on the subscription.
 fn a_crew_budget_gates_the_crew_from_its_own_ledger_spend() {
-    let fx = fixture_with_global(
-        GLOBAL,
-        &workspace("provider_limit_budgets = [\"opus-credits:200usd/30d\"]"),
-    );
+    let fx = fixture(&workspace(
+        "provider_limit_budgets = [\"opus-credits:200usd/30d\"]",
+    ));
     let task = fx.tagged_task(&[], None).id;
     spend(&fx, None, 5_000.0);
     let credits = |fx: &Fixture| {
