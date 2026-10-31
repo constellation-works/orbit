@@ -2,8 +2,11 @@
 #
 # Submitted only by `orbit.agent.invoke` when its caller is such a run and
 # `workflow.explore.enabled` is on. The admission checks the calling run, its
-# worktree, the explorer crew pool and the per-run budgets before this run
-# exists, and records the delegating run as `parent_run_id`.
+# worktree, the explorer crew pool (only crews with an enforced read-only
+# boundary on this host) and the per-run budgets before this run exists, and
+# records the delegating run as `parent_run_id`. A sandboxed caller submits
+# through its run's plugin broker, so this run's worker starts on the host
+# beside the caller's sandbox: a sandbox cannot be created nested in another.
 #
 # One step on purpose, like the operator's invocation: no worktree setup, no
 # lock reservation, no task transition and no PR behavior. Unlike it, the

@@ -5,7 +5,7 @@ tags: [operations, jobs, runs, recovery, debugging]
 paths: ["crates/orbit-core/src/application/job/**", "crates/orbit-cli/src/command/run/**", "crates/orbit-runtime/src/audit/run/trail.rs"]
 related_features: [activity-job, auditability]
 related_artifacts: [ORB-10070, ORB-10496, ORB-10801, ORB-17179, ORB-18166]
-last_validated: 2026-10-29
+last_validated: 2026-10-31
 ---
 
 # Recover Stuck Job Runs
@@ -543,6 +543,17 @@ It is a single-step run in its caller's worktree with no task ownership; its inp
 the caller as `parent_run_id`. A stuck explorer only holds one of its caller's
 `workflow.explore.max_concurrent_per_run` slots: cancel it with `orbit run cancel <RUN_ID>`,
 and the calling agent continues without the answer. Never resume or resubmit one by hand.
+
+An explorer that fails at once with `bwrap: No permissions to create a new namespace`,
+`workspace_read_unavailable`, or `refusing explorer provider ... no enforced read-only sandbox`
+was started inside its caller's sandbox, where no nested sandbox can start. A sandboxed
+caller's submission goes through its run's plugin broker, which starts the explorer beside the
+sandbox instead; check that the calling run's provider had `ORBIT_PLUGIN_BROKER` set (the worker
+log warns `plugin broker unavailable` when it did not) and that every host runs a build that
+brokers `orbit.agent.invoke`. A submission refused with `no explorer crew can run under an
+enforced read-only sandbox on this host` creates no run: give an explorer crew's executor a
+sandbox the host supports, or add a crew whose provider has a read-only mode, to
+`workflow.purpose_crews.explorer`.
 
 ## Resume from checkpoints
 

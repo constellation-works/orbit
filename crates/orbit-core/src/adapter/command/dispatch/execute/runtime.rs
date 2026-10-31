@@ -149,6 +149,14 @@ impl OrbitRuntime {
         // caller's audit boundary; never execute them locally as a fallback.
         #[cfg(unix)]
         let host_read = crate::runtime::plugin::broker::is_host_credentialed_read(name);
+        // [ORB-20566] A managed agent's explorer is submitted by its run's
+        // broker: started from this sandboxed process, the explorer's worker
+        // would create its own sandbox nested in this one, which the kernel
+        // refuses. Only the submission is brokered; the wait for its answer
+        // stays here, so it holds no broker connection.
+        #[cfg(unix)]
+        let explorer = name == crate::runtime::plugin::broker::BROKERED_EXPLORER_TOOL
+            && crate::runtime::run_input::managed_run_context_run_id_from_env().is_some();
         #[cfg(unix)]
         if let Some(socket) = std::env::var_os("ORBIT_PLUGIN_BROKER")
             && session_context.application.is_none()
@@ -156,8 +164,34 @@ impl OrbitRuntime {
                 orbit_common::security::application_credential::APPLICATION_CREDENTIAL_FD_ENV,
             )
             .is_none()
-            && (host_read || self.tool_registry().plugin_binding(name).is_some())
+            && (host_read || explorer || self.tool_registry().plugin_binding(name).is_some())
         {
+            let explorer_wait = if explorer {
+                match crate::adapter::tool_host::agent_tools::brokered_explorer_wait_seconds(&input)
+                {
+                    Ok(wait) => wait,
+                    Err(error) => {
+                        return self.execute_tool_dispatch_with(
+                            name,
+                            input,
+                            ToolDispatchAuditContext {
+                                agent_override,
+                                model_override,
+                                entry_point,
+                                session_context: Some(session_context),
+                                brokered: None,
+                            },
+                            |_| Err(error),
+                        );
+                    }
+                }
+            } else {
+                None
+            };
+            let mut forwarded = input.clone();
+            if explorer && let Some(fields) = forwarded.as_object_mut() {
+                fields.remove("wait_seconds");
+            }
             let cwd = std::env::current_dir()?;
             // The CLI/MCP adapter already resolved an explicit workspace
             // selector to this runtime. Send its logical identity so the
@@ -171,7 +205,7 @@ impl OrbitRuntime {
             let result = crate::runtime::plugin::broker::forward_call_with_status(
                 Path::new(&socket),
                 name,
-                input.clone(),
+                forwarded,
                 &cwd,
                 workspace.as_deref(),
                 broker_entry_point(entry_point),
@@ -199,6 +233,12 @@ impl OrbitRuntime {
                         |_| Err(error),
                     );
                 }
+            };
+            let value = match explorer_wait {
+                Some(seconds) => crate::adapter::tool_host::agent_tools::wait_for_explorer_answer(
+                    self, value, seconds,
+                )?,
+                None => value,
             };
             return Ok(ToolDispatchOutcome {
                 value,

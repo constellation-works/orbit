@@ -126,7 +126,7 @@ pub(super) fn apply_read_only_provider_sandbox(
     provider: &str,
     provider_config: &mut HashMap<String, String>,
 ) -> bool {
-    if provider == "codex" {
+    if orbit_types::workflow::activity_job::explore_provider_has_read_only_mode(provider) {
         provider_config.insert(
             "sandbox".to_string(),
             orbit_types::workflow::activity_job::EXPLORE_PROVIDER_SANDBOX_MODE.to_string(),

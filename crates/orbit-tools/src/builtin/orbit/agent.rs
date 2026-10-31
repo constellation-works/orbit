@@ -106,8 +106,11 @@ impl Tool for OrbitAgentInvokeTool {
                  agent may instead delegate a read-only question when `workflow.explore.enabled` \
                  is on: it gets a sandboxed explorer from the explorer crew pool that reads its \
                  own worktree, cannot write or change Orbit state, and is bounded by per-run \
-                 call, concurrency, timeout and answer-size budgets; every other agent is \
-                 refused, and a refusal never stops the caller's run. Track it with \
+                 call, concurrency, timeout and answer-size budgets. The explorer starts \
+                 beside the caller's sandbox, never inside it; when no explorer crew can run \
+                 under an enforced read-only sandbox on this host the call is refused before \
+                 any run exists, naming the setting to fix, so continue without delegating. \
+                 Every other agent is refused, and a refusal never stops the caller's run. Track it with \
                  `orbit.workflow.run.show`: `agent_invocation.answer` carries the agent's \
                  summary, findings, next_steps, any other result fields and its bounded final \
                  message, and `agent_invocation.progress` its latest message and last activity \

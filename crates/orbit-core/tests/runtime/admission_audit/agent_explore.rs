@@ -207,6 +207,9 @@ fn fixture_with(crews: &str, explore: &str) -> Fixture {
         },
     )
     .expect("seed the shipped job catalog");
+    // Every explorer crew here runs Claude, which has no read-only mode of its
+    // own: only an OS sandbox its executor declares makes it admissible.
+    super::engine_support::seed_executor(&runtime, "claude", native_sandbox());
     git(&repo, &["init", "-q", "-b", "main"]);
     git(&repo, &["config", "user.name", "Orbit Test"]);
     git(&repo, &["config", "user.email", "orbit-test@example.com"]);
@@ -241,6 +244,18 @@ fn fixture_with(crews: &str, explore: &str) -> Fixture {
         cleaned: Arc::new(AtomicBool::new(false)),
         root,
     }
+}
+
+/// The OS sandbox this host has a backend for, which a shipped executor
+/// declares here.
+fn native_sandbox() -> Option<orbit_types::workflow::ExecutorSandboxKind> {
+    use orbit_types::workflow::ExecutorSandboxKind;
+    [
+        ExecutorSandboxKind::LinuxBwrap,
+        ExecutorSandboxKind::MacosSandboxExec,
+    ]
+    .into_iter()
+    .find(|kind| kind.is_available_on(std::env::consts::OS))
 }
 
 #[cfg(unix)]
@@ -1407,6 +1422,48 @@ fn the_switch_off_refuses_every_caller() {
     assert_eq!(explorer_count(&fx.runtime), 0);
 }
 
+/// [ORB-20566] An explorer crew with no enforced read-only boundary was
+/// admitted, and its run then failed at dispatch for the calling agent to
+/// interpret. Admission now leaves such a crew out of the draw and refuses,
+/// once and before any run exists, when no member remains.
+fn an_explorer_pool_without_a_read_only_boundary_is_refused_before_any_run() {
+    use orbit_types::workflow::ExecutorSandboxKind;
+
+    let fx = fixture_with(TWO_EXPLORER_CREWS, BUDGETS);
+    as_managed_agent(&fx.parent.run_id, "agent_implement");
+    let session = agent_session();
+    let cwd = fx.worktree.display().to_string();
+    super::engine_support::seed_executor(&fx.runtime, "claude", Some(ExecutorSandboxKind::Off));
+
+    for crew in [None, Some("haiku")] {
+        let error = refusal(
+            &fx.runtime,
+            AgentInvokeRequest {
+                crew,
+                ..ask(&cwd, &session)
+            },
+        );
+        assert!(
+            matches!(&error, OrbitError::CapabilityDenied(message)
+                if message.contains("read-only")
+                    && message.contains("sandbox: off")
+                    && message.contains("workflow.purpose_crews.explorer")),
+            "the refusal names the missing boundary and the setting an operator fixes \
+             (crew {crew:?}): {error:?}"
+        );
+    }
+    assert_eq!(
+        explorer_count(&fx.runtime),
+        0,
+        "a refused explorer leaves no run to fail at dispatch"
+    );
+
+    // With the executor's OS sandbox back the same call is admitted.
+    super::engine_support::seed_executor(&fx.runtime, "claude", native_sandbox());
+    explore(&fx.runtime, ask(&cwd, &session));
+    assert_eq!(explorer_count(&fx.runtime), 1);
+}
+
 fn other_agents_and_explorers_themselves_are_refused() {
     let fx = fixture(BUDGETS);
     let session = agent_session();
@@ -1741,6 +1798,7 @@ crate::scenario_table!(
     explorer_draws_record_pressure_and_retries_keep_the_original_pool,
     explorer_budgets_refuse_with_the_setting_named,
     the_switch_off_refuses_every_caller,
+    an_explorer_pool_without_a_read_only_boundary_is_refused_before_any_run,
     other_agents_and_explorers_themselves_are_refused,
     the_operator_path_is_unchanged_by_exploration,
     cost_analytics_compare_runs_with_and_without_explorers,

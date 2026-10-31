@@ -24,8 +24,12 @@
 //! The run it submits is the sandboxed explore activity: no trusted-host
 //! admission, the read-only `reviewer` filesystem profile, a read-only tool
 //! allowlist and, where the provider has one, its read-only inner sandbox.
-//! Dispatch refuses the provider before spawn when neither the executor
-//! sandbox nor a read-only inner mode is enforced.
+//! Admission draws only crews that have an executor OS sandbox this host
+//! supports or a provider read-only mode, and refuses before any run exists
+//! when none does; dispatch still refuses the provider before spawn when its
+//! wrapper cannot start and it has no read-only mode [ORB-20566].
+//! A sandboxed caller reaches this admission through its run's plugin broker,
+//! so the explorer's worker starts beside the caller's sandbox, not inside it.
 //! A refusal is an ordinary tool error; the calling worker continues.
 
 use std::path::{Path, PathBuf};
@@ -38,13 +42,14 @@ use orbit_store::contracts::JobRunQuery;
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::activity_job::{
     EXPLORE_CALLER_ACTIVITIES, EXPLORE_JOB, EXPLORE_PARENT_RUN_KEY,
+    explore_provider_has_read_only_mode,
 };
-use orbit_types::workflow::{ActivityCrewPoolMember, CrewPurpose, JobRun};
+use orbit_types::workflow::{ActivityCrewPoolMember, CrewPurpose, ExecutorSandboxKind, JobRun};
 use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::application::contracts::CrewPoolDraw;
+use crate::application::contracts::{CrewCandidate, CrewPoolDraw};
 use crate::application::job::crew_pools::random_crew_ticket;
 use crate::application::job::log_best_effort;
 use crate::application::job::pipeline::{PipelineInvokeResult, PipelineSubmission, input_hash};
@@ -160,7 +165,7 @@ impl OrbitRuntime {
     /// names why. The budget reads and the insert share one lock in the
     /// parent's first existing worktree scratch, independent of which owned
     /// worktree holds `cwd`, so concurrent calls cannot both take its last slot.
-    pub(super) fn submit_explore_run(
+    pub(crate) fn submit_explore_run(
         &self,
         caller: ManagedRunCaller,
         request: AgentInvokeRequest<'_>,
@@ -466,6 +471,35 @@ impl OrbitRuntime {
     /// a weight above 0, else a weighted draw over the pool. With no usable
     /// pool there is no explorer.
     fn explore_crew(&self, requested: Option<&str>) -> Result<CrewPoolDraw, OrbitError> {
+        let (candidates, source) = self.bounded_explore_candidates()?;
+        if let Some(named) = self.canonical_crew_name(requested)? {
+            let selected = candidates
+                .iter()
+                .find(|candidate| candidate.crew.name == named && candidate.weight > 0)
+                .cloned()
+                .ok_or_else(|| {
+                    OrbitError::CapabilityDenied(format!(
+                        "crew '{named}' is not an explorer crew on this host, or cannot run \
+                         read-only here; name one from `{}` or omit `crew`",
+                        CrewPurpose::Explorer.config_key()
+                    ))
+                })?;
+            return self.draw_crew_pool(vec![selected], &source, &mut random_crew_ticket);
+        }
+        self.draw_crew_pool(candidates, &source, &mut random_crew_ticket)
+    }
+
+    /// The explorer pool members that can run on this host under an enforced
+    /// read-only boundary, or the one operator-facing reason none can
+    /// [ORB-20566].
+    ///
+    /// A member qualifies when its provider has a read-only mode of its own,
+    /// or its executor declares an OS sandbox this host has a backend for. A
+    /// member with neither would be refused at dispatch after its run already
+    /// existed, so it is never drawn and a pool of only such members refuses
+    /// here, before anything durable exists. Whether the declared wrapper can
+    /// actually start is still probed at dispatch, which refuses before spawn.
+    fn bounded_explore_candidates(&self) -> Result<(Vec<CrewCandidate>, String), OrbitError> {
         let Some((candidates, source)) =
             self.purpose_pool_candidates(CrewPurpose::Explorer, false)?
         else {
@@ -475,32 +509,61 @@ impl OrbitRuntime {
                 CrewPurpose::Explorer.config_key()
             )));
         };
-        if let Some(named) = self.canonical_crew_name(requested)? {
-            let selected = candidates
-                .iter()
-                .find(|candidate| candidate.crew.name == named && candidate.weight > 0)
-                .cloned()
-                .ok_or_else(|| {
-                    OrbitError::CapabilityDenied(format!(
-                        "crew '{named}' is not an explorer crew on this host; name one from \
-                         `{}` or omit `crew`",
-                        CrewPurpose::Explorer.config_key()
-                    ))
-                })?;
-            return self.draw_crew_pool(vec![selected], &source, &mut random_crew_ticket);
+        let mut unbounded = Vec::new();
+        let mut bounded = Vec::new();
+        for candidate in candidates {
+            match self.explore_boundary_refusal(&candidate.crew.assignment.provider)? {
+                None => bounded.push(candidate),
+                Some(reason) => unbounded.push(format!("crew '{}': {reason}", candidate.crew.name)),
+            }
         }
-        self.draw_crew_pool(candidates, &source, &mut random_crew_ticket)
+        if bounded.is_empty() {
+            return Err(OrbitError::CapabilityDenied(format!(
+                "no explorer crew can run under an enforced read-only sandbox on this host ({}); \
+                 an operator must give an explorer crew's executor a sandbox this host \
+                 supports, or add a crew whose provider has a read-only mode, to `{}`. \
+                 Continue without delegating",
+                unbounded.join("; "),
+                CrewPurpose::Explorer.config_key()
+            )));
+        }
+        Ok((bounded, source))
+    }
+
+    /// Why `provider` has no enforced read-only boundary on this host, or
+    /// `None` when it has one.
+    fn explore_boundary_refusal(&self, provider: &str) -> Result<Option<String>, OrbitError> {
+        if explore_provider_has_read_only_mode(provider) {
+            return Ok(None);
+        }
+        let host_os = std::env::consts::OS;
+        Ok(
+            match self.get_executor_def(provider)?.and_then(|def| def.sandbox) {
+                Some(kind) if kind != ExecutorSandboxKind::Off && kind.is_available_on(host_os) => {
+                    None
+                }
+                Some(ExecutorSandboxKind::Off) => Some(format!(
+                    "executor `{provider}` declares `sandbox: off`, and the provider has no \
+                     read-only mode"
+                )),
+                Some(kind) => Some(format!(
+                    "executor `{provider}` declares `sandbox: {kind}`, which {host_os} cannot \
+                     apply, and the provider has no read-only mode"
+                )),
+                None => Some(format!(
+                    "executor `{provider}` declares no sandbox, and the provider has no \
+                     read-only mode"
+                )),
+            },
+        )
     }
 
     /// Whether an implement or review-repair run is offered read-only
-    /// delegation: the switch is on and an explorer crew can run here. The
-    /// prompt says nothing of delegation otherwise.
+    /// delegation: the switch is on and an explorer crew can run here under
+    /// an enforced read-only boundary. The prompt says nothing of delegation
+    /// otherwise.
     pub(crate) fn explore_delegation_offered(&self) -> bool {
-        self.explore_settings().enabled
-            && matches!(
-                self.purpose_pool_candidates(CrewPurpose::Explorer, false),
-                Ok(Some(_))
-            )
+        self.explore_settings().enabled && self.bounded_explore_candidates().is_ok()
     }
 
     /// Every explorer `parent` delegated, oldest first. Explorers are only

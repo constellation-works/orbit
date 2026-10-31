@@ -450,3 +450,42 @@ fn a_backend_answering_with_a_listener_code_is_audited_once_by_the_broker() {
     assert_eq!(code.as_str(), "plugin_broker_call_failed", "{payload}");
     assert_eq!(payload["retryable"], false, "{payload}");
 }
+
+/// [ORB-20566] A sandboxed agent's explorer submission is run by its broker on
+/// the host, so the explorer's sandbox starts beside the caller's instead of
+/// nested in it, where the kernel refuses a new namespace. The broker used to
+/// refuse it as no tool of its own.
+#[test]
+fn an_explorer_submission_reaches_explorer_admission_for_the_served_run() {
+    let fixture = Fixture::new();
+    let serving = serve(&fixture, fixture.run(&["orbit.agent.invoke"]));
+    let cwd = fixture.worktree.display().to_string();
+
+    let response = serving.call(request(
+        "orbit.agent.invoke",
+        json!({"prompt": "where is the retry budget enforced", "cwd": cwd}),
+        &fixture.worktree,
+    ));
+
+    let message = response["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        !message.contains("is none of these"),
+        "the broker runs explorer submissions: {response}"
+    );
+    assert!(
+        message.contains("workflow.explore.enabled"),
+        "explorer admission decided the call, here because exploration is off: {response}"
+    );
+
+    let waiting = serving.call(request(
+        "orbit.agent.invoke",
+        json!({"prompt": "where", "cwd": cwd, "wait_seconds": 5}),
+        &fixture.worktree,
+    ));
+    assert!(
+        waiting["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("does not wait")),
+        "a wait stays with the caller and never holds the broker connection: {waiting}"
+    );
+}

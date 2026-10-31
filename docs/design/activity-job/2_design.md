@@ -4,7 +4,7 @@ type: design
 title: "Activity / Job — Design"
 owner: codex
 last_updated: 2026-10-30
-last_validated: 2026-10-19
+last_validated: 2026-10-31
 status: Draft
 feature: activity-job
 doc_role: design
@@ -383,7 +383,12 @@ filesystem sandbox on both platforms. `agent_explore_pipeline` creates no
 checkout either: it reuses its calling implement run's worktree read-only under
 the `reviewer` profile when the executor sandbox wraps it. A provider without
 that wrapper starts only in an enforced read-only mode (Codex); otherwise
-dispatch refuses before spawn. It never carries a trusted-host admission. Managed `proc.spawn` inherits its
+dispatch refuses before spawn. Admission draws only explorer crews that have one
+of the two (an executor OS sandbox this host supports, or a provider read-only
+mode) and refuses before any run exists when none does; delegation is not offered
+then. A sandboxed caller's submission goes through its run's plugin broker, so the
+explorer's worker starts on the host beside the caller's sandbox rather than nested
+in it, where neither Bubblewrap nor Seatbelt can start ([ORB-20566]). It never carries a trusted-host admission. Managed `proc.spawn` inherits its
 worker's Bubblewrap/Seatbelt boundary without adding Landlock. The retained
 Landlock read API does not handle agent writes; its production caller is the
 explicit plugin boundary. That boundary creates absent concrete write-grant
