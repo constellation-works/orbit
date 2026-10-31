@@ -76,6 +76,8 @@ export function primeTaskDetail(summary, full, snapshot) {
 
 export function applyUpdatedTask(updatedTask, context) {
   if (!updatedTask || !updatedTask.id) return;
+  // A pending read may contain a snapshot from before this completed update.
+  if (taskDetailLoads.get(updatedTask.id)?.pending) taskDetailLoads.delete(updatedTask.id);
   const previous = taskList(context).find((task) => task && task.id === updatedTask.id);
   const merged = mergeTaskRecord(previous, updatedTask);
   if (!isTaskSummary(merged)) taskDetails.set(merged.id, merged);
@@ -119,7 +121,7 @@ export function loadTaskDetail(task, context) {
         applyUpdatedTask(full, context);
         rerender(context);
       }
-      return full;
+      return taskDetailLoads.get(task.id) === load ? full : (taskDetails.get(task.id) || full);
     },
     (error) => {
       load.pending = false;

@@ -54,6 +54,44 @@ export async function checkTaskSaveRefresh({ openPage, row, pane, waitShown, cap
       await context.close();
     }
   }
+  // Aggregate polling starts a direct full-detail read against a new summary.
+  // Hold its serialized pre-save response while the visible cached detail saves.
+  for (const field of ['description', 'complexity', 'status', 'crew']) {
+    const { page, errors, context } = await openPage({ url: field === 'crew' ? '/?workspace=one#tasks' : '/?workspace=all#tasks', clock: true });
+    await row(page, 'PANEL-6').locator('.title').click();
+    await waitShown(page, 'PANEL-6');
+    if (field === 'status') {
+      await page.evaluate(() => { location.hash = '#tasks/PANEL-6'; });
+      await page.locator('#tasks-main.task-page-mode').waitFor();
+    }
+    const detail = pane(page).locator('#detail-PANEL-6');
+    await detail.locator('.task-status-select').waitFor();
+    await page.evaluate(() => { panelFixture.holdTaskDetail = true; panelFixture.omitBundledDetail = true; });
+    await page.clock.fastForward(30_000);
+    await page.waitForFunction(() => typeof panelFixture.releaseTaskDetail === 'function');
+    if (field === 'description') {
+      const cell = detail.locator('.description-block');
+      await cell.locator('.field-edit').click();
+      await cell.locator('.field-editor-input').fill('Saved description from the operator');
+      await cell.locator('button.action.save').click();
+      await page.waitForFunction(() => panelFixture.patches.some(p => p.body.description));
+    } else {
+      const value = field === 'status' ? 'in-progress' : field === 'crew' ? 'sol' : 'hard';
+      await detail.locator(`.task-${field}-select`).selectOption(value);
+      await page.waitForFunction(field => panelFixture.patches.some(p => p.body[field]), field);
+      await detail.locator(`.${field}-cell .mutation-feedback.success`).waitFor();
+    }
+    await page.evaluate(() => panelFixture.releaseTaskDetail());
+    await page.waitForFunction(() => !panelFixture.holdTaskDetail);
+    // Drain the deferred fetch and its promise callbacks before asserting.
+    await page.clock.runFor(1);
+    const current = await page.evaluate(async () => (await (await fetch('/api/tasks/PANEL-6?workspace=one')).json()));
+    if (field === 'description') assert.match(await detail.innerText(), /Saved description from the operator/);
+    else if (field === 'status') assert.equal(await detail.locator('.status-cell').getAttribute('data-status'), current.status);
+    else assert.equal(await detail.locator(`.task-${field}-select`).inputValue(), current[field]);
+    assert.deepEqual(errors, []);
+    await context.close();
+  }
   fs.writeFileSync(path.join(evidence, 'task-save-refresh-result.json'), JSON.stringify({ cases }, null, 2));
   assert.deepEqual(cases.filter(test => !test.matches), [], 'A pre-save list response must not replace saved detail or its governed transitions');
   results.taskSaveRefresh = true;

@@ -150,7 +150,8 @@ tab you chose. Select a workspace to inspect it on its host.
 - **All workspaces** lists tasks from every served workspace. Automation, the
   auto-drain, settings, and other per-workspace panels are read-only there.
   Task actions still work on a row that names its owning workspace and are
-  sent to that owner. A row without an owner stays read-only.
+  sent to that owner. A row without an owner stays read-only. Review approval
+  requires selecting the owning workspace, both in the row and task detail.
 - Inactive workspaces show as `<name> (unavailable)` and cannot be selected.
 - The URL holds the host, workspace, and time window, so a reload or copied
   link opens the same view.

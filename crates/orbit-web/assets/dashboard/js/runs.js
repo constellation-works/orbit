@@ -1007,7 +1007,7 @@ function runsQueryInput() {
   input.type = "search";
   input.placeholder = "Task or job id";
   input.setAttribute("aria-label", "Filter runs by task or job id");
-  input.title = "A task id such as ORB-15159 filters by task. Any other id filters by job. The address can set both.";
+  input.title = "A task id filters by task. Any other id filters by job. The address can set both.";
   input.autocomplete = "off";
   input.spellcheck = false;
   input.tabIndex = 0;
