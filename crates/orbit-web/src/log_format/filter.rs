@@ -151,6 +151,15 @@ impl Filters {
             .zip(ts)
             .is_some_and(|(floor, ts)| ts < floor)
     }
+
+    /// No target, level, or time bound, so every well-formed record matches and
+    /// a reverse scan cannot stop early. Callers can skip the header parse.
+    pub(super) fn selects_every_record(&self) -> bool {
+        self.target_prefix.is_none()
+            && self.min_level.is_none()
+            && self.since.is_none()
+            && self.until.is_none()
+    }
 }
 
 /// How far out of order the process log's timestamps may run. They are taken

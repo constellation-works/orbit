@@ -258,6 +258,14 @@ enum Scanned {
 /// Judge `raw` against `filters`. A line that is not wanted is rejected from
 /// its timestamp, level and target alone; only a match builds a [`Value`].
 fn scan_line(raw: &str, filters: &Filters) -> Scanned {
+    // An open snapshot asks for every record. Parsing the header first would
+    // scan the line twice and parse a timestamp the filter never uses.
+    if filters.selects_every_record() {
+        return match parse_value(raw) {
+            Some(value) => Scanned::Match(value),
+            None => Scanned::Skip,
+        };
+    }
     // Without a window there is no boundary to find, so a line that never
     // mentions the level it needs is skipped unread.
     if filters.since.is_none()

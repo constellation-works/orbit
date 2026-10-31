@@ -129,7 +129,7 @@ pub(super) async fn get_log(Query(q): Query<LogQuery>) -> Response {
     })
     .await
     {
-        Ok(snapshot) => Json(snapshot).into_response(),
+        Ok(snapshot) => log_snapshot_response(snapshot),
         Err(response) => *response,
     }
 }
@@ -244,13 +244,46 @@ fn read_log_snapshot_from_path(
         },
         agent_cursor.as_ref(),
     );
-    let events = tail.events.iter().map(render_log_event_for_web).collect();
+    let offset = tail.cursor;
+    let events = tail
+        .events
+        .into_iter()
+        .map(render_log_event_for_web)
+        .collect();
     Ok(LogSnapshot {
         cursor,
         events,
-        offset: tail.cursor,
+        offset,
         agent_offset,
     })
+}
+
+fn log_snapshot_response(snapshot: LogSnapshot) -> Response {
+    // serde_json starts at 128 bytes and recopies while the buffer doubles.
+    // The snapshot is mostly the message text, so size the buffer once.
+    let mut bytes = snapshot.cursor.len().saturating_add(128);
+    for event in &snapshot.events {
+        bytes = bytes
+            .saturating_add(event.message_html.len())
+            .saturating_add(event.ts.len())
+            .saturating_add(event.source.len())
+            .saturating_add(event.target.len())
+            .saturating_add(event.code.len())
+            .saturating_add(event.level.len())
+            .saturating_add(80);
+    }
+    let mut buf = Vec::with_capacity(bytes);
+    if serde_json::to_writer(&mut buf, &snapshot).is_ok() {
+        return (
+            [(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json"),
+            )],
+            buf,
+        )
+            .into_response();
+    }
+    Json(snapshot).into_response()
 }
 
 /// A byte position and, for rotation-safe clients, the file it belongs to.
@@ -593,7 +626,7 @@ pub(super) fn read_appended_log_events(
             .finish()
             .and_then(|line| parse_matching_event(&line, filters))
         {
-            events.push((render_log_event_for_web(&event), *offset));
+            events.push((render_log_event_for_web(event), *offset));
         }
     }
 

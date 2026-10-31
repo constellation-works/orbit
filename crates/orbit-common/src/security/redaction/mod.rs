@@ -36,4 +36,5 @@ pub use error::{
 };
 pub use pattern::{
     PatternRedactor, argv_redactor, is_high_confidence_single_token_credential, redact_all,
+    redact_all_owned, redact_all_owned_flagging_html,
 };

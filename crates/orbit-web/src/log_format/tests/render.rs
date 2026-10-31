@@ -24,13 +24,13 @@ fn format_message_html_escapes_dynamic_field_values() {
 #[test]
 fn rendered_log_redacts_secret_tokens_in_lines_and_fields() {
     let secret = "sk-abcdefghijklmnopqrstuvwxyz0123456789";
-    let runner = render_log_event_for_web(&json!({
+    let runner = render_log_event_for_web(json!({
         "timestamp": "2026-04-27T01:00:03Z",
         "level": "INFO",
         "target": "orbit_engine::activity_job::cli_runner::supervisor",
         "fields": {"stream": "stderr", "line": format!("using key {secret} now")}
     }));
-    let generic = render_log_event_for_web(&json!({
+    let generic = render_log_event_for_web(json!({
         "timestamp": "2026-04-27T01:00:03Z",
         "level": "INFO",
         "target": "orbit.other",

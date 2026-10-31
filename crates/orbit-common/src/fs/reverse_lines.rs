@@ -120,6 +120,14 @@ impl<R: Read + Seek> ReverseLines<R> {
                 if fragment.len() > self.max_line_bytes.saturating_sub(self.carry.len()) {
                     self.carry.clear();
                     self.skipping = true;
+                } else if self.carry.is_empty()
+                    && let Some(index) = newline
+                {
+                    // The whole line sits in this block. Copy it forward instead
+                    // of reversing it into `carry` and reversing it back.
+                    let line = fragment.to_vec();
+                    self.block_end = index;
+                    return Ok(Some(line));
                 } else {
                     self.carry.extend(fragment.iter().rev());
                 }

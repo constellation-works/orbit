@@ -3,9 +3,9 @@
 
 use std::{borrow::Cow, sync::OnceLock};
 
-use regex::Regex;
+use regex::{Regex, RegexSet};
 
-use super::env::redact_sensitive_env_text;
+use super::env::redact_sensitive_env_text_cow;
 
 static DEFAULT_PATTERN_REDACTOR: OnceLock<PatternRedactor> = OnceLock::new();
 static ARGV_PATTERN_REDACTOR: OnceLock<PatternRedactor> = OnceLock::new();
@@ -29,6 +29,7 @@ static HIGH_CONFIDENCE_SINGLE_TOKEN_PATTERNS: OnceLock<Vec<Regex>> = OnceLock::n
 #[derive(Clone)]
 pub struct PatternRedactor {
     patterns: Vec<(Regex, &'static str)>,
+    pattern_set: RegexSet,
 }
 
 impl PatternRedactor {
@@ -284,7 +285,12 @@ impl PatternRedactor {
                 "[REDACTED_SECRET]",
             ),
         ];
-        Self { patterns }
+        let mut redactor = Self {
+            patterns,
+            pattern_set: RegexSet::empty(),
+        };
+        redactor.rebuild_pattern_set();
+        redactor
     }
 
     fn compile_argv_secrets() -> Self {
@@ -293,11 +299,29 @@ impl PatternRedactor {
             Regex::new(r"(^|[^\p{L}\p{N}_-])sk-[A-Za-z0-9_\-]+").expect("valid regex"),
             "${1}[REDACTED_API_KEY]",
         ));
+        me.rebuild_pattern_set();
         me
+    }
+
+    fn rebuild_pattern_set(&mut self) {
+        self.pattern_set = RegexSet::new(self.patterns.iter().map(|(pattern, _)| pattern.as_str()))
+            .expect("valid redaction regex set");
     }
 
     /// Apply all patterns in order to `input`.
     pub fn apply_str(&self, input: &str) -> String {
+        self.apply_str_cow(input).into_owned()
+    }
+
+    fn apply_str_cow<'a>(&self, input: &'a str) -> Cow<'a, str> {
+        if !self.pattern_set.is_match(input) {
+            return Cow::Borrowed(input);
+        }
+
+        self.apply_matching_str_cow(input)
+    }
+
+    fn apply_matching_str_cow<'a>(&self, input: &'a str) -> Cow<'a, str> {
         let mut out: Cow<'_, str> = Cow::Borrowed(input);
         for (pattern, replacement) in &self.patterns {
             match pattern.replace_all(&out, *replacement) {
@@ -305,7 +329,7 @@ impl PatternRedactor {
                 Cow::Owned(new) => out = Cow::Owned(new),
             }
         }
-        out.into_owned()
+        out
     }
 }
 
@@ -322,8 +346,158 @@ impl Default for PatternRedactor {
 /// Apply env-value and default pattern redaction in one pass. Use when the
 /// input shape is unknown (knowledge records, log lines, aggregated errors).
 pub fn redact_all(input: &str) -> String {
-    let env_scrubbed = redact_sensitive_env_text(input);
-    default_pattern_redactor().apply_str(&env_scrubbed)
+    if redaction_fast_miss(input).is_some() {
+        return input.to_string();
+    }
+    redact_scanners(input)
+}
+
+/// Redact an owned string, reusing its allocation when it contains no secret.
+pub fn redact_all_owned(input: String) -> String {
+    if redaction_fast_miss(&input).is_some() {
+        return input;
+    }
+    redact_owned_scanners(input)
+}
+
+/// [`redact_all_owned`] plus whether the returned text contains an HTML
+/// metacharacter (`&`, `<`, `>`, `"`, `'`).
+///
+/// A fast miss reports the input exactly, so the flag lets a caller skip a
+/// second scan before escaping. Text that still needs the scanners returns
+/// `true`: the replacement may contain a metacharacter, and the caller checks.
+pub fn redact_all_owned_flagging_html(input: String) -> (String, bool) {
+    if let Some(needs_html_escape) = redaction_fast_miss(&input) {
+        return (input, needs_html_escape);
+    }
+    (redact_owned_scanners(input), true)
+}
+
+fn redact_scanners(input: &str) -> String {
+    let env_scrubbed = redact_sensitive_env_text_cow(input);
+    let redactor = default_pattern_redactor();
+    if redactor.pattern_set.is_match(env_scrubbed.as_ref()) {
+        redactor
+            .apply_matching_str_cow(env_scrubbed.as_ref())
+            .into_owned()
+    } else {
+        env_scrubbed.into_owned()
+    }
+}
+
+fn redact_owned_scanners(input: String) -> String {
+    let env_scrubbed = redact_sensitive_env_text_cow(&input);
+    let redactor = default_pattern_redactor();
+    if redactor.pattern_set.is_match(env_scrubbed.as_ref()) {
+        redactor
+            .apply_matching_str_cow(env_scrubbed.as_ref())
+            .into_owned()
+    } else {
+        match env_scrubbed {
+            Cow::Borrowed(_) => input,
+            Cow::Owned(redacted) => redacted,
+        }
+    }
+}
+
+/// ASCII fragments that the HTTP patterns in [`PatternRedactor::compile_http_default`]
+/// must contain. Matching is impossible when every fragment has a byte absent
+/// from the haystack's ASCII-case-folded alphabet. A fragment is only a
+/// necessary condition: text that merely contains those bytes still goes
+/// through the compiled regex. Non-ASCII haystacks skip this check, because
+/// Unicode case-folding can match an ASCII pattern without those ASCII bytes.
+const PATTERN_TRIGGER_BYTES: &[&[u8]] = &[
+    b"authorization",
+    b"apikey",
+    b"bearer",
+    b"key=",
+    b"sha256:",
+    b"sk-",
+    b"aiza",
+    b"glpat-",
+    b"github_pat_",
+    b"gho_",
+    b"ghp_",
+    b"ghs_",
+    b"ghu_",
+    b"ghr_",
+    b"akia",
+    b"awssecretaccesskey",
+    b"npm_",
+    b"://",
+    b"xoxa-",
+    b"xoxb-",
+    b"xoxp-",
+    b"xoxr-",
+    b"xoxs-",
+    b"orbl_",
+    b"ssh-rsa",
+    b"ssh-dss",
+    b"ssh-ed25519",
+    b"ecdsa-sha2-nistp",
+    b"connecting to",
+    b"authenticating to",
+    b"authenticated to",
+];
+
+/// `Some(needs_html_escape)` when every env value and pattern misses `input`.
+/// `None` when the scanners have to run. Non-ASCII text is `None`: Unicode
+/// case-folding can match an ASCII pattern without the trigger's ASCII bytes.
+/// HTML metacharacters are recorded from the same pass so a caller can escape
+/// without scanning again.
+fn redaction_fast_miss(input: &str) -> Option<bool> {
+    let bytes = input.as_bytes();
+    if bytes.is_empty() {
+        return Some(false);
+    }
+    let mut exact = [0_u64; 4];
+    let mut saw_uppercase = false;
+    for &byte in bytes {
+        if byte >= 128 {
+            return None;
+        }
+        if byte.is_ascii_uppercase() {
+            saw_uppercase = true;
+        }
+        exact[(byte >> 6) as usize] |= 1_u64 << (byte & 63);
+    }
+    let folded = if saw_uppercase {
+        fold_ascii_uppercase(exact)
+    } else {
+        exact
+    };
+    if alphabet_contains_any(&folded, PATTERN_TRIGGER_BYTES)
+        || super::env::sensitive_env_alphabet_possible(&exact)
+    {
+        return None;
+    }
+    Some(alphabet_needs_html_escape(&exact))
+}
+
+/// Copy `A`..=`Z` bits onto `a`..=`z`. Those letters occupy bits 1..=26 of
+/// word 1, and the lowercase forms are 32 positions higher in the same word.
+fn fold_ascii_uppercase(mut alphabet: [u64; 4]) -> [u64; 4] {
+    const UPPER_BITS: u64 = (1_u64 << 27) - 2;
+    alphabet[1] |= (alphabet[1] & UPPER_BITS) << 32;
+    alphabet
+}
+
+fn alphabet_needs_html_escape(alphabet: &[u64; 4]) -> bool {
+    [b'&', b'<', b'>', b'"', b'\'']
+        .into_iter()
+        .any(|byte| alphabet[(byte >> 6) as usize] & (1_u64 << (byte & 63)) != 0)
+}
+
+fn alphabet_contains_any(alphabet: &[u64; 4], needles: &[&[u8]]) -> bool {
+    needles
+        .iter()
+        .any(|needle| alphabet_contains(alphabet, needle))
+}
+
+fn alphabet_contains(alphabet: &[u64; 4], needle: &[u8]) -> bool {
+    needle
+        .iter()
+        .all(|&byte| alphabet[(byte >> 6) as usize] & (1_u64 << (byte & 63)) != 0)
 }
 
 /// Return true when `input` is exactly one high-confidence credential token.

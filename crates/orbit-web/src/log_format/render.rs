@@ -1,7 +1,9 @@
 //! HTML rendering and context shortening for web log events.
 
 use orbit_cmd::log_format::{AGENT_OUTPUT_TARGET, format_code, format_source};
-use orbit_common::security::redaction::redact_all;
+use orbit_common::security::redaction::{
+    redact_all, redact_all_owned, redact_all_owned_flagging_html,
+};
 use serde::Serialize;
 use serde_json::Value;
 use std::path::Path;
@@ -17,28 +19,116 @@ pub(crate) struct RenderedLogEvent {
     pub agent_stdout: bool,
 }
 
-pub(crate) fn render_log_event_for_web(event: &Value) -> RenderedLogEvent {
-    let ts = event
-        .get("timestamp")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
-    let level_raw = event.get("level").and_then(Value::as_str).unwrap_or("INFO");
-    let target = event.get("target").and_then(Value::as_str).unwrap_or("-");
+pub(crate) fn render_log_event_for_web(event: Value) -> RenderedLogEvent {
+    let mut event = match event {
+        Value::Object(event) => event,
+        _ => Default::default(),
+    };
+    let ts = match event.remove("timestamp") {
+        Some(Value::String(timestamp)) => timestamp,
+        _ => String::new(),
+    };
+    let level_raw = match event.remove("level") {
+        Some(Value::String(level)) => level,
+        _ => "INFO".to_string(),
+    };
+    let target = match event.remove("target") {
+        Some(Value::String(target)) => target,
+        _ => "-".to_string(),
+    };
     let fields = event
-        .get("fields")
-        .cloned()
+        .remove("fields")
         .unwrap_or_else(|| Value::Object(Default::default()));
+    let source = format_source(&target, &fields);
+    let code = format_code(&target, &level_raw, &fields);
+    let level = normalize_level(&level_raw).to_string();
+    let agent_stdout = is_agent_relay(&target, &fields)
+        && fields.get("stream").and_then(Value::as_str) == Some("stdout");
+    let message_html = format_message_html_owned(&target, fields);
 
     RenderedLogEvent {
         ts,
-        source: format_source(target, &fields),
-        target: redact_all(target),
-        code: format_code(target, level_raw, &fields),
-        level: normalize_level(level_raw).to_string(),
-        message_html: format_message_html(target, &fields),
-        agent_stdout: is_agent_relay(target, &fields)
-            && fields.get("stream").and_then(Value::as_str) == Some("stdout"),
+        source,
+        target: redact_all_owned(target),
+        code,
+        level,
+        message_html,
+        agent_stdout,
+    }
+}
+
+fn format_message_html_owned(target: &str, fields: Value) -> String {
+    if matches!(
+        target,
+        "orbit.policy.deny"
+            | "orbit.friction.reported"
+            | "orbit.job.step_started"
+            | "orbit.job.step_finished"
+            | "orbit.job.step_retry"
+            | "orbit.job.step_skipped"
+            | "orbit.job.step_denied"
+            | "orbit.job.fanout"
+            | "orbit.job.worker_state"
+            | "orbit.job.loop_iteration"
+            | "orbit.job.loop_did_not_converge"
+    ) || is_agent_relay(target, &fields)
+    {
+        return format_message_html(target, &fields);
+    }
+    format_generic_fields_owned(fields)
+}
+
+fn format_generic_fields_owned(fields: Value) -> String {
+    let Value::Object(mut fields) = fields else {
+        return String::new();
+    };
+    let mut parts = Vec::new();
+    if let Some(Value::String(message)) = fields.remove("message") {
+        parts.push(escape_html_unless_plain(redact_all_owned_flagging_html(
+            message,
+        )));
+    }
+    let cwd = fields.remove("cwd");
+    let job_run_id = fields.remove("job_run_id");
+    for (key, value) in fields {
+        parts.push(format!(
+            "<b>{}</b>={}",
+            escape_html(&key),
+            code_value(redact_field_value_owned(value))
+        ));
+    }
+    for (key, value) in [("cwd", cwd), ("job_run_id", job_run_id)] {
+        if let Some(value) = value {
+            parts.push(format!(
+                "<b>{key}</b>={}",
+                code_value(redact_field_value_owned(value))
+            ));
+        }
+    }
+    match parts.len() {
+        0 => String::new(),
+        1 => parts.pop().unwrap_or_default(),
+        _ => parts.join(" "),
+    }
+}
+
+fn redact_field_value_owned(value: Value) -> String {
+    match value {
+        Value::String(value) => redact_all_owned(value),
+        other => redact_strings_owned(other).to_string(),
+    }
+}
+
+fn redact_strings_owned(value: Value) -> Value {
+    match value {
+        Value::String(value) => Value::String(redact_all_owned(value)),
+        Value::Array(items) => Value::Array(items.into_iter().map(redact_strings_owned).collect()),
+        Value::Object(map) => Value::Object(
+            map.into_iter()
+                .map(|(key, value)| (key, redact_strings_owned(value)))
+                .collect(),
+        ),
+        other => other,
     }
 }
 
@@ -69,31 +159,32 @@ fn redact_strings(value: &Value) -> Value {
 }
 
 pub(crate) fn format_message_html(target: &str, fields: &Value) -> String {
-    let redacted = redact_strings(fields);
-    let fields = &redacted;
-    let getf = |k: &str| fields.get(k).and_then(Value::as_str).unwrap_or("");
+    let getf = |k: &str| {
+        fields
+            .get(k)
+            .and_then(Value::as_str)
+            .map(redact_all)
+            .unwrap_or_default()
+    };
     let getn = |k: &str| -> String {
         fields
             .get(k)
             .map(|v| match v {
-                Value::String(s) => s.clone(),
-                other => other.to_string(),
+                Value::String(s) => redact_all(s),
+                other => redact_strings(other).to_string(),
             })
             .unwrap_or_default()
     };
 
     match target {
         "orbit.policy.deny" => html_pairs(&[
-            ("tool", getf("tool").to_string()),
-            ("path", getf("path").to_string()),
-            ("profile", getf("profile").to_string()),
-            ("rule", getf("matched_rule").to_string()),
+            ("tool", getf("tool")),
+            ("path", getf("path")),
+            ("profile", getf("profile")),
+            ("rule", getf("matched_rule")),
         ]),
         "orbit.friction.reported" => {
-            let mut s = format!(
-                "friction reported on {}",
-                code_value(getf("task_id").to_string())
-            );
+            let mut s = format!("friction reported on {}", code_value(getf("task_id")));
             let agent = getf("agent");
             let model = getf("model");
             if !agent.is_empty() || !model.is_empty() {
@@ -103,18 +194,18 @@ pub(crate) fn format_message_html(target: &str, fields: &Value) -> String {
             let summary = getf("summary");
             if !summary.is_empty() {
                 s.push_str(": ");
-                s.push_str(&escape_html(summary));
+                s.push_str(&escape_html(&summary));
             }
             s
         }
         "orbit.job.step_started" => format!(
             "step {} started [run={}]",
-            code_value(getf("step_id").to_string()),
-            code_value(getf("job_run_id").to_string()),
+            code_value(getf("step_id")),
+            code_value(getf("job_run_id")),
         ),
         "orbit.job.step_finished" => {
-            let step = code_value(getf("step_id").to_string());
-            let outcome = code_value(getf("outcome").to_string());
+            let step = code_value(getf("step_id"));
+            let outcome = code_value(getf("outcome"));
             match fields.get("success").and_then(Value::as_bool) {
                 Some(true) => format!("step {step} finished ok ({outcome})"),
                 Some(false) | None => format!("step {step} finished {outcome}"),
@@ -129,20 +220,20 @@ pub(crate) fn format_message_html(target: &str, fields: &Value) -> String {
         "orbit.job.step_skipped" => {
             format!(
                 "step {} skipped: {}",
-                code_value(getf("step_id").to_string()),
-                escape_html(getf("reason")),
+                code_value(getf("step_id")),
+                escape_html(&getf("reason")),
             )
         }
         "orbit.job.step_denied" => {
             format!(
                 "step {} denied: {}",
-                code_value(getf("step_id").to_string()),
-                escape_html(getf("reason")),
+                code_value(getf("step_id")),
+                escape_html(&getf("reason")),
             )
         }
         "orbit.job.fanout" => html_pairs(&[
-            ("phase", getf("phase").to_string()),
-            ("step", getf("step_id").to_string()),
+            ("phase", getf("phase")),
+            ("step", getf("step_id")),
             ("workers", getn("worker_count")),
             ("collected", getn("collected")),
             ("failed", getn("failed")),
@@ -150,22 +241,22 @@ pub(crate) fn format_message_html(target: &str, fields: &Value) -> String {
         "orbit.job.worker_state" => format!(
             "worker[{}] state={} step={}",
             code_value(getn("worker_index")),
-            code_value(getf("state").to_string()),
-            code_value(getf("step_id").to_string()),
+            code_value(getf("state")),
+            code_value(getf("step_id")),
         ),
         "orbit.job.loop_iteration" => format!(
             "loop {} phase={} step={}",
             code_value(getn("iteration")),
-            code_value(getf("phase").to_string()),
-            code_value(getf("step_id").to_string()),
+            code_value(getf("phase")),
+            code_value(getf("step_id")),
         ),
         "orbit.job.loop_did_not_converge" => format!(
             "loop step={} did not converge after {} iterations",
-            code_value(getf("step_id").to_string()),
+            code_value(getf("step_id")),
             code_value(getn("max_iterations")),
         ),
         _ if is_agent_relay(target, fields) => format_agent_message(fields),
-        _ => format_generic_fields(fields),
+        _ => format_generic_fields(fields, None),
     }
 }
 
@@ -175,7 +266,8 @@ fn is_agent_relay(target: &str, fields: &Value) -> bool {
 
 fn format_agent_message(fields: &Value) -> String {
     let line = fields.get("line").and_then(Value::as_str).unwrap_or("");
-    let event = serde_json::from_str::<Value>(line).ok();
+    let redacted_line = redact_all(line);
+    let event = serde_json::from_str::<Value>(&redacted_line).ok();
     let kind = event
         .as_ref()
         .and_then(|event| event.get("type"))
@@ -207,13 +299,9 @@ fn format_agent_message(fields: &Value) -> String {
     // payload would put provider JSON in the status bar. A line without a
     // kind is the only record of what the agent said, so it stays.
     let context = if kind.is_some() {
-        let mut fields = fields.clone();
-        if let Some(map) = fields.as_object_mut() {
-            map.remove("line");
-        }
-        format_generic_fields(&fields)
+        format_generic_fields(fields, Some("line"))
     } else {
-        format_generic_fields(fields)
+        format_generic_fields(fields, None)
     };
     if !context.is_empty() {
         summary.push(' ');
@@ -222,17 +310,20 @@ fn format_agent_message(fields: &Value) -> String {
     summary
 }
 
-fn format_generic_fields(fields: &Value) -> String {
+fn format_generic_fields(fields: &Value, omitted_field: Option<&str>) -> String {
     let mut parts = Vec::new();
     if let Value::Object(map) = fields {
         if let Some(message) = map.get("message").and_then(Value::as_str) {
-            parts.push(escape_html(message));
+            parts.push(escape_html(&redact_all(message)));
         }
         // Message first; bulky location and run context last, regardless of
         // the tracing serializer's field order.
         for (key, value) in map
             .iter()
-            .filter(|(key, _)| !matches!(key.as_str(), "message" | "cwd" | "job_run_id"))
+            .filter(|(key, _)| {
+                !matches!(key.as_str(), "message" | "cwd" | "job_run_id")
+                    && omitted_field != Some(key.as_str())
+            })
             .chain(
                 ["cwd", "job_run_id"]
                     .into_iter()
@@ -240,8 +331,8 @@ fn format_generic_fields(fields: &Value) -> String {
             )
         {
             let value = match value {
-                Value::String(s) => s.clone(),
-                other => other.to_string(),
+                Value::String(s) => redact_all(s),
+                other => redact_strings(other).to_string(),
             };
             parts.push(format!("<b>{}</b>={}", escape_html(key), code_value(value)));
         }
@@ -311,6 +402,35 @@ fn shorten_context_value(value: &str) -> String {
 }
 
 fn escape_html(raw: &str) -> String {
+    let mut escaped = String::with_capacity(raw.len());
+    for ch in raw.chars() {
+        match ch {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&#39;"),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
+fn escape_html_unless_plain((raw, needs_escape): (String, bool)) -> String {
+    if needs_escape {
+        escape_html_owned(raw)
+    } else {
+        raw
+    }
+}
+
+fn escape_html_owned(raw: String) -> String {
+    if !raw
+        .bytes()
+        .any(|byte| matches!(byte, b'&' | b'<' | b'>' | b'"' | b'\''))
+    {
+        return raw;
+    }
     let mut escaped = String::with_capacity(raw.len());
     for ch in raw.chars() {
         match ch {

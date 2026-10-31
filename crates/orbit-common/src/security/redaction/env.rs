@@ -26,12 +26,17 @@ static SENSITIVE_ENV_VALUES: OnceLock<Vec<String>> = OnceLock::new();
 /// when that encoding differs from the raw text. Audit blobs and tracing
 /// `?` fields contain those encodings, not the live value.
 pub fn redact_sensitive_env_text(raw: &str) -> String {
-    let mut redacted = raw.to_string();
+    redact_sensitive_env_text_cow(raw).into_owned()
+}
+
+pub(super) fn redact_sensitive_env_text_cow(raw: &str) -> Cow<'_, str> {
+    let secrets = sensitive_env_values();
+    let mut redacted = Cow::Borrowed(raw);
     // `redact_all` runs this for every string field of every tracing event, so
     // only a value that actually occurs pays for a `replace` allocation.
-    for secret in sensitive_env_values().iter() {
+    for secret in secrets.iter() {
         if redacted.contains(secret.as_str()) {
-            redacted = redacted.replace(secret.as_str(), REDACTED_ENV_VALUE);
+            redacted = Cow::Owned(redacted.replace(secret.as_str(), REDACTED_ENV_VALUE));
         }
     }
     redacted
@@ -208,6 +213,19 @@ fn sensitive_env_values() -> Cow<'static, [String]> {
     } else {
         Cow::Borrowed(cached_sensitive_env_values())
     }
+}
+
+/// Whether any cached sensitive value could occur in a haystack whose bytes
+/// are exactly the set in `alphabet` (`byte >> 6` selects the word, `byte & 63`
+/// the bit). A value with one missing byte cannot be a substring, so the
+/// caller skips scanning. A value whose bytes are all present still needs
+/// [`redact_sensitive_env_text_cow`], which checks order.
+pub(super) fn sensitive_env_alphabet_possible(alphabet: &[u64; 4]) -> bool {
+    sensitive_env_values().iter().any(|secret| {
+        secret
+            .bytes()
+            .all(|byte| alphabet[(byte >> 6) as usize] & (1_u64 << (byte & 63)) != 0)
+    })
 }
 
 /// Decide whether a sensitive-named env value is eligible for substitution
