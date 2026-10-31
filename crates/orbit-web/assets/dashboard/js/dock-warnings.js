@@ -61,9 +61,19 @@ function warningTime(ts) {
   return { text: formatClock(d, { zone: false }), title: formatDateTime(d, { seconds: true }) };
 }
 
+// Stable identity for one rendered row. `|` is safe as a joiner because every
+// part is encoded, so two entries share a key exactly when they show the same
+// warning; focus and expansion follow the key across repaints.
+function warningKey(entry) {
+  return [entry.level, entry.ts, entry.source, entry.message]
+    .map((part) => encodeURIComponent(part || ""))
+    .join("|");
+}
+
 function renderRow(entry) {
   const warn = entry.level === "warn";
   const row = el("li", { class: `dock-warning ${warn ? "warn" : "note"}` });
+  row.dataset.warningKey = warningKey(entry);
   const { text, title } = warningTime(entry.ts);
   const source = entry.reveal
     ? el("button", { type: "button", class: "dock-warning-source link", text: entry.source || "Log", title: "Show this line in the Log" })
@@ -97,18 +107,46 @@ function renderDockWarnings() {
   const box = $("dock-warnings");
   if (box) {
     const entries = dockWarningEntries();
-    // A repaint keeps the rows the operator opened, keyed by their text.
-    const open = new Set([...box.querySelectorAll(".dock-warning.expanded")].map((row) => row.title));
+    // A repaint keeps the rows the operator opened, keyed by warning identity.
+    const open = new Set(
+      [...box.querySelectorAll(".dock-warning.expanded")].map((row) => row.dataset.warningKey || row.title),
+    );
+    // Keyboard focus lives on a row or its Log action, and clearing the box
+    // drops it to the page body; hand it to the rebuilt counterpart instead.
+    const active = document.activeElement;
+    const focusedRow = active instanceof Element ? active.closest(".dock-warning") : null;
+    const focusInBox = focusedRow && box.contains(focusedRow)
+      ? {
+        key: focusedRow.dataset.warningKey || focusedRow.title,
+        onAction: active !== focusedRow,
+        index: [...box.children].indexOf(focusedRow),
+      }
+      : null;
     box.textContent = "";
     for (const entry of entries) {
       const row = renderRow(entry);
-      if (open.has(row.title)) {
+      if (open.has(row.dataset.warningKey)) {
         row.classList.add("expanded");
         row.setAttribute("aria-expanded", "true");
       }
       box.append(row);
     }
     box.hidden = entries.length === 0;
+    if (focusInBox) {
+      const survivor = [...box.children].find((row) => row.dataset.warningKey === focusInBox.key);
+      if (survivor) {
+        const target = focusInBox.onAction
+          ? survivor.querySelector("button.dock-warning-source") || survivor
+          : survivor;
+        target.focus({ preventScroll: true });
+      } else if (box.children.length > 0) {
+        // The focused warning is gone: stay nearby on the row that took its place.
+        box.children[Math.min(focusInBox.index, box.children.length - 1)].focus({ preventScroll: true });
+      } else {
+        // No warnings remain and the box hides: fall back to the dock's selected tab.
+        document.querySelector('#dock-mode-toggle .dock-seg.on')?.focus({ preventScroll: true });
+      }
+    }
   }
   for (const callback of listeners) callback();
 }
