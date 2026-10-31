@@ -10,10 +10,10 @@
 //!
 //! This is an **accident guard, not a security boundary**. Every agent on a
 //! development box runs as the same OS user and can bypass Orbit entirely with
-//! `git`, `rm`, or a direct write to the data root. Nothing here changes that,
-//! and no design that pretends otherwise — a password, a token, a keychain —
-//! belongs here: it would buy no protection while inviting the surrounding
-//! rails to be relaxed on the strength of a boundary that does not exist.
+//! `git`, `rm`, or a direct write to the data root. Application credentials
+//! identify exact host-issued consents within this guard; they do not protect
+//! against arbitrary same-user code. No surrounding sandbox or authority check
+//! may be relaxed because a credential exists.
 //!
 //! The goal is narrower and achievable: unintended destruction fails loudly
 //! and leaves a record.
@@ -45,8 +45,7 @@
 //! SSH is decided the same way as a local one: the destination honors the
 //! authority in the argv it was started with, because an SSH login to a machine
 //! is ownership of it [ORB-12564]. The registry remains the only
-//! operation-specific
-//! authorization statement Orbit makes, and its answer is surface-independent:
+//! capability-specific authorization statement Orbit makes, and its answer is surface-independent:
 //! the same answer for an MCP call, a CLI `tool run`, the dashboard, and the
 //! deterministic dispatcher.
 //!
@@ -61,6 +60,14 @@
 //! guardrail that pins every governed tool's placement is
 //! `crates/orbit-tools/src/builtin/orbit/tests/authorization.rs`, which lives
 //! in the lowest crate that can see both axes at once [ORB-10478].
+//!
+//! # Application consent
+//!
+//! Host-issued application sessions are a separate, exact-call authority,
+//! verified against live workspace, input, digest and consent state by the
+//! runtime before capability resolution. They never add Operator, Runner or
+//! Agent grants to this catalog. Ordinary callers keep every denial here;
+//! self-declared application metadata contributes nothing to their envelope.
 //!
 //! # Layering
 //!
@@ -78,19 +85,20 @@ mod grants;
 
 pub use caller::{CallerCapabilities, CallerEnvelope, CallerProvenance, CapabilityResolution};
 pub use catalog::{
-    DASHBOARD_AUTO_DRAIN_APPROVE_PROPOSED, DASHBOARD_AUTO_DRAIN_AUTO_FIX,
-    DASHBOARD_AUTO_DRAIN_COMPLETE, DASHBOARD_AUTO_DRAIN_MODE, DASHBOARD_AUTO_DRAIN_STOP,
-    DASHBOARD_AUTO_TASK_MINT, DASHBOARD_AUTO_TASK_SCHEDULE, DASHBOARD_AUTO_TASK_TOGGLE,
-    DASHBOARD_CLAIM_RECOVER, DASHBOARD_CLOCK_CADENCE, DASHBOARD_CLOCK_SERVICE,
-    DASHBOARD_CONFIG_SET, DASHBOARD_EXPERIMENT_CONCLUDE, DASHBOARD_EXPERIMENT_CREATE,
-    DASHBOARD_EXPERIMENT_START, DASHBOARD_EXPERIMENT_UPDATE, DASHBOARD_HANDOFF_APPROVE,
-    DASHBOARD_HANDOFF_RETRY, DASHBOARD_HANDOFF_REVOKE, DASHBOARD_HOST_EDIT, DASHBOARD_HOST_FORWARD,
-    DASHBOARD_JOB_RUN, DASHBOARD_LEASE_WRITE, DASHBOARD_PLUGIN_DISABLE, DASHBOARD_PLUGIN_ENABLE,
-    DASHBOARD_ROUTINE_TOGGLE, DASHBOARD_ROUTINE_TRIGGER, DASHBOARD_TASK_PILOT_ADMISSION,
-    DASHBOARD_TASK_POST_DEPLOY, DASHBOARD_TASK_REQUEUE, DASHBOARD_TASK_SETTLE_MERGED,
-    DESKTOP_TASK_COMPLETE, DESKTOP_TASK_EDIT, GOVERNED_OPERATIONS, GovernedOperation,
-    OperationSurface, PLUGIN_TOOL_AGENT_CALLABLE, PLUGIN_TOOL_MUTATING, PLUGIN_TOOL_READ_ONLY,
-    TASK_GRANT_TOOLS_OPERATION_ID, governed_command, governed_plugin_tool, governed_tool,
+    APPLICATION_BUILTIN_OPERATIONS, DASHBOARD_AUTO_DRAIN_APPROVE_PROPOSED,
+    DASHBOARD_AUTO_DRAIN_AUTO_FIX, DASHBOARD_AUTO_DRAIN_COMPLETE, DASHBOARD_AUTO_DRAIN_MODE,
+    DASHBOARD_AUTO_DRAIN_STOP, DASHBOARD_AUTO_TASK_MINT, DASHBOARD_AUTO_TASK_SCHEDULE,
+    DASHBOARD_AUTO_TASK_TOGGLE, DASHBOARD_CLAIM_RECOVER, DASHBOARD_CLOCK_CADENCE,
+    DASHBOARD_CLOCK_SERVICE, DASHBOARD_CONFIG_SET, DASHBOARD_EXPERIMENT_CONCLUDE,
+    DASHBOARD_EXPERIMENT_CREATE, DASHBOARD_EXPERIMENT_START, DASHBOARD_EXPERIMENT_UPDATE,
+    DASHBOARD_HANDOFF_APPROVE, DASHBOARD_HANDOFF_RETRY, DASHBOARD_HANDOFF_REVOKE,
+    DASHBOARD_HOST_EDIT, DASHBOARD_HOST_FORWARD, DASHBOARD_JOB_RUN, DASHBOARD_LEASE_WRITE,
+    DASHBOARD_PLUGIN_DISABLE, DASHBOARD_PLUGIN_ENABLE, DASHBOARD_ROUTINE_TOGGLE,
+    DASHBOARD_ROUTINE_TRIGGER, DASHBOARD_TASK_PILOT_ADMISSION, DASHBOARD_TASK_POST_DEPLOY,
+    DASHBOARD_TASK_REQUEUE, DASHBOARD_TASK_SETTLE_MERGED, DESKTOP_TASK_COMPLETE, DESKTOP_TASK_EDIT,
+    GOVERNED_OPERATIONS, GovernedOperation, OperationSurface, PLUGIN_TOOL_AGENT_CALLABLE,
+    PLUGIN_TOOL_MUTATING, PLUGIN_TOOL_READ_ONLY, TASK_GRANT_TOOLS_OPERATION_ID, governed_command,
+    governed_plugin_tool, governed_tool,
 };
 pub use decision::{AuthorizationDenial, authorize};
 pub use env::{OPERATOR_OVERRIDE_ENV, agent_context_declared, operator_override_active};

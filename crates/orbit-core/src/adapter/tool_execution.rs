@@ -115,6 +115,18 @@ impl OrbitRuntime {
         capability_enforcement: CapabilityEnforcement,
     ) -> Result<Value, OrbitError> {
         self.bind_worker_session(&mut tool_context.session_context)?;
+        let application = self.admit_application_call(
+            name,
+            &input,
+            &mut tool_context.session_context,
+            capability_enforcement,
+        )?;
+        if application
+            && let Some(output) =
+                self.execute_application_builtin(name, &input, &tool_context.session_context)?
+        {
+            return Ok(output);
+        }
         if !self.tool_registry().has(name) {
             self.ensure_tool_agent_facing_with_context(name, &tool_context)?;
         }

@@ -1,6 +1,11 @@
 //! Domain contracts for this Orbit types module.
 
+mod application;
 mod definition;
+pub use application::{
+    ApplicationConsent, ApplicationConsentRequest, ApplicationInvocation, ApplicationOperation,
+    ApplicationPluginConsent, ApplicationScope,
+};
 mod error;
 mod invocation;
 mod mcp_rules;

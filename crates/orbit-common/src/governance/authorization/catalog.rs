@@ -63,6 +63,11 @@ impl GovernedOperation {
 /// tool chokepoint checks it beside the write's own row.
 pub const TASK_GRANT_TOOLS_OPERATION_ID: &str = "orbit.task.grant_tools";
 
+/// Closed built-in application-consent surface. These operations require
+/// exact host-verified scope and the ordinary domain lifecycle checks, without
+/// granting any capability. Every other built-in keeps its existing floor.
+pub const APPLICATION_BUILTIN_OPERATIONS: &[&str] = &["orbit.task.update", "orbit.decision.answer"];
+
 /// Versioned routine-definition toggle exposed by the dashboard.
 pub const DASHBOARD_ROUTINE_TOGGLE: GovernedOperation = GovernedOperation {
     id: "routine.toggle",
@@ -432,6 +437,24 @@ pub fn governed_plugin_tool(mutating: bool, agent_callable: bool) -> &'static Go
 ///    — only the chokepoint can see the process envelope a CLI caller's
 ///    authority actually lives in.
 pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
+    GovernedOperation {
+        id: "application consent",
+        surface: OperationSurface::CliCommand,
+        allowed: &[McpCapability::Operator],
+        rationale: "issuing application credentials requires explicit operator consent",
+    },
+    GovernedOperation {
+        id: "application rotate",
+        surface: OperationSurface::CliCommand,
+        allowed: &[McpCapability::Operator],
+        rationale: "rotating application authority requires the operator",
+    },
+    GovernedOperation {
+        id: "application revoke",
+        surface: OperationSurface::CliCommand,
+        allowed: &[McpCapability::Operator],
+        rationale: "revoking application authority requires the operator",
+    },
     // Identified people and agents may coordinate paths. This is an identity
     // floor, while owner placement and lease policy constrain the operation.
     GovernedOperation {

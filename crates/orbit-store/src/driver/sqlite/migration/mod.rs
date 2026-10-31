@@ -241,5 +241,7 @@ pub fn pending_schema_migrations_after(current_version: u32) -> Vec<PendingSchem
         .collect()
 }
 
+mod application_consent;
 #[cfg(test)]
 mod tests;
+use application_consent::apply_application_consent;

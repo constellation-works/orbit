@@ -210,7 +210,7 @@ fn dry_run_reports_the_same_plugin_callback_allowlist_refusal_as_dispatch() {
     std::fs::write(
         &record,
         json!({
-            "schema_version": 3, "plugin": "ungranted", "version": "0.1.0",
+            "schema_version": 4, "plugin": "ungranted", "version": "0.1.0",
             "manifest_digest": "0".repeat(64), "effective_tools": [],
             "token": token, "pid": pid, "starttime": starttime,
         })
