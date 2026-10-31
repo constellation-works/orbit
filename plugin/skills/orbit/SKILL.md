@@ -88,3 +88,9 @@ new task with a `regression_from` relation. Only an operator's
 `rejected` are not sources). `rejected` returns to `backlog` or
 `in-progress`. Follow supported transitions and the assigned workflow; agents
 have no lifecycle force override.
+
+When you work a task directly in an interactive session instead of through a
+drain, set its `context_files` to the files the work will touch as you claim
+it, and keep them current as the change grows. Drains schedule around a
+task's `context_files`, so an interactive claim without them collides with
+queued work.
