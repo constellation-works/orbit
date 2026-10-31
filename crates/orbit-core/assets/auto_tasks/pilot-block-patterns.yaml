@@ -117,9 +117,10 @@ template:
       (`outcome=escalated` and the diagnosis). The episode starts at the history entry
       whose `to_status` is `blocked`. The run id is `decision.run_id` on that history
       entry when it is present, otherwise a `run_id=` token in the entry `note`, otherwise
-      the task's `job_run_id`. Read that run with `orbit run show`. For every such
-      episode, note what ended it: a later requeue that delivered, an operator applying a
-      proposed option, a human edit, a rejection, or nothing yet.
+      the task's `job_run_id`. Read that run with
+      `orbit run show <run-id> --no-reconcile --json`. For every such episode, note what
+      ended it: a later requeue that delivered, an operator applying a proposed option, a
+      human edit, a rejection, or nothing yet.
 
     ## 3. Group by cause and route to the source
 
