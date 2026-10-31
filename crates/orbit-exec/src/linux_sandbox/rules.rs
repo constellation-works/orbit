@@ -38,7 +38,16 @@ pub(super) fn mount_paths_for_rule(
             "linux-bwrap modify rule `{rule}` has no existing path to mount"
         )));
     }
-    Ok(matches.iter().map(|entry| entry.target.clone()).collect())
+    let paths: Vec<PathBuf> = matches
+        .iter()
+        .filter_map(|entry| entry.target.resolved().map(Path::to_path_buf))
+        .collect();
+    if require_match && paths.is_empty() {
+        return Err(OrbitError::InvalidInput(format!(
+            "linux-bwrap modify rule `{rule}` matches only dangling links, so it has no existing path to mount"
+        )));
+    }
+    Ok(paths)
 }
 
 pub(super) fn is_narrow_reallow(prior_rules: &[String], rule: &str) -> bool {
@@ -111,12 +120,16 @@ fn deny_has_nested_reallow(modify: &[String], deny_index: usize) -> bool {
 }
 
 /// Every existing path matched by any of `rules`, from one walk per search
-/// root.
+/// root. A matched dangling link contributes its own entry: nothing exists
+/// behind it to resolve, and naming the entry keeps it excluded.
 pub(super) fn expand_rules(rules: &[String]) -> Result<BTreeSet<PathBuf>, OrbitError> {
     Ok(expand_each_rule(rules.iter().map(String::as_str))?
         .into_values()
         .flatten()
-        .map(|entry| entry.target)
+        .map(|entry| match entry.target {
+            MatchTarget::Resolved(target) => target,
+            MatchTarget::Dangling(_) => entry.entry,
+        })
         .collect())
 }
 
@@ -124,7 +137,29 @@ pub(super) fn expand_rules(rules: &[String]) -> Result<BTreeSet<PathBuf>, OrbitE
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct GlobMatch {
     pub entry: PathBuf,
-    pub target: PathBuf,
+    pub target: MatchTarget,
+}
+
+/// What a matched directory entry resolves to.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum MatchTarget {
+    /// The entry's canonical path.
+    Resolved(PathBuf),
+    /// The entry is a symlink whose target does not exist; this holds the
+    /// link's own contents. It grants and mounts nothing. A later target
+    /// creation or retarget changes the match, so the post-run guard still
+    /// sees it as a new match.
+    Dangling(PathBuf),
+}
+
+impl MatchTarget {
+    /// The canonical path, or `None` for a dangling link.
+    pub(super) fn resolved(&self) -> Option<&Path> {
+        match self {
+            Self::Resolved(path) => Some(path),
+            Self::Dangling(_) => None,
+        }
+    }
 }
 
 pub(super) type GlobMatches<'a> = BTreeMap<&'a str, BTreeSet<GlobMatch>>;
@@ -170,16 +205,14 @@ pub(super) fn expand_each_rule<'a>(
                 ))
             })?;
             // Canonicalize a candidate at most once, however many rules it hits.
-            let mut canonical: Option<PathBuf> = None;
+            let mut canonical: Option<MatchTarget> = None;
             for (rule, regex, display_root) in &matchers {
                 if regex.is_match(&rendered)
                     || regex.is_match(&render_glob_path(&display_root.join(relative)))
                 {
                     let path = match &canonical {
                         Some(path) => path,
-                        None => {
-                            canonical.insert(canonical_existing(&candidate, "denyModify match")?)
-                        }
+                        None => canonical.insert(match_target(&candidate)?),
                     };
                     matches.entry(rule).or_default().insert(GlobMatch {
                         entry: candidate.clone(),
@@ -190,6 +223,26 @@ pub(super) fn expand_each_rule<'a>(
         }
     }
     Ok(matches)
+}
+
+/// Resolve a glob match. Only a symlink whose target is missing (`NotFound`
+/// on resolution, with the link itself present) is dangling; every other
+/// resolution failure still fails the expansion.
+fn match_target(candidate: &Path) -> Result<MatchTarget, OrbitError> {
+    let error = match candidate.canonicalize() {
+        Ok(path) => return Ok(MatchTarget::Resolved(path)),
+        Err(error) => error,
+    };
+    if error.kind() == std::io::ErrorKind::NotFound
+        && std::fs::symlink_metadata(candidate).is_ok_and(|metadata| metadata.is_symlink())
+        && let Ok(link) = std::fs::read_link(candidate)
+    {
+        return Ok(MatchTarget::Dangling(link));
+    }
+    Err(OrbitError::InvalidInput(format!(
+        "denyModify match `{}` must exist and resolve canonically: {error}",
+        candidate.display()
+    )))
 }
 
 fn static_prefix(rule: &str) -> PathBuf {
