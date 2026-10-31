@@ -3,9 +3,9 @@ summary: "MCP Session Context — Design"
 type: design
 title: "MCP Session Context — Design"
 owner: codex
-last_updated: 2026-10-21
-last_validated: 2026-10-19
-status: Accepted
+last_updated: 2026-10-31
+last_validated: 2026-10-31
+status: Implemented
 feature: mcp-session-context
 doc_role: design
 tags: ["mcp-session-context", "mcp", "workspace", "audit"]
@@ -29,6 +29,12 @@ related_artifacts: []
 | caller_ip | Accepting SSH environment | Best-effort first field of SSH_CONNECTION |
 | trace_id | MCP adapter | Fresh correlation ID for one tools/call |
 | orchestrator | The server's launch binding | Crew name attributed to tasks the session creates; never an authorization or execution input |
+| effective_capabilities | Serving process startup mode | Complete session grants used by Core authorization and tools/list filtering; never client-supplied |
+| origin_session_id | MCP adapter | Server-minted ID stable for one MCP session and used for audit correlation |
+| mcp_call_id | Federated call boundary | Destination/tool/request correlation ID used when a remote outcome is unknown [ORB-14656] |
+| worker_invocation | Managed Orbit runtime | Validated task/claim/run binding carried through the runtime session, not editable job input [ORB-12496] |
+| worker_host_call | Runtime or destination SSH launch path | Marks an internal worker projection; initialize metadata and tool arguments cannot set it |
+| self_reported_actor | Initialize metadata | Normalized self-claim for audit only; it does not authenticate the caller |
 
 Clients cannot populate trusted fields through initialize metadata or tool JSON. Initialize accepts a workspace selector under _meta.orbit.workspace (plus the compatibility spelling _meta["orbit.workspace"]) and an untrusted self-reported actor claim; caller/process/transport/correlation fields remain server-owned.
 
@@ -46,7 +52,7 @@ Remote mode starts one child:
 
 SSH inherits stdin, stdout, and stderr. Orbit does not parse or rewrite MCP in the proxy. The hidden caller argument marks the accepting session as ssh-mcp; its value remains audit metadata. The remote server derives its own process identity and may record the source address exposed by SSH_CONNECTION.
 
-There is no TCP listener or reusable network session in v1.
+The stdio modes do not use a TCP listener or a reusable network session. The separate `orbit mcp listen` command accepts TCP connections, creates an independent `OrbitToolServer` session for each peer, and records the peer address as `caller_ip`; it binds loopback by default and supplies no authentication policy [ORB-10690] [ORB-10806]. The federated stdio mux is another distinct mode: it routes workspace calls to configured local or SSH destinations and routes task IDs through the configured task-prefix table [ORB-11009].
 
 ## 3. Workspace resolution
 
@@ -61,7 +67,7 @@ Steps 2 and 3 are one session field, resolved once at initialize: an announced w
 
 Process cwd is not an MCP fallback. The server resolves the selector against its registry, opens the selected local runtime, writes the resolved workspace_id into context, and normalizes an explicit workspace argument to the selected checkout path before Core dispatch.
 
-For Codex, `orbit mcp init` writes `env_vars` on the local `[mcp_servers.orbit]` entry. The list forwards the managed binding names `ORBIT_MANAGED_RUN_CONTEXT`, `ORBIT_RUN_ID`, `ORBIT_SESSION_ID`, `ORBIT_WORKSPACE`, and `ORBIT_REGISTRY_ROOT`, the agent identity names `ORBIT_AGENT_NAME` and `ORBIT_AGENT_MODEL`, and the policy names `ORBIT_TASK_ACTOR_KIND`, `ORBIT_ACTIVITY_TOOLS`, `ORBIT_ACTIVITY_TOOL_POLICY`, `ORBIT_ACTIVITY_TOOLS_DENY`, `ORBIT_ACTIVITY_NAME`, `ORBIT_ACTIVITY_DEADLINE_UNIX_MS`, `ORBIT_ACTIVITY_FS_PROFILE`, `ORBIT_PROC_ALLOWED_PROGRAMS`, `ORBIT_PROC_PROGRAM_POLICY`, and `ORBIT_PROC_DISALLOWED_PROGRAMS`, the timeout and build-budget names `ORBIT_ACTIVITY_TIMEOUT_MS` and `ORBIT_ACTIVITY_BUILD_BUDGET_DIR`, and the plugin broker locator `ORBIT_PLUGIN_BROKER`, from Codex's environment. The broker locator names a socket and grants nothing: the broker authenticates each connection by the kernel's peer identity against the run it serves, so forwarding it lets a nested server reach brokered tools (the claimed before-PR review bridge among them) without widening authority. A managed Codex launch overrides that list and supplies a complete enabled orbit MCP entry: `command` is the selected `ORBIT_BIN` and `args` are `mcp serve`. This works when the user's Codex config has no orbit entry and does not put managed envelope values in argv. A job run exports `ORBIT_RUN_ID`; a source inspection exports `ORBIT_SESSION_ID` instead. Either identity, together with the managed marker, allows `ORBIT_WORKSPACE` to bind the nested server. The forwarded identity and activity names make the nested server record agent attribution and use the same tool policy (allowlist, or deny-mode disallow list), filesystem profile, process program policy, and `proc.spawn` timeout budget (the activity's deadline) as the managed run. The selector remains subject to registry resolution and per-call override.
+For Codex, `orbit mcp init` writes `env_vars` on the local `[mcp_servers.orbit]` entry. The list forwards the managed binding names `ORBIT_MANAGED_RUN_CONTEXT`, `ORBIT_RUN_ID`, `ORBIT_SESSION_ID`, `ORBIT_WORKSPACE`, and `ORBIT_REGISTRY_ROOT`, the agent identity names `ORBIT_AGENT_NAME` and `ORBIT_AGENT_MODEL`, and the policy names `ORBIT_TASK_ACTOR_KIND`, `ORBIT_ACTIVITY_TOOLS`, `ORBIT_ACTIVITY_TOOL_POLICY`, `ORBIT_ACTIVITY_TOOLS_DENY`, `ORBIT_ACTIVITY_NAME`, `ORBIT_ACTIVITY_DEADLINE_UNIX_MS`, `ORBIT_ACTIVITY_FS_PROFILE`, `ORBIT_PROC_ALLOWED_PROGRAMS`, `ORBIT_PROC_PROGRAM_POLICY`, and `ORBIT_PROC_DISALLOWED_PROGRAMS`, the timeout and build-budget names `ORBIT_ACTIVITY_TIMEOUT_MS` and `ORBIT_ACTIVITY_BUILD_BUDGET_DIR`, and the plugin broker locator `ORBIT_PLUGIN_BROKER`, from Codex's environment [ORB-13268] [ORB-13269] [ORB-13315] [ORB-13316] [ORB-13317]. The broker locator names a socket and grants nothing: the broker authenticates each connection by the kernel's peer identity against the run it serves, so forwarding it lets a nested server reach brokered tools (the claimed before-PR review bridge among them) without widening authority. A managed Codex launch overrides that list and supplies a complete enabled orbit MCP entry: `command` is the selected `ORBIT_BIN` and `args` are `mcp serve`. This works when the user's Codex config has no orbit entry and does not put managed envelope values in argv. A job run exports `ORBIT_RUN_ID`; a source inspection exports `ORBIT_SESSION_ID` instead. Either identity, together with the managed marker, allows `ORBIT_WORKSPACE` to bind the nested server. The forwarded identity and activity names make the nested server record agent attribution and use the same tool policy (allowlist, or deny-mode disallow list), filesystem profile, process program policy, and `proc.spawn` timeout budget (the activity's deadline) as the managed run. The selector remains subject to registry resolution and per-call override.
 
 Global tools do not require a workspace selector.
 
@@ -79,6 +85,8 @@ Because tools/list is answered per session, the injected selector documents the 
 
 For a plugin tool that does not declare `workspace` in its input schema, the MCP adapter moves that argument into the per-call routing context before dispatch. The plugin receives only its declared input. If the plugin itself declares `workspace`, the adapter preserves it in the plugin input.
 
+The host selects toolsets at startup with `--toolset` or `machine.mcp.toolsets`; the default exposes tasks, workflows, runs, automation and decision tools, while optional sets include leases, experiments, analytics, decision-channel and agent-invoke. A call outside the selected set is refused as disabled. The default omits `agent-invoke`; managed explorer runs can opt in when configured [ORB-20234] [ORB-20382] [ORB-20414].
+
 ## 5. Core dispatch and audit
 
 The server passes a resolved workspace call to Core through execute_tool_command_dispatch_with_session_context. Global calls use Core's global in-process dispatch seam. Unknown or unadvertised raw names use that same global seam and produce one denied row. Every tools/call therefore crosses one Core audit boundary exactly once with its per-call context.
@@ -93,6 +101,27 @@ Model-authored fields with names resembling audit fields do not override the sup
 
 MCP performs no lease validation, placement routing, broker negotiation, or Orbit principal authentication.
 
-Managed activity enforcement still depends on the provider CLI forwarding its environment into the nested MCP server. A host-held invocation binding would remove that dependency; it is a separate authorization change.
+Claimed worker identity is now carried through a runtime-owned invocation binding, which provides the task/claim/run fence independently of editable job input [ORB-12496]. The nested MCP server still depends on the provider CLI forwarding activity policy, filesystem profile and process-policy environment, along with the managed workspace and attribution values [ORB-13268] [ORB-13269] [ORB-13315] [ORB-13316] [ORB-13317]. Replacing that policy propagation with host-owned state would be a separate authorization change.
 
 Capability authorization is no longer deferred: Core's tool chokepoint authorizes a governed operation from the session's effective capabilities alone, and the serving process decides those once at startup — `orbit mcp serve` grants agent, `orbit mcp serve --operator` grants agent and operator ([ORB-10916], [ORB-10927]). McpCapability is still not MCP exposure metadata; `tools/list` is filtered by each session's effective capabilities, and calls remain subject to authorization when made.
+
+## Task References
+
+- [ORB-11117] — bound managed MCP sessions to the resolved workspace selector.
+- [ORB-10916] — made Core authorization use the session's effective capabilities.
+- [ORB-10927] — added MCP capability filtering while retaining call-time authorization.
+- [ORB-10690] — added the explicit TCP MCP listener.
+- [ORB-10806] — added the policy-free `orbit mcp listen` command.
+- [ORB-11009] — established federated MCP routing and task-prefix lookup.
+- [ORB-13268] — forwarded managed-run identity and activity policy into Codex MCP sessions.
+- [ORB-13269] — enforced the activity tool allowlist and actor kind in Codex MCP sessions.
+- [ORB-13315] — added the deny-list tool policy and its MCP environment mode.
+- [ORB-13316] — moved shipped activities to the deny-list tool policy.
+- [ORB-13317] — added process-program deny-list policy for shipped activities.
+- [ORB-12496] — carried runtime-owned worker invocation bindings through coordination sessions.
+- [ORB-14656] — made malformed federated replies surface an unknown outcome with call identity.
+- [ORB-20234] — added opt-in MCP toolsets.
+- [ORB-20382] — hid agent invocation from operator sessions.
+- [ORB-20414] — moved agent invocation into the opt-in `agent-invoke` toolset.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

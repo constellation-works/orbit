@@ -3,8 +3,8 @@ summary: "MCP Session Context — Vision"
 type: design
 title: "MCP Session Context — Vision"
 owner: codex
-last_updated: 2026-10-21
-last_validated: 2026-10-28
+last_updated: 2026-10-31
+last_validated: 2026-10-31
 status: Accepted
 feature: mcp-session-context
 doc_role: vision
@@ -22,11 +22,11 @@ Session context should remain a small provenance and correlation envelope. Tool-
 
 ### Authorization
 
-Authorization is enforced behind Core dispatch. Session capability policy comes from the accepting server and its local or destination-owned SSH policy; caller_machine_id, caller_ip, hostname, and SSH target remain audit evidence rather than credentials. Any future grant source must preserve that separation.
+Authorization is enforced behind Core dispatch. Session capability policy comes from the accepting server and its local or destination-owned SSH policy; caller_machine_id, caller_ip, hostname, and SSH target remain audit evidence rather than credentials [ORB-10916] [ORB-10927]. Any future grant source must preserve that separation.
 
 ### Additional transports
 
-The current TCP listener and federated SSH mux construct process and transport facts at their accepting boundaries, preserve MCP framing, isolate mutable session state, and create one trace per call. Any new transport must follow the same rules. Because the TCP listener authenticates no client, its safe default remains loopback-only; a non-loopback deployment must provide access control outside the listener.
+The current TCP listener and federated SSH mux construct process and transport facts at their accepting boundaries, preserve MCP framing, isolate mutable session state, and create one trace per call [ORB-10690] [ORB-10806] [ORB-11009]. Any new transport must follow the same rules. Because the TCP listener authenticates no client, its safe default remains loopback-only; a non-loopback deployment must provide access control outside the listener.
 
 ### Additional context fields
 
@@ -54,5 +54,8 @@ Add a field only when all three are true:
 ## Task References
 
 - [ORB-11009] established the separation between v1 local addressing and the host-qualified federated selector.
+- [ORB-10690] added the TCP listener transport this design treats as a separate accepting boundary.
+- [ORB-10806] kept listener authorization and access control outside `orbit mcp listen`.
+- [ORB-10916] and [ORB-10927] established server-owned capability grants and Core authorization.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
