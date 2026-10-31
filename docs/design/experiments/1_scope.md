@@ -209,7 +209,10 @@ calls and persists `tool_calls_incomplete` ([ORB-20572]). A task whose first
 implement invocation is incomplete has no first-edit score, and a task with no
 recorded explorer call but an incomplete implement invocation at or after
 assignment counts in the arm's `tasks_explorer_unobserved`, not as a confirmed
-absence. The readout adds a `tool_trace_incomplete` warning.
+absence. The readout adds a `tool_trace_incomplete` warning for the first-edit
+case and an `explorer_trace_incomplete` warning for the explorer case. A later
+truncated invocation leaves a complete first invocation's first edit measured
+([ORB-20590]).
 
 `cost_usd` uses each invocation's valid provider-reported dollars first, then
 its token-derived estimate from the shared, versioned configuration data in

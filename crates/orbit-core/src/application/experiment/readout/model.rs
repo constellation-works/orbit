@@ -264,7 +264,8 @@ pub struct Verdict {
 #[derive(Debug, Clone, Serialize)]
 pub struct ReadoutWarning {
     /// `sample_ratio`, `drift`, `lagging`, `primary_unmeasured`,
-    /// `first_edit_incomplete`, `tool_trace_incomplete`, `crew_mismatch` or
+    /// `first_edit_incomplete`, `tool_trace_incomplete`,
+    /// `explorer_trace_incomplete`, `crew_mismatch` or
     /// `crew_mismatch_unavailable`.
     pub kind: &'static str,
     pub message: String,
