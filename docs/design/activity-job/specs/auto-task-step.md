@@ -479,9 +479,13 @@ enablement, provider work and release timing remain operator decisions.
   run. The sweep wakes it when due (at most 60 s later, or at the deadline).
   The woken worker adopts it by a compare-and-set on its park, so it resumes
   once. A job disabled or removed while parked cancels the run.
-- **Parallel.** A succeeded branch's output is checkpointed and restored on
-  replay without rerunning it. A block whose join can still pass parks while
-  any branch is parked; its join semantics are unchanged.
+- **Parallel.** A succeeded branch is checkpointed and restored on replay
+  without rerunning it. A target branch restores its output. A succeeded
+  loop, fan-out, or nested parallel restores that output and the pipeline
+  entries it exposed (nested step outputs and fan-in collect and error
+  aliases). A branch that has not succeeded runs again. A block whose join
+  can still pass parks while any branch is parked; its join semantics are
+  unchanged.
 - **Start guard.** A minted task starts only while its step admits it. Local
   submission and owner pull-claim admission recheck the run (not finished),
   the binding, the step (not settled or expired), the definition and

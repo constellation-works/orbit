@@ -40,9 +40,12 @@ pub(super) struct ExecCtx<'a> {
     pub(super) item: Option<Value>,
     pub(super) iteration: Option<u32>,
     /// [ORB-20158] `Some` in a job with auto-task steps, outside loops and
-    /// fan-outs: each `parallel:` block checkpoints a succeeded branch, and a
-    /// replay restores the branches recorded here (parallel step id → branch
-    /// id → output) instead of running them again.
+    /// fan-outs. Each `parallel:` block checkpoints a succeeded branch, and a
+    /// replay restores every branch recorded here — a target or a compound
+    /// loop, fan-out, or nested parallel — instead of running it again.
+    /// Loops and fan-outs clear the map: their bodies are not separate
+    /// restored branches, and a parent parallel restores a succeeded loop or
+    /// fan-out whole.
     pub(super) restored_branches: Option<Arc<RestoredBranches>>,
 }
 
