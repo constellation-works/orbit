@@ -244,7 +244,7 @@ owner. The status list shows every status:
   in task history as a `forced` event. Agents cannot force a status.
 
 The right dock has three tabs. **Drain** shows the auto-drain card and
-**Start a window** (window length, parallel tasks, admission control and
+**Start a window** (window length, parallel tasks, and
 what happens after a task ships; see [auto-drain](#auto-drain)). On a replica,
 Start pulls directly from the owner. **Locks held** lists the files tasks
 currently lock, by file or by task. **Log** is a live `orbit.log` tail you can
@@ -511,7 +511,7 @@ The card shows:
   typing a task ID filters to the paths its context overlaps. The chosen view
   is remembered.
 
-**Start a window** offers duration, parallelism, admission control and the
+**Start a window** offers duration, parallelism, and the
 permissions below. Its footer sums the window up and shows any refusal or
 throttle warning. The server validates the request before starting a run.
 
@@ -522,7 +522,7 @@ throttle warning. The server validates the request before starting a run.
 | **Mark shipped tasks done** | Off (default) leaves shipped tasks in `review`. On moves every task the window ships from `review` to `done`, not only those in the readiness snapshot before the window starts. It needs an operator session on the owner; disabled on a replica. |
 | **Approve qualifying proposals** | Off (default) leaves `proposed` tasks for you. On (`--approve-proposed`) lets every pass approve proposed tasks that have context files and an assessed complexity (or the `no-diff-expected` tag) and a clean task-pilot verification, including tasks filed while the window runs; `no-auto-approve` tasks are skipped. It needs an operator session and is disabled on a replica, where only the owner approves work. A live window started with it shows **Approving proposed tasks** with its approved and held counts. A hold for pilot warnings also shows each finding's kind and first line. |
 | **Auto-fix PR blockers** | Off by default. Repairs failed required checks and merge conflicts on the window's own PRs through the existing watcher and repair ledger. Needs an operator session on the owner machine; disabled on pull replicas with a visible reason. It never grants merging or proposed-task approval; merging still requires **Mark shipped tasks done**. |
-| **Review before landing** | **Workspace policy** (default) leaves review to `review.timing`. **Add before-PR review** or **Add before-landing review** (`--review`) adds that layer to this window only when policy applies none. The layer policy already applies is accepted, and the other one, a workspace that sets neither `workflow.purpose_crews.pre_landing_review` nor `workflow.purpose_crews.review`, and local-only delivery are refused when you start. Disabled on a replica, where the owner decides review. See [Review layers](../../concepts/tasks/#adding-review-to-one-run). |
+| **Review before landing** | An on/off switch for this window only; it leaves workspace configuration unchanged. When workspace policy already applies a review layer (`review.timing`), the switch shows on and is locked: a window can add review, never remove it. Otherwise on adds before-landing review to this window only (`--review before-landing`); off leaves review to workspace policy. The switch is refused with its reason when no reviewer crew is configured (`workflow.purpose_crews.pre_landing_review` nor `workflow.purpose_crews.review` set), for local-only delivery, or for a pull drain. Disabled on a replica, where the owner decides review. See [Review layers](../../concepts/tasks/#adding-review-to-one-run). |
 | **Start … window** | After a confirmation, starts a window with these settings and stays on Tasks. On a replica, it pulls from the owner. Reads **Start another … window** while one is draining. |
 | **Stop** | Stops new admissions (`orbit run auto --stop`). Admitted workers keep running; this is not cancellation. Needs an operator session. |
 | **Send pending results** | On a replica checkout only, replaces **Stop** when no window is admitting. An owner checkout with no live window shows no stop or settle control. Delivers pull settlements this replica recorded but has not yet delivered to its owner. Needs an operator session. |

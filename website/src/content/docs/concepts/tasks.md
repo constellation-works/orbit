@@ -582,8 +582,11 @@ tags have separate rules.
 ### Adding review to one run
 
 `orbit run ship` and `orbit run auto` accept `--review before-pr` or
-`--review before-landing`. The dashboard's **Start a window** card has the same
-choice under **Review before landing**. The option adds a review layer to that
+`--review before-landing`. The dashboard's **Start a window** card instead
+offers an on/off **Review before landing** switch: when workspace policy
+already applies a review layer the switch shows on and is locked, and
+otherwise on adds before-landing review to that window only (it never offers
+before-PR). Either way the option adds a review layer to that
 run only and leaves workspace configuration unchanged. It can only add review,
 never remove or swap it:
 
@@ -592,6 +595,10 @@ never remove or swap it:
 | Applies no layer | Adds before-PR review | Adds before-landing review |
 | `review.timing = "before_pr"` | Accepted; policy already applies it | Refused, naming the key and its source |
 | `review.timing = "before_landing"` | Refused, naming the key and its source | Accepted; policy already applies it |
+
+The dashboard switch follows the `--review before-landing` column: on with no
+policy layer adds before-landing review, and on with either policy layer is
+locked on because the policy already applies it.
 
 Before any run is created, Orbit also refuses the option when:
 
