@@ -3101,32 +3101,6 @@
         "## 6. Report and cursor",
         "## Rules and command surfaces"
       ],
-      "digest": "a89f847d0c4dd71ded1c5bc430e9110828441b583e2926219940d0e00abe2638",
-      "revision": "29332f977acf6c2b26d96e07c6650ff6835060b5",
-      "settings": {
-        "complexity": "medium",
-        "dedupe": "skip_if_open",
-        "enabled": false,
-        "priority": "medium",
-        "schedule": {
-          "cron": "40 6 * * *"
-        },
-        "tags": [
-          "pilot-block-patterns",
-          "no-diff-expected"
-        ]
-      }
-    },
-    {
-      "comments": [
-        "## 1. Windows",
-        "## 2. Collect",
-        "## 3. Group by cause and route to the source",
-        "## 4. Dedupe and file",
-        "## 5. Check earlier fixes",
-        "## 6. Report and cursor",
-        "## Rules and command surfaces"
-      ],
       "digest": "baf35172a80a79107670d2ded11785a9af07f6cf5494a754471f195551a29c9c",
       "revision": "8ddebfced5cb3a395fc8b7902f9db0d322f1cb8e",
       "settings": {
