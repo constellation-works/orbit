@@ -1246,10 +1246,15 @@ confirmation, with an optional reason. Once an experiment has started, its
 definition can no longer be edited: the card has no Edit, and its page
 says so.
 
-The form adds no rules of its own. Orbit checks the definition exactly as
-`orbit experiment create`, `update`, and `start` do, and shows its message
-next to the field it names, such as a guardrail threshold under
-**Guardrails** or a crew pool problem in that arm's **Crew pool**.
+The form adds one rule of its own besides Orbit's checks. Clearing
+**Primary metric**, **Minimum sample per arm**, or **Maximum days** on a
+draft that already sets them is refused next to each cleared field: an
+omitted field leaves the stored value unchanged, so the form keeps the
+edit open instead of closing as a saved edit. Otherwise Orbit checks the
+definition exactly as `orbit experiment create`, `update`, and `start`
+do, and shows its message next to the field it names, such as a
+guardrail threshold under **Guardrails** or a crew pool problem in that
+arm's **Crew pool**.
 Starting is refused while `experiments.enabled` is false or
 `experiments.max_running` experiments are already running. Each change
 appears in the timeline with actor `dashboard`.

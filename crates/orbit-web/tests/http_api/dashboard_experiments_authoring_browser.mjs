@@ -326,6 +326,70 @@ export async function checkExperimentAuthoringBrowser(readout) {
       await page.evaluate(async () => window.experiments.fetchAndRenderExperiments());
       requests.length = 0;
 
+      // Clearing optional draft fields is refused in place: the form stays
+      // open, each cleared field names the refusal, no PATCH is sent and
+      // reopening shows the stored values. Save and start refuses the same
+      // way without entering its confirmation.
+      const clearDraft = {
+        id: `exp-clear-${width}`, name: 'clear-fields', status: 'draft', segment: 0,
+        mode: 'shadow', hypothesis: 'Clearing keeps the stored values.',
+        primary_metric: 'cost_usd', min_sample: 20, max_days: 14,
+        population: {}, guardrails: {}, events: [],
+        created_at: '2026-10-28T00:00:00Z',
+        arms: [
+          { name: 'control', control: true, weight: 1, retired_segment: null },
+          { name: 'treatment', control: false, weight: 1, retired_segment: null },
+        ],
+      };
+      store.push(clearDraft);
+      await page.evaluate(async () => window.experiments.fetchAndRenderExperiments());
+      const clearCard = page.locator('.ex-item', { hasText: 'clear-fields' });
+      await clearCard.locator('.exf-edit').click();
+      assert.equal(await labelled(form, 'Primary metric').locator('select').inputValue(), 'cost_usd', 'edit opens on the stored primary metric');
+      assert.equal(await labelled(form, 'Minimum sample per arm').locator('input').inputValue(), '20', 'edit opens on the stored sample');
+      assert.equal(await labelled(form, 'Maximum days').locator('input').inputValue(), '14', 'edit opens on the stored days');
+      await labelled(form, 'Primary metric').locator('select').selectOption('');
+      await labelled(form, 'Minimum sample per arm').locator('input').fill('');
+      await labelled(form, 'Maximum days').locator('input').fill('');
+      const clearPatchBefore = requests.filter(request => request.method === 'PATCH').length;
+      await form.locator('.exf-save').click();
+      for (const [label, field] of [['Primary metric', 'primary_metric'], ['Minimum sample per arm', 'min_sample'], ['Maximum days', 'max_days']]) {
+        const refusal = labelled(form, label).locator('.exf-error');
+        await refusal.waitFor();
+        assert.match(await refusal.textContent(), /not supported/, `${field} names its refusal`);
+      }
+      assert.equal(await form.isVisible(), true, 'a refused clear keeps the form open');
+      assert.equal(await page.locator('#experiments-form').isHidden(), false, 'a refused clear keeps the form host open');
+      assert.equal(requests.filter(request => request.method === 'PATCH').length, clearPatchBefore, 'a refused clear sends no PATCH');
+      assert.equal(clearDraft.primary_metric, 'cost_usd', 'a refused clear keeps the stored metric');
+      assert.equal(clearDraft.min_sample, 20, 'a refused clear keeps the stored sample');
+      assert.equal(clearDraft.max_days, 14, 'a refused clear keeps the stored days');
+      await labelled(form, 'Primary metric').scrollIntoViewIfNeeded();
+      await shot('clear-refusal');
+      const clearRequestsBeforeStart = requests.length;
+      await form.locator('.exf-save-start').click();
+      assert.equal(await form.locator('.exf-confirm').count(), 0, 'a refused clear shows no Save and start confirmation');
+      assert.equal(await form.isVisible(), true, 'a refused Save and start keeps the form open');
+      assert.equal(requests.length, clearRequestsBeforeStart, 'a refused Save and start sends no write');
+      await form.locator('.exf-cancel').click();
+      await page.locator('#experiments-form').waitFor({ state: 'hidden' });
+      await clearCard.locator('.exf-edit').click();
+      assert.equal(await labelled(form, 'Primary metric').locator('select').inputValue(), 'cost_usd', 'reopening shows the kept metric');
+      assert.equal(await labelled(form, 'Minimum sample per arm').locator('input').inputValue(), '20', 'reopening shows the kept sample');
+      assert.equal(await labelled(form, 'Maximum days').locator('input').inputValue(), '14', 'reopening shows the kept days');
+      await labelled(form, 'Primary metric').locator('select').selectOption('first_pass_acceptance');
+      await labelled(form, 'Minimum sample per arm').locator('input').fill('30');
+      await labelled(form, 'Maximum days').locator('input').fill('21');
+      await form.locator('.exf-save').click();
+      await page.locator('#experiments-form').waitFor({ state: 'hidden' });
+      const clearPatch = requests.find(request => request.method === 'PATCH' && request.body.primary_metric === 'first_pass_acceptance');
+      assert.ok(clearPatch, 'a positive edit after the refusal still patches');
+      assert.equal(clearPatch.body.min_sample, 30);
+      assert.equal(clearPatch.body.max_days, 21);
+      store = [];
+      await page.evaluate(async () => window.experiments.fetchAndRenderExperiments());
+      requests.length = 0;
+
       // Create: the form covers the definition; crew pickers offer only the
       // workspace's configured crews.
       await page.locator('#experiments-new').click();
