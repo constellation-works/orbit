@@ -1,9 +1,9 @@
 // Orbit dashboard task actions row: Ship, the comment and reject forms, Approve and the shared action runner.
 
-import { captureWorkspaceVisit, el, postJson, hostWriteRefusal, submissionNoticeLines } from './common.js';
+import { captureWorkspaceVisit, el, postJson, hostWriteRefusal, isAggregateView, submissionNoticeLines } from './common.js';
 import { renderMarkdown } from './markdown.js';
 import { claimedReviewApproval, handoffApprovalRequest, invalidateDistributedConsole } from './distributed.js';
-import { $, taskState, rerender, refreshTasks, canMutateTask, taskWorkspacePath, taskMutationPath, actionErrorNode } from './task-shared.js';
+import { $, taskState, rerender, refreshTasks, canMutateTask, aggregateRefusalTitle, taskWorkspacePath, taskMutationPath, actionErrorNode } from './task-shared.js';
 import * as taskShared from './task-shared.js';
 import { collapseTask } from './task-nav.js';
 import { appendFixPrControls, appendPilotControls, appendRecoveryControls, appendTriageControls, escalationTriage, refreshFixPrControls, taskPullRequestNumber } from './task-agent-actions.js';
@@ -49,8 +49,11 @@ export function buildActionsRow(task, detail, context, { includeLifecycle = true
     actions.appendChild(btn);
   }
   if (includeLifecycle && APPROVE_STATUSES.has(task.status)) {
-    const btn = el("button", { class: "action approve", text: "approve" });
-    btn.disabled = !mutable;
+    const reviewNeedsWorkspace = task.status === "review" && isAggregateView();
+    const btn = el("button", { class: "action approve", text: "approve",
+      ...(reviewNeedsWorkspace ? { title: aggregateRefusalTitle("Approve", "approve") } : {}),
+    });
+    btn.disabled = !mutable || reviewNeedsWorkspace;
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
       if (task.status === "review") approveReviewTask(task, detail, btn, context);
@@ -308,6 +311,7 @@ async function runAction(task, kind, detail, body, btnNode, context, opts = {}) 
 /// candidate and starts the owner's landing job; a plain status write would
 /// be refused while the claim protects the task.
 async function approveReviewTask(task, detail, btnNode, context) {
+  if (isAggregateView() || !canMutateTask(task)) return;
   const visit = captureWorkspaceVisit();
   const admission = `${visit.revision}:${task.id}`;
   if (reviewApprovalsInFlight.has(admission)) return;

@@ -62,6 +62,7 @@ const tasks = statuses.map((status, index) => ({
     ],
   } : {}),
 }));
+if (new URLSearchParams(location.search).get('workspace') === 'all') tasks[2].external_refs = [];
 const sampleComments = [
   { at: '2026-10-18T11:00:00Z', by: 'operator', message: 'Please keep the list still while I read.' },
   { at: '2026-10-18T11:30:00Z', by: 'claude', message: 'Done: the detail now opens in a side panel.' },
@@ -83,7 +84,7 @@ const full = task => ({
   status_transitions: task.status_transitions.map(transition => ({ ...transition, required_field: null })),
   description: task.description || '## Why\\n\\nOperators compare tasks side by side. ' + task.title + ' needs a **clear** spec.\\n\\n- keep the list still\\n- show the detail beside it',
   acceptance_criteria: task.acceptance_criteria || ['The list keeps its scroll position', 'The panel opens beside the list'],
-  plan: '1. Read the code\\n2. Change it', complexity: 'medium', type: 'feature', tags: ['dashboard', 'ui'],
+  plan: '1. Read the code\\n2. Change it', complexity: task.complexity || 'medium', type: 'feature', tags: ['dashboard', 'ui'],
   created_by: task.created_by === undefined ? 'operator' : task.created_by, created_at: '2026-10-18T10:00:00Z', updated_at: '2026-10-18T12:00:00Z',
   history: Array.from({ length: 6 }, (_, i) => ({ at: '2026-10-18T1' + i + ':00:00Z', by: 'operator', event: 'updated', note: 'edit ' + (i + 1) })),
   comments: task.comments || (task.id === 'PANEL-2' ? [] : sampleComments),
@@ -95,6 +96,7 @@ globalThis.panelFixture = {
   ships: [], holdShipPost: false, releaseShipPost: null,
   deliveryClaim: false, readiness: [], lifecycle: [],
   holdTaskList: false, releaseTaskList: null,
+  holdTaskDetail: false, releaseTaskDetail: null, omitBundledDetail: false,
   drainActions: [], drainPhase: 'idle', failAlsoTaskReadiness: false,
   refuseWith: null,
 };
@@ -103,12 +105,12 @@ globalThis.fetch = async (input, options = {}) => {
   const api = url.pathname;
   globalThis.panelFixture.reads.push(api + url.search);
   const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
-  if (api === '/api/workspaces') return json([{ id: 'one', name: 'one', status: 'active', is_default: true }]);
+  if (api === '/api/workspaces') return json([{ id: 'one', name: 'one', status: 'active', is_default: true }, { id: 'two', name: 'two', status: 'active' }]);
   if (api === '/api/hosts') return json({ hosts: [{ name: 'owner', machine_id: 'owner-id', local: true }] });
-  if (api === '/api/tasks') {
-    const selected = tasks.find(task => task.id === url.searchParams.get('detail'));
+  if (api === '/api/tasks' || api === '/api/tasks/all') {
+    const selected = !panelFixture.omitBundledDetail && tasks.find(task => task.id === url.searchParams.get('detail'));
     // Serialize before the barrier, as a server response computed before PATCH.
-    const response = json({ items: tasks, total: tasks.length, limit: 50, truncated: false, ...(selected ? { detail: full(selected) } : {}) });
+    const response = json({ items: api.endsWith('/all') ? tasks.map(task => ({ ...task, ...(task.id === 'PANEL-3' ? { external_refs: [] } : {}), workspace_id: 'one', workspace_name: 'one' })) : tasks, total: tasks.length, limit: 50, truncated: false, ...(selected ? { detail: full(selected) } : {}) });
     if (globalThis.panelFixture.holdTaskList) {
       globalThis.panelFixture.holdTaskList = false;
       await new Promise(resolve => { globalThis.panelFixture.releaseTaskList = resolve; });
@@ -200,6 +202,8 @@ globalThis.fetch = async (input, options = {}) => {
       if (body.status === 'done' && globalThis.panelFixture.refuseWith) return json({ error: globalThis.panelFixture.refuseWith }, 409);
       globalThis.panelFixture.patches.push({ id: task.id, body });
       if (Object.hasOwn(body, 'crew')) task.crew = body.crew;
+      if (Object.hasOwn(body, 'complexity')) task.complexity = body.complexity;
+      if (Object.hasOwn(body, 'description')) task.description = body.description;
       if (Object.hasOwn(body, 'not_before')) { task.not_before = body.not_before || null; task.scheduled_hold = Boolean(body.not_before); }
       if (body.status) {
         task.status = body.status;
@@ -208,7 +212,12 @@ globalThis.fetch = async (input, options = {}) => {
       if (body.acceptance_criteria) task.acceptance_criteria = body.acceptance_criteria;
       if (body.context_files) task.context_files = body.context_files;
     }
-    return task ? json(full(task)) : json({ error: 'not found' }, 404);
+    const response = task ? json(full(task)) : json({ error: 'not found' }, 404);
+    if (task && !options.method && globalThis.panelFixture.holdTaskDetail) {
+      globalThis.panelFixture.holdTaskDetail = false;
+      await new Promise(resolve => { globalThis.panelFixture.releaseTaskDetail = resolve; });
+    }
+    return response;
   }
   return json({ items: [], total: 0 });
 };
@@ -460,6 +469,23 @@ async function checkTaskPanel() {
         await capture(page, `task-detail-${name}-after-dark-${width}.png`);
       }
     }
+    await context.close();
+  }
+
+  // Review admission needs a concrete workspace even when the aggregate row has an owner.
+  for (const width of [1440, 375]) {
+    const { page, errors, context } = await openPage({ width, height: width === 375 ? 812 : 900, url: '/?workspace=all#tasks' });
+    await page.evaluate(() => { panelFixture.deliveryClaim = true; });
+    await row(page, 'PANEL-3').locator('.title').click();
+    await waitShown(page, 'PANEL-3');
+    const approve = pane(page).locator('#detail-PANEL-3 .lifecycle-actions .approve');
+    assert.equal(await approve.isDisabled(), true, 'Aggregate detail review approval requires workspace selection');
+    assert.match(await approve.getAttribute('title'), /select a specific workspace/i);
+    const quick = row(page, 'PANEL-3').locator('.task-quick.approve');
+    assert.equal(await quick.isDisabled(), true, 'Aggregate row review approval requires workspace selection');
+    assert.equal(await page.evaluate(() => panelFixture.writes.length), 0);
+    await capture(page, `review-approval-aggregate-dark-${width}.png`);
+    assert.deepEqual(errors, []);
     await context.close();
   }
 
