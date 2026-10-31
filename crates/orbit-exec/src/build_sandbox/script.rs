@@ -54,7 +54,9 @@ pub struct ScriptSandboxSpec<'a> {
     /// The step's scratch directory on the host, holding
     /// [`SCRIPT_SCRATCH_DIRS`]; mounted at [`SCRIPT_SANDBOX_MOUNT`].
     pub scratch: &'a Path,
-    /// Recorded interpreter paths and granted read roots: read-only.
+    /// Recorded interpreter paths and granted read roots: read-only. A root
+    /// that overlaps a masked tree enclosing the cwd is refused, as a write
+    /// root is.
     pub readable: &'a [PathBuf],
     /// Granted write roots: read-write.
     pub writable: &'a [PathBuf],
@@ -120,6 +122,27 @@ pub fn compile_linux_script_argv(
 ) -> Result<Vec<String>, OrbitError> {
     // An enclosing mask cannot be mounted without hiding the cwd. Reject a
     // grant that would expose that otherwise-unmounted tree, including aliases.
+    // Read roots are bound wholesale too, so they get the same refusal; only a
+    // root inside the cwd tree, which is mounted anyway, stays allowed.
+    let cwd_physical = spec.cwd.canonicalize().ok();
+    for root in spec.readable {
+        let Ok(root) = root.canonicalize() else {
+            // A path that does not resolve is not bound either.
+            continue;
+        };
+        if cwd_physical
+            .as_deref()
+            .is_some_and(|cwd| root.starts_with(cwd))
+        {
+            continue;
+        }
+        if overlaps_enclosing_mask(spec, &root) {
+            return Err(OrbitError::PolicyDenied(format!(
+                "script read root {} overlaps protected state",
+                root.display()
+            )));
+        }
+    }
     let mut writable = Vec::with_capacity(spec.writable.len());
     for root in spec.writable {
         let root = root.canonicalize().map_err(|error| {
@@ -128,16 +151,11 @@ pub fn compile_linux_script_argv(
                 root.display()
             ))
         })?;
-        for masked in spec.masked {
-            if let Ok(masked) = masked.canonicalize()
-                && spec.cwd.starts_with(&masked)
-                && (root.starts_with(&masked) || masked.starts_with(&root))
-            {
-                return Err(OrbitError::PolicyDenied(format!(
-                    "script write root {} overlaps protected state",
-                    root.display()
-                )));
-            }
+        if overlaps_enclosing_mask(spec, &root) {
+            return Err(OrbitError::PolicyDenied(format!(
+                "script write root {} overlaps protected state",
+                root.display()
+            )));
         }
         writable.push(root);
     }
@@ -208,6 +226,16 @@ pub fn compile_linux_script_argv(
     args.push("--".into());
     args.extend(argv.iter().cloned());
     Ok(args)
+}
+
+/// Whether a canonical grant root is, contains or lies within a masked tree
+/// that encloses the cwd. Such a tree is not mounted, so it cannot be masked.
+fn overlaps_enclosing_mask(spec: &ScriptSandboxSpec<'_>, root: &Path) -> bool {
+    spec.masked.iter().any(|masked| {
+        masked.canonicalize().is_ok_and(|masked| {
+            spec.cwd.starts_with(&masked) && (root.starts_with(&masked) || masked.starts_with(root))
+        })
+    })
 }
 
 /// The Git directories a cwd tree reads: its `.git` directory, or for a
