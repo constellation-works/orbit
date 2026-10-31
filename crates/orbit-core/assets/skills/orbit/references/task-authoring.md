@@ -27,6 +27,21 @@ pickup. Do not confuse a task description with a design document or a transcript
   refusal/negative cases. Commands are validation methods, not substitutes for an
   expected result. Distinguish implemented, tested, merged and deployed when those
   differ; do not make an implementation task require an unauthorized live rollout.
+- **Timing and performance criteria:** a timing criterion must be stable under
+  re-measurement of an unchanged binary: repeated measurement of the same binary
+  on the same fixture must not be able to flip it across its bound. Specify a
+  re-measurement-stable protocol — a fixed fixture (same input, host class and
+  build), warmup and sample counts, the number of independent repetitions and
+  how they are aggregated, and a bound whose margin exceeds the spread shown by
+  repeated measurement of an unchanged binary (a no-change control) — or state
+  an absolute budget a lane can check deterministically (for example, p95 at
+  most a named duration over a named number of paced samples on the fixed
+  fixture). Never file a single warm p95 ratio at a hard threshold (such as
+  candidate/base <= 0.67 from one warm run each) as the sole acceptance gate;
+  a ratio may support a stable gate, but cannot be that gate on one measurement.
+  When no such stable bound is known yet, make the timing result informational,
+  gate on a deterministic proxy (operation, request or payload counts), or file
+  a measurement task first that establishes the fixture, spread and margin.
 
 Split work when independently deliverable outcomes or real dependency boundaries
 justify it. A coherent cross-layer change can remain one task; file count and
