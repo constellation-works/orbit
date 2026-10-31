@@ -12,7 +12,11 @@ use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
 use orbit_core::OrbitError;
-use orbit_core::runtime::task_pr_forge::{ForgePullRequest, PullRequestBlockers, TaskPrForge};
+#[cfg(unix)]
+use orbit_core::runtime::task_pr_forge::GhTaskPrForge;
+use orbit_core::runtime::task_pr_forge::{
+    CheckRerunOutcome, ForgePullRequest, PullRequestBlockers, TaskPrForge,
+};
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_types::task::{ExternalRef, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::JobRunState;
@@ -74,12 +78,15 @@ impl TaskPrForge for RerunForge {
         _: &Path,
         number: u64,
         head_sha: &str,
-    ) -> Result<Vec<String>, OrbitError> {
+    ) -> Result<CheckRerunOutcome, OrbitError> {
         self.reruns
             .lock()
             .unwrap()
             .push((number, head_sha.to_string()));
-        Ok(vec!["CI".into()])
+        Ok(CheckRerunOutcome {
+            requested: vec![(101, "CI".into())],
+            uncertain: None,
+        })
     }
     fn authenticated_login(&self, _: &Path) -> Result<String, OrbitError> {
         Ok("orbit-bot".into())
@@ -209,6 +216,105 @@ fn rerun_ci_reruns_the_failed_checks_at_the_inspected_head_and_requeues() {
         comments[0]
     );
     assert_eq!(fx.markers(&task).len(), 1);
+}
+
+/// Use the real rerun implementation with the fixture's PR preflight.
+#[cfg(unix)]
+struct TransportForge(RerunForge);
+
+#[cfg(unix)]
+impl TaskPrForge for TransportForge {
+    fn open_pull_requests(&self, root: &Path) -> Result<Vec<ForgePullRequest>, OrbitError> {
+        self.0.open_pull_requests(root)
+    }
+    fn pull_request_blockers(
+        &self,
+        root: &Path,
+        number: u64,
+    ) -> Result<Option<PullRequestBlockers>, OrbitError> {
+        self.0.pull_request_blockers(root, number)
+    }
+    fn rerun_failed_checks(
+        &self,
+        root: &Path,
+        number: u64,
+        head: &str,
+    ) -> Result<CheckRerunOutcome, OrbitError> {
+        GhTaskPrForge.rerun_failed_checks(root, number, head)
+    }
+    fn authenticated_login(&self, root: &Path) -> Result<String, OrbitError> {
+        self.0.authenticated_login(root)
+    }
+    fn close_pull_request(
+        &self,
+        root: &Path,
+        number: u64,
+        comment: &str,
+    ) -> Result<(), OrbitError> {
+        self.0.close_pull_request(root, number, comment)
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn rerun_ci_records_partial_transport_failure_and_counts_it() {
+    use std::os::unix::fs::PermissionsExt;
+    if run_isolated_test(
+        "blocked_task_triage_recovery::rerun_ci_records_partial_transport_failure_and_counts_it",
+    ) {
+        return;
+    }
+    let bin = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let gh = bin.path().join("gh");
+    let calls = bin.path().join("calls");
+    let script = format!(
+        r#"#!/bin/sh
+case "$1 $2 $3" in
+  'run list '*) printf '%s\n' '[{{"databaseId":101,"workflowName":"first","headSha":"{HEAD}","status":"completed","conclusion":"failure"}},{{"databaseId":202,"workflowName":"second","headSha":"{HEAD}","status":"completed","conclusion":"failure"}}]' ;;
+  'run rerun 101') echo 101 >> '{}' ;;
+  'run rerun 202') echo 202 >> '{}'; echo transport-failed >&2; exit 1 ;;
+  *) exit 99 ;;
+esac
+"#,
+        calls.display(),
+        calls.display()
+    );
+    std::fs::write(&gh, script).unwrap();
+    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(bin.path().to_path_buf())
+            .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    // This test runs alone in its child process before starting any worker threads.
+    unsafe { std::env::set_var("PATH", path) };
+    let mut fx = fixture();
+    fx.runtime = fx
+        .runtime
+        .clone()
+        .with_task_pr_forge(Arc::new(TransportForge(RerunForge::new(HEAD, &["Test"]))));
+    let task = fx.task(&[]);
+    fx.record_pull_request(&task, 17);
+    fx.escalate(&task);
+    let answer = fx.rerun_ci(&task, HEAD).unwrap();
+    assert_eq!(std::fs::read_to_string(calls).unwrap(), "101\n202\n");
+    assert_eq!(answer["applied"]["requests"][0]["run_id"], 101);
+    assert_eq!(answer["applied"]["uncertain"]["run_id"], 202);
+    assert_eq!(answer["requeue"]["count"], 1);
+    assert_eq!(fx.status(&task), "backlog");
+    let comments = fx.triage_comments(&task);
+    assert!(
+        comments[0].contains("first (run 101)")
+            && comments[0].contains("second (run 202)")
+            && comments[0].contains("uncertain")
+    );
+    assert_eq!(fx.markers(&task).len(), 1);
+    fx.escalate(&task);
+    let again = fx.rerun_ci(&task, HEAD).unwrap();
+    assert_eq!(again["requeue"]["count"], 2);
+    fx.escalate(&task);
+    let refusal = fx.rerun_ci(&task, HEAD).unwrap_err();
+    assert!(refusal.contains("limit 2 per 24 hour(s)"), "{refusal}");
 }
 
 #[test]

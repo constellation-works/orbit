@@ -72,6 +72,15 @@ pub struct PullRequestBlockers {
     pub passed_required_checks: Vec<String>,
 }
 
+/// Outcomes of requests made to rerun failed workflow jobs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckRerunOutcome {
+    /// Successfully acknowledged workflow requests, including their run IDs.
+    pub requested: Vec<(u64, String)>,
+    /// The first request whose outcome could not be confirmed, and its error.
+    pub uncertain: Option<(u64, String, String)>,
+}
+
 /// Forge operations behind closing a task's PRs on a terminal decision,
 /// settling a task from its merged delivery PR, and finding the merge
 /// blockers an out-of-run auto-fix repairs.
@@ -141,15 +150,16 @@ pub trait TaskPrForge: Send + Sync {
     }
 
     /// Re-request the checks that failed on exactly commit `head_sha` of pull
-    /// request `number`, returning what was re-requested, by name. Nothing is
-    /// re-requested for any other head. The default cannot, so a forge
-    /// without it refuses and the caller records nothing.
+    /// request `number`, returning acknowledged requests and any uncertain
+    /// request. Errors must occur before a request is attempted; once one is
+    /// attempted, return its outcome even if the transport fails. Nothing is
+    /// re-requested for any other head. The default refuses before a request.
     fn rerun_failed_checks(
         &self,
         _repo_root: &Path,
         number: u64,
         _head_sha: &str,
-    ) -> Result<Vec<String>, OrbitError> {
+    ) -> Result<CheckRerunOutcome, OrbitError> {
         Err(OrbitError::Execution(format!(
             "this forge cannot re-request the checks of pull request #{number}"
         )))
@@ -375,7 +385,7 @@ impl TaskPrForge for GhTaskPrForge {
         repo_root: &Path,
         number: u64,
         head_sha: &str,
-    ) -> Result<Vec<String>, OrbitError> {
+    ) -> Result<CheckRerunOutcome, OrbitError> {
         let stdout = run_gh(
             orbit_tools::github_cli::commit_workflow_runs_request(head_sha),
             repo_root,
@@ -412,14 +422,22 @@ impl TaskPrForge for GhTaskPrForge {
         }
         let mut rerun = Vec::new();
         for (run_id, name) in failed {
-            run_gh(
+            if let Err(error) = run_gh(
                 orbit_tools::github_cli::rerun_failed_jobs_request(run_id),
                 repo_root,
                 "gh run rerun",
-            )?;
-            rerun.push(name);
+            ) {
+                return Ok(CheckRerunOutcome {
+                    requested: rerun,
+                    uncertain: Some((run_id, name, error.to_string())),
+                });
+            }
+            rerun.push((run_id, name));
         }
-        Ok(rerun)
+        Ok(CheckRerunOutcome {
+            requested: rerun,
+            uncertain: None,
+        })
     }
 
     fn authenticated_login(&self, repo_root: &Path) -> Result<String, OrbitError> {
