@@ -202,11 +202,16 @@ seeded `finding_verification.yaml` routine. It also mentions a prior REJECTED
 verdict.
 These surfaces enforce it:
 
-- `orbit task update <id> --approve` (`proposed` → `backlog`), and an update
-  to `in_progress` from `proposed` or `someday` (the start path). Both refuse
-  with the hold detail. The update check applies the update's
-  own `tags` and `type` first, so retyping or retagging in the same update
-  is honoured.
+- `orbit task update <id> --approve` (`proposed` → `backlog`), an update
+  to `backlog` from `proposed` or `someday`, and an update to `in_progress`
+  from `proposed` or `someday` (the start path). All refuse with the hold
+  detail before any approval, history or field write. A promoting update or
+  start is judged on the material it leaves: its own title, description,
+  criteria, context, `tags` and `type`, normalized as they will be stored,
+  with the stored status kept for the check. Retyping or retagging a chore
+  into a finding in the same write is held, retyping a finding into a
+  non-finding is honoured, and editing a confirmed finding's material in the
+  same write needs a verdict for the new material.
 - Workflow entry and pull admission, through `pilot_admission_hold_in`. The
   hold ranks ahead of the other admission holds.
 - `list_backlog_tasks`, which excludes the task with reason

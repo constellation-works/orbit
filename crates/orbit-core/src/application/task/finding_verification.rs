@@ -28,6 +28,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::TaskRecordUpdateParams;
+use super::params::TaskUpdateParams;
 use crate::OrbitRuntime;
 use crate::application::contracts::FINDING_VERIFICATION_JOB;
 use crate::application::contracts::InspectionPool;
@@ -81,6 +82,35 @@ pub(crate) fn needs_verification(task: &Task, history: &[TaskHistoryEntry]) -> b
             record.verdict == FindingVerdict::Confirmed
                 && record.finding_fingerprint.as_deref() == Some(&finding_fingerprint(task))
         })
+}
+
+/// `task` with the finding material a promoting write `params` leaves it
+/// with: title, description, criteria, context, tags and type. The status
+/// stays the stored one, so the verifiable-status predicate still judges
+/// the preview; previewing the target status would release the hold.
+/// Callers pass the edits as the write stores them (normalized), so a tag
+/// spelled differently cannot read as a non-finding here and a finding there.
+pub(crate) fn promoted_finding_preview(task: &Task, params: &TaskUpdateParams) -> Task {
+    let mut promoted = task.clone();
+    if let Some(title) = &params.title {
+        promoted.title.clone_from(title);
+    }
+    if let Some(description) = &params.description {
+        promoted.description.clone_from(description);
+    }
+    if let Some(criteria) = &params.acceptance_criteria {
+        promoted.acceptance_criteria.clone_from(criteria);
+    }
+    if let Some(context_files) = &params.context_files {
+        promoted.context_files.clone_from(context_files);
+    }
+    if let Some(tags) = &params.tags {
+        promoted.tags.clone_from(tags);
+    }
+    if let Some(task_type) = params.task_type {
+        promoted.task_type = task_type;
+    }
+    promoted
 }
 
 /// What a verdict judges: the finding as filed. A state trigger claims a
@@ -692,6 +722,18 @@ impl OrbitRuntime {
             Some(hold) => Err(OrbitError::InvalidInput(hold.detail())),
             None => Ok(()),
         }
+    }
+
+    /// Refuse a write that promotes `task` out of `proposed` or `someday`
+    /// while the finding material it would leave is an unverified review
+    /// finding: a non-finding turned into one, or a confirmed finding whose
+    /// material the same write changes [`promoted_finding_preview`].
+    pub(crate) fn ensure_promoted_finding_verified(
+        &self,
+        task: &Task,
+        params: &TaskUpdateParams,
+    ) -> Result<(), OrbitError> {
+        self.ensure_finding_verified(&promoted_finding_preview(task, params))
     }
 
     /// The latest verdict recorded for `task_id`.

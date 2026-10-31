@@ -100,7 +100,9 @@ pub mod test_support {
     pub use crate::application::landing::with_landing_retry_reservation_hook;
     pub use crate::application::managed_assets::test_support::with_auto_task_manifest_read_hook;
     pub use crate::application::review::fulfilment_test_support::with_review_evidence_completion;
-    pub use crate::application::task::with_decision_dkim_resolver;
+    pub use crate::application::task::{
+        with_decision_answer_checkpoint, with_decision_dkim_resolver,
+    };
     /// Fail the next drain pass's release of its unadmitted gap-fit reservations.
     pub use crate::application::workspace_auto::with_reservation_release_failure;
     pub use crate::runtime::{

@@ -208,6 +208,21 @@ impl OrbitRuntime {
                     }
                     if let Some(target) = f.status {
                         self.desktop_status_allowed(&task, target, session)?;
+                        // A promotion is judged on the finding material this
+                        // edit leaves; a someday finding may carry an edit.
+                        if matches!(task.status, TaskStatus::Proposed | TaskStatus::Someday)
+                            && target == TaskStatus::Backlog
+                        {
+                            self.ensure_promoted_finding_verified(
+                                &task,
+                                &TaskUpdateParams {
+                                    title: f.title.clone(),
+                                    description: f.description.clone(),
+                                    acceptance_criteria: f.acceptance_criteria.clone(),
+                                    ..Default::default()
+                                },
+                            )?;
+                        }
                         if task.status == TaskStatus::Proposed
                             && target == TaskStatus::Backlog
                             && (f.title.is_some()
