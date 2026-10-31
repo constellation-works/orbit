@@ -41,6 +41,8 @@ mod admission_forecast;
 mod admitted_crew_write_back;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod agent_sandbox_mask;
+#[cfg(unix)]
+mod application_authority;
 mod artifact_tools;
 mod audit_commit_report;
 mod auto_task_job_steps;

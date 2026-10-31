@@ -729,12 +729,18 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::super::apply_agent_execution_identity,
     },
+    Migration {
+        version: 79,
+        name: "application_consent",
+        compat: MigrationCompatibility::Additive,
+        apply: super::super::apply_application_consent,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 78;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 79;
 
 /// A migration recorded as applied in the `schema_meta` ledger.
 #[derive(Debug, Clone, PartialEq, Eq)]

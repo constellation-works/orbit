@@ -113,7 +113,7 @@ where
             agent_override: None,
             model_override: None,
             entry_point,
-            session_context: Some(session_context),
+            session_context: Some(session_context.clone()),
             brokered: None,
         },
         |params, invocation| {
@@ -124,6 +124,11 @@ where
         },
         |input| {
             enforce_plugin_callback_allowlist_from_root(global_root, name)?;
+            if session_context.application.is_some()
+                || (entry_point == ToolEntryPoint::Cli && std::env::var_os(orbit_common::security::application_credential::APPLICATION_CREDENTIAL_FD_ENV).is_some())
+            {
+                return Err(OrbitError::CapabilityDenied("application calls require an explicitly resolved workspace runtime".into()));
+            }
             dispatch(input)
         },
     )
@@ -147,7 +152,13 @@ pub(in crate::adapter::command) fn execute_global_plugin_dispatch(
         .plugin_binding(name)
         .ok_or_else(|| OrbitError::not_found(NotFoundKind::Tool, name.to_string()))?;
     #[cfg(unix)]
-    let broker_refusal = if let Some(socket) = std::env::var_os("ORBIT_PLUGIN_BROKER") {
+    let broker_refusal = if let Some(socket) = std::env::var_os("ORBIT_PLUGIN_BROKER")
+        && session_context.application.is_none()
+        && std::env::var_os(
+            orbit_common::security::application_credential::APPLICATION_CREDENTIAL_FD_ENV,
+        )
+        .is_none()
+    {
         let cwd = std::env::current_dir()?;
         let result = crate::runtime::plugin::broker::forward_call_with_status(
             Path::new(&socket),
@@ -233,6 +244,9 @@ pub(in crate::adapter::command) fn execute_global_plugin_dispatch(
             // resolved here — inside the audited closure, so a refusal lands
             // on the row for this call.
             enforce_plugin_callback_allowlist_from_root(&global_root, name)?;
+            if orbit_common::security::application_credential::ApplicationCredential::from_process_descriptor()?.is_some() || tool_context.session_context.application.is_some() {
+                return Err(OrbitError::CapabilityDenied("application calls require an explicitly resolved workspace runtime".into()));
+            }
             authorize_plugin_tool(
                 binding.execution_kind == orbit_types::plugin::PluginExecutionKind::Mutating,
                 binding.agent_callable,
@@ -435,6 +449,11 @@ impl OrbitRuntime {
         let host_read = crate::runtime::plugin::broker::is_host_credentialed_read(name);
         #[cfg(unix)]
         if let Some(socket) = std::env::var_os("ORBIT_PLUGIN_BROKER")
+            && session_context.application.is_none()
+            && std::env::var_os(
+                orbit_common::security::application_credential::APPLICATION_CREDENTIAL_FD_ENV,
+            )
+            .is_none()
             && (host_read || self.tool_registry().plugin_binding(name).is_some())
         {
             let cwd = std::env::current_dir()?;
@@ -491,16 +510,25 @@ impl OrbitRuntime {
         #[cfg(unix)]
         let mut claimed_owner_refusal = None;
         #[cfg(unix)]
-        match super::claimed::bridge_claimed_owner_call(
-            &self.global_root(),
-            self.worker_invocation(),
-            self.automation_machine_identity(),
-            name,
-            &input,
-            &std::env::current_dir()?,
-            &self.paths().repo_root,
-            entry_point,
-        ) {
+        match if session_context.application.is_some()
+            || std::env::var_os(
+                orbit_common::security::application_credential::APPLICATION_CREDENTIAL_FD_ENV,
+            )
+            .is_some()
+        {
+            None
+        } else {
+            super::claimed::bridge_claimed_owner_call(
+                &self.global_root(),
+                self.worker_invocation(),
+                self.automation_machine_identity(),
+                name,
+                &input,
+                &std::env::current_dir()?,
+                &self.paths().repo_root,
+                entry_point,
+            )
+        } {
             Some(super::claimed::ClaimedOwnerRoute::Forwarded(result)) => {
                 mark_tool_audit_recorded();
                 return Ok(ToolDispatchOutcome {
@@ -525,6 +553,18 @@ impl OrbitRuntime {
                 brokered: None,
             },
             |input| {
+                let enforcement = match entry_point {
+                    ToolEntryPoint::Cli => CapabilityEnforcement::Enforce,
+                    ToolEntryPoint::Mcp => CapabilityEnforcement::McpSessionOnly,
+                };
+                let application =
+                    self.admit_application_call(name, &input, &mut session_context, enforcement)?;
+                if application
+                    && let Some(output) =
+                        self.execute_application_builtin(name, &input, &session_context)?
+                {
+                    return Ok(output);
+                }
                 #[cfg(unix)]
                 if self.tool_registry().plugin_binding(name).is_some() {
                     crate::runtime::plugin::broker::refuse_unbrokered_call(
@@ -696,6 +736,11 @@ impl OrbitRuntime {
             .tool_registry()
             .plugin_binding(name)
             .map(|binding| binding.provenance.clone());
+        let mut application_session = audit.session_context.clone().unwrap_or_default();
+        let application_enforcement = match audit.entry_point {
+            ToolEntryPoint::Cli => CapabilityEnforcement::Enforce,
+            ToolEntryPoint::Mcp => CapabilityEnforcement::McpSessionOnly,
+        };
         execute_tool_dispatch_with_audit_store(
             name,
             input,
@@ -704,6 +749,12 @@ impl OrbitRuntime {
             audit,
             |params, invocation| self.record_audit_event_with_invocation(params, invocation),
             |input| {
+                self.admit_application_call(
+                    name,
+                    &input,
+                    &mut application_session,
+                    application_enforcement,
+                )?;
                 enforce_plugin_callback_allowlist(
                     &self.global_root(),
                     self.stores().plugins(),
@@ -767,7 +818,9 @@ where
     // backend did with `secret_updates`: names and applied/refused only.
     let _ = take_delivered_plugin_secret_names();
     let _ = take_plugin_secret_updates();
+    let _ = crate::runtime::application_authority::take_application_audit();
     let result = dispatch(input);
+    let application = crate::runtime::application_authority::take_application_audit();
     let plugin_secrets = take_delivered_plugin_secret_names();
     let plugin_secret_updates = take_plugin_secret_updates();
     let plugin = take_callback_plugin_provenance().or(plugin);
@@ -818,7 +871,9 @@ where
         tool_name: Some(name.to_string()),
         target_type: Some("tool".to_string()),
         target_id: Some(name.to_string()),
-        role: role_label,
+        role: application.as_ref().map_or(role_label, |invocation| {
+            format!("application:{}", invocation.consent.application_id)
+        }),
         status,
         exit_code,
         duration_ms,
@@ -873,6 +928,7 @@ where
     // Rebuilt for the lock retry. The fields only borrow this call's
     // session, so a second insert does not observe a different invocation.
     let invocation = || AuditInvocationFields {
+        application: application.as_ref(),
         trace_id: session_context
             .as_ref()
             .and_then(|context| context.trace_id.as_deref()),

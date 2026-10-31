@@ -510,6 +510,10 @@ fn legacy_db_adopts_versioned_ledger() {
                 "migration.v0078".to_string(),
                 "agent_execution_identity".to_string()
             ),
+            (
+                "migration.v0079".to_string(),
+                "application_consent".to_string()
+            ),
         ]
     );
 }

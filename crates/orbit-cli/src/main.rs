@@ -634,6 +634,23 @@ fn run() {
     // plain command reads governed data around that allowlist.
     {
         let operation = cli.command.operation().attribute_to(&actor);
+        if std::env::var_os(
+            orbit_common::security::application_credential::APPLICATION_CREDENTIAL_FD_ENV,
+        )
+        .is_some()
+            && operation.audit_meta.as_ref().is_none_or(|meta| {
+                meta.command != "tool" || meta.subcommand.as_deref() != Some("run")
+            })
+        {
+            print_error(
+                &orbit_core::OrbitError::CapabilityDenied(
+                    "application credentials may invoke only workspace tool calls".into(),
+                ),
+                &sink,
+                operation.json_error_preference,
+            );
+            orbit_common::observability::logging::exit(1);
+        }
         if !operation.plugin_callback_entry_point
             && let Err(error) = refuse_plugin_child_cli(&operation.audit_meta, cli.root.as_deref())
         {

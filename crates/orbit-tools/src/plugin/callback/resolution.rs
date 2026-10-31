@@ -236,6 +236,7 @@ fn validated_callback_session_entries(global_root: &Path) -> std::io::Result<fs:
 
 fn identity_from(record: &SessionRecord) -> PluginCallbackIdentity {
     PluginCallbackIdentity {
+        application: record.application.clone(),
         provenance: PluginProvenance {
             name: record.plugin.clone(),
             version: record.version.clone(),

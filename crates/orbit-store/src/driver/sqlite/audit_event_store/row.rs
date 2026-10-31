@@ -19,7 +19,7 @@ pub(super) const AUDIT_EVENT_COLUMNS: &str = "id, execution_id, timestamp, comma
      capabilities_json, origin_session_id, mcp_call_id, lease_id, task_id, \
      job_run_id, activity_id, step_index, trace_id, caller_ip, \
      self_reported_actor, plugin_name, plugin_version, plugin_manifest_digest, \
-     plugin_grants, plugin_secrets, plugin_secret_updates, brokered, peer_pid";
+     plugin_grants, plugin_secrets, plugin_secret_updates, brokered, peer_pid, application_json";
 
 pub(super) fn audit_event_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AuditEvent> {
     let ts_raw: String = row.get(2)?;
@@ -49,6 +49,13 @@ pub(super) fn audit_event_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<
         .unwrap_or_default();
 
     Ok(AuditEvent {
+        application: row
+            .get::<_, Option<String>>(45)?
+            .map(|raw| {
+                serde_json::from_str(&raw)
+                    .map_err(|_| invalid_text(45, "", "invalid application audit provenance"))
+            })
+            .transpose()?,
         id: row.get(0)?,
         execution_id: row.get(1)?,
         timestamp,

@@ -177,6 +177,7 @@ impl PluginTool {
             &spec.allowed_tools(ctx),
         )?;
         callback.stamp_env(&mut environment);
+        callback.bind_application(ctx.session_context.application.as_deref())?;
         // The decision-channel callbacks read a store no plugin child may
         // read, so the child reaches them through this host.
         callback.open_host_route(ctx.orbit_host.as_ref())?;

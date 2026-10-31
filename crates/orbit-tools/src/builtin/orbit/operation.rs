@@ -179,8 +179,8 @@ where
 
 /// Register a noun whose MCP tools `orbit mcp serve` advertises only when
 /// `toolset` is enabled. The toolset follows the noun, except that a
-/// decision channel's callbacks (the host-routed callback class, which only
-/// the bound channel plugin or the operator may call) join the
+/// decision channel's digest and submission, which only
+/// the bound channel plugin or the operator may call, join the
 /// decision-channel toolset whatever their noun's.
 pub(super) fn register_noun_in_toolset<V>(
     registry: &mut ToolRegistry,
@@ -192,7 +192,12 @@ pub(super) fn register_noun_in_toolset<V>(
 {
     for spec in noun.operations {
         let tool = OperationTool(spec);
-        let toolset = if crate::plugin::is_host_routed_callback_tool(spec.tool_name) {
+        // Host routing is transport, not placement: application completion
+        // also routes task updates, which remain on the default toolset.
+        let toolset = if matches!(
+            spec.tool_name,
+            "orbit.decision.digest" | "orbit.decision.submit"
+        ) {
             McpToolset::DecisionChannel
         } else {
             toolset
