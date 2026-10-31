@@ -219,7 +219,11 @@ const AUTO_DRAIN_REVIEW_HELP = "Adds a second-agent review before landing to eve
 
 // The review layer workspace policy applies, as readiness reports it; ""
 // for none or a server that does not report it.
+// [ORB-20519] A replica reports its own local policy, but a pull start never
+// sends review and the owner's policy decides the claims it hands out, so the
+// replica-local timing must not read as a locked-on workspace layer.
 function workspaceReviewTiming(payload) {
+  if (drainCheckout(payload).replica) return "";
   const timing = payload?.start_options?.review?.timing;
   return timing === "before-landing" || timing === "before-pr" ? timing : "";
 }
