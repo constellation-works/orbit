@@ -462,6 +462,15 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
     // threshold one, a first protected pass or a progress reset creates the
     // identity now; losing it after filing would give a retry a different key.
     let pass_recorded = record_last_pass(runtime, input, pass.clone(), Some(observation));
+    if pass_recorded && let Some(run_id) = drain_run_id(input) {
+        crate::application::pull_drain::crew_health::record_pool_crew_health(
+            runtime,
+            run_id,
+            input,
+            allowlist.as_ref(),
+            &[],
+        );
+    }
     // Only `enforce` idles the drain behind a stuck head, so only it files;
     // `shadow` records the stall as what `enforce` would have reported.
     let friction_recorded = if let (true, Some(GapFitMode::Enforce), Some(run_id), Some(head)) = (

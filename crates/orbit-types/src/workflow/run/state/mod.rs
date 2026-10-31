@@ -14,14 +14,14 @@ pub use auto_task::{
     AutoTaskStepStatus, FrozenAutoTaskTarget, ParkedWait,
 };
 pub use drain::{
-    CrewExclusion, CrewExclusionSource, DrainAdmissionForecast, DrainAdmissionPass,
-    DrainAdmissionsStop, DrainApprovalReport, DrainCancelRequest, DrainCapacity, DrainHoldFinding,
-    DrainPassCounters, DrainPassObservation, DrainPassOutcome, DrainWaitingTask,
-    DrainWindowExtension, DrainWorkerLimit, ForecastBuckets, ForecastPeak, GapFitAdmission,
-    GapFitHead, GapFitHeadMiss, GapFitHeadStall, GapFitSkip, PullAdmissionFit, PullAuthExclusion,
-    PullAuthRecovery, PullBreaker, PullCrewPreflight, PullDrainState, PullSinglePass,
-    PullUnfitWork, PullWindowClose, ResourcePressure, ResourceThrottle, RunCancellationProvenance,
-    TaskCancellationPolicy,
+    CrewExclusion, CrewExclusionSource, CrewPoolExclusion, DrainAdmissionForecast,
+    DrainAdmissionPass, DrainAdmissionsStop, DrainApprovalReport, DrainCancelRequest,
+    DrainCapacity, DrainHoldFinding, DrainPassCounters, DrainPassObservation, DrainPassOutcome,
+    DrainWaitingTask, DrainWindowExtension, DrainWorkerLimit, ForecastBuckets, ForecastPeak,
+    GapFitAdmission, GapFitHead, GapFitHeadMiss, GapFitHeadStall, GapFitSkip, PullAdmissionFit,
+    PullAuthExclusion, PullAuthRecovery, PullBreaker, PullCrewPreflight, PullDrainState,
+    PullSinglePass, PullUnfitWork, PullWindowClose, ResourcePressure, ResourceThrottle,
+    RunCancellationProvenance, TaskCancellationPolicy,
 };
 pub use failure::{
     CONTRACT_REFUSAL_MARKER, ClaimFailureClass, OWNER_BUSY_MARKER,

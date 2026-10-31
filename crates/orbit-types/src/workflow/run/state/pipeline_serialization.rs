@@ -55,6 +55,7 @@ impl Serialize for PipelineState {
             pull_window_close: &self.pull_drain.pull_window_close => self.pull_drain.pull_window_close.is_none(),
             pull_breaker: &self.pull_drain.pull_breaker => self.pull_drain.pull_breaker.is_none(),
             pull_admission_fit: &self.pull_drain.pull_admission_fit => self.pull_drain.pull_admission_fit.is_none(),
+            crew_pool_exclusions: &self.pull_drain.crew_pool_exclusions => self.pull_drain.crew_pool_exclusions.is_empty(),
             drain_last_pass: &self.pull_drain.drain_last_pass => self.pull_drain.drain_last_pass.is_none(),
             drain_last_forecast: &self.pull_drain.drain_last_forecast => self.pull_drain.drain_last_forecast.is_none(),
             drain_pass_counters: &self.pull_drain.drain_pass_counters => self.pull_drain.drain_pass_counters.is_none(),

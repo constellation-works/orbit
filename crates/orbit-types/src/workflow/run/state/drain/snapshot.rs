@@ -12,6 +12,37 @@ use super::{
     PullSinglePass, PullWindowClose,
 };
 
+/// Consecutive admission passes excluding a configured complexity/type pool member.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CrewPoolExclusion {
+    /// First pass in this uninterrupted streak.
+    pub since: DateTime<Utc>,
+    /// Latest actual observation (not the time a diagnostic was read).
+    pub last_observed_at: DateTime<Utc>,
+    /// Consecutive observed passes.
+    pub passes: u32,
+    /// Names-only reason for the latest exclusion.
+    pub reason: String,
+}
+
+impl CrewPoolExclusion {
+    /// At least two observations spanning two minutes; reading a stale
+    /// checkpoint never advances the window.
+    pub fn sustained(&self) -> bool {
+        self.passes >= 2 && (self.last_observed_at - self.since).num_seconds() >= 120
+    }
+
+    /// Operator warning shared by run show, readiness and friction.
+    pub fn describe(&self, crew: &str) -> String {
+        format!(
+            "Pool crew `{crew}` excluded on every admission pass ({} passes since {}): {}",
+            self.passes,
+            self.since.to_rfc3339(),
+            self.reason
+        )
+    }
+}
+
 /// Drain controls, pull admission checkpoints, and delivery forge holds carried
 /// by a pipeline run. Missing records retain the submitted/default behavior.
 ///
@@ -19,6 +50,9 @@ use super::{
 /// the Rust grouping does not add an object or rename a persisted key.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct PullDrainState {
+    /// Active streaks for pool crews excluded on every admission pass.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub crew_pool_exclusions: BTreeMap<String, CrewPoolExclusion>,
     /// Live worker ceiling for a bounded auto drain, when an operator has
     /// adjusted it [ORB-11253]. Absent means the submitted input still
     /// governs. Like `child_dispatches` this survives terminalization: it is
@@ -129,5 +163,16 @@ impl PullDrainState {
                 ..DrainPassCounters::default()
             })
             .count(observation, at);
+    }
+}
+
+impl PullDrainState {
+    /// Sustained pool-member warnings, based only on observed passes.
+    pub fn pool_crew_exclusion_warnings(&self) -> Vec<String> {
+        self.crew_pool_exclusions
+            .iter()
+            .filter(|(_, streak)| streak.sustained())
+            .map(|(crew, streak)| streak.describe(crew))
+            .collect()
     }
 }

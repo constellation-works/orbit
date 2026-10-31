@@ -455,6 +455,15 @@ pub(crate) fn pull_refill(
             }
         },
     };
+    if let Some(window) = crews.as_ref() {
+        super::super::crew_health::record_pool_crew_health(
+            runtime,
+            &run_id,
+            input,
+            None,
+            &window.excluded,
+        );
+    }
     let runs_nothing = crews.as_ref().is_some_and(PullCrewWindow::runs_nothing);
     admitting &= !runs_nothing;
     // The forecast this pass last requested against, recorded for `run

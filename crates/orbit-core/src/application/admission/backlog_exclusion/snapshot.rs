@@ -41,6 +41,13 @@ pub(crate) fn workspace_ship_mode(runtime: &OrbitRuntime) -> ShipMode {
     runtime.automatic_delivery_ship_mode()
 }
 
+/// Observation keeps the live launcher's recorded missing-source names;
+/// without a live run, readiness judges the observing environment.
+pub(super) enum BacklogReadMode<'a> {
+    Admission,
+    Observation(Option<&'a [orbit_types::workflow::CrewEnvUnset]>),
+}
+
 /// The drain's snapshot: admitted work is delivered in the workspace's ship
 /// mode. `review` is the admitting run's captured review admission, when
 /// there is one.
@@ -58,7 +65,7 @@ pub(crate) fn backlog_snapshot(
         pools,
         workspace_ship_mode(runtime),
         review,
-        false,
+        BacklogReadMode::Admission,
     )
 }
 
@@ -74,6 +81,7 @@ pub(crate) fn backlog_snapshot_observed(
     allowlist: Option<&CrewAllowlist>,
     pools: &CapturedCrewPools,
     review: Option<&ReviewAdmission>,
+    crew_env_unset: Option<&[orbit_types::workflow::CrewEnvUnset]>,
 ) -> Result<BacklogSnapshot, PassError> {
     backlog_snapshot_in_mode(
         runtime,
@@ -82,7 +90,7 @@ pub(crate) fn backlog_snapshot_observed(
         pools,
         workspace_ship_mode(runtime),
         review,
-        true,
+        BacklogReadMode::Observation(crew_env_unset),
     )
 }
 
@@ -95,13 +103,16 @@ pub(super) fn backlog_snapshot_in_mode(
     pools: &CapturedCrewPools,
     mode: ShipMode,
     review: Option<&ReviewAdmission>,
-    observed: bool,
+    read_mode: BacklogReadMode<'_>,
 ) -> Result<BacklogSnapshot, PassError> {
     // The population is materialized once, by moving the selection into the
     // lookup. Everything below borrows from it: the backlog is a vector of
     // references and the snapshot hands back IDs.
-    let task_lookup = admission_population(runtime.stores().tasks(), observed)
-        .map_err(|error| PassError::store(action, "list tasks", error))?;
+    let task_lookup = admission_population(
+        runtime.stores().tasks(),
+        matches!(read_mode, BacklogReadMode::Observation(_)),
+    )
+    .map_err(|error| PassError::store(action, "list tasks", error))?;
     // One status projection per snapshot. It is the registry-global index,
     // not a re-read of `task_lookup`'s statuses (see `BacklogSnapshot`).
     let status_by_id = runtime
@@ -403,43 +414,82 @@ pub(super) fn backlog_snapshot_in_mode(
     // Once the assessment gate has held back unprepared work, the crew filter
     // runs before scheduling exclusions so a task reports the reason an
     // operator can act on — reassign it, or run a drain that permits its crew
-    // — rather than a downstream lock reason. Everything that survives keeps
+    // — or provide its missing env source — rather than a downstream lock
+    // reason. Everything that survives keeps
     // its ordinary priority/age order.
-    if let Some(allowlist) = allowlist {
-        backlog.retain(|task| {
-            match runtime.auto_task_crew_candidates(task, pools, None) {
-                // A parked pool member (weight 0) is never drawn, so it cannot
-                // make a task eligible under this restriction either.
-                Ok((crews, _))
-                    if crews.iter().any(|candidate| {
-                        candidate.weight > 0 && allowlist.permits(&candidate.crew)
-                    }) =>
-                {
-                    true
-                }
-                // An unresolvable crew fails closed under an explicit
-                // restriction: the drain cannot show it is permitted, and
-                // guessing would spend a budget the operator scoped.
-                resolution => {
-                    excluded.push(BacklogTaskExclusion {
-                        id: task.id.clone(),
-                        reason: BacklogTaskExclusionReason::CrewNotAllowed,
-                        conflicts: Vec::new(),
-                        crew: Some(match resolution {
-                            Ok((crews, _)) => crews
-                                .into_iter()
-                                .map(|candidate| candidate.crew.name)
-                                .collect::<Vec<_>>()
-                                .join(", "),
-                            Err(error) => format!("<unresolved: {error}>"),
-                        }),
-                        detail: None,
-                    });
-                    false
-                }
+    let crew_unset = match read_mode {
+        BacklogReadMode::Observation(Some(unset)) => unset.to_vec(),
+        BacklogReadMode::Observation(None) | BacklogReadMode::Admission => runtime.unset_crew_env(),
+    };
+    backlog.retain(|task| {
+        if allowlist.is_none() && crew_unset.is_empty() {
+            return true;
+        }
+        let resolution = runtime.auto_task_crew_candidates(task, pools, None);
+        if let Ok((crews, _)) = &resolution {
+            let candidates = crews
+                .iter()
+                .filter(|candidate| candidate.weight > 0)
+                .collect::<Vec<_>>();
+            let runnable = candidates.iter().any(|candidate| {
+                allowlist.is_none_or(|allowed| allowed.permits(&candidate.crew))
+                    && !crew_unset
+                        .iter()
+                        .any(|unset| unset.crew == candidate.crew.name)
+            });
+            if runnable {
+                return true;
             }
+            let missing = candidates
+                .iter()
+                .filter_map(|candidate| {
+                    crew_unset
+                        .iter()
+                        .find(|unset| unset.crew == candidate.crew.name)
+                })
+                .collect::<Vec<_>>();
+            if !missing.is_empty() {
+                excluded.push(BacklogTaskExclusion {
+                    id: task.id.clone(),
+                    reason: BacklogTaskExclusionReason::CrewEnvUnset,
+                    conflicts: Vec::new(),
+                    crew: Some(
+                        missing
+                            .iter()
+                            .map(|unset| unset.crew.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    ),
+                    detail: Some(
+                        missing
+                            .iter()
+                            .map(|unset| unset.describe())
+                            .collect::<Vec<_>>()
+                            .join("; "),
+                    ),
+                });
+                return false;
+            }
+        }
+        if allowlist.is_none() {
+            return true;
+        }
+        excluded.push(BacklogTaskExclusion {
+            id: task.id.clone(),
+            reason: BacklogTaskExclusionReason::CrewNotAllowed,
+            conflicts: Vec::new(),
+            crew: Some(match resolution {
+                Ok((crews, _)) => crews
+                    .into_iter()
+                    .map(|candidate| candidate.crew.name)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                Err(error) => format!("<unresolved: {error}>"),
+            }),
+            detail: None,
         });
-    }
+        false
+    });
     // A task resuming a preserved publication adopts its existing branch and
     // pull request before it edits anything, so it is not held behind other
     // tasks' locks on files its own published diff already changed. Only the

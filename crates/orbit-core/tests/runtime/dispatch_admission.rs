@@ -57,6 +57,7 @@ use orbit_types::workflow::{JobRunState, JobRunTrigger, PipelineState};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+mod crew_env;
 mod gap_fit;
 mod lock_busy_pass;
 mod replay_crew;

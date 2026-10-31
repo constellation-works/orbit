@@ -255,6 +255,11 @@ pub(crate) fn run_header_text_with_lock_holders(
                 .join("; ")
         ));
     }
+    if let Some(state) = state {
+        for warning in state.pull_drain.pool_crew_exclusion_warnings() {
+            lines.push(format!("{} {warning}", bold("Warning:")));
+        }
+    }
     lines.extend(format_child_dispatch_lines(state));
     lines.join("\n")
 }

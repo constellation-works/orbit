@@ -171,6 +171,7 @@ spec:
                 - active_pilot_preparation
                 - baseline_red_hold
                 - context_lock_conflict
+                - crew_env_unset
                 - crew_not_allowed
                 - delivery_job_unavailable
                 - group_member_conflict

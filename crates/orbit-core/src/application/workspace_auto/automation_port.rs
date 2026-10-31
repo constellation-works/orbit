@@ -11,8 +11,11 @@ use crate::application::automation::AutomationBoardPort;
 impl AutomationBoardPort for OrbitRuntime {
     fn eligible_task_ids(&self) -> Result<Vec<String>, OrbitError> {
         let pools = self.auto_crew_pools_for_input(&json!({}))?;
-        let snapshot = backlog_snapshot_observed(self, "automation_condition", None, &pools, None)
-            .map_err(|error| OrbitError::Execution(format!("read eligibility view: {error}")))?;
+        let snapshot =
+            backlog_snapshot_observed(self, "automation_condition", None, &pools, None, None)
+                .map_err(|error| {
+                    OrbitError::Execution(format!("read eligibility view: {error}"))
+                })?;
         Ok(snapshot.admissible_leaves)
     }
 

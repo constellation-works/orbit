@@ -74,6 +74,20 @@ impl OrbitRuntime {
         .then_some(Unrunnable::NoClaudeCredential)
     }
 
+    /// Declared source names for enabled crews, for shell and managed-service
+    /// diagnostics. Contains configuration identifiers only, never values.
+    pub fn configured_crew_env_sources(
+        &self,
+    ) -> Vec<(String, Vec<orbit_types::identity::CrewEnvVar>)> {
+        self.context
+            .settings()
+            .crews()
+            .values()
+            .filter(|crew| crew.enabled)
+            .map(|crew| (crew.name.clone(), crew.env.clone()))
+            .collect()
+    }
+
     /// Every enabled crew whose `[crews.<name>] env` names a source this
     /// runtime's environment (runtime defaults such as `clock.env` included)
     /// holds no value for. Names only, never values.

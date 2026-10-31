@@ -32,6 +32,7 @@ pub mod log_format;
 pub mod mcp_clients;
 mod migrate;
 mod registry;
+pub mod service_environment;
 mod task;
 pub use registry::{routines as registry_routines, runtime as registry_runtime};
 pub use task::{owner as task_owner, store as task_store};
