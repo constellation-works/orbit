@@ -481,6 +481,7 @@ fn cli_dispatch_hands_workers_only_a_verified_browser_kit() -> Result<(), Box<dy
     let shell = root.join("browsers/chromium_headless_shell-1248");
     fs::create_dir_all(&shell)?;
     fs::write(shell.join("INSTALLATION_COMPLETE"), "")?;
+    fs::write(shell.join("chrome-headless-shell"), "fixture")?;
     fs::create_dir_all(root.join("root/usr/lib/x86_64-linux-gnu"))?;
     fs::write(root.join("env.sh"), "export LD_LIBRARY_PATH=/kit/libs\n")?;
 
