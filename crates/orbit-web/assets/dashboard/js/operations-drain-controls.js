@@ -408,11 +408,15 @@ const AUTO_DRAIN_SETTLE_CONFIRM = "Send completed task results to their owner? T
 // the remedy for leaves stuck `settling` and claims stranded `running`.
 // Only a read-only view or a missing operator session disables it, and the
 // reason is visible text beside the button rather than a title alone.
+// [ORB-20501] The settle-only pass delivers a replica's pull settlements to
+// its owner; an owner has none to send, so with no window open there it
+// offers nothing ("none") rather than a button that cannot do anything.
 function autoDrainStopMode(payload) {
   const live = autoDrainLiveWindow(payload);
   const autoOpen = live.runId && !live.admissionsStopped;
   const pullOpen = live.pullRunId && !live.pullAdmissionsStopped;
-  return autoOpen || pullOpen ? "stop" : "settle";
+  if (autoOpen || pullOpen) return "stop";
+  return drainCheckout(payload, selectedWorkspace()?.id).replica ? "settle" : "none";
 }
 
 // The windows a Stop would close now, named for confirm and status text.
@@ -455,6 +459,7 @@ function autoDrainStopHeadline(outcome) {
 }
 
 export function autoDrainStopButton(payload) {
+  if (autoDrainStopMode(payload) === "none") return null;
   const key = "auto-drain:stop";
   const reasons = autoDrainReasons(payload);
   const live = autoDrainLiveWindow(payload);
@@ -512,6 +517,7 @@ export function autoDrainStopButton(payload) {
 // Visible text (not only a tooltip, which keyboard and touch users never see)
 // says why the control is off, or what it does right now.
 export function autoDrainStopNote(payload) {
+  if (autoDrainStopMode(payload) === "none") return null;
   const reasons = autoDrainReasons(payload);
   return el("div", {
     class: reasons.stop ? "operation-control-note drain-stop-note disabled-reason" : "operation-control-note drain-stop-note",
