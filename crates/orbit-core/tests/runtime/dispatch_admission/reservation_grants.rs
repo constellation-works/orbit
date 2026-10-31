@@ -419,6 +419,119 @@ fn closing_rescued_blocked_task_through_the_task_tool_succeeds_without_force_whi
     );
 }
 
+#[test]
+fn proposed_pickup_preserves_typed_store_error_when_start_write_fails_after_approval() {
+    if !isolated(
+        "dispatch_admission::reservation_grants::proposed_pickup_preserves_typed_store_error_when_start_write_fails_after_approval",
+    ) {
+        return;
+    }
+    let (_root, runtime, repo) = runtime();
+    std::fs::write(repo.join("shared.txt"), "fixture\n").unwrap();
+
+    let holder = seed(
+        &runtime,
+        Seed {
+            title: "claim holder",
+            status: TaskStatus::InProgress,
+            context_files: Some(&["file:shared.txt"]),
+            ..Seed::default()
+        },
+    );
+    let claim = ExecutionClaim {
+        claim_id: "claim-store-fixture".into(),
+        task_id: holder.id.clone(),
+        request_id: "req-store-fixture".into(),
+        executed_on: ExecutionLocation {
+            machine_id: "machine-1".into(),
+            machine_name: None,
+        },
+        run_context: AdmissionRunContext {
+            run_id: "jrun-store-fixture".into(),
+            job_name: "test-job".into(),
+            machine_name: None,
+        },
+        footprint: vec!["file:shared.txt".into()],
+        reservation_id: "res-store-fixture".into(),
+        reservation_expires_at: (Utc::now() + chrono::Duration::hours(1)).to_rfc3339(),
+        phase: ExecutionClaimPhase::Running,
+        repair: None,
+    };
+    let workspace_id = runtime.workspace_id().unwrap();
+    let connection = rusqlite::Connection::open(runtime.global_root().join("orbit.db")).unwrap();
+    connection
+        .execute(
+            "INSERT INTO task_coordination_rows(workspace_id, kind, row_id, payload_json, journal_id, created_at)
+             VALUES (?1, 'distributed-execution-claim-v1', ?2, ?3, 'fixture', ?4)",
+            rusqlite::params![
+                workspace_id,
+                claim.claim_id,
+                serde_json::to_string(&claim).unwrap(),
+                Utc::now().to_rfc3339()
+            ],
+        )
+        .unwrap();
+
+    let proposed = seed(
+        &runtime,
+        Seed {
+            title: "proposed store candidate",
+            status: TaskStatus::Proposed,
+            context_files: Some(&["file:shared.txt"]),
+            ..Seed::default()
+        },
+    );
+
+    // Unbind the checkout so the start write's footprint guard fails with a
+    // typed store error after the approval write has committed. The approval
+    // targets `backlog`, which needs no checkout, so it still lands.
+    let registry_path = runtime.global_root().join("tasks").join("index.sqlite");
+    let registry = rusqlite::Connection::open(&registry_path).unwrap();
+    assert_eq!(
+        registry
+            .execute(
+                "DELETE FROM workspace_checkout_bindings WHERE workspace_id = ?1",
+                rusqlite::params![workspace_id],
+            )
+            .unwrap(),
+        1,
+        "the fixture checkout binding must exist to unbind it"
+    );
+
+    let refusal = runtime
+        .start_task(&proposed.id, None, None)
+        .expect_err("a start write without a checkout binding is a typed store error");
+    assert!(
+        matches!(refusal, OrbitError::Store(_)),
+        "a non-InvalidInput post-approval failure must keep its variant: {refusal:?}"
+    );
+    assert!(
+        !refusal.is_lock_busy(),
+        "a store error is not lock-busy: {refusal:?}"
+    );
+    assert_eq!(
+        refusal.storage_layer(),
+        Some(orbit_common::StorageLayer::Store),
+        "the store class must survive the approval context: {refusal:?}"
+    );
+    let message = refusal.to_string();
+    assert!(
+        message.contains("claimed workspace checkout is unavailable"),
+        "the typed store cause must survive: {message}"
+    );
+    assert!(
+        message.contains("approval was recorded")
+            && message.contains("backlog")
+            && message.contains("drain"),
+        "partial approval and recovery must be explicit: {message}"
+    );
+    assert_eq!(
+        runtime.get_task(&proposed.id).unwrap().status,
+        TaskStatus::Backlog,
+        "the approval write commits before the typed start failure"
+    );
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     no_diff_grants_check_frozen_claims_after_reservation_expiry_scenarios,
