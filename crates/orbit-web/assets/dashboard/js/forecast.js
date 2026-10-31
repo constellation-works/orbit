@@ -36,6 +36,7 @@ function el(tag, opts = {}, children = []) {
 const BODY = "forecast-body";
 const COUNT = "forecast-count";
 const ENDPOINT = "/api/diagnostics/backlog_forecast";
+const UNREPORTED_FORECAST_REASON = "Forecast unavailable, reason not reported";
 // History selection: the default lookback (30 days, at least the newest 50
 // completions), the newest N completions whatever their age, or 90 days.
 const HISTORIES = [
@@ -301,6 +302,15 @@ function quantileText(quantiles, fmt) {
   return `p50 ${p50 == null ? "unknown" : fmt(p50)} · p90 ${p90 == null ? "unknown" : fmt(p90)}`;
 }
 
+function hasHorizonCensoringEvidence(forecast) {
+  const drainProbability = num(forecast?.drain_probability);
+  const completionProbability = num(forecast?.completion_probability);
+  const unfinished = num(forecast?.not_expected_to_drain);
+  return (drainProbability != null && drainProbability < 1)
+    || (completionProbability != null && completionProbability < 1)
+    || (unfinished != null && unfinished > 0);
+}
+
 /// Formatted pre-regression baseline figures; each missing percentile stays
 /// unknown and no metric is invented. Null when the baseline has no figures.
 export function forecastBaselineFigures(baseline) {
@@ -365,12 +375,12 @@ export function backlogForecastSummary(payload) {
   const history = num(payload.inputs?.history_deliveries);
   const coverage = payload.coverage || {};
   let reasonKind = "unknown";
-  let reason = "Backlog forecast unavailable";
-  let detail = "The forecast did not say why it is unavailable.";
+  let reason = UNREPORTED_FORECAST_REASON;
+  let detail = "The forecast did not report why it is unavailable.";
   if (tasks === 0) { reasonKind = "empty"; reason = "No backlog to forecast"; detail = "No backlog or in-progress tasks in this workspace."; }
   else if (history === 0 || (tasks != null && tasks > 0 && num(coverage.no_history) != null && num(coverage.no_history) >= tasks)) { reasonKind = "no_history"; reason = "No delivery history to sample"; detail = "There is no delivery history to sample for this backlog."; }
   else if (forecast.schedulable_subset) { reasonKind = "subset"; reason = "Not every task can be scheduled"; detail = "Some tasks depend on work the drain cannot start, so there is no full total."; }
-  else if (tasks != null && tasks > 0) { reasonKind = "horizon"; reason = "Beyond the 90-day horizon"; detail = "The simulated backlog did not drain within the 90-day horizon."; }
+  else if (tasks != null && tasks > 0 && hasHorizonCensoringEvidence(forecast)) { reasonKind = "horizon"; reason = "Beyond the 90-day horizon"; detail = "The simulated backlog did not drain within the 90-day horizon."; }
   const figures = forecastBaselineFigures(forecast.pre_regression_baseline);
   return { unavailable: true, reasonKind, reason, detail, baseline: figures, baselineText: baselineText(figures), counts, freshness, drain: null, cost: null, exactCost: null, tokens: null };
 }
@@ -473,8 +483,9 @@ function drainFoot(quantiles) {
   if (info) return info.label;
   if (quantiles?.p90 != null) return null;
   if (lastPayload.forecast?.schedulable_subset) return SUBSET_FOOT;
-  if (quantiles?.p50 != null) return "p90 beyond the 90-day horizon";
-  return lastPayload.coverage?.no_history ? "some tasks have no history" : "beyond the 90-day horizon";
+  if (quantiles?.p50 != null) return hasHorizonCensoringEvidence(lastPayload.forecast) ? "p90 beyond the 90-day horizon" : UNREPORTED_FORECAST_REASON;
+  if (lastPayload.coverage?.no_history) return "some tasks have no history";
+  return hasHorizonCensoringEvidence(lastPayload.forecast) ? "beyond the 90-day horizon" : UNREPORTED_FORECAST_REASON;
 }
 
 function unavailableBlock(forecast, payload) {
@@ -604,7 +615,8 @@ function forecastCard() {
     ]));
     const subset = subsetNote(forecast);
     if (subset) children.push(subset);
-    children.push(el("p", { class: "fc-approved fc-odds" }, [drainOdds(forecast)]));
+    const odds = drainOdds(forecast);
+    if (odds) children.push(el("p", { class: "fc-approved fc-odds" }, [odds]));
   }
   children.push(arrivalsLine());
   const approved = lastPayload.if_approved;
@@ -638,9 +650,14 @@ function subsetNote(forecast) {
 
 function drainOdds(forecast) {
   const horizon = formatForecastHours(forecast.horizon_hours ?? 2160);
-  const parts = [`Drains within ${horizon} in ${fmtShare(forecast.drain_probability)} of runs`, `the initial tasks all finish in ${fmtShare(forecast.completion_probability)}`];
+  const drainProbability = num(forecast.drain_probability);
+  const completionProbability = num(forecast.completion_probability);
+  const parts = [];
+  if (drainProbability != null) parts.push(`Drains within ${horizon} in ${fmtShare(drainProbability)} of runs`);
+  if (completionProbability != null) parts.push(`the initial tasks all finish in ${fmtShare(completionProbability)}`);
   const unfinished = num(forecast.not_expected_to_drain);
   if (unfinished) parts.push(`${unfinished.toFixed(2)} tasks unfinished on average`);
+  if (!parts.length) return null;
   const text = `${parts.join("; ")}.`;
   return forecast.simulation_truncated ? `${text} Some runs hit the event limit.` : text;
 }
