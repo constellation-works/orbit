@@ -65,6 +65,7 @@ pub(super) fn dispatch(
             arm: input.optional_string("arm")?,
         }),
         ExperimentVerb::Abandon => change(ExperimentChange::Abandon),
+        ExperimentVerb::Delete => runtime.delete_experiment(&input.required_string("id")?, by()?),
         ExperimentVerb::Show => view_json(runtime.experiment_view(&input.required_string("id")?)?),
         ExperimentVerb::Readout => serde_json::to_value(runtime.experiment_readout(
             &input.required_string("id")?,

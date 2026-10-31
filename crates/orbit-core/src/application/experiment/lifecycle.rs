@@ -277,6 +277,68 @@ impl OrbitRuntime {
         self.write_change(&record, experiment, arms, kind, detail, by, running_limit)
     }
 
+    /// Delete a finished experiment that never applied a treatment, with its
+    /// arms, events and assignments.
+    ///
+    /// Only a draft, concluded or abandoned experiment qualifies, and only
+    /// when deleting it cannot orphan a reference: a live arm assignment
+    /// changed a task's run and is cited from `task.crew` and run captures,
+    /// and a conclusion with an arm filed a promotion task that names it.
+    /// Shadow assignments applied nothing. The event log goes with the
+    /// experiment, so the deletion itself is logged here.
+    pub fn delete_experiment(
+        &self,
+        id_or_name: &str,
+        by: ExperimentActor,
+    ) -> Result<Value, OrbitError> {
+        let record = self.experiment_record(id_or_name)?;
+        let current = &record.experiment;
+        require_status(current, &[DRAFT, CONCLUDED, ABANDONED], "delete")?;
+        if let Some(arm) = &current.concluded_arm {
+            return Err(OrbitError::InvalidInput(format!(
+                "cannot delete experiment `{}`: it concluded with arm `{arm}`, and its promotion task names it",
+                current.name
+            )));
+        }
+        let store = self.sqlite_store()?;
+        let workspace = self.workspace_id()?;
+        let applied = store
+            .experiment_assignments(&workspace, &current.id)?
+            .into_iter()
+            .filter(|assignment| assignment.arm.is_some())
+            .count();
+        if current.mode == "live" && applied > 0 {
+            return Err(OrbitError::InvalidInput(format!(
+                "cannot delete experiment `{}`: it ran live and assigned {applied} task(s) to arms, whose crews and runs cite it",
+                current.name
+            )));
+        }
+        if !store.delete_experiment(&workspace, &current.id, current.revision)? {
+            return Err(OrbitError::InvalidInput(format!(
+                "experiment `{}` changed while this delete was prepared; show it and retry",
+                current.name
+            )));
+        }
+        tracing::info!(
+            experiment = %current.id,
+            name = %current.name,
+            mode = %current.mode,
+            status = %current.status,
+            created_by = %current.created_by,
+            actor = %by.actor,
+            reason = by.reason.as_deref().unwrap_or_default(),
+            "experiment deleted"
+        );
+        Ok(json!({
+            "deleted": current.id,
+            "name": current.name,
+            "mode": current.mode,
+            "status": current.status,
+            "created_by": current.created_by,
+            "assignments": applied,
+        }))
+    }
+
     /// The experiment whose id, or else whose name, is `id_or_name`.
     pub fn experiment_view(&self, id_or_name: &str) -> Result<ExperimentView, OrbitError> {
         ExperimentView::from_record(self.experiment_record(id_or_name)?)

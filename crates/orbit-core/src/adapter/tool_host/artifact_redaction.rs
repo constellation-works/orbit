@@ -373,6 +373,7 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
             | ExperimentVerb::Reweight
             | ExperimentVerb::Conclude
             | ExperimentVerb::Abandon
+            | ExperimentVerb::Delete
             | ExperimentVerb::Show
             | ExperimentVerb::List
             | ExperimentVerb::Readout => ActionPolicy {

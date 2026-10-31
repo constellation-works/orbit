@@ -23,7 +23,8 @@ below. `show`, `list`, and `readout` are read-only and any caller may use
 them. In MCP terms the tools are `orbit.experiment.create`, `update`,
 `clone`, `start`, `pause`, `resume`, `reweight`, `assign`, `conclude`,
 `abandon`, `show`, `list`, and `readout`; the writes carry the same
-operator-only refusal there.
+operator-only refusal there. `delete` has no MCP tool: it is an operator
+CLI command only.
 
 ## Before you start
 
@@ -372,6 +373,19 @@ Concluding with no `--arm` records no winner and files nothing, and
 concluding again with a different arm after a promotion task exists is
 refused until that task is removed. `abandon` files nothing and records
 no winner.
+
+## Delete a finished experiment
+
+```bash
+orbit experiment delete crew-ladder-hard-7 --reason "old shadow trial"
+```
+
+`delete` removes a draft, concluded, or abandoned experiment along with its
+arms, event log, and assignments. It refuses an experiment that is still
+running or paused. It also refuses one that ran live and assigned tasks to
+arms, because those tasks' crews and runs refer to it, and one concluded with
+an arm, because its promotion task names it. Shadow experiments never changed
+a task, so a finished one can always be deleted.
 
 ## Watch it in the dashboard
 
