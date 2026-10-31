@@ -1526,9 +1526,12 @@ or report:
   or for a task tagged `security` or `security-review`. `rerun_ci` is also refused when the task
   records no pull request, the head moved since the triager inspected it, no required check
   failed, or the history records that head's failure as inherited from the base
-  (`pr_auto_fix_base_red`, `ci_base_suspect`). A refused requeue is recorded with its human action
-  and the task stays blocked; a refused `resume_run` or `rerun_ci` records nothing, so the episode
-  still awaits triage.
+  (`pr_auto_fix_base_red`, `ci_base_suspect`). Operator-only or exhausted-bound requeue refusals
+  are recorded with their human action; the task stays blocked and the marker settles the episode.
+  A requeue preflight failure (including an unsettled run) or an unreadable recent-count error
+  returns before triage is written, leaving the episode awaiting triage. If the count cannot be
+  read, record a `report` that the block remains unresolved; do not assume a marker exists. A
+  refused `resume_run` or `rerun_ci` also records nothing, so the episode still awaits triage.
 - **Host-specific failures stay visible.** The triager's activity withholds task update, lifecycle,
   and direct requeue and run-resume tools, so it cannot edit a task or force anything. Its only
   write path to a block is `block_triage`, which applies the bounds and guards above.
