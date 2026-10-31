@@ -587,9 +587,19 @@ function drainDelta(next, base) {
   return `${diff > 0 ? "+" : "−"}${formatForecastHours(Math.abs(diff))} at p50`;
 }
 
+// The if-approved scenario's own unavailable evidence. Proposed coverage is
+// a separate checklist, so the main backlog's coverage is not this reason.
+function proposedForecastUnavailable() {
+  const approved = lastPayload.if_approved;
+  if (!approved || !forecastCount(lastPayload.backlog?.proposed)) return null;
+  const proposedCoverage = lastPayload.proposed_coverage;
+  const coverage = proposedCoverage && typeof proposedCoverage === "object" ? proposedCoverage : {};
+  return forecastUnavailableInfo(approved, { coverage });
+}
+
 // If the proposed tasks were approved: the adjusted drain time, or the
-// baseline when that is unavailable too. The page's one warning line covers
-// why; this figure only says which it shows.
+// baseline when that is unavailable. The page's one warning, from whichever
+// scenario is unavailable, covers why; this figure only says which it shows.
 function approvedFigure() {
   const approved = lastPayload.if_approved;
   const proposed = forecastCount(lastPayload.backlog?.proposed);
@@ -598,7 +608,7 @@ function approvedFigure() {
   const label = "If proposed work is approved";
   const noun = `${proposed} proposed task${proposed === 1 ? "" : "s"}`;
   const rest = (scenario) => `cost ${formatForecastQuantileRange(scenario?.usd, formatForecastUsd)} · tokens ${formatForecastQuantileRange(scenario?.tokens, formatForecastTokens)}`;
-  if (forecastUnavailableInfo(approved, lastPayload)) {
+  if (proposedForecastUnavailable()) {
     const baseline = approved.pre_regression_baseline;
     if (!forecastBaselineFigures(baseline)) return figure(label, null, formatForecastHours, [`${noun} · no baseline`], { className: "fc-approved-fig", unknown: "unknown" });
     const delta = drainDelta(baseline.time_to_drain_hours, forecast.pre_regression_baseline?.time_to_drain_hours);
@@ -614,19 +624,34 @@ function focusGaps() {
   target?.focus?.({ preventScroll: true });
 }
 
-// The single warning when the regression-adjusted forecast is unavailable;
-// the reasons and evidence are in Data gaps.
+function unavailableWarning(text, kind) {
+  const link = el("button", { class: "fc-link", type: "button", text: "See data gaps" });
+  link.addEventListener("click", focusGaps);
+  const node = el("p", { class: "fc-warning fc-unavailable", role: "note" }, [text, " ", link]);
+  node.dataset.forecastReason = kind;
+  return node;
+}
+
+// The single warning when a regression-adjusted forecast is unavailable.
+// Either scenario can supply it; the reasons and evidence are in Data gaps.
 function warningLine(info, hasBaseline) {
   const missing = forecastCount(lastPayload.coverage?.regression_history_missing);
   const lead = hasBaseline ? "Baseline only — " : "No forecast — ";
   const text = info.kind === "regression_history_missing" && missing
     ? `${lead}regression follow-up work isn't included because ${missing} task${missing === 1 ? " has" : "s have"} no regression history.`
     : `${lead}the regression-adjusted forecast is unavailable: ${info.label}.`;
-  const link = el("button", { class: "fc-link", type: "button", text: "See data gaps" });
-  link.addEventListener("click", focusGaps);
-  const node = el("p", { class: "fc-warning fc-unavailable", role: "note" }, [text, " ", link]);
-  node.dataset.forecastReason = info.kind;
-  return node;
+  return unavailableWarning(text, info.kind);
+}
+
+// The same one warning when only the proposed scenario is unavailable, so
+// the main forecast stays the adjusted figures and the proposed baseline is
+// still qualified.
+function proposedWarning(info, hasBaseline) {
+  const reason = `If approved, the adjusted forecast is unavailable: ${info.label}.`;
+  const limit = hasBaseline
+    ? " The baseline shown for proposed work excludes unsupported regression follow-up work and is not the regression-adjusted forecast."
+    : "";
+  return unavailableWarning(`${reason}${limit}`, info.kind);
 }
 
 function arrivalsLine() {
@@ -710,6 +735,11 @@ function answerCard() {
         figure("Effective parallelism", forecast.effective_parallelism, fmtParallelism, `of ${inputs.concurrency ?? "?"} slots, averaged over the drain`, { className: "fc-kpi fc-minor" }),
         figure("Critical path", forecast.critical_path_hours, formatForecastHours, "longest dependency chain", { className: "fc-kpi fc-minor" }),
       ]));
+      const approvedInfo = proposedForecastUnavailable();
+      if (approvedInfo) {
+        const hasApprovedBaseline = Boolean(forecastBaselineFigures(lastPayload.if_approved?.pre_regression_baseline));
+        children.push(proposedWarning(approvedInfo, hasApprovedBaseline));
+      }
       const odds = drainOdds(forecast);
       if (odds) children.push(el("p", { class: "fc-line fc-odds" }, [odds]));
     }
@@ -890,22 +920,42 @@ function coverageItems() {
   ];
 }
 
-// Why the adjusted forecast is unavailable, with its evidence: the detail
-// behind the answer card's one warning line.
+// Why an adjusted forecast is unavailable, with its evidence: the detail
+// behind the answer card's one warning line. Either scenario can supply it.
 function unavailableNote() {
   const forecast = lastPayload.forecast || {};
   const info = forecast.tasks ? forecastUnavailableInfo(forecast, lastPayload) : null;
-  if (!info) return null;
-  const parts = [info.detail];
-  if (forecastBaselineFigures(forecast.pre_regression_baseline)) {
-    parts.push("The pre-regression baseline shown instead excludes unsupported regression follow-up work and is not the regression-adjusted forecast; a percentile shown as unknown was not estimated.");
+  const approvedInfo = proposedForecastUnavailable();
+  if (!info && !approvedInfo) return null;
+  const parts = [];
+  if (info) {
+    parts.push(info.detail);
+    if (forecastBaselineFigures(forecast.pre_regression_baseline)) {
+      parts.push("The pre-regression baseline shown instead excludes unsupported regression follow-up work and is not the regression-adjusted forecast; a percentile shown as unknown was not estimated.");
+    }
+    if (approvedInfo) {
+      const also = `If approved, the adjusted forecast is also unavailable: ${approvedInfo.label}.`;
+      const approvedBaseline = forecastBaselineFigures(lastPayload.if_approved?.pre_regression_baseline);
+      parts.push(approvedBaseline ? `${also} Its baseline excludes unsupported regression follow-up work.` : also);
+    }
+  } else {
+    parts.push(`If approved, the adjusted forecast is unavailable: ${approvedInfo.label}. ${approvedInfo.detail}`);
+    if (forecastBaselineFigures(lastPayload.if_approved?.pre_regression_baseline)) {
+      parts.push("The baseline shown for proposed work excludes unsupported regression follow-up work and is not the regression-adjusted forecast; a percentile shown as unknown was not estimated.");
+    }
   }
-  const approved = lastPayload.if_approved;
-  const approvedInfo = approved && lastPayload.backlog?.proposed ? forecastUnavailableInfo(approved, lastPayload) : null;
-  if (approvedInfo) parts.push(`If approved, the adjusted forecast is also unavailable: ${approvedInfo.label}.`);
   const node = el("p", { class: "fc-line fc-gap-note" }, [parts.join(" ")]);
-  node.dataset.forecastReason = info.kind;
+  node.dataset.forecastReason = (info || approvedInfo).kind;
   return node;
+}
+
+function gapsClearNote() {
+  const forecast = lastPayload.forecast || {};
+  const mainUnavailable = Boolean(forecast.tasks && forecastUnavailableInfo(forecast, lastPayload));
+  if (!mainUnavailable && proposedForecastUnavailable()) {
+    return "Current backlog coverage checks are clear. The proposed-work forecast is unavailable for a separate reason.";
+  }
+  return "No data gaps: every coverage check is clear.";
 }
 
 function gapsCard() {
@@ -918,7 +968,7 @@ function gapsCard() {
       el("span", { class: "fc-gap-label", text: label }),
       el("span", { class: "fc-gap-count", text: String(value) }),
     ])))
-    : el("div", { class: "mx-empty-note", text: "No data gaps: every coverage check is clear." });
+    : el("div", { class: "mx-empty-note", text: gapsClearNote() });
   const node = card("Data gaps", meta, [tiles, unavailableNote()], "fc-gaps-card", "fc-gaps");
   node.tabIndex = -1;
   return node;

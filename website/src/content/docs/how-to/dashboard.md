@@ -912,10 +912,13 @@ calibration, with the detail collapsed underneath.
   is unavailable if its rank falls among those missing totals.
 - With proposed tasks waiting, **If proposed work is approved** gives the
   drain time if they were all approved and how much it changes, with their
-  cost and tokens.
-- When regression follow-up work can't be estimated, the figures show the
-  baseline without it and one warning line says why, with a link to the data
-  gaps.
+  cost and tokens. When that proposed forecast cannot include regression
+  follow-up, it shows the baseline instead. One warning names why and says
+  that baseline excludes unsupported regression follow-up work.
+- When regression follow-up work can't be estimated for the current backlog,
+  the figures show the baseline without it and one warning line says why,
+  with a link to the data gaps. That is still the only warning when the
+  proposed forecast is unavailable as well.
 - The **History** select chooses the finished tasks sampled. The default is
   the last 30 days, reaching further back when those hold fewer than 50
   finished tasks, so a quiet month still forecasts. **Last 200** and **Last
