@@ -22,7 +22,11 @@ done
 # Modes: the default full run (`make ci`); --fast (`make ci-fast`); the offline
 # file/metadata-only --static (`make ci-guards`); and the two
 # parts of the split hosted workflow (.github/workflows/ci.yml). --checks runs
-# everything except the workspace test build, doctests and nextest. --test-archive PATH
+# formatting, production Clippy, documentation and the supply-chain gate.
+# --guards runs the repository guards and self-tests (the guard pool and the
+# exclusive lane) in the CI guardrails job, beside the test build; with
+# CI_SELF_TESTS=changed (pull requests) it selects self-tests by their inputs,
+# as --fast does. --test-archive PATH
 # runs only the workspace test build and archives its test binaries for the
 # parallel nextest shards. --test-partitions PATH proves the shards' count
 # partitions of that archive cover every test. --test-doctests runs doctests
@@ -30,11 +34,12 @@ done
 fast=false
 static=false
 checks=false
+guards=false
 archive=""
 partitions=false
 test_doctests=false
 usage() {
-  echo "usage: ci-guardrails.sh [--fast | --static | --checks | --test-archive PATH | --test-partitions PATH | --test-doctests]" >&2
+  echo "usage: ci-guardrails.sh [--fast | --static | --checks | --guards | --test-archive PATH | --test-partitions PATH | --test-doctests]" >&2
   exit 2
 }
 case "${1:-}" in
@@ -42,6 +47,7 @@ case "${1:-}" in
   --fast) fast=true ;;
   --static) fast=true; static=true ;;
   --checks) checks=true ;;
+  --guards) guards=true ;;
   --test-doctests) test_doctests=true ;;
   --test-archive | --test-partitions)
     [[ -n "${2:-}" ]] || usage
@@ -56,7 +62,7 @@ esac
 # Several guardrail scripts shell out to ripgrep; a missing `rg` degrades
 # them silently (empty search results read as "clean" or, worse, as false
 # violations). Fail fast instead. [ORB-10021]
-if [[ -z "$archive" && "$test_doctests" == false ]] && ! command -v rg >/dev/null 2>&1; then
+if [[ -z "$archive" && "$test_doctests" == false && "$checks" == false ]] && ! command -v rg >/dev/null 2>&1; then
   echo "ci-guardrails: ripgrep (rg) is required; install it before running" >&2
   exit 1
 fi
@@ -177,11 +183,20 @@ fi
 # plus the members `ci-test-affected.py --test-build-packages` adds to keep
 # the workspace's dependency features, and record that package list beside
 # the archive (PATH.packages). The partition guard then admits empty shards.
-# A selection the checkout cannot build falls back to the workspace.
+# A selection the checkout cannot build falls back to the workspace. The
+# shards run only the affected crates' tests (the build set adds feature
+# anchors whose tests the change cannot affect), so the guard lists the same
+# package filter they pass.
 if [[ "$partitions" == true ]]; then
   allow_empty=()
+  affected_filter=()
   if [[ -f "$archive.packages" ]]; then
     allow_empty=(--allow-empty)
+  fi
+  if [[ "${CI_TEST_SCOPE:-}" == affected:* ]]; then
+    allow_empty=(--allow-empty)
+    crates="${CI_TEST_SCOPE#affected:}"
+    affected_filter=(-E "package(${crates//,/) | package(})")
   fi
   # Extract the archive once, inside the checkout, and list every selection
   # from that extraction's metadata, as the shard-1 sandbox gate does. Listing
@@ -197,7 +212,8 @@ if [[ "$partitions" == true ]]; then
     ${allow_empty[@]+"${allow_empty[@]}"} -- cargo nextest list \
     --binaries-metadata "$extracted/target/nextest/binaries-metadata.json" \
     --cargo-metadata "$extracted/target/nextest/cargo-metadata.json" \
-    --workspace-remap "$repo_root" --target-dir-remap "$extracted/target"
+    --workspace-remap "$repo_root" --target-dir-remap "$extracted/target" \
+    ${affected_filter[@]+"${affected_filter[@]}"}
   exit 0
 fi
 if [[ -n "$archive" ]]; then
@@ -232,7 +248,7 @@ fi
 run_self_tests=true
 if [[ "$static" == true ]]; then
   run_self_tests=false
-elif [[ "$fast" == true ]]; then
+elif [[ "$fast" == true || ("$guards" == true && "${CI_SELF_TESTS:-all}" == changed) ]]; then
   # Match ci-test-affected's delivery-base override and merge-base fallback.
   base=""
   if [[ -n "${CI_TEST_BASE:-}" ]]; then
@@ -273,7 +289,7 @@ fi
 
 # --fast runs formatting and script guardrails, never the Rust test suite.
 # `make ci-test-affected` supplies the separate pre-handoff test gate.
-if [[ "$static" == false ]]; then
+if [[ "$static" == false && "$guards" == false ]]; then
   run_phase fmt cargo fmt --all -- --check
 fi
 
@@ -490,7 +506,7 @@ start_check_chain() {
 # before the workspace tests start. Each suite is mostly one process, so the
 # lane leaves most of the host to that lowered work.
 guard_phase_started=$SECONDS
-if [[ "$static" == false ]]; then
+if [[ "$static" == false && "$checks" == false ]]; then
   exclusive_started=$SECONDS
   (
     # The report trap belongs to the parent shell, not to the lane.
@@ -507,6 +523,7 @@ if [[ "$static" == false ]]; then
   exclusive_lane_pid=$!
 fi
 
+if [[ "$checks" == false ]]; then
 (
   # The report trap belongs to the parent shell, not to the pool.
   trap - EXIT
@@ -520,7 +537,9 @@ fi
   # Start the longer repository scans first; the pool keeps pool_width running.
   run_guard "$repo_root/scripts/check-orphan-modules.sh"
   run_guard "$repo_root/scripts/check-workflow-action-pins.sh"
-  if [[ "$static" == true ]]; then
+  # Its inventory check always runs; its fixture self-test (the non-static
+  # --check) only when self-test inputs changed.
+  if [[ "$static" == true || "$run_self_tests" == false ]]; then
     run_guard "$repo_root/scripts/test-qa-full-sweep.py" --check --static
   else
     run_guard "$repo_root/scripts/test-qa-full-sweep.py" --check
@@ -594,6 +613,7 @@ fi
   exit "$failed"
 ) >"$guard_logs/pool.out" 2>"$guard_logs/pool.err" &
 guard_pool_pid=$!
+fi
 
 # Every Cargo command that compiles workspace members after the folded build
 # runs under its lint environment. Cargo fingerprints it, so without it the
@@ -602,15 +622,15 @@ lint="$repo_root/scripts/with-test-build-lint.sh"
 
 if [[ "$checks" == true ]]; then
   # The hosted Check job builds no test binaries: the test-build job does, and
-  # the shard jobs run nextest. The check chain starts beside the pool and the
-  # exclusive lane, in the idle class like the build it replaces there, so the
-  # exclusive suites keep normal-priority CPU to themselves. Doctests reuse
-  # the test-build job's libraries there, after the archive upload.
+  # the shard jobs run nextest. The CI guardrails job runs the guard pool and
+  # the exclusive lane on their own runner. Doctests reuse the test-build
+  # job's libraries there, after the archive upload.
   start_check_chain
+  join_check_chain
+elif [[ "$guards" == true ]]; then
   join_guard_pool
   join_exclusive_lane
   guards_joined=$SECONDS
-  join_check_chain
 elif [[ "$fast" == false ]]; then
   # Enumerating workflow tests compiles their targets; keep it out of ci-fast.
   # --workspace-build lists them from the same `--workspace --lib --bins
@@ -656,7 +676,7 @@ elif [[ "$fast" == false ]]; then
   fi
 fi
 
-if [[ "$fast" == false ]]; then
+if [[ "$fast" == false && "$guards" == false ]]; then
   # Supply-chain gate: dependency advisories + license allow-list (deny.toml).
   # [ORB-00416] [ORB-11983] Soft-presence like nextest above — CI installs a pinned version;
   # local runs without the tool warn instead of hard-failing. It may fetch the
@@ -677,5 +697,7 @@ fi
 
 # From the start of the pool and the exclusive lane to the later of their
 # joins. In full mode that includes the workflow test build they overlap.
-phase_records+=("repository-guards wall_seconds=$((guards_joined - guard_phase_started)) exit=$failed")
+if [[ "$checks" == false ]]; then
+  phase_records+=("repository-guards wall_seconds=$((guards_joined - guard_phase_started)) exit=$failed")
+fi
 exit "$failed"
