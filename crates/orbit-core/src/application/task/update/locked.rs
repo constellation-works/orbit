@@ -21,7 +21,9 @@ use super::super::lifecycle::{
 };
 use super::super::params::TaskUpdateParams;
 use super::artifacts::admit_task_artifact_as;
-use super::entry::{LockedTaskUpdate, StatusAuthority, TaskUpdateContext, task_field_writer};
+use super::entry::{
+    LockedTaskUpdate, StatusAuthority, TaskFieldWriter, TaskUpdateContext, task_field_writer,
+};
 use crate::OrbitRuntime;
 use crate::application::task::TaskReviewPort;
 
@@ -244,6 +246,27 @@ impl OrbitRuntime {
         let crew_redraw_history = validated.crew_redraw_history;
         let granted_tools_change = validated.granted_tools_change;
         params = validated.params;
+        // Operator work is completed by its operator: an agent-attributed
+        // update cannot close a human crew's task, before or after a crew
+        // change in the same write.
+        if requested_status == Some(TaskStatus::Done)
+            && status_authority == StatusAuthority::Lifecycle
+            && writer == TaskFieldWriter::Agent
+        {
+            let next_crew = params
+                .crew
+                .as_ref()
+                .map_or(task.crew.as_deref(), Option::as_deref);
+            if let Some(human) = self
+                .human_crew(task.crew.as_deref())
+                .or_else(|| self.human_crew(next_crew))
+            {
+                return Err(OrbitError::PolicyDenied(format!(
+                    "task {id} is assigned to human crew '{}': only an operator may move it to done",
+                    human.name
+                )));
+            }
+        }
         // The finding check above read the edits as supplied; judge the
         // material as it will be stored, since normalization can turn a
         // differently spelled tag into a review-finding tag.

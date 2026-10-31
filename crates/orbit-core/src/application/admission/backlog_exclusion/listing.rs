@@ -9,8 +9,9 @@ use super::super::pass_error::PassError;
 use super::super::unknown_footprint::{FootprintGuard, FootprintWave, whole_tree_holder};
 use super::exclusions::{
     browser_kit_exclusion, clears_complexity_gate, footprint_exclusion, host_labels_exclusion,
-    host_os_exclusion, inherited_only_epic_root_exclusion, mock_validation_exclusion,
-    pilot_finding_exclusion, pilot_preparation_exclusion, scheduled_exclusion,
+    host_os_exclusion, human_crew_exclusion, inherited_only_epic_root_exclusion,
+    mock_validation_exclusion, pilot_finding_exclusion, pilot_preparation_exclusion,
+    scheduled_exclusion,
 };
 use super::snapshot::backlog_snapshot_in_mode;
 use super::{
@@ -189,6 +190,10 @@ pub(crate) fn list_backlog_tasks(
                     message: format!("load task {task_id}: {err}"),
                 }
             })?;
+            if let Some(exclusion) = human_crew_exclusion(runtime, &task) {
+                excluded.push(exclusion);
+                continue;
+            }
             // Submission refused a scheduled task unless the operator's
             // override is on record; this catches a run resumed or replayed
             // after `not_before` was set.

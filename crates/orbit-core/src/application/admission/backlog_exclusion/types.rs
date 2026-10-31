@@ -14,8 +14,9 @@ pub(crate) struct BacklogTaskExclusion {
     pub(crate) reason: BacklogTaskExclusionReason,
     pub(crate) conflicts: Vec<BacklogTaskConflict>,
     /// The crew the task would have dispatched as, on a
-    /// [`BacklogTaskExclusionReason::CrewNotAllowed`] or
-    /// [`BacklogTaskExclusionReason::CrewEnvUnset`] exclusion. Naming the
+    /// [`BacklogTaskExclusionReason::CrewNotAllowed`],
+    /// [`BacklogTaskExclusionReason::CrewEnvUnset`] or
+    /// [`BacklogTaskExclusionReason::HumanCrew`] exclusion. Naming the
     /// *effective* crew — not the raw `task.crew`, which is often unset and
     /// inherited — is what makes the exclusion actionable [ORB-11242].
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -36,6 +37,12 @@ pub(crate) struct BacklogTaskExclusion {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum BacklogTaskExclusionReason {
     ContextLockConflict,
+    /// The task's crew is a human crew (`[crews.<name>] kind = "human"`): the
+    /// work waits for that operator. No drain admits it, whatever its
+    /// `--allow-crew` list names, and it is never re-crewed onto an agent.
+    /// `crew` names the human crew; reassigning the task to an agent crew is
+    /// the only thing that clears it.
+    HumanCrew,
     /// The task selects a delivery job with a `delivery:<job>` tag that cannot
     /// deliver it in the drain's ship mode — its plugin is disabled or
     /// uninstalled, or the job does not declare that mode. The task stays in

@@ -29,6 +29,7 @@ pub(crate) const CREW_CONFIG_FIELDS: &[&str] = &[
     "effort",
     "enabled",
     "env",
+    "kind",
     "model",
     "provider",
     "tags",

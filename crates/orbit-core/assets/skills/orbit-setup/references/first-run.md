@@ -85,6 +85,8 @@ Non-interactive runs must pass both explicitly:
 orbit init --non-interactive --machine-name <name> --task-prefix <PREFIX>
 ```
 
+Init also seeds the operator's human crew (`[crews.<name>] kind = "human"`) for work Orbit tracks but never dispatches. It uses the OS user name, offered at a prompt and taken as-is non-interactively; pass `--human-name <name>` to choose another. A re-run keeps an existing one.
+
 ## Step 4 — Initialize the workspace
 
 For agent-assisted PR delivery, from the repository root (omit `--mcp` if no client registration is wanted):

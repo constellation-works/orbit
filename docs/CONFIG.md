@@ -1424,6 +1424,25 @@ Final recovery keeps its own rules (no fallback; `[]` turns it off), and automat
 
 **Retired crew shapes** fail load with migration guidance: `planner` / `implementer` / `reviewer` sub-tables (use flat `model` and `provider`); `backend` (`cli` is ignored, `http` and `auto` refused, likewise in `ORBIT_BACKEND` and `[runtime] backend`; remove it); `[agent.<role>]` tables (use `[crews.<name>]` plus `workflow.default_crew`).
 
+### Human crews
+
+`kind = "human"` declares a crew for operator work: tasks a person does themselves, such as approving a contract or renewing a domain, tracked beside agent work but never dispatched. `kind` defaults to `"agent"`; any other value fails load.
+
+```toml
+[crews.dk]
+kind = "human"
+description = "Daniel's own work"
+```
+
+- **Keys.** A human crew takes only `description` and `tags`. Setting `provider`, `model`, `effort`, `env` or any other agent key fails load. Its name must not match an agent crew, built-in ones included. Human crews are kept apart from the agent crews, so a `[crews]` table holding only human crews still gets the built-in agent crews.
+- **Never drawn.** `workflow.default_crew`, the complexity, type and purpose pools, `purpose_crews.review`, and experiment arm overlays may not name one. Config load refuses the first four, and `orbit experiment start` refuses an arm. A redraw never selects or moves a task onto a human crew.
+- **Never admitted.** A drain or pull follower skips a human-crew task even when `--allow-crew` names the crew. `--allow-crew` accepts a human crew's name, but it admits nothing. `orbit run readiness` reports the task with reason `human_crew` and the crew. An explicit ship of the task admits nothing, and the dashboard shows no Ship control for it.
+- **Never piloted.** The task pilot excludes the task (`human_crew`), refuses an explicit request (`task_pilot_human_crew`), and records no assessment, warning or hold on it.
+- **Closed by the operator.** An agent-attributed `orbit.task.update` (one that passes `model`) cannot move a human-crew task to `done`. The operator's own update or the dashboard can.
+- **Out of agent analytics.** Crew analytics, performance rankings, the crew ladder and provider usage leave human crews out.
+- **Listed.** `orbit config show` lists a human crew with provider `human`, and `orbit config get crews.<name>.kind` answers `human`. For an agent crew, `kind` is absent. The dashboard tags each human-crew task `for <name>`. Its **My work** chip (`#tasks?crew=mine`) keeps the open tasks of the viewer's human crew: the only human crew, or else the one matching the OS user that runs `orbit web serve`.
+- **Seeded by `orbit init`.** When the global config has no human crew, `orbit init` adds one named after the OS user, normalized to lowercase letters, digits, `_` and `-`. At a terminal it prompts with the OS user as the default; without a terminal, or with `--non-interactive`, it takes the OS user as-is. `--human-name <NAME>` sets the name. A name an agent crew already holds is asked again at a terminal and refused otherwise, before init writes anything. A re-run leaves an existing human crew unchanged.
+
 ### Per-crew credentials (`env`)
 
 Every crew of a provider reads its credential from the same agent environment, so by default they share one account. A crew's `env` list points that crew alone at another one, such as an API key with prepaid credits next to a Claude subscription:

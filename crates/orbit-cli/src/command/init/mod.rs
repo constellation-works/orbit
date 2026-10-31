@@ -10,6 +10,7 @@
 pub mod agent_detect;
 pub mod agent_prompt;
 mod command;
+mod human_crew;
 #[cfg(target_os = "linux")]
 mod linux_host;
 mod prompt_stdin;

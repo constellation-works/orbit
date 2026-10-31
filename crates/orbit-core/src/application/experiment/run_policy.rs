@@ -146,6 +146,16 @@ impl OrbitRuntime {
                     })
                     .collect::<Vec<_>>();
                 let source = format!("experiment `{name}` arm `{arm}` crew pool");
+                // A human crew is not in the agent registry, so the pool check
+                // below would call it undefined; name what it is instead.
+                if let Some(human) = entries
+                    .iter()
+                    .find_map(|member| self.human_crew(Some(&member.name)))
+                {
+                    return Err(OrbitError::InvalidInput(
+                        orbit_types::identity::human_crew_refusal(&source, &human.name),
+                    ));
+                }
                 canonical_crew_pool_entries(&entries, self.context.settings().crews(), &source)?;
                 for member in &entries {
                     self.resolve_crew_for_task(Some(&member.name), None)?;

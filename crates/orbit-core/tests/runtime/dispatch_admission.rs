@@ -59,6 +59,7 @@ use tempfile::TempDir;
 
 mod crew_env;
 mod gap_fit;
+mod human_crew;
 mod lock_busy_pass;
 mod replay_crew;
 mod reservation_grants;

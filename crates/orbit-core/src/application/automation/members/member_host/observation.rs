@@ -162,6 +162,11 @@ impl Host<'_> {
 
             match self.trigger.kind {
                 StateTriggerKind::PreparationEligible => {
+                    // Operator work: the pilot never assesses a human crew's task.
+                    if self.runtime.is_human_crew(task.crew.as_deref()) {
+                        withheld.insert(task.id, "human_crew".into());
+                        continue;
+                    }
                     if !orbit_automation::members::preparation::eligible(&task, self.eligibility())
                     {
                         withheld.insert(task.id, "task_ineligible".into());

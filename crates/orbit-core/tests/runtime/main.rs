@@ -127,6 +127,7 @@ mod host_os_executor;
 mod host_os_routing;
 mod host_resources;
 mod host_ui_routing;
+mod human_crew_work;
 mod implement_blocker;
 mod invocation_metrics;
 mod job_failure_streak;

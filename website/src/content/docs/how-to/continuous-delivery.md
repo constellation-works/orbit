@@ -150,6 +150,10 @@ Common reasons a backlog task waits:
 - **`crew_not_allowed`**, when you preview a
   [crew restriction](#restrict-a-window-to-some-crews) or a running window
   has one.
+- **`human_crew`**: the task is assigned to a
+  [human crew](../../reference/config/#human-crews), so it waits for that
+  person. No drain admits it, even one whose `--allow-crew` names that crew.
+  Reassign it to an agent crew to dispatch it.
 - **`pilot_duplicate`** or **`pilot_already_landed`**: the latest applied
   task-pilot assessment found duplicate work or work already landed. This
   also holds tasks filed directly into backlog. Read the finding in the task

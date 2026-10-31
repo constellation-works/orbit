@@ -106,6 +106,12 @@ reserved). For an unattended setup, pass both:
 orbit init --non-interactive --machine-name build-01 --task-prefix ABC
 ```
 
+`orbit init` also adds a [human crew](../../reference/config/#human-crews)
+for your own work: tasks Orbit tracks for you but never hands to an agent. It
+offers your OS user name and uses it as-is without a terminal or with
+`--non-interactive`. Pass `--human-name <name>` to choose another. Running
+init again keeps the existing human crew.
+
 On Linux, an unattended `orbit init` never waits for a password, so it prepares
 the sandbox only as root or with passwordless `sudo`. Otherwise it warns and
 still seeds Orbit, and agent runs stay blocked until `orbit doctor providers`

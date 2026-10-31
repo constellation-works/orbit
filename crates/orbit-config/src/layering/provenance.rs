@@ -77,6 +77,35 @@ pub(super) fn effective_values(
             });
         }
     }
+    // A human crew lists its few fields like an agent crew's, `kind` always,
+    // so `config get crews.<name>.kind` and the listing say what it is.
+    for (name, human) in &resolved.human_crews {
+        let mut fields = vec![(
+            "kind",
+            serde_json::json!(orbit_types::identity::HUMAN_CREW_KIND),
+        )];
+        if let Some(description) = &human.description {
+            fields.push(("description", serde_json::json!(description)));
+        }
+        if !human.tags.is_empty() {
+            fields.push(("tags", serde_json::json!(human.tags)));
+        }
+        for (field, value) in fields {
+            let source = source_for_crew_field(name, field, global, workspace);
+            values.push(EffectiveConfigValue {
+                shadowed_by: shadowed_for_crew_field(name, field, &source, global),
+                fallback: None,
+                global_value: global
+                    .and_then(|document| crew_entry(&document.value, name))
+                    .and_then(|entry| entry.get(field))
+                    .map(json_from_toml),
+                built_in: serde_json::Value::Null,
+                source,
+                key: format!("crews.{name}.{field}"),
+                value,
+            });
+        }
+    }
     // `[plugins.<ns>]` rows layer like crews: one row per key actually present
     // in a layer, with the file that supplied it. A key the plugin defaults
     // but no file sets is reported by `orbit plugin show`, not here — this

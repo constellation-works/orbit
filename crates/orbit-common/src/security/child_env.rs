@@ -368,10 +368,9 @@ pub(crate) fn backfill_login_identity(vars: &mut BTreeMap<String, String>) {
 /// On Unix this is the `pw_name` for the real uid via the reentrant
 /// `getpwuid_r`, which (unlike `$USER`) does not depend on the ambient
 /// environment. Returns `None` when no passwd entry exists or the lookup
-/// fails.
-// pub(crate) for sibling-layout tests in security/tests/child_env.rs.
+/// fails. Also the fallback for the operator crew name `orbit init` offers.
 #[cfg(unix)]
-pub(crate) fn os_login_name() -> Option<String> {
+pub fn os_login_name() -> Option<String> {
     use std::ffi::CStr;
 
     // SAFETY: getuid cannot fail. getpwuid_r writes into caller-owned buffers
@@ -405,9 +404,8 @@ pub(crate) fn os_login_name() -> Option<String> {
 }
 
 /// Non-Unix fallback: derive the login name from `USERNAME` if present.
-// pub(crate) for sibling-layout tests in security/tests/child_env.rs.
 #[cfg(not(unix))]
-pub(crate) fn os_login_name() -> Option<String> {
+pub fn os_login_name() -> Option<String> {
     std::env::var("USERNAME")
         .ok()
         .filter(|name| !name.is_empty())

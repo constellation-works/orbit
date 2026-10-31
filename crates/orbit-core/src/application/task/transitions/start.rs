@@ -355,13 +355,18 @@ impl OrbitRuntime {
             let resolved_crew_override = if start_edits.crew.is_some() {
                 start_edits.crew.clone().flatten()
             } else {
-                self.canonical_crew_name(crew_override.as_deref())?
+                self.canonical_task_crew_name(crew_override.as_deref())?
             };
-            self.resolve_and_log_crew_for_task_start(
-                id,
-                resolved_crew_override.as_deref(),
-                task.crew.as_deref(),
-            )?;
+            // An operator starting a human crew's work has no agent crew to
+            // resolve; the dispatch refusal is for agents only.
+            let starting_crew = resolved_crew_override.as_deref().or(task.crew.as_deref());
+            if !self.is_human_crew(starting_crew) {
+                self.resolve_and_log_crew_for_task_start(
+                    id,
+                    resolved_crew_override.as_deref(),
+                    task.crew.as_deref(),
+                )?;
+            }
             let dependency_status_index = self.dependency_status_index([&task])?;
             let unmet_dependencies = unmet_task_dependencies(&task, &dependency_status_index);
             let effective_plan = start_edits.plan.as_deref().unwrap_or(task.plan.as_str());

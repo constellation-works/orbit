@@ -18,6 +18,16 @@ use crate::runtime::run_input::recorded_task_ids;
 
 /// A grant pins execution to the owner, intersected with its required labels.
 /// Ungranted tasks keep the claimed implementer's existing restrictions.
+/// The pull hold for a task assigned to a human crew: operator work no
+/// follower or owner pull claims, matching the local `human_crew` exclusion.
+fn human_crew_pull_hold(runtime: &crate::OrbitRuntime, task: &Task) -> Option<String> {
+    let human = runtime.human_crew(task.crew.as_deref())?;
+    Some(format!(
+        "human_crew: assigned to human crew `{}`; operator work no drain claims",
+        human.name
+    ))
+}
+
 fn claimed_tool_hold(runtime: &crate::OrbitRuntime, task: &Task) -> Option<String> {
     if let Some(grant) = host_labels::granted_tools_owner_hold(task) {
         return Some(runtime.task_host_labels_wait(task).unwrap_or(grant));
@@ -94,6 +104,11 @@ impl OrbitRuntime {
         let machine_id = Some(identity.location().machine_id.as_str());
         let now = chrono::Utc::now();
         for task in &backlog {
+            // Operator work: no follower claims a human crew's task.
+            if let Some(hold) = human_crew_pull_hold(self, task) {
+                admission_holds.insert(task.id.clone(), hold);
+                continue;
+            }
             // A task scheduled ahead is claimed by no follower until its
             // time; the first request after it may take it.
             if let Some(hold) = crate::application::task::schedule_hold_in(task, now, &|| {
@@ -213,6 +228,11 @@ impl OrbitRuntime {
                     && orbit_types::task::has_verify_mock_ui_tag(&task.tags)
                 {
                     return Ok(Some("visual_live_claim_unsupported: owner-verified final-candidate visual resolution is unavailable for claimed delivery".into()));
+                }
+                // Re-read under the section: the crew may have been changed
+                // to a human crew since the backlog read.
+                if let Some(hold) = human_crew_pull_hold(self, task) {
+                    return Ok(Some(hold));
                 }
                 // Re-read under the section: a `not_before` set after the
                 // backlog read above still holds the candidate.

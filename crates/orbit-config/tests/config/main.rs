@@ -64,6 +64,7 @@ include!("lease_workspace.rs");
 include!("default_crew.rs");
 include!("delivery_conventions.rs");
 include!("fallbacks.rs");
+include!("human_crews.rs");
 include!("ignored_crew_attribution.rs");
 include!("plugin_config.rs");
 include!("crew_performance.rs");

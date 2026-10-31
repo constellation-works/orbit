@@ -72,7 +72,9 @@ impl OrbitRuntime {
         task: &mut Task,
         complexity: Option<TaskComplexity>,
     ) -> Result<Option<TaskHistoryEntry>, OrbitError> {
-        if self.task_crew_has_admitted_delivery(task)? {
+        // A task assigned to a human crew keeps it: no re-rate draws it onto
+        // an agent.
+        if self.is_human_crew(task.crew.as_deref()) || self.task_crew_has_admitted_delivery(task)? {
             return Ok(None);
         }
         let Some(source) = self.task_crew_source(task)? else {

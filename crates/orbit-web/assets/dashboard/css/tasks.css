@@ -365,6 +365,18 @@ main.tasks-layout.task-page-mode .pinned-external { display: none; }
 .title-tags > .readiness-blocking { color: var(--warn-fg); background: var(--warn-wash); border-color: var(--warn-line); }
 .title-tags > .readiness-advisory { background: transparent; color: var(--fg-mute); }
 .title-tags > .readiness-preparing { background: transparent; border-style: dashed; color: var(--fg-dim); }
+/* Operator work: assigned to a human crew, so no agent picks it up. */
+.title-tags > .human-crew-badge {
+  padding: 0 7px;
+  border: 1px solid var(--accent-line);
+  border-radius: 5px;
+  background: var(--accent-wash);
+  color: var(--accent-hi);
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  line-height: 17px;
+  white-space: nowrap;
+}
 
 .row-meta {
   display: flex;

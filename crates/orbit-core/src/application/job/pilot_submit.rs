@@ -31,6 +31,8 @@ pub enum TaskPilotRefusal {
     /// The task is not `proposed` or `backlog`: it is admitted, in flight,
     /// finished or retired.
     UnsupportedStatus { task_id: String, status: TaskStatus },
+    /// The task is assigned to a human crew: operator work no pilot assesses.
+    HumanCrew { task_id: String, crew: String },
     /// A live pilot run already holds the task.
     PilotRunning { task_id: String, run_id: String },
     /// A live delivery run carries the task, so it is admitted or claimed.
@@ -44,6 +46,7 @@ impl TaskPilotRefusal {
     pub fn code(&self) -> &'static str {
         match self {
             Self::UnsupportedStatus { .. } => "task_pilot_unsupported_status",
+            Self::HumanCrew { .. } => "task_pilot_human_crew",
             Self::PilotRunning { .. } => "task_pilot_already_running",
             Self::DeliveryRunning { .. } => "task_pilot_delivery_running",
             Self::ReplicaCheckout { .. } => "task_pilot_replica_checkout",
@@ -57,6 +60,10 @@ impl fmt::Display for TaskPilotRefusal {
             Self::UnsupportedStatus { task_id, status } => write!(
                 f,
                 "explicit task-pilot selection refuses {task_id} (status {status}); only proposed and backlog tasks may be assessed"
+            ),
+            Self::HumanCrew { task_id, crew } => write!(
+                f,
+                "task {task_id} is assigned to human crew {crew}: operator work the task pilot never assesses; reassign it to an agent crew first"
             ),
             Self::PilotRunning { task_id, run_id } => write!(
                 f,
@@ -124,6 +131,12 @@ impl OrbitRuntime {
                     status: task.status,
                 },
             ));
+        }
+        if let Some(human) = self.human_crew(task.crew.as_deref()) {
+            return Err(TaskPilotSubmitError::Refused(TaskPilotRefusal::HumanCrew {
+                crew: human.name.clone(),
+                task_id: task.id,
+            }));
         }
         if let Some(run_id) = self.live_pilot_run_for_task(&task.id)? {
             return Err(TaskPilotSubmitError::Refused(

@@ -7,6 +7,7 @@ mod artifact_ids;
 mod crew_env;
 mod digest;
 mod error;
+mod human_crew;
 mod id;
 mod machine;
 pub use error::{IdentityError, ProviderModelError};
@@ -25,6 +26,9 @@ pub use agent_pair::{
 pub use artifact_ids::{is_valid_adr_id, is_valid_friction_id, validate_friction_id};
 pub use crew_env::{CrewEnvSource, CrewEnvVar};
 pub use digest::lower_hex;
+pub use human_crew::{
+    AGENT_CREW_KIND, HUMAN_CREW_KIND, HumanCrew, find_human_crew, human_crew_refusal,
+};
 pub use id::OrbitId;
 pub use machine::{
     LEGACY_TASK_PREFIX, MACHINE_ID_PREFIX, REGISTRY_IDENTIFIER_MAX_BYTES, validate_machine_id,
