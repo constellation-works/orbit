@@ -88,6 +88,8 @@
   transition: background 0.15s ease, color 0.15s ease;
 }
 
+.rail .tab[hidden] { display: none; }
+
 .rail .tab:hover { color: var(--fg); background: var(--bg-hover); }
 
 .rail .tab.active {

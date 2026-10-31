@@ -43,10 +43,22 @@ fn list_workspaces_json(state: &DashboardState) -> Vec<Value> {
     let pinned = state.pin();
     let default = pinned.default_workspace();
     let home = orbit_common::fs::path::home_dir().ok();
-    pinned
-        .entries()
+    let entries = pinned.entries();
+    // `lease_enabled` lets the dashboard hide its Leases destination where
+    // leases are off; null when the workspace's runtime can't be opened, so an
+    // unknown setting reads as today's behaviour (shown).
+    let lease_enabled = fan_out(entries.len(), |index| {
+        let entry = &entries[index];
+        if !entry.active {
+            return None;
+        }
+        let runtime = pinned.runtime_for(&entry.id).ok()?;
+        Some(runtime.leases_enabled())
+    });
+    entries
         .iter()
-        .map(|entry| {
+        .zip(lease_enabled)
+        .map(|(entry, lease_enabled)| {
             json!({
                 "id": entry.id,
                 "creation_binding": super::tasks::create::binding_token(entry),
@@ -55,6 +67,7 @@ fn list_workspaces_json(state: &DashboardState) -> Vec<Value> {
                 "orbit_dir": abbreviate_home(&entry.orbit_dir, home.as_deref()),
                 "status": if entry.active { "active" } else { "invalid" },
                 "is_default": default == Some(entry.id.as_str()),
+                "lease_enabled": lease_enabled,
             })
         })
         .collect()

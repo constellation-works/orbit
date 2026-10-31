@@ -2,7 +2,9 @@
 // leases off reads as a neutral state in both panels (no error styling, no
 // retry advice), a poll tick stops re-requesting the lease routes, an explicit
 // Refresh or a workspace change rechecks them, and a genuine failure keeps its
-// error styling and retry hint.
+// error styling and retry hint. The rail's Leases item hides only where
+// `/api/workspaces` reports `lease_enabled: false`, and stays for an unknown
+// setting.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
@@ -76,9 +78,13 @@ class Node {
 
 const bodies = Object.fromEntries(['leases-body', 'leases-count', 'lease-landings-body', 'lease-landings-count']
   .map(id => [id, Object.assign(new Node('div'), { id })]));
+// The rail's Leases item: the only `.tab` selector the leases module queries.
+const leasesTab = Object.assign(new Node('button'), { hidden: false, blur() { document.activeElement = null; } });
+leasesTab.dataset.tab = 'leases';
 const document = {
   activeElement: null,
   body: new Node('body'),
+  querySelector: selector => (selector === '.tab[data-tab="leases"]' ? leasesTab : null),
   createElement: tag => new Node(tag),
   getElementById: id => bodies[id] || null,
 };
@@ -110,7 +116,7 @@ const leases = load('leases.js');
 await common.link(() => { throw new Error('unexpected common dependency'); });
 await leases.link(specifier => { assert.equal(specifier, './common.js'); return common; });
 await leases.evaluate();
-const { fetchAndRenderLeases, fetchAndRenderLeaseLandings } = leases.namespace;
+const { fetchAndRenderLeases, fetchAndRenderLeaseLandings, syncLeasesRailItem } = leases.namespace;
 const { runPanelPoll, setWorkspace } = common.namespace;
 
 const leaseReads = () => requests.filter(path => path.startsWith('/api/leases')).length;
@@ -179,5 +185,39 @@ assert.equal(leasesBody.querySelectorAll('.action-error').length, 1, 'a genuine 
 const beforeFailurePoll = leaseReads();
 await runPanelPoll(true, () => fetchAndRenderLeases().catch(() => {}));
 assert.equal(leaseReads(), beforeFailurePoll + 1, 'a genuine failure is not treated as the off state by the poll');
+
+// The rail item follows each workspace's `lease_enabled` from /api/workspaces.
+const workspaces = [
+  { id: 'ws_on', lease_enabled: true },
+  { id: 'ws_off', lease_enabled: false },
+  { id: 'ws_unknown', lease_enabled: null },
+  { id: 'ws_older_server' },
+];
+syncLeasesRailItem(workspaces, 'ws_on');
+assert.equal(leasesTab.hidden, false, 'an enabled workspace keeps the Leases item');
+document.activeElement = leasesTab;
+syncLeasesRailItem(workspaces, 'ws_off');
+assert.equal(leasesTab.hidden, true, 'a disabled workspace hides the Leases item');
+assert.equal(document.activeElement, null, 'a hidden Leases item does not keep focus');
+syncLeasesRailItem(workspaces, 'ws_on');
+assert.equal(leasesTab.hidden, false, 'switching back to an enabled workspace shows it again');
+for (const [list, id, why] of [
+  [workspaces, 'ws_unknown', 'a null setting'],
+  [workspaces, 'ws_older_server', 'a listing without the field'],
+  [workspaces, 'ws_missing', 'a workspace absent from the listing'],
+  [workspaces, null, 'the aggregate view'],
+  [null, 'ws_off', 'an unreadable listing'],
+]) {
+  syncLeasesRailItem(workspaces, 'ws_off');
+  syncLeasesRailItem(list, id);
+  assert.equal(leasesTab.hidden, false, `${why} keeps the Leases item visible`);
+}
+
+// A direct link to the tab while leases are off still renders the off note.
+syncLeasesRailItem(workspaces, 'ws_off');
+routes['/api/leases'] = DISABLED;
+routes['/api/leases/notices'] = DISABLED;
+await refresh();
+assertOff();
 
 console.log('dashboard leases off-state behavior passed');

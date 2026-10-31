@@ -39,6 +39,11 @@ impl LeasePolicy {
         })
     }
 
+    /// Whether `lease.enabled` admits lease operations in this workspace.
+    pub(crate) fn enabled(&self) -> bool {
+        self.enabled
+    }
+
     pub(super) fn ensure_enabled(&self) -> Result<(), OrbitError> {
         if self.enabled {
             return Ok(());
