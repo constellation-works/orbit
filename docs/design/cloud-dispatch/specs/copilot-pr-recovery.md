@@ -8,7 +8,7 @@ type: design
 summary: "Proposed opt-in Copilot delegation for existing-PR CI and conflict repairs, sharing Orbit's repair ownership and budgets while preserving exact-head validation and separate merge authority."
 tags: [cloud, copilot, recovery, ci, github]
 last_updated: 2026-10-29
-last_validated: 2026-10-29
+last_validated: 2026-10-31
 ---
 
 # Scope: Copilot repair of an existing pull request
