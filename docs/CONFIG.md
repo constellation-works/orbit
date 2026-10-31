@@ -2577,6 +2577,20 @@ After creating or reusing a PR, Orbit unions the allowlisted tags present on eve
 | `ux_rules.max_new_tasks` | `10` | **Advanced.** Most new tasks one rule-findings filing run creates, highest severity first. |
 | `ux_rules.file_at` | `"low"` | **Advanced.** Lowest rule-result severity the rule-findings filer files: `critical`, `high`, `medium`, `low` or `nit`; lower results are recorded only. |
 | `ux_rules.disabled` | `[]` | **Advanced.** Rule ids whose results are recorded only, not filed; the runner still runs them. |
+| `jobs.failure_streak_warn` | `5` | Consecutive failed runs of one job at which the dashboard warns that it is failing (0–1000; `0` turns the warning off). See [below](#jobs--failing-job-warning). |
+
+### `[jobs]` — failing-job warning
+
+A job's failure streak is its newest finished runs in a row whose state is `failed` or `interrupted`, counted back to the first `success`. Operator cancels, designed holds (`held`), timeouts and skipped runs are neither failures nor successes: they neither extend nor break a streak, so the count matches the failures the daily run-failure-patterns pass counts. The streak is read from the newest 100 finished runs of the job, and a streak that fills that window reads "at least 100".
+
+When a job's streak reaches `jobs.failure_streak_warn`, the dashboard's Jobs › Catalogue row shows a "Failing: N in a row since <day>" badge with the latest error, whether every run in the streak failed with the same error, and a link to the latest failed run. The Jobs and Health navigation items show a count of failing jobs. Below the threshold nothing is shown, and `0` turns the warning off everywhere. `GET /api/jobs` reports each job's streak whatever the threshold; `GET /api/jobs/failure-streaks` returns the jobs at or above it.
+
+The warning is display only: it never pauses, disables or changes a job, and it sends no notification outside the dashboard.
+
+```toml
+[jobs]
+failure_streak_warn = 5
+```
 
 Agent relay output goes to `orbit-agent.jsonl` with its own 200 MiB archive budget and 50 MiB active-file limit, so it cannot consume the operational budget; each feed is pruned by its own size and age limits. A full agent queue blocks the relay instead of dropping lines. The operational feed can still drop a line when its queue is full. The dashboard and `orbit log tail` merge both active feeds. Full rotation runs in long-lived processes (`orbit mcp serve`, `orbit clock tick`/`orbit sweep`, `orbit web serve`); short-lived commands only roll an oversized active file.
 

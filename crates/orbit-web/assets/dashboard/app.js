@@ -23,7 +23,7 @@ import { getIncidentClass, getIncidentWindow } from './js/incidents.js';
 import { renderMarkdown } from './js/markdown.js';
 import { destinationLabel, initRouter, initTabs as iT, navigateToRun as nTR, scopeRouteHash, setActiveTab as sAT, setRunDetailSubtab, } from './js/router.js';
 import { initRuns, jobRunsQuery, runsQueryKey, mergeRunsWithFriction, renderRuns, runIsCancellable, buildCancelRunButton, buildReplayRunButton } from './js/runs.js';
-import { fetchAndRenderAutoDrainPane, fetchAndRenderOperations, fetchAndRenderJobs, initOperations, peekRoutineFailures, startFleetIndicatorRefresh } from './js/operations.js';
+import { fetchAndRenderAutoDrainPane, fetchAndRenderOperations, fetchAndRenderJobs, initOperations, peekJobFailures, peekRoutineFailures, startFleetIndicatorRefresh } from './js/operations.js';
 import { onDrainReadinessChange } from './js/drain-waits.js';
 import { onTaskRuntimeChange, runStartedAt, setRunningRuns, setTaskLocks } from './js/task-runtime.js';
 import { taskState } from './js/task-shared.js';
@@ -1458,6 +1458,10 @@ function activeRefreshJobs({ poll = false, explicit = false } = {}) {
   // Routines and Jobs already read this status in their active-panel request.
   if (slowReads && (activeTab !== "operations" || activeOperationsSubtab === "auto-tasks" || aggregate)) {
     void peekRoutineFailures().catch(error => console.error(error));
+  }
+  // The Jobs catalogue reads the same failure streaks in its own request.
+  if (slowReads && (activeTab !== "jobs" || activeJobsSubtab !== "catalogue" || aggregate)) {
+    void peekJobFailures().catch(error => console.error(error));
   }
   const jobs = [];
   const add = (panel, request) => jobs.push({ panel, request });

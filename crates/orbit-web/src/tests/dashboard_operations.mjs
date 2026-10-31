@@ -40,6 +40,10 @@ let releaseGet = null;
 let delayJobRunsWorkspace = null;
 let releaseJobRuns = null;
 let failJobRunsWorkspace = null;
+// The jobs at or above jobs.failure_streak_warn: task_pr_pipeline failed 17 runs
+// in a row with one error; `fixture` and the others have no streak at threshold.
+const failureStreak = { job_id: 'task_pr_pipeline', count: 17, since: '2026-09-06T09:30:00Z', latest_run_id: 'jrun-orphan', latest_error: 'review: [provider_capacity] 429 Too Many Requests', same_error: true, truncated: false };
+let jobFailures = { threshold: 5, failing: [failureStreak] };
 let workspaceTwoRunId = null;
 let nextTask = 1;
 let drainRunId = null;
@@ -217,6 +221,7 @@ globalThis.fetch = async (path, options = {}) => {
       ? [{ name: 'graph-refresh', source: 'one', target: 'job:graph_refresh_pipeline', plugin_inactive: true, reason: "seeded by plugin:graph@1.0.0, which is switched off in workspace 'one'; run `orbit plugin enable graph --scope workspace` there to fire it again" }]
       : [],
   });
+  if (url.pathname === '/api/jobs/failure-streaks') return response(jobFailures);
   if (url.pathname === '/api/job-runs') {
     if (workspace === delayJobRunsWorkspace) await new Promise(resolve => { releaseJobRuns = resolve; });
     if (workspace === failJobRunsWorkspace) return response({ error: 'Fixture job runs unavailable' }, 500);
@@ -1045,6 +1050,31 @@ assert(get('job-operation-feedback').textContent.includes('jrun-dashboard-fixtur
 assert(get('jobs-body').textContent.includes('jrun-dashboard-fixture'), 'new run appears after refresh');
 triggerFeedbackClear('job-operation-feedback');
 assert(get('job-operation-feedback').textContent === '', 'job submission receipt clears after timeout');
+
+// A job at or above the failure-streak threshold carries a warning with its
+// streak, latest error and a link to the newest failed run; others show none.
+await fetchAndRenderJobs();
+const failureBadgeOf = id => descendants(descendants(get('jobs-body')).find(node => node.dataset?.job === id)).find(node => String(node.className || '').includes('job-failure-badge'));
+const failingBadge = failureBadgeOf('task_pr_pipeline');
+assert(failingBadge, 'a job at the failure threshold shows a failure badge');
+assert(failingBadge.textContent.includes('Failing: 17 in a row since Sep 6'), `badge states the streak and its start: ${failingBadge.textContent}`);
+assert(failingBadge.textContent.includes('same error ×17') && failingBadge.textContent.includes('[provider_capacity] 429 Too Many Requests'), `badge names the shared error and the latest one: ${failingBadge.textContent}`);
+assert(descendants(failingBadge).some(node => node.tagName === 'A' && node.getAttribute('href')?.includes('jrun-orphan')), 'badge links to the latest failed run');
+assert(['fixture', 'parked_pipeline', 'task_auto_pipeline', longTaskJobId].every(id => !failureBadgeOf(id)), 'jobs below the threshold show no failure badge');
+assert(!get('rail-count-jobs-failing').hidden && get('rail-count-jobs-failing').textContent === '1 failing', `Jobs rail counts failing jobs: ${get('rail-count-jobs-failing').textContent}`);
+assert(!get('rail-count-job-failures').hidden && get('rail-count-job-failures').textContent === '1 job' && get('rail-count-job-failures').title.includes('task_pr_pipeline: Failing: 17 in a row'), 'Health rail counts failing jobs and names them');
+// Varying errors and a scan that ended inside the streak read honestly.
+jobFailures = { threshold: 5, failing: [{ ...failureStreak, same_error: false, truncated: true, count: 100 }] };
+await fetchAndRenderJobs();
+const varyingBadge = failureBadgeOf('task_pr_pipeline');
+assert(varyingBadge.textContent.includes('Failing: at least 100 in a row') && varyingBadge.textContent.includes('errors vary') && !varyingBadge.textContent.includes('same error'), `varying, truncated streak: ${varyingBadge.textContent}`);
+// A threshold of 0 turns the warning off: no badge and no rail count.
+jobFailures = { threshold: 0, failing: [] };
+await fetchAndRenderJobs();
+assert(!descendants(get('jobs-body')).some(node => String(node.className || '').includes('job-failure-badge')), 'threshold 0 shows no badge');
+assert(get('rail-count-jobs-failing').hidden && get('rail-count-job-failures').hidden, 'threshold 0 hides the rail counts');
+jobFailures = { threshold: 5, failing: [failureStreak] };
+await fetchAndRenderJobs();
 
 // A workspace switch clears the previous jobs view while the new workspace's
 // runs are still pending. A routines refresh must not repaint the old run list,

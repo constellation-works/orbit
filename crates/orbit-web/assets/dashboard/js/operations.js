@@ -23,7 +23,7 @@ export { startFleetIndicatorRefresh };
 export { fetchAndRenderAutoDrainPane } from './operations-drain.js';
 export { drainHolderCounts } from './operations-drain-capacity.js';
 export { peekRoutineFailures } from './operations-routines.js';
-export { fetchAndRenderJobs } from './operations-jobs.js';
+export { fetchAndRenderJobs, peekJobFailures } from './operations-jobs.js';
 
 function renderOperations(payload, { force = false } = {}) {
   noteCronZone(payload);

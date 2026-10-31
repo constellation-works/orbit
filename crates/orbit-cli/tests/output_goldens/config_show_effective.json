@@ -182,6 +182,13 @@
       "path": null,
       "shadowed_by": []
     },
+    "jobs.failure_streak_warn": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
     "lease.aging_minutes": {
       "scope": "built-in",
       "state": "default",

@@ -847,6 +847,12 @@ macro_rules! with_tail_keys {
         tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<String>| resolve_choice(raw, "low", "ux_rules.file_at", &["critical", "high", "medium", "low", "nit"]),
     },
+    jobs_failure_streak_warn: u32 => u32 {
+        key: "jobs.failure_streak_warn", value_type: "integer",
+        description: "Consecutive failed runs of one job at which the dashboard warns that it is failing; 0 turns the warning off.",
+        section: ConfigSection::Housekeeping, order: 186,
+        resolve: |raw: Option<u32>| resolve_bounded_range(raw, 5, 0, 1000, "jobs.failure_streak_warn"),
+    },
     ux_rules_disabled: Vec<String> => Vec<String> {
         key: "ux_rules.disabled", value_type: "array<string>",
         description: "Rule ids whose results are recorded only, not filed; the runner still runs them.",

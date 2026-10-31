@@ -6,7 +6,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Utc};
 use orbit_common::governance::authorization::{DASHBOARD_AUTO_DRAIN_COMPLETE, DASHBOARD_JOB_RUN};
-use orbit_core::application::job::{JobRunListParams, JobRunOrder};
+use orbit_core::application::job::{JobFailureStreak, JobRunListParams, JobRunOrder};
 use orbit_core::{JobRunState, OrbitRuntime};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -167,19 +167,64 @@ impl JobRunListState {
 pub(super) async fn list_jobs(Ws(runtime): Ws) -> Response {
     use orbit_core::application::job::JobCatalogFilter;
     match blocking("list jobs", move || {
-        runtime.list_job_catalog_with_last_run(true, JobCatalogFilter::All)
+        let rows = runtime.list_job_catalog_with_last_run(true, JobCatalogFilter::All)?;
+        let job_ids: Vec<String> = rows.iter().map(|(entry, _)| entry.job_id.clone()).collect();
+        let streaks = runtime.job_failure_streaks(&job_ids)?;
+        Ok((rows, streaks))
     })
     .await
     {
-        Ok(rows) => {
+        Ok((rows, streaks)) => {
+            let streaks: std::collections::HashMap<_, _> = streaks
+                .into_iter()
+                .map(|streak| (streak.job_id.clone(), streak))
+                .collect();
             let values: Vec<Value> = rows
                 .iter()
                 .map(|(entry, last_run)| {
-                    job_catalog_to_json_with_last_run(entry, last_run.as_ref())
+                    let mut value = job_catalog_to_json_with_last_run(entry, last_run.as_ref());
+                    value["failure_streak"] = streaks
+                        .get(&entry.job_id)
+                        .map_or(Value::Null, JobFailureStreak::to_json);
+                    value
                 })
                 .collect();
             Json(Value::Array(values)).into_response()
         }
+        Err(response) => *response,
+    }
+}
+
+/// Jobs whose current failure streak has reached `jobs.failure_streak_warn`,
+/// with that threshold. The dashboard reads this for the catalogue badges and
+/// the Jobs and Health rail counts. A threshold of 0 turns the warning off:
+/// nothing is computed and `failing` is empty. Display only.
+pub(super) async fn list_job_failure_streaks(Ws(runtime): Ws) -> Response {
+    use orbit_core::application::job::JobCatalogFilter;
+    match blocking("list job failure streaks", move || {
+        let threshold = runtime.job_failure_streak_warn();
+        if threshold == 0 {
+            return Ok((threshold, Vec::new()));
+        }
+        let job_ids: Vec<String> = runtime
+            .list_job_catalog_with_last_run(true, JobCatalogFilter::All)?
+            .into_iter()
+            .map(|(entry, _)| entry.job_id)
+            .collect();
+        let failing = runtime
+            .job_failure_streaks(&job_ids)?
+            .into_iter()
+            .filter(|streak| streak.count >= threshold as usize)
+            .collect::<Vec<_>>();
+        Ok((threshold, failing))
+    })
+    .await
+    {
+        Ok((threshold, failing)) => Json(json!({
+            "threshold": threshold,
+            "failing": failing.iter().map(JobFailureStreak::to_json).collect::<Vec<_>>(),
+        }))
+        .into_response(),
         Err(response) => *response,
     }
 }

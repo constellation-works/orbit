@@ -1,6 +1,6 @@
 // Job catalogue and live run operations [ORB-10875, ORB-10876].
 
-import { copyText, el, fetchJson, hostWriteRefusal, postJson, requestPanel, relativeTime } from './common.js';
+import { captureWorkspaceVisit, copyText, el, fetchJson, formatDayHeading, hostWriteRefusal, isAggregateView, postJson, requestPanel, relativeTime } from './common.js';
 
 import {
   $,
@@ -35,7 +35,67 @@ import { jobIdFromTarget, scopedRoutines, updateRoutineFailureBadge } from './op
 
 const JOB_RUN_LIMIT = 100;
 export let lastJobs = null;
-registerOperationsReset(() => { lastJobs = null; });
+registerOperationsReset(() => { lastJobs = null; updateJobFailureBadges([]); });
+
+// Jobs whose recent runs failed in a row, from /api/jobs/failure-streaks.
+// `null` means unknown (not yet read, or the read failed): the catalogue then
+// shows no badge and the rail pills stay as they were.
+let jobFailureRequest = 0;
+
+function failureStreakText(streak) {
+  const count = `${streak.truncated ? "at least " : ""}${streak.count}`;
+  return `Failing: ${count} in a row since ${formatDayHeading(streak.since).replace(/^\w+, /, "")}${streak.truncated ? " or earlier" : ""}`;
+}
+
+function failureStreakSummary(streak) {
+  return `${streak.job_id}: ${failureStreakText(streak)}${streak.same_error ? ` (same error ×${streak.count})` : ""}`;
+}
+
+// The Jobs and Health rail pills count the failing jobs. Health's is the
+// attention pill that is visible from every tab; Jobs' sits beside its
+// pending/running volume count. Both are display only.
+export function updateJobFailureBadges(failing) {
+  jobFailureRequest += 1;
+  const jobs = failing || [];
+  const title = jobs.length ? `${jobs.map(failureStreakSummary).join("; ")}. See Jobs › Catalogue.` : "";
+  for (const [id, text] of [["rail-count-jobs-failing", `${jobs.length} failing`], ["rail-count-job-failures", `${jobs.length} job${jobs.length === 1 ? "" : "s"}`]]) {
+    const node = $(id);
+    if (!node) continue;
+    node.hidden = jobs.length === 0;
+    node.textContent = jobs.length ? text : "";
+    node.title = title;
+  }
+}
+
+// Keep the rail pills true from every tab, including before Jobs is opened.
+// A reply from an earlier host/workspace visit must not restore a stale count.
+export async function peekJobFailures() {
+  if (isAggregateView() || !selectedWorkspace()) {
+    updateJobFailureBadges([]);
+    return;
+  }
+  const visit = captureWorkspaceVisit();
+  const request = ++jobFailureRequest;
+  try {
+    const payload = await fetchJson("/api/jobs/failure-streaks");
+    if (visit.isCurrent() && request === jobFailureRequest) updateJobFailureBadges(payload?.failing);
+  } catch (_) {
+    if (visit.isCurrent() && request === jobFailureRequest) updateJobFailureBadges([]);
+  }
+}
+
+// The warning on a catalogue row: how long it has failed, whether it is one
+// error or several, the latest error and a link to the newest failed run.
+function jobFailureBadge(streak, workspaceId) {
+  const badge = el("div", { class: "job-failure-badge", role: "status" }, [
+    el("strong", { class: "job-failure-title", text: failureStreakText(streak), title: time(streak.since) }),
+    el("span", { class: "job-failure-kind", text: streak.same_error ? `same error ×${streak.count}` : "errors vary" }),
+    streak.latest_error ? el("span", { class: "job-failure-error mono", text: streak.latest_error, title: streak.latest_error }) : null,
+    runLink(streak.latest_run_id, workspaceId, "Latest failed run"),
+  ].filter(Boolean));
+  badge.dataset.failureCount = String(streak.count);
+  return badge;
+}
 
 function jobFamily(jobId) {
   if (/sweep|gc|pilot|triage|scheduler/.test(jobId)) return "sweep";
@@ -144,7 +204,7 @@ function jobCommand(jobId, workspace) {
   return `orbit run job ${shellWordJob(String(jobId))} --workspace ${targetWord}`;
 }
 
-function jobRow(job, workspace) {
+function jobRow(job, workspace, streak) {
   const detailsKey = `job:${job.id}`;
   const last = job.lastRun;
   const command = jobCommand(job.id, workspace);
@@ -208,6 +268,7 @@ function jobRow(job, workspace) {
       operationCell("Active", [el("span", { class: `operation-cell-main mono${job.running ? " live" : " muted"}`, text: job.running ? `${job.running} running` : "idle" })]),
       operationCell("", [explainUnavailable(run, runReason)], "operation-cell-action"),
     ]),
+    streak ? jobFailureBadge(streak, workspace?.id) : null,
     operationDetails(detailsKey, [
       el("div", { class: "operation-command" }, [
         el("code", { class: "mono", text: command }),
@@ -268,6 +329,7 @@ export function renderJobs(payload) {
     return;
   }
   const catalog = jobCatalog(operationsState.lastOperations, runs, workspace.name);
+  const failing = new Map((payload.failures?.failing || []).map((streak) => [streak.job_id, streak]));
   if (catalog.size === 0) {
     body.appendChild(el("div", { class: "empty-state", text: "No job has been referenced by a routine or run in this workspace recently." }));
   } else {
@@ -282,7 +344,7 @@ export function renderJobs(payload) {
       if (!members.length) continue;
       const group = operationGroup(tone, title, members.length, hint);
       group.appendChild(operationColumns(columns));
-      for (const job of members) group.appendChild(jobRow(job, workspace));
+      for (const job of members) group.appendChild(jobRow(job, workspace, failing.get(job.id)));
       body.appendChild(group);
     }
     body.appendChild(el("p", { class: "operation-control-note", text: `Catalogue projected from routine targets and the last ${JOB_RUN_LIMIT} runs.` }));
@@ -301,13 +363,16 @@ export function fetchAndRenderJobs() {
     () => Promise.all([
       fetchJson(withInactivePlugins("/api/routines")),
       fetchJson(`/api/job-runs?limit=${JOB_RUN_LIMIT}${live ? "&state=active" : ""}`),
-    ]).then(([routines, runs]) => ({ routines, runs, view: live ? "live" : "catalogue" })),
+      // The streak read must not take the catalogue down with it.
+      live ? null : fetchJson("/api/jobs/failure-streaks").catch(() => null),
+    ]).then(([routines, runs, failures]) => ({ routines, runs, failures, view: live ? "live" : "catalogue" })),
     (payload) => {
       // Only a fresh catalogue/live read adopts its routines snapshot. A
       // repaint from cached jobs must retain a newer Routines readback.
       operationsState.lastOperations = payload.routines;
       noteCronZone(operationsState.lastOperations);
       updateRoutineFailureBadge(scopedRoutines(operationsState.lastOperations));
+      if (payload.failures) updateJobFailureBadges(payload.failures.failing);
       renderJobs(payload);
     }, countId);
 }

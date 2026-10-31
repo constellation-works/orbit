@@ -677,6 +677,31 @@ try {
       if (!reachable.workspace) throw new Error(`workspace selector not reachable at ${viewport.name} / ${tab}`);
       if (reachable.clipped) throw new Error(`Clipped Operations control at ${viewport.name} / ${tab}`);
       await assertNoOverflow(`${viewport.name} / ${tab}`);
+      if (tab === 'catalogue') {
+        // The job at the failure threshold is warned about in full width of its
+        // row, and no job below it is; the rail counts it from any width.
+        const failure = await page.evaluate(() => {
+          const badge = document.querySelector('#jobs-body .job-failure-badge');
+          const box = badge?.getBoundingClientRect();
+          const link = badge?.querySelector('a');
+          const linkBox = link?.getBoundingClientRect();
+          return {
+            failing: [...document.querySelectorAll('#jobs-body .job-card')].filter(card => card.querySelector('.job-failure-badge')).map(card => card.dataset.job),
+            text: badge?.textContent ?? '',
+            badgeInside: Boolean(box) && box.width > 0 && box.left >= 0 && box.right <= window.innerWidth + 1,
+            linkInside: Boolean(linkBox) && linkBox.width > 0 && linkBox.right <= window.innerWidth + 1,
+            jobsPill: document.getElementById('rail-count-jobs-failing')?.textContent,
+            jobsPillHidden: document.getElementById('rail-count-jobs-failing')?.hidden,
+          };
+        });
+        if (failure.failing.join() !== 'task_pr_pipeline' || !failure.text.includes('Failing: 17 in a row since') || !failure.badgeInside || !failure.linkInside || failure.jobsPillHidden || failure.jobsPill !== '1 failing') {
+          throw new Error(`Failing-job badge at ${viewport.name}: ${JSON.stringify(failure)}`);
+        }
+        const failingRow = page.locator('#jobs-body .job-card:has(.job-failure-badge)');
+        await failingRow.scrollIntoViewIfNeeded();
+        await failingRow.screenshot({ path: path.join(evidence, `job-failure-badge-dark-${viewport.name}.png`), animations: 'disabled' });
+        if (viewport.name === '1440') await page.locator('.rail').screenshot({ path: path.join(evidence, 'job-failure-rail-dark-1440.png'), animations: 'disabled' });
+      }
       await page.screenshot({ path: path.join(evidence, `${tab}-${viewport.name}.png`), fullPage: true });
     }
   }
