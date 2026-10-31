@@ -720,10 +720,15 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
         # Every selection adds the always-run security and recovery crates.
         self.assertEqual(self.pull_request("docs/guide.md", "crates/orbit-core/assets/skills/x.md"),
                          "affected:orbit-auth,orbit-cli,orbit-cmd,orbit-core,orbit-exec,orbit-policy,orbit-store,orbit-web")
-        # The skill mirror is read by orbit-core's catalog test; other plugin/ paths run in full.
+        # The skill mirror is checked against its source by the sync guard, so
+        # it selects no crate; other plugin/ paths run in full.
         self.assertEqual(self.pull_request("plugin/skills/x.md"),
-                         "affected:orbit-auth,orbit-cli,orbit-cmd,orbit-core,orbit-exec,orbit-policy,orbit-store,orbit-web")
+                         "affected:orbit-auth,orbit-exec,orbit-policy,orbit-store")
         self.assertEqual(self.pull_request("plugin/plugin.json"), "full")
+        # A governed tool added to orbit-tools still selects orbit-mcp's
+        # task_route boundary test and orbit-cli's tool goldens.
+        selected = self.pull_request("crates/orbit-tools/src/lib.rs").removeprefix("affected:").split(",")
+        self.assertTrue({"orbit-mcp", "orbit-cli", "orbit-tools"} <= set(selected), selected)
         self.assertEqual(self.pull_request("website/src/content/docs/reference/config.md"),
                          "affected:orbit-auth,orbit-cli,orbit-exec,orbit-policy,orbit-store")
         # A path no crate reads runs the always-run crates alone.

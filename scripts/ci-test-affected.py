@@ -98,8 +98,12 @@ FILE_READERS = (
     (Path("plugin/hooks"), ("orbit-cli",)),
     (Path("server.json"), ("orbit-cli",)),
     (Path("website/src/content/docs/reference/config.md"), ("orbit-cli",)),
-    # The skill mirror: orbit-core's default_catalog test reads its reference pages.
-    (Path("plugin/skills"), ("orbit-core",)),
+    # The generated skill mirror of crates/orbit-core/assets/skills, whose own
+    # change selects orbit-core. orbit-core's default_catalog test reads the
+    # mirror's reference pages, but the always-run sync-plugin-skills.sh guard
+    # fails any mirror that differs from its source, so a mirror-only change
+    # selects no crate.
+    (Path("plugin/skills"), ()),
     # Read only by scripts/test-qa-full-sweep.py, which the guardrails run.
     (Path("scripts/qa-full-sweep-inventory.json"), ()),
 )
