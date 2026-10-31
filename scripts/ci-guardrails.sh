@@ -168,7 +168,8 @@ fi
 # the archive, --test-partitions runs the partition guard over the archive
 # itself, so the guard proves what the shards receive while they already run.
 # NEXTEST_PARTITIONS (ci.yml) is the count-partition count: the shard jobs
-# run all but one partition and the test-build job runs the remaining one.
+# and the extra partition job run all but one partition and the test-build
+# job runs the remaining one.
 # A caller that sets only the older NEXTEST_SHARDS gets that many partitions.
 #
 # CI_TEST_SCOPE is the Change scope job's mode. For `affected:<crate>,...` (a
@@ -182,10 +183,21 @@ if [[ "$partitions" == true ]]; then
   if [[ -f "$archive.packages" ]]; then
     allow_empty=(--allow-empty)
   fi
-  # nextest extracts the archive for each listing; keep it in the checkout.
-  TMPDIR="$guard_logs" run_phase workspace-test-partitions \
+  # Extract the archive once, inside the checkout, and list every selection
+  # from that extraction's metadata, as the shard-1 sandbox gate does. Listing
+  # the archive file itself extracted all of it again for each of the
+  # NEXTEST_PARTITIONS + 1 listings (5.5 s each hosted). The listings still
+  # execute the archive's own test binaries.
+  extracted="$guard_logs/nextest-archive"
+  mkdir "$extracted"
+  run_phase workspace-test-archive-extract cargo nextest list --archive-file "$archive" \
+    --workspace-remap "$repo_root" --extract-to "$extracted" >/dev/null
+  run_phase workspace-test-partitions \
     "$repo_root/scripts/check-nextest-partitions.py" --shards "${NEXTEST_PARTITIONS:-${NEXTEST_SHARDS:?set NEXTEST_PARTITIONS or NEXTEST_SHARDS}}" \
-    ${allow_empty[@]+"${allow_empty[@]}"} -- cargo nextest list --archive-file "$archive" --workspace-remap "$repo_root"
+    ${allow_empty[@]+"${allow_empty[@]}"} -- cargo nextest list \
+    --binaries-metadata "$extracted/target/nextest/binaries-metadata.json" \
+    --cargo-metadata "$extracted/target/nextest/cargo-metadata.json" \
+    --workspace-remap "$repo_root" --target-dir-remap "$extracted/target"
   exit 0
 fi
 if [[ -n "$archive" ]]; then

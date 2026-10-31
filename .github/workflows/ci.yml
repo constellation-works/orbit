@@ -45,13 +45,13 @@ env:
   # Check job's wait read this value; the literal "Test shard k/N" jobs must
   # match it (scripts/test-pr-state-workflows.py).
   NEXTEST_SHARDS: "3"
-  # Count partitions of the test list. The three shard jobs run three of
-  # them; the Test build job runs the remaining one from the archive it
-  # built, after the upload, on a runner that would otherwise idle while
-  # the shards run. One more partition than shard jobs, so the literal
-  # shard job names and the agent-main ruleset are unchanged. The
-  # partition guard proves the four selections cover every test once.
-  NEXTEST_PARTITIONS: "4"
+  # Count partitions of the test list. The three shard jobs and the
+  # "Test extra partition" job run four of them; the Test build job runs
+  # the remaining one from the archive it built, after the upload. Two
+  # more partitions than shard jobs, so the literal shard job names and
+  # the agent-main ruleset are unchanged. The partition guard proves the
+  # five selections cover every test once.
+  NEXTEST_PARTITIONS: "5"
   # The nextest transfer travels as this many artifacts, which each shard
   # downloads in parallel. One stream from the artifact store ran at 3-10 MB/s
   # on some runners (153 s for 448 MB); the "Upload nextest archive part k/N"
@@ -232,9 +232,9 @@ jobs:
   # [ORB-16695] The test gate is split across runners. "Test build" compiles
   # the workspace tests once and archives them (on an `affected:` PR, only the
   # affected crates' tests); NEXTEST_SHARDS "Test shard" jobs run nextest from
-  # that archive, one count partition each, in parallel, and the build job
-  # runs the remaining NEXTEST_PARTITIONS-th partition itself after the
-  # upload. "Check / Clippy /
+  # that archive, one count partition each, in parallel, as does the "Test
+  # extra partition" job, and the build job runs the remaining partition
+  # itself after the upload. "Check / Clippy /
   # Test" runs formatting, the repository guards and self-tests, production
   # Clippy, doctests, documentation and the supply-chain gate beside them,
   # then waits for the build and every shard.
@@ -518,11 +518,12 @@ jobs:
           TIMEFORMAT='guardrails_seconds=%R'
           time ./scripts/ci-guardrails.sh --checks
 
-      # The Check job finishes only after the test build and every shard, so
-      # its elapsed time is the whole gate's wall time (the 600-second budget
-      # in docs/design-patterns/test_strategy.md) and its conclusion is the
-      # gate's result. A failed or skipped test job fails it at once, and a
-      # partition-guard failure after the archive upload fails the test build.
+      # The Check job finishes only after the test build, every shard and the
+      # extra partition job, so its elapsed time is the whole gate's wall time
+      # (the 600-second budget in docs/design-patterns/test_strategy.md) and
+      # its conclusion is the gate's result. A failed or skipped test job
+      # fails it at once, and a partition-guard failure after the archive
+      # upload fails the test build.
       # Dependency evidence executes from one complete trusted base tree,
       # including any repository helpers the producer imports.
       - name: Await the test build and nextest shards
@@ -613,6 +614,7 @@ jobs:
               sys.argv = [producer, "--job", "Test build"]
               for shard in range(1, int(os.environ["NEXTEST_SHARDS"]) + 1):
                   sys.argv += ["--job", f"Test shard {shard}/{os.environ['NEXTEST_SHARDS']}"]
+              sys.argv += ["--job", "Test extra partition"]
               exec(compile(producer_bytes, producer, "exec"),
                    {"__name__": "__main__", "__file__": producer,
                     "__package__": "", "__spec__": None, "__cached__": None,
@@ -676,7 +678,9 @@ jobs:
       # (see the steps at the end of the job). Partition 2 is not the
       # heaviest measured partition (partition 1 is, in every local and
       # hosted sample), which leaves room for the post-upload guard,
-      # doctests and tool setup this job runs ahead of it.
+      # doctests and tool setup this job runs ahead of it. With four
+      # partitions this job's partition ran last in 11 of 18 hosted runs
+      # (docs/design-patterns/test_strategy.md, eighth pass).
       PARTITION: "2"
     steps:
       - name: Admit runner disk space
@@ -829,7 +833,8 @@ jobs:
           compression-level: 0
 
       # Lists the uploaded archive once whole and once per count partition,
-      # and fails unless the shards cover every test exactly once. It runs
+      # from one extraction, and fails unless the partitions cover every
+      # test exactly once. It runs
       # after the upload, beside the shards rather than ahead of them, and a
       # failure here fails this job and so the Check job's wait.
       - name: Prove the shards cover every test
@@ -1013,10 +1018,10 @@ jobs:
   # count matches NEXTEST_SHARDS (scripts/test-pr-state-workflows.py).
   # SHARD names the job (its JUnit report and the shard-1 sandbox gate);
   # PARTITION is the count partition it runs. The Test build job runs
-  # partition 2, so the shard jobs run partitions 1, 3 and 4 of
-  # NEXTEST_PARTITIONS. agent-main's ruleset requires these exact names:
-  # renaming a shard, or changing NEXTEST_SHARDS, needs the same ruleset
-  # change before merge.
+  # partition 2 and the "Test extra partition" job partition 5, so the
+  # shard jobs run partitions 1, 3 and 4 of NEXTEST_PARTITIONS.
+  # agent-main's ruleset requires these exact names: renaming a shard, or
+  # changing NEXTEST_SHARDS, needs the same ruleset change before merge.
   test-1:
     needs: [pr-state, scope]
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
@@ -1313,4 +1318,22 @@ jobs:
     env:
       SHARD: "3"
       PARTITION: "4"
+    steps: *test-shard-steps
+
+  # A fourth runner with the shard steps and one more count partition. It is
+  # not a "Test shard k/N" job, so NEXTEST_SHARDS, the shard names and the
+  # agent-main ruleset are unchanged; the Check job awaits it like a shard,
+  # so its failure still fails the required Check / Clippy / Test check.
+  test-extra:
+    needs: [pr-state, scope]
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
+    name: Test extra partition
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+    env:
+      SHARD: "extra"
+      PARTITION: "5"
     steps: *test-shard-steps
