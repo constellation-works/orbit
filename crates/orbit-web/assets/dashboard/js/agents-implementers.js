@@ -27,7 +27,13 @@ let curvesScope = null;
 // The latest render's redraw, so crossing the phone breakpoint redraws the
 // chart on its canvas.
 let redraw = null;
-window.matchMedia(NARROW).addEventListener("change", () => { if (redraw) redraw(); });
+// The phone query, or null where the host has no `matchMedia`.
+const narrowQuery = typeof window.matchMedia === "function" ? window.matchMedia(NARROW) : null;
+if (narrowQuery) narrowQuery.addEventListener("change", () => { if (redraw) redraw(); });
+
+function isNarrow() {
+  return Boolean(narrowQuery && narrowQuery.matches);
+}
 
 function curvesPath(selectedWindow) {
   const tier = complexity ? `&complexity=${encodeURIComponent(complexity)}` : "";
@@ -151,7 +157,7 @@ function pickerNode(rerender) {
 // buckets any drawn series reaches. A gap in a series' drawn buckets breaks
 // its line and band rather than bridging missing evidence.
 function chartNode(drawnSeries) {
-  const narrow = window.matchMedia(NARROW).matches;
+  const narrow = isNarrow();
   const WIDTH = narrow ? 360 : 640;
   const HEIGHT = narrow ? 240 : 260;
   const PAD = { left: 40, right: 10, top: 12, bottom: 40 };
@@ -292,7 +298,7 @@ function render({ scorecard, rerender }) {
 
 // The panel node is rebuilt when the curves or the reader's choices change.
 function hash() {
-  return [complexity, picked ? [...picked].sort() : null, curves, window.matchMedia(NARROW).matches];
+  return [complexity, picked ? [...picked].sort() : null, curves, isNarrow()];
 }
 
 // Read on every scorecard fetch, so a poll refreshes the curves too.

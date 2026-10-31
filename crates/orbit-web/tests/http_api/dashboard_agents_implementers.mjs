@@ -6,7 +6,24 @@ common.setWorkspace('ws-a');
 common.setWindow('30d');
 agents.setAgentsRole('implementers');
 const loading = agents.fetchAndRenderAgents();
+// Size curves: one default series (one bucket sparse, one under the minimum
+// sample) and one series below the default threshold.
+const curveBucket = (bucket, tasks, regressed, low, high) => ({
+  bucket, lines_from: 2 ** bucket - 1, lines_to: 2 ** (bucket + 1) - 2, tasks, regressed,
+  rate: regressed / tasks, low, high, drawn: tasks >= 10, sparse: regressed < 5,
+});
+const sizeCurves = url => ({
+  window: '30d', requested_window: url.searchParams.get('window'), role: 'implementers', complexity: null,
+  complexities: [{ tier: 'medium', tasks: 44 }], follow_up_days: 7, min_bucket_tasks: 10, min_series_tasks: 30, sparse_outcomes: 5,
+  excluded: { immature: 3, no_size: 1 },
+  series: [
+    { crew: 'opus@medium', models: ['model-b'], tasks: 38, regressed: 9, default_selected: true,
+      buckets: [curveBucket(5, 12, 1, 0.0149, 0.3536), curveBucket(6, 20, 6, 0.1455, 0.519), curveBucket(7, 6, 2, 0.0968, 0.7)] },
+    { crew: 'opus@high', models: ['model-b'], tasks: 6, regressed: 1, default_selected: false, buckets: [curveBucket(8, 6, 1, 0.0301, 0.5635)] },
+  ],
+});
 answer(takeAll(), url => {
+  if (url.pathname.endsWith('/size-curves')) return response(sizeCurves(url));
   if (url.pathname.endsWith('/by-type')) return response(implementerMatrix());
   if (url.pathname.endsWith('/attribution')) return response(attribution);
   const role = url.pathname.split('/')[3];
@@ -19,9 +36,14 @@ assert.equal(byId['agents-count'].textContent, '6 rows · 5 ranked');
 assert.equal(part('ranking').querySelectorAll('tr.agents-row').length, 6);
 assert.equal(part('detail').querySelector('h3').textContent, 'sol');
 const body = byId['agents-body'];
-assert.equal(part('panel'), undefined, 'implementers show no role panel');
-assert.equal(body.querySelectorAll('.agents-role-panel').length, 0, 'no empty role-panel container is left behind');
-assert.deepEqual(body.children.map(node => node.dataset.key).filter(Boolean), ['strip', 'ranking', 'detail', 'how']);
+assert.deepEqual(body.children.map(node => node.dataset.key).filter(Boolean), ['strip', 'ranking', 'detail', 'how', 'panel']);
+const curves = part('panel');
+// SVG classes are attributes in this DOM; series groups carry `data-crew`.
+const svgClass = node => node.getAttribute('class') || '';
+assert.deepEqual(curves.querySelectorAll('g').map(node => node.dataset.crew).filter(Boolean), ['opus@medium'], 'only default-selected crews are drawn');
+const markers = curves.querySelectorAll('circle');
+assert.equal(markers.length, 2, 'a bucket under the minimum sample is not drawn');
+assert.equal(markers.filter(node => svgClass(node).includes('is-sparse')).length, 1, 'a bucket with fewer than five regressed tasks is hollow');
 for (const selector of ['.agents-cost-plot', '.agents-cost-point', '.agents-cost-frontier', '.agents-cost-axis', '.agents-cost-legend', '.agents-tier-table']) {
   assert.equal(body.querySelectorAll(selector).length, 0, `the removed panel leaves no ${selector}`);
 }
