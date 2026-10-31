@@ -54,41 +54,34 @@ impl OrbitRuntime {
 
     /// The provider/model evidence each of a run's activities recorded, for
     /// [`super::job_run_to_json_with_activity_provenance`].
+    ///
+    /// Evidence is one row per completed invocation: its agent/model is the
+    /// provider-reported identity stored at completion (which wins when the
+    /// provider reports a different model than requested), while its crew and
+    /// reasoning effort are the dispatch identity recorded at launch. A launch
+    /// without a completed invocation is not evidence: it leaves the activity
+    /// `unavailable`, never `recorded`. Old completion rows have no dispatch
+    /// record. Keep their effort unknown, never reconstruct it from audit or
+    /// current crew settings.
     pub fn activity_invocation_evidence(
         &self,
         run_id: &str,
     ) -> Result<Vec<ActivityInvocationEvidence>, OrbitError> {
-        let workspace = self.stores().jobs().workspace_id();
-        let mut evidence = self
-            .sqlite_store()?
-            .agent_executions(workspace, run_id)?
-            .into_iter()
-            .map(|record| ActivityInvocationEvidence {
-                activity_id: record.activity_id,
-                provider: record.provider,
-                model: record.model,
-                execution: Some(record.identity),
-            })
-            .collect::<Vec<_>>();
-        // Old completion rows have no dispatch record. Keep their effort
-        // unknown, never reconstruct it from audit or current crew settings.
-        evidence.extend(
-            self.invocation_records(InvocationQuery {
+        Ok(self
+            .invocation_records(InvocationQuery {
                 job_run_id: Some(run_id.to_string()),
                 limit: 100_000,
                 skip_tool_calls: true,
                 ..InvocationQuery::default()
             })?
             .into_iter()
-            .filter(|record| record.execution.is_none())
             .map(|record| ActivityInvocationEvidence {
                 activity_id: record.activity_id,
                 provider: record.agent,
                 model: record.model,
-                execution: None,
-            }),
-        );
-        Ok(evidence)
+                execution: record.execution,
+            })
+            .collect())
     }
 
     /// [`Self::list_job_runs`] without its stale-run reconciliation: the
