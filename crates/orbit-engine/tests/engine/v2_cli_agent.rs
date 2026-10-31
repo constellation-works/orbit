@@ -427,6 +427,126 @@ fn scenario_a_cli_dispatch_emits_envelope_events() -> Result<(), Box<dyn std::er
     Ok(())
 }
 
+/// [ORB-20572] A provider stream that outgrows the bounded capture keeps only
+/// its final lines, so the calls recorded from it are a suffix numbered from 1.
+/// The invocation says so instead of passing that suffix off as the whole
+/// trace, while the completion envelope and usage stay read from the tail.
+#[cfg(unix)]
+#[test]
+fn oversized_provider_stream_marks_its_surviving_tool_calls_incomplete() {
+    crate::git_fixture::isolated(
+        module_path!(),
+        "oversized_provider_stream_marks_its_surviving_tool_calls_incomplete",
+        || {
+            const CAPTURE_LIMIT_ENV: &str = "ORBIT_CLI_RUNNER_OUTPUT_CAPTURE_LIMIT_BYTES";
+            let tool_use = |id: &str, name: &str| {
+                serde_json::json!({"type":"assistant","message":{"role":"assistant","content":[
+                    {"type":"tool_use","id":id,"name":name,"input":{}}]}})
+            };
+            let tool_result = |id: &str| {
+                serde_json::json!({"type":"user","message":{"role":"user","content":[
+                    {"type":"tool_result","tool_use_id":id,"content":"ok"}]}})
+            };
+            let padding = serde_json::json!({"type":"assistant","message":{"role":"assistant",
+                "content":[{"type":"text","text":"padding ".repeat(32)}]}});
+            let envelope = r#"{"schemaVersion":1,"status":"success","result":{},"error":null}"#;
+            let mut frames = vec![
+                tool_use("t1", "mcp__orbit__orbit_agent_invoke"),
+                tool_result("t1"),
+                tool_use("t2", "Read"),
+                tool_result("t2"),
+            ];
+            frames.extend(std::iter::repeat_n(padding, 64));
+            frames.extend([
+                tool_use("t3", "Edit"),
+                tool_result("t3"),
+                serde_json::json!({"type":"result","subtype":"success","is_error":false,
+                    "result":envelope,
+                    "usage":{"input_tokens":11,"output_tokens":22,
+                        "cache_read_input_tokens":3,"cache_creation_input_tokens":4}}),
+            ]);
+            let stream = frames
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n");
+            let limit = 4_096;
+            assert!(
+                stream.len() > 4 * limit,
+                "the stream must outgrow the capture"
+            );
+
+            let data = tempfile::tempdir().unwrap();
+            let stream_path = data.path().join("stream.jsonl");
+            fs::write(&stream_path, format!("{stream}\n")).unwrap();
+            let fake = fake_cli(
+                "claude",
+                &format!(
+                    "#!/bin/sh\ncat > /dev/null\ncat '{}'\n",
+                    stream_path.display()
+                ),
+            )
+            .unwrap();
+            let dispatch = |capture_limit: usize, run_id: &str| {
+                unsafe { std::env::set_var(CAPTURE_LIMIT_ENV, capture_limit.to_string()) };
+                let tmp_audit = tempfile::tempdir().unwrap();
+                let (writer, _store) = build_writer(tmp_audit.path(), run_id).unwrap();
+                let host = ScriptHost::new(fake.cli_path());
+                let outcome = dispatch_v2_activity(V2DispatchInput {
+                    activity_name: "cli_oversized_tool_trace",
+                    spec: &ActivityV2Spec::AgentLoop(cli_agent_loop_spec(None)),
+                    fs_profile: None,
+                    input: serde_json::json!({ "prompt": "implement" }),
+                    audit: writer,
+                    run_id,
+                    host: Some(&host),
+                })
+                .unwrap();
+                unsafe { std::env::remove_var(CAPTURE_LIMIT_ENV) };
+                outcome
+            };
+            let names = |outcome: &orbit_engine::DispatchOutcome| -> Vec<String> {
+                outcome
+                    .invocation
+                    .as_ref()
+                    .unwrap()
+                    .trace
+                    .tool_calls
+                    .iter()
+                    .map(|call| call.tool_name.clone())
+                    .collect()
+            };
+
+            let whole = dispatch(stream.len() * 2, "oversized-whole");
+            assert!(whole.success, "{:?}", whole.message);
+            let whole_trace = &whole.invocation.as_ref().unwrap().trace;
+            assert!(!whole_trace.tool_calls_incomplete);
+            assert_eq!(
+                names(&whole),
+                ["mcp__orbit__orbit_agent_invoke", "Read", "Edit"]
+            );
+
+            let cut = dispatch(limit, "oversized-cut");
+            assert_eq!(cut.output["stdout_capture_truncated"], true);
+            assert!(cut.success, "{:?}", cut.message);
+            let cut_trace = &cut.invocation.as_ref().unwrap().trace;
+            assert!(
+                cut_trace.tool_calls_incomplete,
+                "the lost early calls must be recorded as lost"
+            );
+            assert_eq!(
+                names(&cut),
+                ["Edit"],
+                "only the late editor survives, renumbered from 1"
+            );
+            assert_eq!(cut.output["completion_envelope_satisfied"], true);
+            assert_eq!(cut_trace.usage, whole_trace.usage);
+            assert_eq!(cut_trace.usage.input, 11);
+            assert_eq!(cut_trace.usage.output, 22);
+        },
+    );
+}
+
 /// A worker's environment carries the browser kit's locators exactly when the
 /// kit under its HOME passed `verify` at the installed version, and never the
 /// kit's libraries on `LD_LIBRARY_PATH`.

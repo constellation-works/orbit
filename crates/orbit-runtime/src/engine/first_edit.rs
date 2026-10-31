@@ -10,7 +10,9 @@
 //! call, or none whose name is a known editor tool, has no score. A shell
 //! such as `command_execution` is not an edit, and is never averaged as zero.
 //! An empty trace is separately observable from a populated trace with no
-//! detectable edit.
+//! detectable edit. An invocation whose provider output outgrew the bounded
+//! capture holds only the calls of its surviving suffix, which a first edit
+//! there would misplace, so it has no score and is flagged incomplete instead.
 
 use std::collections::{HashMap, HashSet};
 
@@ -62,10 +64,13 @@ pub struct FirstImplementEdit {
     pub id: i64,
     pub agent: String,
     /// `(turns, result bytes)` before the first edit, or `None` when the
-    /// invocation records no detectable edit.
+    /// invocation records no detectable edit or an incomplete trace.
     pub score: Option<(u64, u64)>,
     /// Whether the invocation recorded no tool calls.
     pub empty_trace: bool,
+    /// Whether the invocation's tool calls are only the suffix that survived
+    /// the bounded output capture, so `score` is withheld.
+    pub incomplete_trace: bool,
 }
 
 /// The first implement invocation of each task, from one read.
@@ -131,12 +136,14 @@ impl RuntimeKernel {
                 }
                 kept += 1;
                 added += 1;
+                let incomplete_trace = record.tool_calls_incomplete;
                 let score = turns_before_edit(
                     record
                         .tool_calls
                         .iter()
                         .map(|call| (call.seq, call.tool_name.as_str(), call.result_bytes)),
-                );
+                )
+                .filter(|_| !incomplete_trace);
                 let empty_trace = record.tool_calls.is_empty();
                 for task_id in record.task_ids {
                     let replace = by_task
@@ -151,6 +158,7 @@ impl RuntimeKernel {
                                 agent: record.agent.clone(),
                                 score,
                                 empty_trace,
+                                incomplete_trace,
                             },
                         );
                     }

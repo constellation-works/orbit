@@ -47,6 +47,7 @@ const WARNING_LABELS = {
   lagging: "Open outcomes",
   primary_unmeasured: "Primary unmeasured",
   first_edit_incomplete: "First-edit coverage incomplete",
+  tool_trace_incomplete: "Tool trace truncated",
   crew_mismatch: "Crew outside arm pool",
   crew_mismatch_unavailable: "Crew admission pool unavailable",
   forced: "Forced assignments",
@@ -595,8 +596,9 @@ function armCards(experiment, readout, primary, color) {
       ]),
       el("span", {
         class: "mx-sc-foot",
-        text: `Explorer: ${arm.tasks_with_explorer_call ?? 0} of ${arm.n ?? 0} tasks`,
-        title: "Analysed tasks with at least one explorer-delegation call during implement, at or after assignment. A task counts once.",
+        text: `Explorer: ${arm.tasks_with_explorer_call ?? 0} of ${arm.n ?? 0} tasks`
+          + (arm.tasks_explorer_unobserved ? ` (+${arm.tasks_explorer_unobserved} unobserved)` : ""),
+        title: "Analysed tasks with at least one explorer-delegation call during implement, at or after assignment. A task counts once. Unobserved tasks recorded no call, but an implement invocation's output outgrew the capture bound and lost its early tool calls, so a call there cannot be ruled out.",
       }),
       coverage ? el("span", {
         class: "mx-sc-foot ex-arm-cost",

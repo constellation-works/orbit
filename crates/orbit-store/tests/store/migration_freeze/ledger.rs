@@ -523,6 +523,10 @@ fn legacy_db_adopts_versioned_ledger() {
                 "invocation_reliability_window_index".to_string()
             ),
             ("migration.v0082".to_string(), "job_run_build".to_string()),
+            (
+                "migration.v0083".to_string(),
+                "invocation_tool_calls_incomplete".to_string()
+            ),
         ]
     );
 }

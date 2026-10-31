@@ -862,6 +862,121 @@ fn readout_counts_tasks_with_a_recorded_explorer_call() {
     }
 }
 
+/// [ORB-20572] An invocation whose output outgrew the capture bound keeps only
+/// the suffix of its tool calls: its surviving editor is not a measured first
+/// edit, and a missing explorer call is not a confirmed absence.
+#[test]
+fn readout_does_not_measure_or_rule_out_calls_from_a_truncated_tool_trace() {
+    if !super::dispatch_admission::isolated(
+        "experiment_readout::readout_does_not_measure_or_rule_out_calls_from_a_truncated_tool_trace",
+    ) {
+        return;
+    }
+
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("home/.orbit");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(
+        workspace.join("config.toml"),
+        "[experiments]\nenabled = true\n",
+    )
+    .unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let actor = ExperimentActor {
+        actor: "readout-test".into(),
+        reason: None,
+    };
+    let experiment = runtime
+        .create_experiment(
+            "truncated-tool-trace",
+            ExperimentDefinitionInput {
+                arms: Some(json!([
+                    { "name": "control", "control": true },
+                    { "name": "treatment" }
+                ])),
+                primary_metric: Some("turns_before_first_edit".into()),
+                ..ExperimentDefinitionInput::default()
+            },
+            actor.clone(),
+        )
+        .unwrap();
+    runtime
+        .change_experiment(&experiment.id, ExperimentChange::Start, actor)
+        .unwrap();
+
+    let seed = |arm: &str, calls: &[&str], tool_calls_incomplete: bool| {
+        let task_id = enroll_arm_task(&runtime, &experiment.id, arm, TaskComplexity::Low);
+        runtime
+            .insert_invocation_trace_record(&InvocationInsertParams {
+                agent_execution_id: None,
+                job_run_id: format!("fixture-{task_id}"),
+                account: None,
+                activity_id: "agent_implement".into(),
+                agent: "grok".into(),
+                provider: None,
+                model: None,
+                task_ids: vec![task_id.clone()],
+                trace: InvocationTrace {
+                    tool_calls: calls
+                        .iter()
+                        .enumerate()
+                        .map(|(index, tool_name)| ToolCallTrace {
+                            seq: index as u32 + 1,
+                            tool_name: (*tool_name).into(),
+                            ..ToolCallTrace::default()
+                        })
+                        .collect(),
+                    tool_calls_incomplete,
+                    ..InvocationTrace::default()
+                },
+            })
+            .unwrap();
+        runtime.archive_task(&task_id).unwrap();
+    };
+    // The early explorer and read were lost; only the late editor survives.
+    seed("treatment", &["hashline_edit"], true);
+    // An explorer call that survived is a call whatever else was lost.
+    seed("treatment", &["orbit.agent.invoke", "hashline_edit"], true);
+    seed("control", &["read_file", "hashline_edit"], false);
+
+    let readout = runtime.experiment_readout(&experiment.id, None).unwrap();
+    let arm = |name: &str| readout.arms.iter().find(|arm| arm.name == name).unwrap();
+    assert_eq!(arm("treatment").tasks_with_explorer_call, 1);
+    assert_eq!(
+        arm("treatment").tasks_explorer_unobserved,
+        1,
+        "the lost early calls may have held an explorer delegation"
+    );
+    assert_eq!(arm("control").tasks_with_explorer_call, 0);
+    assert_eq!(arm("control").tasks_explorer_unobserved, 0);
+
+    let first_edit = |arm_name: &str| {
+        let metric = readout
+            .metrics
+            .iter()
+            .find(|metric| metric.metric == "turns_before_first_edit")
+            .unwrap();
+        let arm = metric.arms.iter().find(|arm| arm.arm == arm_name).unwrap();
+        (arm.estimate.n, arm.estimate.mean, arm.unmeasured)
+    };
+    assert_eq!(
+        first_edit("treatment"),
+        (0, None, 2),
+        "a suffix's surviving editor is not a measured first edit"
+    );
+    assert_eq!(first_edit("control"), (1, Some(1.0), 0));
+    assert!(
+        readout
+            .warnings
+            .iter()
+            .any(|warning| warning.kind == "tool_trace_incomplete"),
+        "{:?}",
+        readout.warnings
+    );
+}
+
 /// [ORB-20573] Exactly 100,000 newer unrelated implement invocations must
 /// not evict an enrolled task's recorded explorer call from the readout.
 #[test]

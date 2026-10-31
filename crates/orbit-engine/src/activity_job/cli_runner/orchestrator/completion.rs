@@ -291,6 +291,10 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
     // the end event, so the calls are read from the raw capture.
     let trace = trace.map(|mut trace| {
         assign_recorded_tool_calls(&provider, stdout.protocol_bytes(), &mut trace);
+        // [ORB-20572] Every reading above is of the retained suffix, whose
+        // calls are numbered from its first complete line. A capture that
+        // dropped its middle must not pass that suffix off as the whole trace.
+        trace.tool_calls_incomplete = stdout.truncated();
         trace.long_prompt_requests = provider_long_prompt_requests(
             &provider,
             stdout.bytes(),

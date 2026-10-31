@@ -7,6 +7,9 @@
 //! excluded and counted, never averaged as zero. Empty traces are counted
 //! separately from populated traces with no recognized editor call; a shell
 //! such as `command_execution` is not an edit and is never averaged as zero.
+//! A trace whose provider output outgrew the bounded capture holds only a
+//! suffix of the invocation's calls, so it has no first-edit score either: it
+//! is counted as an incomplete trace, never as a measurement.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -161,6 +164,9 @@ enum Contribution {
     Scored(u64, u64),
     /// The first implement invocation has no tool calls to inspect.
     EmptyTrace,
+    /// The first implement trace lost its early calls to the capture bound, so
+    /// no editor call in it is known to be the first.
+    IncompleteTrace,
     /// The populated first implement trace has no recognized editor call.
     NoDetectableEdit,
     /// No implement invocation is linked to the task.
@@ -173,6 +179,7 @@ enum Contribution {
 struct Cell {
     samples: Vec<(u64, u64)>,
     empty_trace: u64,
+    incomplete_trace: u64,
     no_detectable_edit: u64,
     no_invocation: u64,
 }
@@ -182,6 +189,7 @@ impl Cell {
         match contribution {
             Contribution::Scored(turns, bytes) => self.samples.push((turns, bytes)),
             Contribution::EmptyTrace => self.empty_trace += 1,
+            Contribution::IncompleteTrace => self.incomplete_trace += 1,
             Contribution::NoDetectableEdit => self.no_detectable_edit += 1,
             Contribution::NoInvocation => self.no_invocation += 1,
         }
@@ -190,12 +198,17 @@ impl Cell {
     fn is_empty(&self) -> bool {
         self.samples.is_empty()
             && self.empty_trace == 0
+            && self.incomplete_trace == 0
             && self.no_detectable_edit == 0
             && self.no_invocation == 0
     }
 
     fn task_count(&self) -> u64 {
-        self.samples.len() as u64 + self.empty_trace + self.no_detectable_edit + self.no_invocation
+        self.samples.len() as u64
+            + self.empty_trace
+            + self.incomplete_trace
+            + self.no_detectable_edit
+            + self.no_invocation
     }
 
     fn coverage_json(&self) -> Value {
@@ -216,6 +229,7 @@ impl Cell {
             "tasks": tasks,
             "measured": measured,
             "empty_trace": self.empty_trace,
+            "incomplete_trace": self.incomplete_trace,
             "no_detectable_edit": self.no_detectable_edit,
             "no_invocation": self.no_invocation,
             "trace_rate": trace_rate,
@@ -237,6 +251,7 @@ impl Cell {
             // Keep the previous aggregate field for existing clients.
             "excluded_no_edit": self.empty_trace + self.no_detectable_edit,
             "excluded_empty_trace": self.empty_trace,
+            "excluded_incomplete_trace": self.incomplete_trace,
             "excluded_no_detectable_edit": self.no_detectable_edit,
             "excluded_no_invocation": self.no_invocation,
             "tasks": self.task_count(),
@@ -342,6 +357,7 @@ fn turns_to_edit_trend(
             None => Contribution::NoInvocation,
             Some(first) => match first.score {
                 Some((turns, bytes)) => Contribution::Scored(turns, bytes),
+                None if first.incomplete_trace => Contribution::IncompleteTrace,
                 None if first.empty_trace => Contribution::EmptyTrace,
                 None => Contribution::NoDetectableEdit,
             },

@@ -280,3 +280,22 @@ pub(super) fn apply_invocation_reliability_window_index(
     )
     .map_err(sqlite_store_error)
 }
+
+/// v83 `invocation_tool_calls_incomplete` [ORB-20572]: whether the provider's
+/// stdout outgrew the bounded capture, so the invocation's recorded tool calls
+/// are only the suffix that survived it.
+///
+/// A defaulted column only: an older binary keeps inserting without it and its
+/// rows read as complete, as does every row recorded before this migration,
+/// whose truncation was never recorded.
+pub(super) fn apply_invocation_tool_calls_incomplete(conn: &Connection) -> Result<(), OrbitError> {
+    if !table_exists(conn, "invocations")? {
+        return Ok(());
+    }
+    add_column_if_missing(
+        conn,
+        "invocations",
+        "tool_calls_incomplete",
+        "INTEGER NOT NULL DEFAULT 0",
+    )
+}

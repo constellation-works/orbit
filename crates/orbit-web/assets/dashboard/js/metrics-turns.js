@@ -103,6 +103,7 @@ function seriesLabel(series) {
 
 function excluded(cell) {
   return (cell.excluded_empty_trace || 0)
+    + (cell.excluded_incomplete_trace || 0)
     + (cell.excluded_no_detectable_edit ?? cell.excluded_no_edit ?? 0)
     + (cell.excluded_no_invocation || 0);
 }
@@ -115,7 +116,7 @@ function excludedDescription(cell) {
   if (!coverageCategories(cell)) {
     return `${cell.excluded_no_edit || 0} with no detectable edit (trace category unavailable), ${cell.excluded_no_invocation || 0} with no implement invocation`;
   }
-  return `${cell.excluded_empty_trace} with an empty or unavailable tool trace, ${cell.excluded_no_detectable_edit} with a populated trace but no recognized editor, ${cell.excluded_no_invocation || 0} with no implement invocation`;
+  return `${cell.excluded_empty_trace} with an empty or unavailable tool trace, ${cell.excluded_incomplete_trace || 0} with a tool trace truncated by the output capture, ${cell.excluded_no_detectable_edit} with a populated trace but no recognized editor, ${cell.excluded_no_invocation || 0} with no implement invocation`;
 }
 
 function percent(rate) {
@@ -125,7 +126,7 @@ function percent(rate) {
 function coverageNote(payload) {
   const coverage = payload.coverage;
   if (!coverage) return "Trace coverage categories are unavailable from this host.";
-  return `First-edit coverage: ${coverage.measured} of ${coverage.tasks} tasks measured; ${coverage.empty_trace} had an empty or unavailable tool trace, ${coverage.no_detectable_edit} had a populated trace without a recognized editor, and ${coverage.no_invocation} had no implement invocation.`;
+  return `First-edit coverage: ${coverage.measured} of ${coverage.tasks} tasks measured; ${coverage.empty_trace} had an empty or unavailable tool trace, ${coverage.incomplete_trace || 0} had a tool trace truncated by the output capture, ${coverage.no_detectable_edit} had a populated trace without a recognized editor, and ${coverage.no_invocation} had no implement invocation.`;
 }
 
 function providerCoverageNote(payload) {
@@ -234,7 +235,7 @@ export function turnsModel(payload, { windowKey, shown, bucketTitle, bucketWidth
     value: entry.total.n ? format(entry.total[meanKey]) : "—",
     sub: entry.total.n ? `median ${format(entry.total[medianKey])}` : "no measured first edits",
     foot: coverageCategories(entry.total)
-      ? `${tasks(entry.total.n)} measured · ${entry.total.excluded_empty_trace} empty traces · ${entry.total.excluded_no_detectable_edit} populated without an editor · ${entry.total.excluded_no_invocation || 0} without an invocation`
+      ? `${tasks(entry.total.n)} measured · ${entry.total.excluded_empty_trace} empty traces · ${entry.total.excluded_incomplete_trace || 0} truncated traces · ${entry.total.excluded_no_detectable_edit} populated without an editor · ${entry.total.excluded_no_invocation || 0} without an invocation`
       : `${tasks(entry.total.n)} measured · ${excludedDescription(entry.total)}`,
   }));
 
