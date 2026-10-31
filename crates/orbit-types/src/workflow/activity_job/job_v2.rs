@@ -227,8 +227,7 @@ impl JobV2 {
     }
 
     /// Whether this job is under the auto-task step extension: it declares
-    /// schemaVersion 3, or uses one of the extension's fields. Phase 1 keeps
-    /// every such job disabled and refuses to submit or run it, even when
+    /// schemaVersion 3, or uses one of the extension's fields, even when
     /// none of its fields remain.
     pub fn is_auto_task_job(&self) -> bool {
         self.schema_version == super::AUTO_TASK_JOB_SCHEMA_VERSION

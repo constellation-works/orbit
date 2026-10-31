@@ -654,21 +654,17 @@ refusals included, is listed by `orbit run show` and `orbit script
 history <name>` with the script's digest, grant, argv, exit, duration
 and its capped, redacted log.
 
-## Auto-task steps (defined and explained, not run)
+## Auto-task steps
 
 A step may name an auto-task definition: `target: auto-task:<name>`. Such
 a step binds one task from that definition and waits for its accepted
-completion, instead of running an activity. This Orbit loads, checks and
-explains these steps, but cannot run them yet: a job with one must keep
-`state: disabled`, `enabled` fails to load, and submitting it is refused
-before any run is recorded or task minted.
+completion, instead of running an activity.
 
 A job that uses an `auto-task:` target, a wait key or `spec.expire_when`,
 at any nesting, declares `schemaVersion: 3`. Under `schemaVersion: 2` any
 of those keys fails to load, even with a null value or in a nested step. A
-`schemaVersion: 3` job keeps that version and the same restrictions even
-after its last auto-task field is removed: it must stay disabled and cannot
-be submitted until you declare `schemaVersion: 2` again. An Orbit release
+`schemaVersion: 3` job keeps that version even after its last auto-task
+field is removed, until you declare `schemaVersion: 2` again. An Orbit release
 older than this support refuses a `schemaVersion: 3` job as an unsupported
 version, rather than loading it without its waits.
 
@@ -745,8 +741,44 @@ resolved now with its file digest, enabled state and own condition guard
 It writes nothing. `orbit job show` and the explain report both include
 the job's `schema_version`.
 
+### How an auto-task job runs
+
+An enabled job with auto-task steps runs only as a detached submission
+(`orbit run job <name>` or a routine), never as a foreground run such as
+`orbit job run <path>`. Each execution freezes the definition it runs and
+its admission time, so editing the job or a named auto-task affects later
+executions only. The deadlines count from admission, including time spent
+queued or with the host down.
+
+When the job reaches an auto-task step, the step:
+
+1. Settles first on its bound task's outcome: completed is `done`;
+   archived, rejected or deleted ends the step without a new task. A
+   completion recorded after the deadline does not count.
+2. Ends as `timeout` once its own or the job's `expire_when` holds.
+3. Otherwise waits while `wait_until` is false or unknown, or while the
+   named auto-task is missing, disabled, or its own condition or schedule
+   guard is false. A definition whose condition is task, host or file
+   scoped, or a step with `require_result`, holds: this release has no
+   evidence adapter for `release-readiness/v1`.
+4. When ready, binds an open instance under `skip_if_open` dedupe, or mints
+   one task. The mint uses no schedule slot and records which run and step
+   it was for, so a retry after a lost reply finds the same task. A step
+   mints at most one task per execution; `reuse_when` does not match yet.
+
+While a step waits, the run stays `running` and counts against
+`max_active_runs`, but no worker, provider, worktree or drain slot is held:
+the run is parked, `orbit run show` reports it running, and the scheduler's
+sweep resumes it within about a minute. A parallel block keeps its
+branches that already succeeded and parks while any branch waits. Its join
+mode decides the outcome, as before. A minted task starts, from a local
+drain or a follower's claim, only while its step still admits it: an
+ended run, an expired step or a guard that no longer holds keeps it in the
+backlog.
+
 Opening a workspace with this release moves it to workspace layout
-version 5. Earlier Orbit releases then refuse to open the workspace until
+version 7, which records parked runs and step bindings that an earlier
+release would drop. Earlier Orbit releases then refuse to open the workspace until
 they are upgraded, and while an earlier release still holds it, for example
 as a running MCP server, this release waits for that client to exit rather
 than proceeding alongside it.

@@ -890,4 +890,14 @@ impl JobRunStoreBackend for SqliteJobRunStore {
         self.store
             .update_job_run_state_for_workspace(&self.workspace_id, run_id, update)
     }
+
+    fn adopt_parked_job_run(
+        &self,
+        run_id: &str,
+        parked_at: DateTime<Utc>,
+        pid: u32,
+    ) -> Result<bool, OrbitError> {
+        self.store
+            .adopt_parked_job_run_for_workspace(&self.workspace_id, run_id, parked_at, pid)
+    }
 }

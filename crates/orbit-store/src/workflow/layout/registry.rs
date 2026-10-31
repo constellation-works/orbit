@@ -11,7 +11,7 @@ use crate::contracts::MigrationCompatibility;
 
 /// Highest workspace-layout version this binary knows how to produce.
 /// Bump together with a new `LAYOUT_MIGRATIONS` entry — never without one.
-pub const SUPPORTED_LAYOUT_VERSION: u32 = 6;
+pub const SUPPORTED_LAYOUT_VERSION: u32 = 7;
 
 /// One entry in the layout-migration registry.
 pub(crate) struct LayoutMigration {
@@ -91,6 +91,17 @@ pub(crate) const LAYOUT_MIGRATIONS: &[LayoutMigration] = &[
         description: "fence clients without live visual final-candidate gates and strict visual-resolution records; preserve existing records unchanged",
         // New visual dispositions affect landing authority; old readers either
         // ignore manifest obligations or cannot decode populated strict records.
+        compat: MigrationCompatibility::Breaking,
+        apply: apply_baseline_layout,
+    },
+    LayoutMigration {
+        version: 7,
+        name: "auto-task-job-checkpoints",
+        description: "fence clients that cannot preserve parked auto-task job runs, step bindings, receipts and partial parallel branches; preserve existing records unchanged",
+        // ORB-20158: a run of an auto-task job carries a versioned checkpoint
+        // with pending obligations. An older binary deserializes run state
+        // without it and its next checkpoint write would silently drop it,
+        // and it would report a deliberately parked run as interrupted.
         compat: MigrationCompatibility::Breaking,
         apply: apply_baseline_layout,
     },

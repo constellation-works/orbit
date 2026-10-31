@@ -2,7 +2,8 @@
 //! the load-time checker, the pure evaluation behind `orbit automation
 //! explain`, the edge rules, and the protocol that fires each edge once
 //! (`docs/design/condition-triggers/1_scope.md`); and the typed wait
-//! environment and load-time checks of a job's auto-task steps [ORB-20157].
+//! environment, load-time checks and pass evaluation of a job's auto-task
+//! steps [ORB-20157, ORB-20158].
 
 mod ast;
 mod check;
@@ -20,8 +21,8 @@ pub use check::{
     check_condition, check_guard,
 };
 pub use evaluate::{
-    BoardFacts, ClauseNode, ConditionEvaluator, ConditionFacts, OperandValue, OriginFacts,
-    SelfFacts, TaskFacts, TopLevelClause, Truth,
+    BoardFacts, ClauseNode, ConditionEvaluator, ConditionFacts, JobWaitFacts, OperandValue,
+    OriginFacts, SelfFacts, StepFacts, TaskFacts, TopLevelClause, Truth,
 };
 pub use firing::{
     ConditionObservation, PassOutcome, PassSettings, SubjectObservation, advance_pass,

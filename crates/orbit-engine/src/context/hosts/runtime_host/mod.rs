@@ -12,6 +12,7 @@ use orbit_types::task::{
     TaskPriority, TaskStatus,
 };
 use orbit_types::telemetry::ProviderLimitObservation;
+use orbit_types::workflow::{AutoTaskStepRecord, ParkedWait};
 use orbit_types::workflow::{
     DeferralProbe, ExperimentActivityOverlay, ExploreBriefAdmission, JobRun, JobRunStartOutcome,
     JobRunState, NamespaceProbe, PipelineState, TagInstruction,
@@ -26,6 +27,7 @@ use crate::activity_job::{
     ResolvedShellExecutor,
 };
 
+use super::{AutoTaskAdmission, AutoTaskObservation, AutoTaskStepRequest};
 use super::{
     ClaimExecutionContext, CompletionObservationAdmission, CrewConfig, FinalRecoveryAdmission,
     FinalRecoveryAdmissionRequest, FinalRecoveryApplication, FinalRecoveryApplied,

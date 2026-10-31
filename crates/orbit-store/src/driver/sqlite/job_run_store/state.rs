@@ -89,8 +89,15 @@ impl Store {
         run_id: &str,
         state: &PipelineState,
     ) -> Result<(), OrbitError> {
+        state
+            .checkpoint_write_supported()
+            .map_err(OrbitError::Store)?;
         let conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        // [ORB-20158] Never overwrite a checkpoint a newer binary wrote.
+        if let Some(raw) = read_state_json_conn(&conn, workspace_id, run_id)? {
+            refuse_unsupported_stored_checkpoint(&raw)?;
+        }
         // A snapshot written after the run finished must not bring back what
         // finalization compacted away.
         let compacted = run_state_conn(&conn, workspace_id, run_id)?.and_then(|run_state| {
@@ -188,9 +195,13 @@ impl Store {
             let Some(raw_pipeline_state) = raw_pipeline_state else {
                 return Ok(RunStateUpdate::NoState);
             };
+            refuse_unsupported_stored_checkpoint(&raw_pipeline_state)?;
             let mut pipeline_state: PipelineState = serde_json::from_str(&raw_pipeline_state)
                 .map_err(|e| OrbitError::Store(format!("invalid pipeline_state_json: {e}")))?;
             update(state, &mut pipeline_state)?;
+            pipeline_state
+                .checkpoint_write_supported()
+                .map_err(OrbitError::Store)?;
             pipeline_state.compact_for_terminal(state);
             let state_json = serde_json::to_string(&pipeline_state)
                 .map_err(|e| OrbitError::Store(format!("serialize pipeline state: {e}")))?;
@@ -203,6 +214,79 @@ impl Store {
                 .map_err(sqlite_store_error)?;
             Ok(RunStateUpdate::Updated)
         })
+    }
+}
+
+impl Store {
+    /// [ORB-20158] See `JobRunStore::adopt_parked_job_run`: the run row's
+    /// owner and the state's park change in one immediate transaction.
+    pub fn adopt_parked_job_run_for_workspace(
+        &self,
+        workspace_id: &str,
+        run_id: &str,
+        parked_at: chrono::DateTime<chrono::Utc>,
+        pid: u32,
+    ) -> Result<bool, OrbitError> {
+        let pid_start_time = orbit_common::process::identity::process_start_identity_token(pid);
+        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+            let Some(mut run) =
+                super::queries::get_job_run_for_workspace_conn(&tx.tx, workspace_id, run_id)?
+            else {
+                return Ok(false);
+            };
+            if run.state != JobRunState::Running {
+                return Ok(false);
+            }
+            let Some(raw) = read_state_json_conn(&tx.tx, workspace_id, run_id)? else {
+                return Ok(false);
+            };
+            refuse_unsupported_stored_checkpoint(&raw)?;
+            let mut state: PipelineState = serde_json::from_str(&raw)
+                .map_err(|e| OrbitError::Store(format!("invalid pipeline_state_json: {e}")))?;
+            let Some(checkpoint) = state.auto_task.as_mut() else {
+                return Ok(false);
+            };
+            if checkpoint.parked.as_ref().map(|park| park.parked_at) != Some(parked_at) {
+                return Ok(false);
+            }
+            checkpoint.parked = None;
+            state.updated_at = chrono::Utc::now();
+            let state_json = serde_json::to_string(&state)
+                .map_err(|e| OrbitError::Store(format!("serialize pipeline state: {e}")))?;
+            write_state_json_conn(&tx.tx, workspace_id, run_id, &state_json)?;
+            run.pid = Some(pid);
+            run.pid_start_time = pid_start_time;
+            super::queries::upsert_job_run_for_workspace_conn(&tx.tx, workspace_id, &run, None)?;
+            Ok(true)
+        })
+    }
+}
+
+/// [ORB-20158] Refuse a stored state whose auto-task checkpoint a newer
+/// binary wrote: rewriting it through this binary's shape could drop pending
+/// bindings, receipts or the parked continuation. Read before deserializing,
+/// so the refusal does not depend on the newer shape still parsing.
+fn refuse_unsupported_stored_checkpoint(raw: &str) -> Result<(), OrbitError> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return Ok(());
+    };
+    let Some(version) = value
+        .get("auto_task")
+        .and_then(|checkpoint| checkpoint.get("version"))
+    else {
+        return Ok(());
+    };
+    match version.as_u64() {
+        Some(version)
+            if version <= u64::from(orbit_types::workflow::AUTO_TASK_CHECKPOINT_VERSION) =>
+        {
+            Ok(())
+        }
+        _ => Err(OrbitError::Store(format!(
+            "auto-task checkpoint version {version} is newer than the supported {}; this Orbit \
+             refuses to rewrite the run state",
+            orbit_types::workflow::AUTO_TASK_CHECKPOINT_VERSION
+        ))),
     }
 }
 
@@ -275,6 +359,9 @@ pub(super) fn compact_finished_state_conn(
     let Some(raw) = read_state_json_conn(conn, workspace_id, run_id)? else {
         return Ok(());
     };
+    if refuse_unsupported_stored_checkpoint(&raw).is_err() {
+        return Ok(());
+    }
     let mut state = match serde_json::from_str::<PipelineState>(&raw) {
         Ok(state) => state,
         Err(error) => {

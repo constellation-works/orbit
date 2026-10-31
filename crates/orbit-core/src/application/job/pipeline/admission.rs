@@ -3,6 +3,8 @@ use super::*;
 use crate::application::job::{JobAutoConcurrencyPort, ReviewAdmissionHook, crew_pools, delivery};
 use orbit_common::fs::io::open_read_only_no_follow;
 
+use crate::application::job::catalog::check_auto_task_job;
+
 /// Durable insertion outcome before worker setup, which runs outside task locks.
 enum PipelineCrewAdmission {
     Inserted {
@@ -131,22 +133,23 @@ impl OrbitRuntime {
         }
         // Resolve cardinality before reclamation, policy capture, run insertion
         // or resume seeding. Refusal must leave retained candidates untouched.
+        let mut catalog_path = None;
         let spec = match &definition {
-            SubmittedDefinition::Catalog => self
-                .load_v2_job_asset_by_name(job_name)
-                .map(|(_, spec)| spec),
+            SubmittedDefinition::Catalog => {
+                self.load_v2_job_asset_by_name(job_name)
+                    .map(|(path, spec)| {
+                        catalog_path = Some(path);
+                        spec
+                    })
+            }
             SubmittedDefinition::Snapshot { spec, .. } => Ok((*spec).clone()),
         };
         let mut input = input;
         if let Ok(spec) = &spec {
-            // Auto-task steps are defined and explained only: refuse every
-            // schemaVersion 3 job before reclamation, admission capture or a
-            // run record exists, even one with no auto-task step left.
-            if spec.is_auto_task_job() {
-                return Err(OrbitError::InvalidInput(format!(
-                    "job '{job_name}' is a schemaVersion 3 auto-task job, which this Orbit can \
-                     define and explain but cannot run yet; nothing was submitted"
-                )));
+            // A snapshot's auto-task steps get the checks a catalog file's
+            // got at load, before anything is reclaimed or recorded.
+            if !spec.auto_task_steps().is_empty() {
+                check_auto_task_job(job_name, Path::new(job_name), spec, Utc::now())?;
             }
             delivery::normalize_delivery_input(spec, &mut input)?;
         }
@@ -197,6 +200,14 @@ impl OrbitRuntime {
                 .filter(|_| self.worker_invocation().is_none())
                 .map(ToOwned::to_owned);
             let mut persist = || -> Result<PipelineCrewAdmission, OrbitError> {
+                // A task an auto-task job step minted starts only while its
+                // step still admits it (ORB-20158). A child of a running
+                // delivery is already inside that start.
+                if admission.is_none()
+                    && let Some(task_id) = crew_pools::crew_admission_task_id(job_name, &input)
+                {
+                    self.refuse_step_bound_start(task_id)?;
+                }
                 let mut admission_task_writes = self.install_auto_crew_admission(
                     job_name,
                     &mut input,
@@ -389,6 +400,15 @@ impl OrbitRuntime {
                 if let SubmittedDefinition::Snapshot { yaml, .. } = &definition {
                     self.write_run_definition_snapshot(&run.run_id, yaml)?;
                 }
+                if !existing_automation_run && !spec.auto_task_steps().is_empty() {
+                    self.freeze_auto_task_submission(
+                        &run.run_id,
+                        &definition,
+                        catalog_path.as_deref(),
+                        &spec,
+                        submitted_at,
+                    )?;
+                }
 
                 // Reaping other orphaned runs of the job does not concern this
                 // submission; its failure must not fail an admitted run.
@@ -497,6 +517,73 @@ impl OrbitRuntime {
         result
     }
     /// Durably pin a submitted run's job definition next to the run record.
+    /// Freeze an admitted execution of a job with auto-task steps
+    /// (ORB-20158): pin the definition it runs as its snapshot, a catalog
+    /// one included, and record its checkpoint. A resume keeps the frozen
+    /// definition and checkpoint its source left.
+    fn freeze_auto_task_submission(
+        &self,
+        run_id: &str,
+        definition: &SubmittedDefinition<'_>,
+        catalog_path: Option<&Path>,
+        spec: &JobV2,
+        submitted_at: chrono::DateTime<Utc>,
+    ) -> Result<(), OrbitError> {
+        if let Some(checkpoint) = self
+            .read_run_state(run_id)?
+            .and_then(|state| state.auto_task)
+        {
+            return self.write_run_definition_snapshot(run_id, &checkpoint.frozen_job);
+        }
+        let yaml = match (definition, catalog_path) {
+            (SubmittedDefinition::Snapshot { yaml, .. }, _) => (*yaml).to_string(),
+            (SubmittedDefinition::Catalog, Some(path)) => {
+                let yaml = std::fs::read_to_string(path).map_err(|error| {
+                    OrbitError::Io(format!("read job definition {}: {error}", path.display()))
+                })?;
+                // The file must still be the definition admission checked.
+                if load_job_asset(&yaml).ok().map(|asset| asset.spec).as_ref() != Some(spec) {
+                    return Err(OrbitError::InvalidInput(format!(
+                        "job definition {} changed while it was admitted; nothing was submitted",
+                        path.display()
+                    )));
+                }
+                self.write_run_definition_snapshot(run_id, &yaml)?;
+                yaml
+            }
+            (SubmittedDefinition::Catalog, None) => {
+                return Err(OrbitError::Execution(
+                    "an auto-task job admitted from the catalog has no definition file".into(),
+                ));
+            }
+        };
+        crate::application::auto_tasks::job_step::freeze_auto_task_run(
+            self,
+            run_id,
+            &yaml,
+            submitted_at,
+        )
+    }
+
+    /// Refuse to start a task an auto-task job step minted while its step no
+    /// longer admits it. A task that does not resolve is left to the
+    /// submission's own checks to report.
+    fn refuse_step_bound_start(&self, task_id: &str) -> Result<(), OrbitError> {
+        let Ok(task) = self.get_task(task_id) else {
+            return Ok(());
+        };
+        match crate::application::auto_tasks::job_step::step_bound_admission_hold(
+            self,
+            &task,
+            &|| self.get_task_history(task_id),
+        ) {
+            Some(hold) => Err(OrbitError::InvalidInput(format!(
+                "{task_id} is held: {hold}; nothing was submitted"
+            ))),
+            None => Ok(()),
+        }
+    }
+
     fn write_run_definition_snapshot(&self, run_id: &str, yaml: &str) -> Result<(), OrbitError> {
         let dir = self.paths().job_runs_dir.clone();
         let path = run_definition_snapshot_path(&dir, run_id)?;

@@ -11,6 +11,7 @@ use orbit_types::task::{
     TaskPriority, TaskStatus,
 };
 use orbit_types::telemetry::ProviderLimitObservation;
+use orbit_types::workflow::{AutoTaskStepRecord, ParkedWait};
 use orbit_types::workflow::{
     DeferralProbe, ExperimentActivityOverlay, ExploreBriefAdmission, JobRun, JobRunStartOutcome,
     JobRunState, NamespaceProbe, PipelineState, TagInstruction,
@@ -25,6 +26,7 @@ use crate::activity_job::{
     ResolvedShellExecutor,
 };
 
+use super::super::{AutoTaskAdmission, AutoTaskObservation, AutoTaskStepRequest};
 use super::super::{
     ClaimExecutionContext, CompletionObservationAdmission, CrewConfig, FinalRecoveryAdmission,
     FinalRecoveryAdmissionRequest, FinalRecoveryApplication, FinalRecoveryApplied,
@@ -840,6 +842,49 @@ pub trait NullRuntimeHost: Send + Sync {
         _compound_outputs: &BTreeMap<String, Value>,
     ) -> Result<(), DispatchError> {
         Ok(())
+    }
+
+    fn observe_auto_task_step(
+        &self,
+        _run_id: &str,
+        _request: &AutoTaskStepRequest,
+    ) -> Result<AutoTaskObservation, DispatchError> {
+        Err(DispatchError::HostRequired("auto-task step"))
+    }
+
+    fn checkpoint_auto_task_step(
+        &self,
+        _run_id: &str,
+        _step_id: &str,
+        _record: &AutoTaskStepRecord,
+    ) -> Result<(), DispatchError> {
+        Err(DispatchError::HostRequired("auto-task step"))
+    }
+
+    fn admit_auto_task_step(
+        &self,
+        _run_id: &str,
+        _step_id: &str,
+    ) -> Result<AutoTaskAdmission, DispatchError> {
+        Err(DispatchError::HostRequired("auto-task step"))
+    }
+
+    fn checkpoint_parallel_branch(
+        &self,
+        _run_id: &str,
+        _step_id: &str,
+        _branch_id: &str,
+        _output: &Value,
+    ) -> Result<(), DispatchError> {
+        Err(DispatchError::JobExecution(
+            "host does not persist parallel branch checkpoints".to_string(),
+        ))
+    }
+
+    fn park_job_run(&self, _run_id: &str, _park: &ParkedWait) -> Result<(), DispatchError> {
+        Err(DispatchError::JobExecution(
+            "host cannot park a job run".to_string(),
+        ))
     }
 
     fn checkpoint_step_diagnostic(

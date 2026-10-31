@@ -203,6 +203,13 @@ pub struct PipelineState {
     /// existed.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub steering_rounds: BTreeMap<String, Vec<SteeringRound>>,
+    /// The versioned checkpoint of a job with `auto-task:` steps: frozen
+    /// definitions, step activations, bindings, receipts, partial parallel
+    /// branches and the parked continuation. Absent for every other job.
+    /// Terminal compaction keeps it: bindings and late evidence outlive the
+    /// run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_task: Option<super::AutoTaskRunCheckpoint>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -239,8 +246,32 @@ impl PipelineState {
             root_cause: None,
             steering_watermarks: BTreeMap::new(),
             steering_rounds: BTreeMap::new(),
+            auto_task: None,
             updated_at: Utc::now(),
         }
+    }
+
+    /// Whether this binary may rewrite the state: an auto-task checkpoint
+    /// a newer binary wrote carries obligations this one cannot represent.
+    pub fn checkpoint_write_supported(&self) -> Result<(), String> {
+        match &self.auto_task {
+            Some(checkpoint) if !checkpoint.is_supported() => Err(format!(
+                "run {} holds auto-task checkpoint version {}, newer than the supported {}; \
+                 this Orbit refuses to rewrite it",
+                self.run_id,
+                checkpoint.version,
+                super::AUTO_TASK_CHECKPOINT_VERSION
+            )),
+            _ => Ok(()),
+        }
+    }
+
+    /// The parked continuation, when this run is deliberately parked rather
+    /// than held by a live worker.
+    pub fn parked_wait(&self) -> Option<&super::ParkedWait> {
+        self.auto_task
+            .as_ref()
+            .and_then(|checkpoint| checkpoint.parked.as_ref())
     }
 
     /// Record that `step_id` of this run built a task-context prompt for

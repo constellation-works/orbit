@@ -95,6 +95,7 @@ pub(super) fn run_fan_out(
                     recovery_validation_continuations: Default::default(),
                     item: Some(item),
                     iteration: Some(idx),
+                    restored_branches: None,
                 };
                 let res = run_step(&worker_step, &worker_ctx);
                 let state = match &res {

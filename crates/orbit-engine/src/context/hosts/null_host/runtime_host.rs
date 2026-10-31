@@ -10,6 +10,7 @@ use orbit_types::task::{
     TaskPriority, TaskStatus,
 };
 use orbit_types::telemetry::ProviderLimitObservation;
+use orbit_types::workflow::{AutoTaskStepRecord, ParkedWait};
 use orbit_types::workflow::{
     DeferralProbe, ExperimentActivityOverlay, ExploreBriefAdmission, JobRun, JobRunStartOutcome,
     JobRunState, NamespaceProbe, PipelineState, TagInstruction,
@@ -25,6 +26,7 @@ use crate::activity_job::{
 };
 
 use super::super::RuntimeHost;
+use super::super::{AutoTaskAdmission, AutoTaskObservation, AutoTaskStepRequest};
 use super::super::{
     ClaimExecutionContext, CompletionObservationAdmission, CrewConfig, FinalRecoveryAdmission,
     FinalRecoveryAdmissionRequest, FinalRecoveryApplication, FinalRecoveryApplied,
@@ -660,6 +662,45 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
     ) -> Result<ResolvedActivityTools, DispatchError> {
         NullRuntimeHost::resolve_activity_tools(self, task_ids, baseline_tools)
     }
+    fn observe_auto_task_step(
+        &self,
+        run_id: &str,
+        request: &AutoTaskStepRequest,
+    ) -> Result<AutoTaskObservation, DispatchError> {
+        NullRuntimeHost::observe_auto_task_step(self, run_id, request)
+    }
+
+    fn checkpoint_auto_task_step(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        record: &AutoTaskStepRecord,
+    ) -> Result<(), DispatchError> {
+        NullRuntimeHost::checkpoint_auto_task_step(self, run_id, step_id, record)
+    }
+
+    fn admit_auto_task_step(
+        &self,
+        run_id: &str,
+        step_id: &str,
+    ) -> Result<AutoTaskAdmission, DispatchError> {
+        NullRuntimeHost::admit_auto_task_step(self, run_id, step_id)
+    }
+
+    fn checkpoint_parallel_branch(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        branch_id: &str,
+        output: &Value,
+    ) -> Result<(), DispatchError> {
+        NullRuntimeHost::checkpoint_parallel_branch(self, run_id, step_id, branch_id, output)
+    }
+
+    fn park_job_run(&self, run_id: &str, park: &ParkedWait) -> Result<(), DispatchError> {
+        NullRuntimeHost::park_job_run(self, run_id, park)
+    }
+
     fn checkpoint_step(
         &self,
         run_id: &str,

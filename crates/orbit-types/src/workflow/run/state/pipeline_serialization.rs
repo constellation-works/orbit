@@ -72,6 +72,7 @@ impl Serialize for PipelineState {
             root_cause: &self.root_cause => self.root_cause.is_none(),
             steering_watermarks: &self.steering_watermarks => self.steering_watermarks.is_empty(),
             steering_rounds: &self.steering_rounds => self.steering_rounds.is_empty(),
+            auto_task: &self.auto_task => self.auto_task.is_none(),
             updated_at: &self.updated_at => false,
         }
     }

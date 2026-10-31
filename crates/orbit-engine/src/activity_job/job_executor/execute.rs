@@ -120,6 +120,14 @@ pub fn execute_job_with_resume(
         recovery_validation_continuations,
         item: None,
         iteration: None,
+        restored_branches: (!job.auto_task_steps().is_empty()).then(|| {
+            Arc::new(
+                resume
+                    .and_then(|state| state.auto_task.as_ref())
+                    .map(|checkpoint| checkpoint.branches.clone())
+                    .unwrap_or_default(),
+            )
+        }),
     };
 
     // [ORB-13907] Final recovery runs at most once per run: a run resumed
@@ -157,6 +165,7 @@ pub fn execute_job_with_resume(
     let mut evidence_hold = None;
     let mut forge_hold = None;
     let mut child_cancelled = false;
+    let mut parked = None;
     let mut index = 0;
     while let Some(step) = job.steps.get(index) {
         let step_index = index as u32;
@@ -284,6 +293,20 @@ pub fn execute_job_with_resume(
                 forge_hold = Some(hold);
                 break;
             }
+            Err((DispatchError::AutoTaskParked(park), _)) => {
+                // Not a failure: no final recovery or failure handoff runs.
+                // The park must be durable before the worker lets go.
+                ctx.host.park_job_run(run_id, &park).map_err(|error| {
+                    DispatchError::JobExecution(format!(
+                        "step `{}` parked but the park was not recorded: {error}",
+                        step.id
+                    ))
+                })?;
+                overall_ok = false;
+                overall_message = Some(park.reason.clone());
+                parked = Some(*park);
+                break;
+            }
             Err((error @ DispatchError::ChildRunCancelled { .. }, _)) => {
                 overall_ok = false;
                 overall_message = Some(format!("step `{}` {error}", step.id));
@@ -360,6 +383,7 @@ pub fn execute_job_with_resume(
         degraded_audit: audit.degraded_audit(),
         telemetry_failures: audit.telemetry_failure_count(),
         degraded_telemetry: audit.degraded_telemetry(),
+        parked,
     })
 }
 

@@ -98,6 +98,7 @@ fn held_and_unsuccessful_runs_finalize_despite_summary_store_faults() {
                     forge_hold: None,
                     child_cancelled: false,
                     message: (!held).then(|| message.into()),
+                    parked: None,
                     events_emitted: 0,
                 };
                 let database = orbit_config::resolved_audit_db_path(
@@ -262,6 +263,7 @@ fn a_claimed_leaf_provider_limit_holds_and_records_a_deferral() {
                 forge_hold: None,
                 child_cancelled: false,
                 message: Some(limit.into()),
+                parked: None,
                 events_emitted: 0,
             };
             let error = crate::OrbitError::Execution(limit.into());

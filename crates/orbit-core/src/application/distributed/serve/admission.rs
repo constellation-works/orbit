@@ -102,6 +102,16 @@ impl OrbitRuntime {
                 admission_holds.insert(task.id.clone(), hold.detail());
                 continue;
             }
+            // A task an auto-task job step minted is claimed only while its
+            // step still admits it (ORB-20158).
+            if let Some(hold) = crate::application::auto_tasks::job_step::step_bound_admission_hold(
+                self,
+                task,
+                &|| self.get_task_history(&task.id),
+            ) {
+                admission_holds.insert(task.id.clone(), hold);
+                continue;
+            }
             let comments = self.get_task_comments(&task.id)?;
             match self
                 .pilot_admission_hold_in(task, &comments, &|| self.get_task_history(&task.id))?
@@ -212,6 +222,17 @@ impl OrbitRuntime {
                     })?
                 {
                     return Ok(Some(hold.detail()));
+                }
+                // Re-read under the section: the step may have expired or
+                // its definition held since the backlog read.
+                if let Some(hold) =
+                    crate::application::auto_tasks::job_step::step_bound_admission_hold(
+                        self,
+                        task,
+                        &|| Ok(history.to_vec()),
+                    )
+                {
+                    return Ok(Some(hold));
                 }
                 if identity.is_remote()
                     && let Some(why) = claimed_tool_hold(self, task)

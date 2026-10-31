@@ -28,7 +28,9 @@ pub use publication::{
     PublicationPushCheckpoint, PublicationPushDecision, PublicationPushPerformed,
     PublicationPushProof, PublicationSettlingDecision, PublicationSettlingObservation,
 };
-pub use record::{FINAL_RECOVERY_DECIDED_EVENT, PILOT_ADMISSION_DECIDED_EVENT, TaskDecision};
+pub use record::{
+    FINAL_RECOVERY_DECIDED_EVENT, JobStepInvocation, PILOT_ADMISSION_DECIDED_EVENT, TaskDecision,
+};
 pub use recovery::{PilotAdmissionVerdict, RecordedFinalRecovery};
 pub use request::{
     DECISION_ANSWERED_EVENT, DECISION_DIGEST_EXPIRY_WINDOW_HOURS, DECISION_REQUESTED_EVENT,

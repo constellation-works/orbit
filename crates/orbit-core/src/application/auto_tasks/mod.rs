@@ -21,6 +21,8 @@
 //! - `retired` — shipped defaults a routine replaced, kept as provenance so
 //!   `orbit workspace sync` retires their seeded copies.
 //! - [`crud`] — the shared add/list/show/update/mint domain surface.
+//! - `job_step` — `auto-task:` job steps: freeze, observe, keyed admission,
+//!   checkpoints, parking and the step-bound start guard (ORB-20158).
 //! - [`toggle`] — the one toggle command; the tool, the checked operator
 //!   control and the dashboard are its profiles.
 //! - [`listing`] — whether each listed definition fires here, and when: the
@@ -35,6 +37,7 @@ mod body_history;
 mod change_probe;
 pub mod crud;
 pub mod delete;
+pub(crate) mod job_step;
 pub mod listing;
 mod read;
 pub(crate) mod retired;

@@ -262,11 +262,16 @@ impl OrbitRuntime {
             .input
             .clone()
             .unwrap_or_else(|| Value::Object(Default::default()));
+        // [ORB-20158] An auto-task run's checkpoint is kept even before any
+        // step succeeded: it carries the frozen definitions, the admission
+        // time and deadline, task bindings and succeeded branches, which a
+        // resume must preserve rather than remint or reset.
         let mut resume_state = self.read_run_state(&source.run_id)?.filter(|state| {
-            state
-                .step_states
-                .values()
-                .any(|step_state| *step_state == JobRunState::Success)
+            state.auto_task.is_some()
+                || state
+                    .step_states
+                    .values()
+                    .any(|step_state| *step_state == JobRunState::Success)
         });
         // [ORB-13559] A direct-YAML run already pinned its definition. Requiring
         // a catalog asset here would refuse a resume after the source file is

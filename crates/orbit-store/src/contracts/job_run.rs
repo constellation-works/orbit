@@ -327,6 +327,24 @@ pub trait JobRunStoreBackend: Send + Sync {
     /// queued run with a live worker from one whose worker died. Returns
     /// `false` without writing when the run is missing or no longer pending.
     fn claim_pending_job_run_owner(&self, run_id: &str, pid: u32) -> Result<bool, OrbitError>;
+    /// [ORB-20158] Resume a deliberately parked `running` run under `pid`.
+    ///
+    /// In one immediate transaction: the run must still be `running` and its
+    /// pipeline state must carry the parked continuation recorded at
+    /// `parked_at`. The owner becomes `pid` and the park is cleared, so
+    /// exactly one worker resumes it and orphan reconciliation judges the new
+    /// owner from then on. `false` when the run is missing, no longer running,
+    /// not parked, or parked again under another mark.
+    fn adopt_parked_job_run(
+        &self,
+        _run_id: &str,
+        _parked_at: DateTime<Utc>,
+        _pid: u32,
+    ) -> Result<bool, OrbitError> {
+        Err(OrbitError::Store(
+            "parked job run adoption unavailable".into(),
+        ))
+    }
     fn complete_job_run_step(
         &self,
         run_id: &str,

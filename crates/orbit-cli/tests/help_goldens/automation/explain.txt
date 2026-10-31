@@ -25,7 +25,7 @@ condition's stored state, and writes nothing. A task-scope condition is evaluate
 the tasks its status or tag prefilter selects, at most 200 per explain. Tracking shows
 arm states and holds, any stall, recent fires with their upstream chain, and `self`.
 job:<name> shows a job's auto-task steps as checked at load, with each named auto-task
-resolved; such jobs cannot run yet.
+resolved; it evaluates no wait.
 Examples:
   orbit automation explain release-prep
   orbit automation explain routine:release-on-prep-done --subject <task-id> --json

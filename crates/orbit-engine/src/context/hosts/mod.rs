@@ -1,6 +1,7 @@
 //! The host trait boundary between the engine and its runtime/store
 //! implementors, plus the task-update param types those traits consume.
 
+mod auto_task;
 mod claim;
 mod config;
 #[cfg(feature = "test-support")]
@@ -16,6 +17,9 @@ mod steering;
 mod task_update;
 mod worktree_gc;
 
+pub use auto_task::{
+    AutoTaskAdmission, AutoTaskObservation, AutoTaskReadiness, AutoTaskStepRequest,
+};
 pub use claim::{
     ClaimExecutionContext, HandoffLandingContext, HandoffLandingStep, HandoffLandingUpdate,
 };

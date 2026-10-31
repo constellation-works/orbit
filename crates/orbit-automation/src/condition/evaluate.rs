@@ -80,6 +80,34 @@ pub struct ConditionFacts {
     pub self_facts: SelfFacts,
 }
 
+/// One auto-task step as a job wait reads it (`self.prev`, `steps['<id>']`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StepFacts {
+    /// An `AUTO_TASK_STEP_STATUSES` spelling.
+    pub status: String,
+    pub end_time: Option<DateTime<Utc>>,
+    pub task_id: Option<String>,
+}
+
+/// Everything a job wait expression (`wait_until`, `expire_when`,
+/// `spec.expire_when`) reads for one step pass
+/// (`docs/design/activity-job/specs/auto-task-step.md` §2).
+#[derive(Debug, Clone)]
+pub struct JobWaitFacts {
+    pub now: DateTime<Utc>,
+    pub board: BoardFacts,
+    /// `board.empty`; `None` when a count it needs could not be read.
+    pub board_empty: Option<bool>,
+    pub tasks: BTreeMap<String, TaskFacts>,
+    pub job_started_at: DateTime<Utc>,
+    pub job_source_revision: Option<String>,
+    pub wait_started_at: DateTime<Utc>,
+    pub status: String,
+    pub task_id: Option<String>,
+    pub prev: Option<StepFacts>,
+    pub steps: BTreeMap<String, StepFacts>,
+}
+
 /// A three-valued result.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Truth {
@@ -171,6 +199,59 @@ impl ConditionEvaluator {
             ),
         );
         context.add_variable_from_value("self", self_value(&facts.self_facts));
+        Self { context }
+    }
+
+    /// Bind a job wait's facts [ORB-20158]. Evaluate with `truth(_, None)`.
+    pub fn for_job_wait(facts: &JobWaitFacts) -> Self {
+        let mut env = cel::Env::stdlib();
+        if let Err(error) = env.add_extension(cel::extensions::strings) {
+            tracing::warn!(%error, "condition string functions unavailable");
+        }
+        let mut context = Context::with_env(Arc::new(env));
+        context.add_variable_from_value("now", timestamp(facts.now));
+        let mut board = board_fields(&facts.board);
+        if let Some(empty) = facts.board_empty {
+            board.push(("empty".to_string(), Value::Bool(empty)));
+        }
+        context.add_variable_from_value("board", map_value(board));
+        context.add_variable_from_value(
+            "tasks",
+            map_value(
+                facts
+                    .tasks
+                    .iter()
+                    .map(|(id, task)| (id.clone(), task_value(task))),
+            ),
+        );
+        let mut job = vec![("started_at".to_string(), timestamp(facts.job_started_at))];
+        if let Some(revision) = &facts.job_source_revision {
+            job.push(("source_revision".to_string(), string(revision)));
+        }
+        context.add_variable_from_value("job", map_value(job));
+        let mut own = vec![
+            (
+                "wait_started_at".to_string(),
+                timestamp(facts.wait_started_at),
+            ),
+            ("status".to_string(), string(&facts.status)),
+        ];
+        if let Some(task) = &facts.task_id {
+            own.push(("task_id".to_string(), string(task)));
+        }
+        if let Some(prev) = &facts.prev {
+            own.push(("prev".to_string(), step_value(prev)));
+        }
+        context.add_variable_from_value("self", map_value(own));
+        context.add_variable_from_value(
+            "steps",
+            map_value(
+                facts
+                    .steps
+                    .iter()
+                    .map(|(id, step)| (id.clone(), step_value(step))),
+            ),
+        );
         Self { context }
     }
 
@@ -517,6 +598,10 @@ pub(crate) fn task_value(task: &TaskFacts) -> Value {
 }
 
 fn board_value(board: &BoardFacts) -> Value {
+    map_value(board_fields(board))
+}
+
+fn board_fields(board: &BoardFacts) -> Vec<(String, Value)> {
     let int_map = |values: &BTreeMap<String, i64>| {
         map_value(
             values
@@ -542,6 +627,17 @@ fn board_value(board: &BoardFacts) -> Value {
     }
     if let Some(running) = board.drain_running {
         fields.push(("drain_running".to_string(), Value::Bool(running)));
+    }
+    fields
+}
+
+fn step_value(step: &StepFacts) -> Value {
+    let mut fields = vec![("status".to_string(), string(&step.status))];
+    if let Some(at) = step.end_time {
+        fields.push(("end_time".to_string(), timestamp(at)));
+    }
+    if let Some(task) = &step.task_id {
+        fields.push(("task_id".to_string(), string(task)));
     }
     map_value(fields)
 }

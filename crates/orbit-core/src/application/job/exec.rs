@@ -75,6 +75,9 @@ pub struct V2JobRunResult {
     pub pipeline: Value,
     pub message: Option<String>,
     pub events_emitted: u64,
+    /// [ORB-20158] The run parked on an `auto-task:` step: it stays live,
+    /// holds no worker, and the owner clock resumes it. Never finalized.
+    pub parked: Option<orbit_types::workflow::ParkedWait>,
 }
 
 /// Path-specific durable records retained while finalizing a v2 run.
@@ -206,6 +209,14 @@ impl OrbitRuntime {
         admission_task_writes: Option<crew_pools::AdmissionTaskWrites>,
     ) -> Result<V2JobRunResult, OrbitError> {
         let (job_name, spec) = load_job_definition(yaml_path)?;
+        // An auto-task step parks its run and resumes it from the owner
+        // clock, which only a detached run admits (ORB-20158).
+        if !spec.auto_task_steps().is_empty() {
+            return Err(OrbitError::InvalidInput(format!(
+                "job '{job_name}' has auto-task steps, which run only as a detached \
+                 submission; nothing was run"
+            )));
+        }
         // [ORB-11354] The foreground path takes caller-shaped input too, so it
         // gets the same reserved-key refusal as the detached submission path.
         // Nothing runs a trusted-host activity in the foreground: an admitted
@@ -425,6 +436,7 @@ impl OrbitRuntime {
                 });
 
         let (outcome_str, error_message) = match &outcome_res {
+            Ok(o) if o.parked.is_some() => ("parked", o.message.clone()),
             Ok(o) if o.evidence_hold.is_some() => ("held", None),
             Ok(o) if o.forge_hold.is_some() => ("held", o.message.clone()),
             Ok(o) if o.child_cancelled => ("cancelled", o.message.clone()),
@@ -445,14 +457,18 @@ impl OrbitRuntime {
             }
             Err(err) => ("error", Some(err.to_string())),
         };
-        writer.emit_lossy(V2AuditEventKind::RunFinished {
-            outcome: outcome_str.to_string(),
-            error_message,
-        });
-        self.record_event(OrbitEvent::ActivityRunCompleted {
-            id: asset.name.clone(),
-            state: outcome_str.to_string(),
-        })?;
+        // A parked run has not finished: the worker that resumes it records
+        // the run's end.
+        if outcome_str != "parked" {
+            writer.emit_lossy(V2AuditEventKind::RunFinished {
+                outcome: outcome_str.to_string(),
+                error_message,
+            });
+            self.record_event(OrbitEvent::ActivityRunCompleted {
+                id: asset.name.clone(),
+                state: outcome_str.to_string(),
+            })?;
+        }
 
         let events_count = writer.emitted_event_count();
 
@@ -467,6 +483,7 @@ impl OrbitRuntime {
                 pipeline: o.pipeline,
                 message: o.message,
                 events_emitted: events_count,
+                parked: o.parked,
             }),
             Err(err) => Err(err),
         }
@@ -916,6 +933,12 @@ fn job_run_state_from_audit_outcome(outcome: Option<&str>) -> JobRunState {
 pub(super) fn seeded_resume_state(source_state: &PipelineState, run: &JobRun) -> PipelineState {
     let mut seeded = source_state.clone();
     seeded.run_id = run.run_id.clone();
+    // [ORB-20158] The resumed run keeps the frozen definitions, admission
+    // time, deadline, bindings and receipts; only the park belonged to the
+    // source run's continuation.
+    if let Some(checkpoint) = seeded.auto_task.as_mut() {
+        checkpoint.parked = None;
+    }
     seeded.job_id = run.job_id.clone();
     seeded.pull_drain.forge_hold_expired_at = None;
     // The resumed run's own outcome decides whether it echoes a child.

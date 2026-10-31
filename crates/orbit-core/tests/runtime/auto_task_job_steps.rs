@@ -1,10 +1,10 @@
 //! [ORB-20157] Jobs with `auto-task:` steps through the public runtime: a
-//! disabled definition loads and explains with its targets resolved, an
-//! enabled or ill-typed one is refused at load, and none can be submitted,
-//! so no run is recorded and no task is minted. [ORB-20237] Such a job
-//! declares `schemaVersion: 3`, which survives load and explain and keeps
-//! the job phase-1 only even when none of its fields remain; any of the
-//! fields under `schemaVersion: 2`, even null, is refused.
+//! disabled definition loads and explains with its targets resolved and
+//! cannot be submitted, so no run is recorded and no task is minted; an
+//! ill-typed one is refused at load. [ORB-20237] Such a job declares
+//! `schemaVersion: 3`, which survives load and explain even when none of its
+//! fields remain; any of the fields under `schemaVersion: 2`, even null, is
+//! refused. [ORB-20158] An enabled one loads.
 
 use orbit_core::application::job::JobRunListParams;
 use orbit_core::{
@@ -100,7 +100,7 @@ fn add_auto_task(runtime: &OrbitRuntime, name: &str) {
         .unwrap();
 }
 
-fn a_disabled_auto_task_job_loads_explains_and_refuses_to_run() {
+fn a_disabled_auto_task_job_loads_explains_and_is_not_submitted() {
     let runtime = runtime_with_job("release-readiness", READINESS);
     add_auto_task(&runtime, "full-qa-sweep");
     let tasks_before = runtime.list_tasks().unwrap().len();
@@ -124,7 +124,7 @@ fn a_disabled_auto_task_job_loads_explains_and_refuses_to_run() {
     assert_eq!(report["expire_when"]["bound"], "after_start");
     assert_eq!(report["expire_when"]["after_start_seconds"], 24 * 3600);
     assert_eq!(report["pinned_revision"]["pinned"], true);
-    assert_eq!(report["runtime"]["executable"], false);
+    assert_eq!(report["runtime"]["executable"], true);
     let steps = report["steps"].as_array().unwrap();
     let qa = &steps[0];
     assert_eq!(qa["target"]["auto_task"], "full-qa-sweep");
@@ -153,7 +153,7 @@ fn a_disabled_auto_task_job_loads_explains_and_refuses_to_run() {
 
     runtime
         .submit_job_run("release-readiness", json!({}), None)
-        .expect_err("a job with auto-task steps must not be submitted");
+        .expect_err("a disabled job must not be submitted");
     assert!(
         runtime
             .list_job_runs(JobRunListParams::default())
@@ -169,18 +169,22 @@ fn a_disabled_auto_task_job_loads_explains_and_refuses_to_run() {
 }
 
 /// Each case changes one thing in a specimen that loads.
-fn enabled_or_ill_typed_auto_task_jobs_do_not_load() {
-    assert!(
-        runtime_with_job("release-readiness", NESTED_READINESS)
-            .show_job_catalog_entry("release-readiness")
-            .is_ok(),
-        "the nested specimen loads under schemaVersion 3"
-    );
+fn ill_typed_auto_task_jobs_do_not_load() {
     for (case, yaml) in [
+        ("nested", NESTED_READINESS.to_string()),
         (
             "enabled",
             READINESS.replace("state: disabled", "state: enabled"),
         ),
+    ] {
+        assert!(
+            runtime_with_job("release-readiness", &yaml)
+                .show_job_catalog_entry("release-readiness")
+                .is_ok(),
+            "{case}: the specimen loads under schemaVersion 3"
+        );
+    }
+    for (case, yaml) in [
         (
             "forward reference",
             READINESS.replace(
@@ -206,10 +210,6 @@ fn enabled_or_ill_typed_auto_task_jobs_do_not_load() {
         (
             "nested auto-task fields hidden in schemaVersion 2",
             NESTED_READINESS.replace("schemaVersion: 3", "schemaVersion: 2"),
-        ),
-        (
-            "enabled schemaVersion 3 without auto-task fields",
-            ORDINARY_V3.replace("state: disabled", "state: enabled"),
         ),
         (
             "null step wait field in schemaVersion 2",
@@ -249,10 +249,10 @@ fn enabled_or_ill_typed_auto_task_jobs_do_not_load() {
     }
 }
 
-/// The declared version, not the remaining fields, decides phase 1: a
-/// schemaVersion 3 job whose fields are gone or null still cannot be
-/// submitted, and only an explicit downgrade to 2 makes it ordinary.
-fn a_schema_version_3_job_stays_phase_one_without_its_fields() {
+/// The declared version, not the remaining fields, is reported: a
+/// schemaVersion 3 job whose fields are gone or null keeps it, and only an
+/// explicit downgrade to 2 makes it ordinary.
+fn a_schema_version_3_job_keeps_its_version_without_its_fields() {
     for (case, yaml) in [
         ("no auto-task field", ORDINARY_V3.to_string()),
         (
@@ -268,16 +268,6 @@ fn a_schema_version_3_job_stays_phase_one_without_its_fields() {
             orbit_core::application::job::job_catalog_to_json_with_last_run(&entry, None)["schema_version"],
             3,
             "{case}"
-        );
-        runtime
-            .submit_job_run("release-readiness", json!({}), None)
-            .expect_err(case);
-        assert!(
-            runtime
-                .list_job_runs(JobRunListParams::default())
-                .unwrap()
-                .is_empty(),
-            "{case}: a refused submission must record no run"
         );
     }
 
@@ -295,7 +285,7 @@ fn a_schema_version_3_job_stays_phase_one_without_its_fields() {
 
 crate::scenario_table!(
     auto_task_job_steps_scenarios,
-    a_disabled_auto_task_job_loads_explains_and_refuses_to_run,
-    enabled_or_ill_typed_auto_task_jobs_do_not_load,
-    a_schema_version_3_job_stays_phase_one_without_its_fields
+    a_disabled_auto_task_job_loads_explains_and_is_not_submitted,
+    ill_typed_auto_task_jobs_do_not_load,
+    a_schema_version_3_job_keeps_its_version_without_its_fields
 );
