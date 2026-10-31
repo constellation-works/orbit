@@ -255,7 +255,9 @@ spec:
          the PR and continues the publication. It refuses a moved head and
          a failure the base-red path already owns (`pr_auto_fix_base_red`
          or `ci_base_suspect` in the history); a failure the candidate's
-         code causes is not a rerun.
+         code causes is not a rerun. If the response reports an uncertain
+         request, preserve that detail in the report and inspect the run
+         before retrying; the requeue has already consumed the bound.
        - **Mechanical → requeue.** The cause is Orbit state or environment
          with a documented, supported recovery that needs a fresh run, not
          a resume: stale state the next admission reconciles, or a crashed

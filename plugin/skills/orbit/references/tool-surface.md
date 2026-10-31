@@ -441,6 +441,9 @@ completes, rejects or archives a task.
   the task records no pull request, the head moved, no required check failed, or
   the history records the head's failure as inherited from the base
   (`pr_auto_fix_base_red`, `ci_base_suspect`), plus every refusal a requeue has.
+  If a request fails after it starts, its outcome may be uncertain: the
+  recorded comment and response identify acknowledged and uncertain runs,
+  and the requeue still counts. Inspect the uncertain run before retrying.
 - `friction_reported` links an existing friction record (`friction_id`) or files
   one during the task (`friction_title` and `friction_body`), records its id on
   the episode marker and comment with the human action, and leaves the task

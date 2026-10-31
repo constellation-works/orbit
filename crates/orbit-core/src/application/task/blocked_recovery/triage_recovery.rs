@@ -248,23 +248,40 @@ impl OrbitRuntime {
             .map_err(|error| refused(task, DISPOSITION, error))?;
         let count = recent + 1;
         let failed = blockers.failed_required_checks.join(", ");
+        let requested = rerun
+            .requested
+            .iter()
+            .map(|(id, name)| format!("{name} (run {id})"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let uncertain = rerun
+            .uncertain
+            .as_ref()
+            .map(|(id, name, error)| format!("{name} (run {id}): {error}"));
+        let detail = match &uncertain {
+            Some(error) => {
+                format!("request outcome uncertain: {error}; inspect the workflow before retrying")
+            }
+            None => "all requests acknowledged".to_string(),
+        };
         Ok(TriageWrite {
             disposition: DISPOSITION,
             outcome: "requeued",
             comment: format!(
-                "{} {}\nblocker:\n{}\nrepair: reran the failed checks ({failed}) on head \
-                 {head_sha} of pull request #{number}; {reason}\nrerun: {}",
+                "{} {}\nblocker:\n{}\nrepair: requested reruns for failed checks ({failed}) on head \
+                 {head_sha} of pull request #{number}; {reason}\nacknowledged: {requested}\n{detail}",
                 triage_header(episode, request, DISPOSITION, "requeued"),
                 requeue_summary(count, bound),
                 quote(blocker),
-                rerun.join(", ")
             ),
             requeue: Some((count, bound)),
             applied: Some(json!({
                 "pr_number": number,
                 "head_sha": head_sha,
                 "failed_required_checks": blockers.failed_required_checks,
-                "rerun": rerun,
+                "rerun": rerun.requested.iter().map(|(_, name)| name).collect::<Vec<_>>(),
+                "requests": rerun.requested.iter().map(|(id, name)| json!({"run_id": id, "name": name})).collect::<Vec<_>>(),
+                "uncertain": rerun.uncertain.as_ref().map(|(id, name, error)| json!({"run_id": id, "name": name, "error": error})),
             })),
             ..Default::default()
         })
