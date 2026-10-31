@@ -254,16 +254,9 @@ fn load_layered_resolved_with_staged(
     resolved.operation = resolve_operation_layers(global.as_ref(), workspace.as_ref())?;
     // The winning layer's pool is the merged one, which the snapshot has
     // admitted against the crew registry; keep its canonical entries.
-    resolved.operation.review_crew.value = resolved
-        .snapshot
-        .workflow_purpose_crews_review
-        .clone()
-        .unwrap_or_default();
-    resolved.operation.pre_landing_review_crew.value = resolved
-        .snapshot
-        .workflow_purpose_crews_pre_landing_review
-        .clone()
-        .unwrap_or_default();
+    resolved
+        .operation
+        .project_canonical_review_pools(&resolved.snapshot);
     resolved.plugin_enablement = plugin_enablement;
     crate::visual_review::warn_live_without_review_layer(
         &resolved.visual_review,
