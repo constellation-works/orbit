@@ -3,8 +3,10 @@
 //! and inline-code interpreter flags all fail naming the manifest file),
 //! resolves, and at dispatch hands the attempt to its host. A host refusal
 //! fails the step without retry; a nonzero exit is a failed attempt the
-//! step's `retry` repeats; exit 0 must answer with JSON. Every attempt
-//! leaves one `script.execution` audit entry.
+//! step's `retry` repeats; on exit 0, empty or whitespace-only stdout with no
+//! output schema becomes `{}`. Otherwise stdout must be one JSON document,
+//! and any declared output schema must accept it. Every attempt leaves one
+//! `script.execution` audit entry.
 
 use std::fs;
 use std::path::{Path, PathBuf};
