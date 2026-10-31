@@ -399,6 +399,35 @@ const approvedFigure = body().querySelector('.fc-approved-fig')?.textContent ?? 
 assert.ok(approvedFigure.includes('3.5h') && /baseline/.test(approvedFigure) && !/unavailable/i.test(approvedFigure), `the if-approved figure shows its baseline without restating the warning: ${approvedFigure}`);
 assert.ok(/If approved, the adjusted forecast is also unavailable/.test(body().querySelector('.fc-gap-note')?.textContent ?? ''), 'data gaps still say why the if-approved forecast is unavailable');
 
+const proposedOnly = payload();
+proposedOnly.backlog.proposed = 1;
+proposedOnly.if_approved = {
+  tasks: 2,
+  time_to_drain_hours: { p50: null, p90: null },
+  unavailable: { regression_history_missing: true },
+  regression_rework: { support: { missing_fix_history: 1, history_fixes: 0, history_bundles: 0 } },
+  pre_regression_baseline: {
+    time_to_drain_hours: { p50: 8, p90: 24 },
+    usd: { p50: 15, p90: 45 },
+    tokens: { p50: 150000, p90: 450000 },
+  },
+};
+await render(proposedOnly);
+const proposedOnlyText = text();
+const proposedWarnings = body().querySelectorAll('.fc-unavailable');
+assert.equal(proposedWarnings.length, 1, `the proposed scenario keeps one warning when the main forecast is available: ${proposedOnlyText}`);
+assert.equal(proposedWarnings[0].dataset.forecastReason, 'regression_history_missing');
+const proposedWarningText = proposedWarnings[0].textContent;
+assert.ok(/missing regression history/i.test(proposedWarningText), `the warning names the proposed scenario's unavailable reason: ${proposedWarningText}`);
+assert.ok(/excludes unsupported regression follow-up work/i.test(proposedWarningText), `the warning states the proposed baseline excludes unsupported regression follow-up: ${proposedWarningText}`);
+const proposedFigure = body().querySelector('.fc-approved-fig')?.textContent ?? '';
+assert.ok(proposedFigure.includes('8.0h') && /baseline/i.test(proposedFigure) && !/unavailable/i.test(proposedFigure), `the if-approved figure shows its baseline without restating the warning: ${proposedFigure}`);
+assert.ok(/6\.5h/.test(body().querySelector('.fc-figures')?.textContent ?? ''), `the main forecast stays available: ${proposedOnlyText}`);
+const proposedNote = body().querySelector('.fc-gap-note')?.textContent ?? '';
+assert.ok(/missing regression history/i.test(proposedNote) && /excludes unsupported regression follow-up work/i.test(proposedNote), `data gaps name the proposed reason and the baseline limitation: ${proposedNote}`);
+assert.ok(/1 with missing fix history/.test(proposedNote), `data gaps carry the proposed scenario's support counts: ${proposedNote}`);
+assert.ok(!/No data gaps: every coverage check is clear/.test(proposedOnlyText), `data gaps do not claim every check is clear: ${proposedOnlyText}`);
+
 for (const [flags, kind] of [[{ risk_unestimated: true }, 'risk_unestimated'], [{ arrival_conflict_unknown: true }, 'arrival_conflict_unknown']]) {
   const fixture = unavailableFixture({ flags, baseline: null });
   await render(fixture);
