@@ -47,9 +47,17 @@ template:
     - Before filing, read the installed `orbit` skill's task-authoring
       reference and follow it for task shape. File each group (tool-created
       tasks start `proposed`) with
-      `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"context_files":["file:<verified path>"],"complexity":"<assessed>","tags":["structure-sweep","tech-debt"],"type":"refactor","relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"low","workspace":"<current workspace path>","model":"<agent-family>"}'`.
+      `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"context_files":["file:<verified path>","file:<each new destination>"],"allow_missing_context":true,"complexity":"<assessed>","tags":["structure-sweep","tech-debt"],"type":"refactor","relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"low","workspace":"<current workspace path>","model":"<agent-family>"}'`.
+      List every existing target as a verified `file:`/`dir:` selector and
+      every new file or directory the split will create as its exact
+      `file:`/`dir:` destination selector in the same `context_files` list;
+      `allow_missing_context: true` records each missing destination as
+      durable creation intent for that exact selector. Omit
+      `allow_missing_context` only when the task creates nothing. Comments,
+      plans and agent proposals never grant intent.
       Read each filed task back with `orbit.task.show` before recording it
-      as delivered. Chain tasks whose moves rewrite each other's import or
+      as delivered, and confirm each new destination appears in its
+      `context_files`. Chain tasks whose moves rewrite each other's import or
       load paths with a follow-up
       `orbit tool run orbit.task.update --input '{"id":"<filed task ID>","dependencies":["<predecessor task ID>"],"model":"<agent-family>"}'`,
       and read the task back to confirm the field took effect.
@@ -195,12 +203,22 @@ template:
     - `context_files`: verified `file:` or `dir:` selectors for the files
       to be moved, split or shrunk and, for a source group, their matching
       test files. For a test-reduction task, only `file:<the test file>`.
-      Do not list files that do not exist yet.
+      When the split or move creates a new file or directory (for example
+      `execute/mod.rs`, `scheduler/mod.rs`, a split destination or a
+      moved-test destination), also list each exact destination as a
+      `file:` or `dir:` selector in the same list and file with
+      `allow_missing_context: true`, so each destination is recorded as
+      durable creation intent at filing time; name every destination in
+      **Scope** as well. If an exact destination cannot be named, do not
+      file the task: list the destination in the execution summary as an
+      evidence gap deferred to the next run. Never rely on a comment, plan
+      or agent proposal to grant creation intent.
     - A title of at most 62 characters naming the package, subsystem or
       file and its dominant shape.
     - A description with **Outcome** (every candidate in the group with
       its path, shape and line count), **Scope** (the target modules or
-      files and suggested seams, and what is left alone), any
+      files and suggested seams, every new file or directory destination
+      named exactly, and what is left alone), any
       **Prerequisite**, and the **Conventions** block below, copied
       verbatim.
 
@@ -220,6 +238,9 @@ template:
       layout the detected language names, no module index file over 400
       lines of mostly logic, and no non-test source file over 1,000 lines
       unless the execution summary names the file and the reason it stays.
+    - Every new file or directory named in Scope exists at its exact
+      destination, and each was recorded in `context_files` as creation
+      intent (`allow_missing_context`) when the task was filed.
     - Tests moved with their sources keep their names, and the affected
       package's test count reported before and after is unchanged.
     - The repository's discovered gate commands pass for the affected
@@ -257,7 +278,10 @@ template:
     with their source and test roots, and every candidate found with its
     path, shape, line count and proposed target. Map each candidate to
     its outcome: covered by a cited open task, commented onto a cited
-    owning task, filed as a new task ID, deferred past the 4-task cap, or
+    owning task, filed as a new task ID (with each new destination it
+    records as creation intent), deferred past the 4-task cap, held as an
+    evidence gap because its exact creation destination could not be
+    named, or
     rejected with its reason. List every rejected flat-cluster lead and
     every rejected data-heavy test file with its reason. A clean or fully
     covered tree is a successful no-diff outcome when that scan evidence
@@ -266,7 +290,7 @@ template:
   - Every candidate at the pinned `__ORBIT_BASE_BRANCH__` SHA (non-test source file over 1,000 lines, module index file over 400 lines of mostly logic under the detected language's convention, mixed file/directory layout that language names, verified flat same-concern cluster, test file over 2,000 lines) is enumerated with path, shape, line count and proposed target, and rejected leads are recorded with a reason.
   - The execution summary records the three thresholds (1,000, 400 and 2,000 lines), the pinned SHA, and the discovered languages with their source and test roots, gate commands and CI configuration.
   - Open `structure-sweep` tasks and tasks closed in the last 30 days covering the same paths were checked first; no filed task overlaps a covered candidate, and an uncovered candidate in a package or subsystem an open proposed or backlog task owns was commented onto that task instead of filed again.
-  - At most 4 tasks were filed, largest candidate first, grouped by package or subsystem, each `proposed` with a `spawned_from` relation to this task, verified `context_files`, the Conventions block, and the filing acceptance criteria above; candidates past the cap are listed as deferred.
+  - At most 4 tasks were filed, largest candidate first, grouped by package or subsystem, each `proposed` with a `spawned_from` relation to this task, verified `context_files` plus each new destination recorded as creation intent with `allow_missing_context`, the Conventions block, and the filing acceptance criteria above; candidates past the cap are listed as deferred, and any group whose exact creation destination could not be named is listed as an evidence gap instead of filed.
   - Every filed test-reduction task's criteria require keeping that file's coverage (each scenario survives or is named with a reason) and reporting the test count before and after.
   - The persisted execution summary maps every candidate to a covering task, a commented-onto task, a newly filed task ID, a deferral, or a rejection with its reason.
   - A tree with 0 uncovered candidates succeeds as a no-diff outcome with the scan evidence persisted in the execution summary.
