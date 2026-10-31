@@ -788,3 +788,134 @@ fn agent_effort_is_recorded_after_resolution_and_survives_configuration_changes(
         "{ladder}"
     );
 }
+
+/// Provenance is completed-invocation evidence: when the provider reports a
+/// different model than the crew requested, `run show` names the
+/// provider-reported model while keeping the recorded crew and effort, and a
+/// launch with no completed invocation stays `unavailable`, never `recorded`.
+#[test]
+fn agent_provenance_reports_provider_model_and_leaves_interrupted_launches_unavailable() {
+    if !isolated_run_observation(
+        "run_observation::agent_invoke::agent_provenance_reports_provider_model_and_leaves_interrupted_launches_unavailable",
+    ) {
+        return;
+    }
+    let fixture = Fixture::init();
+    let reported = "gpt-6-reported";
+    let frame = serde_json::json!({"type":"item.completed", "item":{"type":"agent_message", "text":AGENT_TEST_ANSWER}});
+    plant_invoke_provider(
+        &fixture,
+        &format!(
+            "printf '%s\\n' '{}'\nprintf '%s\\n' '{{\"type\":\"turn.completed\",\"usage\":{{\"input_tokens\":100,\"output_tokens\":20}}}}'\nprintf '%s\\n' '{{\"stats\":{{\"models\":{{\"{reported}\":{{}}}}}}}}'",
+            frame
+        ),
+    );
+    let config_path = fixture.home.join(".orbit/config.toml");
+    let original = fs::read_to_string(&config_path).unwrap();
+    let mut config: toml_edit::DocumentMut = original.parse().unwrap();
+    config["crews"]["sol"]["effort"] = toml_edit::value("high");
+    fs::write(&config_path, config.to_string()).unwrap();
+    let result = operator_json(
+        &fixture,
+        &[
+            "run",
+            "agent",
+            "effort probe",
+            "--crew",
+            "sol",
+            "--wait",
+            "--timeout",
+            "30s",
+            "--provider-sandbox",
+            "danger-full-access",
+            "--json",
+        ],
+    );
+    let run_id = result["run_id"].as_str().unwrap();
+    assert_eq!(result["state"], "success", "{result}");
+    let shown = fixture.show_json(run_id);
+    let provenance = shown["run"]["activity_provenance"].as_array().unwrap();
+    let completed: Vec<_> = provenance
+        .iter()
+        .filter(|activity| !activity["invocations"].as_array().unwrap().is_empty())
+        .collect();
+    assert_eq!(completed.len(), 1, "{shown}");
+    let invocation = &completed[0]["invocations"][0];
+    assert_eq!(completed[0]["actual_status"], "recorded", "{shown}");
+    assert_eq!(
+        invocation["model"], reported,
+        "provenance carries the provider-reported model, not the requested gpt-6-sol: {shown}"
+    );
+    assert_eq!(invocation["provider"], "codex", "{shown}");
+    assert_eq!(invocation["crew"], "sol", "{shown}");
+    assert_eq!(invocation["reasoning_effort"], "high", "{shown}");
+    let mcp = operator_json(
+        &fixture,
+        &[
+            "tool",
+            "run",
+            "orbit.workflow.run.show",
+            "--input",
+            &serde_json::json!({"id": run_id}).to_string(),
+        ],
+    );
+    let mcp_completed: Vec<_> = mcp["activity_provenance"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|activity| !activity["invocations"].as_array().unwrap().is_empty())
+        .collect();
+    assert_eq!(mcp_completed.len(), 1, "{mcp}");
+    assert_eq!(mcp_completed[0]["invocations"][0], *invocation, "{mcp}");
+
+    // An interrupted launch records dispatch but no completed invocation, so
+    // the activity is `unavailable`, never `recorded`.
+    let interrupted = Fixture::terminal();
+    let interrupted_id = "jrun-20261031-0901";
+    let workspace_id = interrupted.workspace_id();
+    interrupted
+        .db()
+        .execute(
+            "INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state,
+                 scheduled_at, started_at, created_at)
+             VALUES (?1, ?2, 'task_pr_pipeline', 1, 'running',
+                 '2026-10-31T09:00:00+00:00', '2026-10-31T09:00:00+00:00',
+                 '2026-10-31T09:00:00+00:00')",
+            params![interrupted_id, workspace_id],
+        )
+        .expect("seed interrupted-launch run");
+    interrupted
+        .db()
+        .execute(
+            "INSERT INTO job_run_steps (workspace_id, run_id, step_index, target_type,
+                 target_id, state, started_at)
+             VALUES (?1, ?2, 0, 'activity', 'implement_one', 'running',
+                 '2026-10-31T09:00:01+00:00')",
+            params![workspace_id, interrupted_id],
+        )
+        .expect("seed started activity step");
+    interrupted
+        .db()
+        .execute(
+            "INSERT INTO agent_executions (workspace_id, run_id, activity_id, provider,
+                 model, identity_json, started_at)
+             VALUES (?1, ?2, 'implement_one', 'codex', 'gpt-6-sol', ?3,
+                 '2026-10-31T09:00:01+00:00')",
+            params![
+                workspace_id,
+                interrupted_id,
+                serde_json::json!({"crew": "sol", "reasoning_effort": "high"}).to_string(),
+            ],
+        )
+        .expect("seed interrupted launch");
+    let shown = interrupted.show_json(interrupted_id);
+    assert_eq!(
+        shown["run"]["activity_provenance"],
+        serde_json::json!([{
+            "activity_id": "implement_one",
+            "actual_status": "unavailable",
+            "invocations": [],
+        }]),
+        "{shown}"
+    );
+}
