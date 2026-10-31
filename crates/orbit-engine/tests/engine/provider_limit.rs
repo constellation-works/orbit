@@ -161,6 +161,21 @@ fn typed_limit(message: Option<&str>, provider: &str) -> ProviderLimitFailure {
     ProviderLimitFailure::from_text(message).expect("the failure carries the limit")
 }
 
+/// The first 3pm Pacific instant after `from`. Pacific's day that falls back
+/// is 25 hours long, so the next 3pm can be more than 24 hours away.
+fn next_pacific_three_pm(from: DateTime<Utc>) -> Option<DateTime<Utc>> {
+    let zone = chrono_tz::America::Los_Angeles;
+    let today = from.with_timezone(&zone).date_naive();
+    [today, today.succ_opt()?]
+        .into_iter()
+        .filter_map(|day| {
+            zone.from_local_datetime(&day.and_hms_opt(15, 0, 0)?)
+                .earliest()
+        })
+        .map(|at| at.with_timezone(&Utc))
+        .find(|at| *at > from)
+}
+
 /// Every recorded provider limit text types the failure, and nothing the
 /// agent wrote does.
 fn usage_limits_are_typed_only_from_text_the_failed_provider_wrote() {
@@ -345,9 +360,10 @@ fn usage_limits_are_typed_only_from_text_the_failed_provider_wrote() {
                 let resets_at = limit.resets_at.expect("Claude said when it resets");
                 let pacific = resets_at.with_timezone(&chrono_tz::America::Los_Angeles);
                 assert_eq!((pacific.hour(), pacific.minute()), (15, 0), "{label}");
-                assert!(
-                    resets_at > before && resets_at <= after + Duration::days(1),
-                    "{label}: the next 3pm Pacific: {resets_at}"
+                assert_eq!(
+                    Some(resets_at),
+                    next_pacific_three_pm(before),
+                    "{label}: the next 3pm Pacific"
                 );
             }
             _ => assert_eq!(
