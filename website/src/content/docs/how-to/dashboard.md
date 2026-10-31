@@ -1048,15 +1048,28 @@ escaped because there was no test do not change the score; they appear as
 unscored context in the detail column. Each task counts once per crew and
 model that started an implementation run in the window.
 
-The tab has no role panel: the ranking, the detail column and **How the
-score works** are the whole view. Cost per weighted landed task, median
-completed run time and tasks by tier appear under **Shown, not scored** in
-the detail column. Cost uses recorded delivery-run invocations, including
-delivery reviews and repairs, and prefers provider cost to derived pricing.
-Missing or unpriced telemetry and rows with no landed work show a dash; a
-dash does not mean free work. Cost and time never change the score. On a
-phone, the ranking scrolls within its own box and the detail stacks below
-the ranking.
+Cost per weighted landed task, median completed run time and tasks by tier
+appear under **Shown, not scored** in the detail column. Cost uses recorded
+delivery-run invocations, including delivery reviews and repairs, and prefers
+provider cost to derived pricing. Missing or unpriced telemetry and rows with
+no landed work show a dash; a dash does not mean free work. Cost and time never
+change the score. On a phone, the ranking scrolls within its own box and the
+detail stacks below the ranking.
+
+Below the ranking, the **Regression rate by change size** panel is the tab's
+one role panel. It shows the share of landed tasks with a regression linked to
+them within 7 days of completion, by lines changed. Each task counts once,
+under the crew and model of its final implementation run in the window, and
+needs a recorded diff size and at least 7 days since completion. Each crew and
+model as dispatched is its own curve, so `opus@medium` and `opus@high` are
+separate. Buckets double in width, and each point shows its Wilson 95%
+interval. Use **Complexity** to narrow the curves to one tier, and the crew
+checklist above the chart to choose which curves are drawn; crews with at least
+30 tasks and a drawn bucket start selected. Buckets with fewer than 10 tasks are
+not drawn, and hollow markers flag buckets with fewer than 5 regressed tasks.
+The panel follows the window above, and the **Bucket table** under the chart
+lists every bucket of the crews drawn. The score-against-cost plot and the
+first-reviews tier comparison stay removed. The panel is shown, not scored.
 
 The **Reviewers** tab ranks the reviewers of the review gate, and the review
 jobs that file findings as tasks, by how their verdicts turned out. A reviewer
