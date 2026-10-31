@@ -174,6 +174,27 @@ Supported clients: `claude`, `codex`, `gemini`, `antigravity`, `grok`, `cursor`,
 `agy` (Antigravity). Gemini CLI remains available for enterprise / API-key
 deployments; individual Gemini CLI accounts stopped on 2026-06-18.
 
+### Grok MCP registration
+
+Grok normally loads Orbit's MCP server from the project `.mcp.json` shared with
+Claude Code. `orbit workspace init --mcp` auto-detects installed clients and
+writes the project registration; to target Grok explicitly, run
+`orbit mcp init --scope workspace --grok`. For a home registration, run
+`orbit mcp init --scope home --grok`; the shared Claude-compatible home file is
+`~/.claude.json`.
+
+Re-running Orbit MCP initialization migrates an older Orbit-generated Grok
+entry out of `.grok/config.toml`, preserving other Grok settings and servers.
+When `[claude_compat] imported = true` in `~/.grok/config.toml`, Grok ignores
+the project `.mcp.json`, so initialization keeps the native `.grok/config.toml`
+target. For home scope, initialization also keeps that native target when
+`[compat.claude]` has `mcps = false` or `GROK_CLAUDE_MCPS_ENABLED=0`.
+
+Run `grok inspect` to see which configuration source Grok loaded. The project
+registration is shared: removing Orbit's entry through Claude Code or Grok
+removes it for both clients. Gemini CLI is the neighboring client and uses
+`.gemini/settings.json`.
+
 ### Workspace presets
 
 A preset is a TOML file a distribution ships to set a workspace up in one step.
