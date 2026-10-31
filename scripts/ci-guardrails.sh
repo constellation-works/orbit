@@ -601,6 +601,7 @@ if [[ "$checks" == false ]]; then
   run_guard "$repo_root/scripts/test-cross-revision-check.sh"
   run_guard "$repo_root/scripts/test-check-nextest-partitions.py"
   run_guard "$repo_root/scripts/test-ci-await-jobs.py"
+  run_guard "$repo_root/scripts/test-ci-p90.py"
   run_guard "$repo_root/scripts/test-evaluate-decision-assistance.py"
   run_guard "$repo_root/scripts/test-audit-panics.py"
   run_guard "$repo_root/scripts/test-smoke-claude-mcp.py"
