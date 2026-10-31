@@ -456,8 +456,44 @@ fn duplicate_failing_fingerprint_in_one_document_files_once() {
     assert_eq!(identical["skipped_existing"][0]["fingerprint"], "fp-same");
 }
 
+fn mixed_surface_results_keep_their_filing_surface() {
+    let (_root, runtime) = fixture("");
+    let mut cli = result("fail", "high", "mixed-cli", json!({}));
+    cli["surface"] = json!("cli");
+    let mut ui = result("error", "high", "mixed-ui", json!({}));
+    ui["surface"] = json!("ui");
+    ui["rule"] = json!("ui.example");
+    let outcome = file(
+        &runtime,
+        json!({"schema_version": 1, "surface": "mixed", "results": [cli, ui]}),
+        json!({}),
+    );
+    assert_eq!(outcome["filed_count"], 2, "{outcome}");
+    for entry in outcome["filed"].as_array().unwrap() {
+        let task = runtime
+            .get_task(entry["task_id"].as_str().unwrap())
+            .unwrap();
+        let surface = if entry["error_task"] == true {
+            "ui"
+        } else {
+            "cli"
+        };
+        assert!(
+            task.tags.iter().any(|tag| tag == surface),
+            "{:?}",
+            task.tags
+        );
+        assert!(
+            task.description.contains(&format!("--surface {surface}")),
+            "{}",
+            task.description
+        );
+    }
+}
+
 crate::scenario_table!(
     rule_findings_sweep_scenarios,
+    mixed_surface_results_keep_their_filing_surface,
     duplicate_failing_fingerprint_in_one_document_files_once,
     failing_fingerprint_files_once_then_comments_on_change_and_pass,
     oscillating_measurements_comment_on_return_to_earlier_value,

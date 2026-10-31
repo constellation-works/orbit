@@ -140,7 +140,46 @@ The fingerprint is `rule id`, the target id, and the target argv (or the target 
 
 The deterministic `file_rule_findings` activity turns one results document into tasks: one proposed bug task per new failing fingerprint (the fingerprint is stored in the task's `rule_fingerprint` field, with the measurements, the evidence and a reproduce command naming `--rule` and the target), a comment on the open owner when measurements change, exactly one comment when the fingerprint passes again (never a status change), and one task per rule for `error` results, tagged `ux-rules-error`. New tasks per run are capped by `ux_rules.max_new_tasks` (default 10, highest severity first); results below `ux_rules.file_at` (default `low`) or for rules in `ux_rules.disabled` are recorded in the run output only. The filer is generic: any script that writes this schema can feed it.
 
-`ux_rules_pipeline` pairs a granted script step with the filer, and the seeded `ux-rules` routine runs it daily (disabled until enabled). The script step names a workspace script `ux_rules_runner`: an operator writes a Script manifest at `.orbit/resources/scripts/ux_rules_runner.yaml` whose entry runs this runner once per surface in `ux_rules.surfaces` and prints ONE merged results document as its stdout JSON, then grants it with `orbit script grant ux_rules_runner`. Without the grant the step refuses before spawn; there is no shell fallback. A network-`none` script step cannot reach a dashboard on the host's loopback (its own network namespace), so a live `--base-url` UI surface waits for script steps' network phase; `--surface cli` and `--fixture` UI runs (the fixture server is inside the script's namespace) work as-is. `orbit run show` for a routine run carries the pass/fail/error/skipped counts and the tasks filed or commented in the filing step's output.
+`ux_rules_pipeline` runs the shipped `step.mjs` adapter, then the filer. It uses `--fixture` for UI; `ui_base_url` is ignored because a network-none script cannot reach the host dashboard. The merged results retain each result's surface for filing. Surface startup failures become `error` results with the runner's diagnostic. The temporary evidence files are removed after the merge; their paths in the results are diagnostic references, not retained artifacts.
+
+To set up the workspace, copy the following template to `.orbit/resources/scripts/ux_rules_runner.yaml`. Replace the absolute paths with the host's actual Node interpreter, Orbit binary, and browser kit root. The kit root must contain both the Playwright module and browsers. The Orbit binary and Node must be executable in the sandbox, including their shared libraries. Set `UX_RULES_ORBIT` to the absolute Orbit binary path, and set `PLAYWRIGHT_MODULE` and `PLAYWRIGHT_BROWSERS_PATH` to the kit's paths in the environment of the process running jobs (including its service environment). The script profile clears other environment variables. Scratch uses its provided `TMPDIR`; no extra write root is needed.
+
+```yaml
+schemaVersion: 1
+kind: Script
+metadata:
+  name: ux_rules_runner
+spec:
+  description: Measure configured UX rule surfaces.
+  entry: scripts/ux-rules/step.mjs
+  interpreter: [/opt/node/bin/node]
+  input_schema_json:
+    type: object
+    required: [surfaces]
+    properties:
+      surfaces: {type: array, items: {type: string}}
+      ui_base_url: {type: string}
+      runner: {type: string}
+  output_schema_json:
+    type: object
+    required: [schema_version, surface, results]
+    properties:
+      schema_version: {type: integer}
+      surface: {type: string}
+      results: {type: array}
+  requests:
+    network: none
+    read_roots: [/opt/orbit/bin/orbit, /opt/browser-kit]
+    write_roots: []
+    env_pass: [UX_RULES_ORBIT, PLAYWRIGHT_MODULE, PLAYWRIGHT_BROWSERS_PATH]
+    timeout_seconds: 3600
+```
+
+1. Copy and adapt the manifest and service environment as above.
+2. Set surfaces with `orbit config set ux_rules.surfaces '["cli", "ui"]'`.
+3. An operator runs `orbit script grant ux_rules_runner`, then `orbit run job ux_rules_pipeline`. Check `orbit run show` for counts and filed tasks before enabling the disabled daily routine.
+
+The fixture server starts inside the script network namespace and needs a working loopback interface, the browser kit, and the Orbit binary. A direct Linux fixture run works with those host prerequisites, but it does not prove the Bubblewrap profile: an unprivileged-namespace denial prevented a sandbox run on the implementation host. Verify the script step on a host where Bubblewrap is available; if its isolated loopback is down, the fixture server cannot bind and UI results report errors. `faketime` is optional: without it server-relative ages can drift, as described above.
 
 ## Handoff: ux-review auto-tasks after the routine (phase 3)
 
