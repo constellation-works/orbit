@@ -46,7 +46,7 @@ pub struct RegressionRiskSettings {
 
 /// Admitted `experiments.*`: the workspace's experiment policy. Experiment
 /// definitions are store records, not configuration.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ExperimentSettings {
     /// `experiments.enabled` (default `false`).
     pub enabled: bool,
@@ -54,6 +54,10 @@ pub struct ExperimentSettings {
     pub max_running: u32,
     /// `experiments.config_keys` (default empty).
     pub config_keys: Vec<String>,
+    /// `experiments.min_delivered_rate` (default 0.9): below this share of
+    /// a treatment arm's settled tasks receiving its treatment, a readout
+    /// withholds its verdict.
+    pub min_delivered_rate: f64,
 }
 
 /// Admitted `workflow.explore.*`: whether implement and review-repair runs
@@ -478,6 +482,7 @@ impl ConfigSnapshot {
             enabled: self.experiments_enabled,
             max_running: self.experiments_max_running,
             config_keys: self.experiments_config_keys.clone(),
+            min_delivered_rate: self.experiments_min_delivered_rate,
         }
     }
 

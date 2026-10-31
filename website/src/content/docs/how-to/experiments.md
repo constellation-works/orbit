@@ -299,8 +299,10 @@ The verdict is one of:
 - `collecting` — not every active arm has reached `min_sample` on the
   primary metric, and `max_days` has not passed since start. Retired arms
   do not hold the verdict back.
-- `withheld` (label `no verdict`) — the sample-ratio check failed; see
-  below. No winner is named however the differences look.
+- `withheld` (label `no verdict`) — the sample-ratio check failed, or a
+  treatment arm's treatment did not reach enough of its runs (the reason
+  reads ``arm `<arm>` treatment delivered on <n>/<m> runs``); see below.
+  No winner is named however the differences look.
 - `winner <arm>` — an arm whose primary-metric interval excludes zero in
   the better direction and that breaches no guardrail. When several arms
   qualify, the largest improvement wins.
@@ -317,6 +319,28 @@ the threshold), or `unknown` (there is no difference to read) per arm.
 Only `ok` lets an arm win.
 
 Read the warnings before the verdict:
+
+- **Treatment delivery.** An arm is only treated if its overlay reached
+  its runs. For each treatment arm whose overlay sets instructions, skills
+  or tools, the readout checks every role those target (`implement`,
+  `review`, `recovery`): a task counts as delivered when one of its runs
+  dispatched that role with the arm's overlay and the step then finished
+  successfully, as recorded in the run's audit trail. The arm's `delivery`
+  reports `assigned`, `delivered`, `pending` (in flight and not yet
+  delivered) and `rate`, the delivered share of its settled tasks; the CLI
+  prints it in the `DELIVERED` column and the dashboard arm card shows
+  `Delivered: <n> of <m> runs`. When any arm's rate is below
+  `experiments.min_delivered_rate` (default `0.9`, set it under
+  `[experiments]` in `.orbit/config.toml`), the readout adds an
+  `undelivered` warning and withholds the verdict, from the first settled
+  task on. Crew-only, config-only and empty arms have no delivery check.
+  Delivery shows the overlaid step ran and succeeded, not that the agent
+  followed the instruction; read the explorer uptake for that.
+- **Per-protocol view.** `per_protocol` (CLI: `per-protocol (delivered runs
+  only)`; dashboard arm card: `Per-protocol`) is the primary metric with each
+  checked treatment arm reduced to its delivered tasks. The other metrics
+  and the verdict are intention-to-treat. When the two views disagree, the
+  difference depends on the treatment actually running.
 
 - **Sample ratio.** Per segment, a chi-square test compares the observed
   arm counts with the weights. Below p = 0.001 the assignment is suspect

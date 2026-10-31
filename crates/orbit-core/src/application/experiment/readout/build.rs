@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::{ExperimentRecord, ExperimentStoreBackend as _};
+use orbit_types::workflow::TagInstructionRole;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
@@ -10,22 +11,59 @@ use crate::application::experiment::assignment::{
     EXPLICIT_CREW_EXCLUSION, SURFACE_CONFLICT_EXCLUSION,
 };
 use crate::application::experiment::definition::{ExperimentOverlay, validate_metric};
+use crate::application::experiment::overlay::instruction_role;
 use crate::application::experiment::readout::outcomes::{
     METRIC_SPECS, Observed, Outcome, REGRESSION_WINDOW_DAYS, TaskOutcome, metric_spec,
 };
 
 use super::model::{
-    CrewCount, EXPERIMENT_READOUT_SCHEMA_VERSION, ExperimentReadout, GuardrailReadout, Lagging,
-    PrimaryObservation, ReadoutArm, ReadoutEnrollment, ReadoutExperiment, ReadoutMetric,
-    ReadoutWarning, SAMPLE_RATIO_ALPHA, SampleRatio, SampleRatioSegment, SegmentCount,
+    ArmDelivery, CrewCount, EXPERIMENT_READOUT_SCHEMA_VERSION, ExperimentReadout, GuardrailReadout,
+    Lagging, PerProtocolReadout, PrimaryObservation, ReadoutArm, ReadoutEnrollment,
+    ReadoutExperiment, ReadoutMetric, ReadoutWarning, SAMPLE_RATIO_ALPHA, SampleRatio,
+    SampleRatioSegment, SegmentCount,
 };
 use super::{metrics, stats, verdict};
+
+/// The label of the per-protocol view.
+const PER_PROTOCOL_LABEL: &str = "per-protocol (delivered runs only)";
+
+/// Each non-control arm's dispatch roles, from its overlay definition: the
+/// roles whose steps must receive the overlay and succeed for a task to
+/// count as treated. Arms whose overlay changes no dispatch are absent.
+fn arm_dispatch_roles(
+    record: &ExperimentRecord,
+) -> Result<BTreeMap<String, BTreeSet<TagInstructionRole>>, OrbitError> {
+    let mut roles = BTreeMap::new();
+    for arm in record.arms.iter().filter(|arm| !arm.control) {
+        let overlay = ExperimentOverlay::parse(
+            &arm.name,
+            serde_json::from_str(&arm.overlay_json).map_err(|error| {
+                OrbitError::Store(format!("invalid experiment overlay: {error}"))
+            })?,
+        )?;
+        let targeted: BTreeSet<TagInstructionRole> = overlay
+            .dispatch_roles()
+            .into_iter()
+            .map(instruction_role)
+            .collect();
+        if !targeted.is_empty() {
+            roles.insert(arm.name.clone(), targeted);
+        }
+    }
+    Ok(roles)
+}
+
+/// The task received its arm's treatment in every role the overlay targets.
+fn delivered(task: &TaskOutcome, roles: &BTreeSet<TagInstructionRole>) -> bool {
+    roles.is_subset(&task.delivered_roles)
+}
 
 fn build_readout(
     record: &ExperimentRecord,
     enrollment: ReadoutEnrollment,
     observed: &Observed,
     metric: Option<&str>,
+    min_delivered_rate: f64,
     now: DateTime<Utc>,
 ) -> Result<ExperimentReadout, OrbitError> {
     let experiment = &record.experiment;
@@ -77,10 +115,18 @@ fn build_readout(
         });
     }
 
+    let dispatch_roles = arm_dispatch_roles(record)?;
     let arms: Vec<ReadoutArm> = record
         .arms
         .iter()
-        .map(|arm| arm_readout(arm, tasks, observed.run_digests.get(&arm.name)))
+        .map(|arm| {
+            arm_readout(
+                arm,
+                tasks,
+                observed.run_digests.get(&arm.name),
+                dispatch_roles.get(&arm.name),
+            )
+        })
         .collect();
     for arm in arms.iter().filter(|arm| arm.drifted) {
         warnings.push(ReadoutWarning {
@@ -150,13 +196,43 @@ fn build_readout(
         });
     }
     let horizon_reached = verdict::horizon_reached(record, primary, horizon_at, now);
+    let undelivered = verdict::undelivered_reasons(&arms, min_delivered_rate, horizon_reached);
+    for reason in &undelivered {
+        warnings.push(ReadoutWarning {
+            kind: "undelivered",
+            message: format!(
+                "{reason}, below the {min_delivered_rate} minimum; the treatment did not reach enough of its runs, so no verdict is given"
+            ),
+        });
+    }
     let verdict = verdict::verdict(
         horizon_reached,
         sample_ratio.mismatch,
+        &undelivered,
         started_at.is_some(),
         primary,
         &guardrail_readouts,
     );
+    let per_protocol = experiment
+        .primary_metric
+        .as_deref()
+        .and_then(metric_spec)
+        .filter(|_| !dispatch_roles.is_empty())
+        .map(|spec| {
+            let delivered_tasks: Vec<TaskOutcome> = tasks
+                .iter()
+                .filter(|task| {
+                    dispatch_roles
+                        .get(&task.arm)
+                        .is_none_or(|roles| delivered(task, roles))
+                })
+                .cloned()
+                .collect();
+            PerProtocolReadout {
+                label: PER_PROTOCOL_LABEL,
+                metric: metrics::metric_readout(spec, record, control.as_deref(), &delivered_tasks),
+            }
+        });
     let mut primary_observations: Vec<PrimaryObservation> = experiment
         .primary_metric
         .as_deref()
@@ -195,6 +271,7 @@ fn build_readout(
             guardrails,
             min_sample: experiment.min_sample_per_arm,
             max_days: experiment.max_days,
+            min_delivered_rate,
             started_at: started_at.map(|at| at.to_rfc3339()),
             horizon_at: horizon_at.map(|at| at.to_rfc3339()),
         },
@@ -204,6 +281,7 @@ fn build_readout(
         sample_ratio,
         lagging,
         metrics,
+        per_protocol,
         guardrails: guardrail_readouts,
         verdict,
         warnings,
@@ -215,6 +293,7 @@ fn arm_readout(
     arm: &orbit_store::contracts::ExperimentArmRow,
     tasks: &[TaskOutcome],
     run_digests: Option<&BTreeSet<String>>,
+    dispatch_roles: Option<&BTreeSet<TagInstructionRole>>,
 ) -> ReadoutArm {
     let mine: Vec<&TaskOutcome> = tasks.iter().filter(|task| task.arm == arm.name).collect();
     let mut segments: BTreeMap<u32, usize> = BTreeMap::new();
@@ -249,6 +328,21 @@ fn arm_readout(
             .then(left.crew.cmp(&right.crew))
     });
     let run_digests: Vec<String> = run_digests.into_iter().flatten().cloned().collect();
+    let delivery = dispatch_roles.map(|roles| {
+        let delivered_count = mine.iter().filter(|task| delivered(task, roles)).count();
+        let pending = mine
+            .iter()
+            .filter(|task| !task.terminal && !delivered(task, roles))
+            .count();
+        let settled = mine.len() - pending;
+        ArmDelivery {
+            roles: roles.iter().map(|role| role.as_str().to_string()).collect(),
+            assigned: mine.len(),
+            delivered: delivered_count,
+            pending,
+            rate: (settled > 0).then(|| delivered_count as f64 / settled as f64),
+        }
+    });
     ReadoutArm {
         effort_breakdown: Vec::new(),
         name: arm.name.clone(),
@@ -266,6 +360,7 @@ fn arm_readout(
         drifted: assignment_digests.len() > 1 || run_digests.len() > 1,
         assignment_digests: assignment_digests.into_iter().collect(),
         run_digests,
+        delivery,
     }
 }
 
@@ -383,7 +478,15 @@ impl OrbitRuntime {
             interactive_excluded: observed.interactive_excluded,
             unreadable: enrolled.len() - observed.tasks.len() - observed.interactive_excluded,
         };
-        let mut readout = build_readout(&record, enrollment, &observed, metric, now)?;
+        let min_delivered_rate = self.experiment_settings().min_delivered_rate;
+        let mut readout = build_readout(
+            &record,
+            enrollment,
+            &observed,
+            metric,
+            min_delivered_rate,
+            now,
+        )?;
         let facts = self.sqlite_store()?.list_invocation_accounting_facts(
             &orbit_store::contracts::InvocationAccountingQuery {
                 workspace_id: Some(self.stores().jobs().workspace_id().to_string()),

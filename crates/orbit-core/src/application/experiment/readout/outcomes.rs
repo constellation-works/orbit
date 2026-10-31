@@ -12,8 +12,8 @@ use orbit_store::V2AuditEventFilter;
 use orbit_store::contracts::{ExperimentAssignment, InvocationQuery, JobRunQuery};
 use orbit_types::task::{Task, TaskHistoryEntry, TaskRelationType, TaskStatus, complexity_bucket};
 use orbit_types::workflow::{
-    PR_AUTO_FIX_ADMITTED_EVENT, PrAutoFixAttempt, PrAutoFixBlocker, ReviewVerdict, V2AuditEvent,
-    V2AuditEventKind,
+    PR_AUTO_FIX_ADMITTED_EVENT, PrAutoFixAttempt, PrAutoFixBlocker, ReviewVerdict,
+    TagInstructionRole, V2AuditEvent, V2AuditEventKind,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -37,6 +37,8 @@ const AUDIT_PAGE: usize = 2_000;
 const CONFLICT_RECOVERY_ACTIVITY: &str = "pr_conflict_recovery";
 /// The task history event of an auto-fix started outside the run.
 const AUTO_FIX_OUT_OF_RUN_EVENT: &str = "pr_auto_fix_out_of_run";
+/// The `step_finished` outcome of a step that completed.
+const STEP_SUCCESS: &str = "success";
 
 /// Whether `name` is an explorer delegation, including the tool's own name
 /// on the tail of an MCP identifier (`mcp__orbit__orbit_agent_invoke`).
@@ -200,6 +202,7 @@ pub(super) enum Outcome {
 }
 
 /// One enrolled, unforced task with its outcomes.
+#[derive(Clone)]
 pub(super) struct TaskOutcome {
     pub(super) task_id: String,
     pub(super) arm: String,
@@ -226,6 +229,11 @@ pub(super) struct TaskOutcome {
     pub(super) first_edit_trace_incomplete: bool,
     pub(super) assigned_at: DateTime<Utc>,
     pub(super) assignment_digest: Option<String>,
+    /// Activity roles in which a dispatch received this task's arm overlay
+    /// and the dispatching step then finished successfully, read from the
+    /// run audit trail (`experiment_overlay_applied` joined to the same
+    /// run's `step_finished`).
+    pub(super) delivered_roles: BTreeSet<TagInstructionRole>,
     /// Present only for settled tasks with complete invocation cost coverage.
     pub(super) cost_source: Option<CostSource>,
     pub(super) values: BTreeMap<&'static str, Outcome>,
@@ -439,7 +447,8 @@ impl OrbitRuntime {
         let tokens = self.task_token_totals(Some(since))?;
         let spend = self.task_spend(&ids, since)?;
         let lines = self.landed_task_lines_changed(&ids, since)?;
-        let (run_events, run_digests) = self.run_audit(experiment_id, &ids, since)?;
+        let (run_events, run_digests, delivered_roles) =
+            self.run_audit(experiment_id, &ids, since)?;
         let first_edits = self.first_implement_edits(Some(since))?;
 
         let mut landed_at = BTreeMap::new();
@@ -635,6 +644,7 @@ impl OrbitRuntime {
                     .is_some_and(|edit| edit.incomplete_trace),
                 assigned_at: row.assigned_at,
                 assignment_digest: row.digest.clone(),
+                delivered_roles: delivered_roles.get(id).cloned().unwrap_or_default(),
                 cost_source,
                 values,
             });
@@ -770,8 +780,9 @@ impl OrbitRuntime {
         Ok(lines)
     }
 
-    /// Recoveries and conflicts per task from its runs' audit trails, and
-    /// the overlay digests each arm's dispatches received.
+    /// Recoveries and conflicts per task from its runs' audit trails, the
+    /// overlay digests each arm's dispatches received, and the roles in
+    /// which each task's arm overlay reached a step that then succeeded.
     #[allow(clippy::type_complexity)]
     fn run_audit(
         &self,
@@ -782,6 +793,7 @@ impl OrbitRuntime {
         (
             BTreeMap<String, RunEvents>,
             BTreeMap<String, BTreeSet<String>>,
+            BTreeMap<String, BTreeSet<TagInstructionRole>>,
         ),
         OrbitError,
     > {
@@ -801,6 +813,10 @@ impl OrbitRuntime {
         }
         let mut events: BTreeMap<String, RunEvents> = BTreeMap::new();
         let mut digests: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        // (run, step) -> (task, role) of each dispatch that received an arm
+        // overlay of this experiment.
+        let mut dispatches: BTreeMap<(String, String), BTreeSet<(String, TagInstructionRole)>> =
+            BTreeMap::new();
         let mut seen = BTreeSet::new();
         let mut offset = 0;
         loop {
@@ -855,7 +871,10 @@ impl OrbitRuntime {
                             continue;
                         };
                         if let V2AuditEventKind::ExperimentOverlayApplied {
-                            task_id, overlays, ..
+                            step_id,
+                            task_id,
+                            overlays,
+                            ..
                         } = event.kind
                             && ids.contains(&task_id)
                         {
@@ -863,6 +882,10 @@ impl OrbitRuntime {
                                 .into_iter()
                                 .filter(|overlay| overlay.experiment == experiment_id)
                             {
+                                dispatches
+                                    .entry((row.run_id.clone(), step_id.clone()))
+                                    .or_default()
+                                    .insert((task_id.clone(), overlay.role));
                                 digests
                                     .entry(overlay.arm)
                                     .or_default()
@@ -877,7 +900,57 @@ impl OrbitRuntime {
                 break;
             }
         }
-        Ok((events, digests))
+        let mut delivered: BTreeMap<String, BTreeSet<TagInstructionRole>> = BTreeMap::new();
+        let runs: BTreeSet<&str> = dispatches.keys().map(|(run, _)| run.as_str()).collect();
+        for run in runs {
+            let finished = self.step_outcomes(run)?;
+            for ((_, step), received) in dispatches
+                .iter()
+                .filter(|((dispatch_run, _), _)| dispatch_run == run)
+            {
+                if finished.get(step).map(String::as_str) != Some(STEP_SUCCESS) {
+                    continue;
+                }
+                for (task, role) in received {
+                    delivered.entry(task.clone()).or_default().insert(*role);
+                }
+            }
+        }
+        Ok((events, digests, delivered))
+    }
+
+    /// Each step's last `step_finished` outcome in `run`'s audit trail.
+    fn step_outcomes(&self, run: &str) -> Result<BTreeMap<String, String>, OrbitError> {
+        let mut outcomes = BTreeMap::new();
+        let mut offset = 0;
+        loop {
+            let page = self.list_v2_audit_events(V2AuditEventFilter {
+                run_id: Some(run.to_string()),
+                source: Some("v2_envelope".to_string()),
+                body_kinds: vec!["step_finished".to_string()],
+                limit: Some(AUDIT_PAGE),
+                offset: Some(offset),
+                oldest_first: true,
+                ..Default::default()
+            })?;
+            let fetched = page.len();
+            offset += fetched;
+            for row in page {
+                let Ok(event) = serde_json::from_str::<V2AuditEvent>(&row.payload_json) else {
+                    continue;
+                };
+                if let V2AuditEventKind::StepFinished {
+                    step_id, outcome, ..
+                } = event.kind
+                {
+                    outcomes.insert(step_id, outcome);
+                }
+            }
+            if fetched < AUDIT_PAGE {
+                break;
+            }
+        }
+        Ok(outcomes)
     }
 }
 

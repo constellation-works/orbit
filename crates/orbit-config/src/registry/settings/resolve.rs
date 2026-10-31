@@ -833,3 +833,15 @@ fn resolve_optional_non_empty_raw(
         other => Ok(other),
     }
 }
+
+/// `experiments.min_delivered_rate`: a share from 0 to 1, `0.9` when unset.
+pub(super) fn resolve_experiments_min_delivered_rate(raw: Option<f64>) -> Result<f64, OrbitError> {
+    let rate = raw.unwrap_or(0.9);
+    if rate.is_finite() && (0.0..=1.0).contains(&rate) {
+        Ok(rate)
+    } else {
+        Err(OrbitError::InvalidInput(format!(
+            "experiments.min_delivered_rate has invalid value {rate}; expected 0..=1"
+        )))
+    }
+}

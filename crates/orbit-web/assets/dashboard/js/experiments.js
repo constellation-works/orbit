@@ -44,6 +44,7 @@ const STATUS_ORDER = ["running", "paused", "draft", "concluded", "abandoned"];
 const WARNING_LABELS = {
   sample_ratio: "Sample ratio",
   drift: "Drift",
+  undelivered: "Treatment not delivered",
   lagging: "Open outcomes",
   primary_unmeasured: "Primary unmeasured",
   first_edit_incomplete: "First-edit coverage incomplete",
@@ -570,6 +571,8 @@ function armCards(experiment, readout, primary, color) {
   const unit = primary?.unit;
   const cards = arms.map((arm) => {
     const estimate = primary?.arms?.find((row) => row.arm === arm.name);
+    const perProtocol = readout.per_protocol?.metric?.arms?.find((row) => row.arm === arm.name);
+    const delivery = arm.delivery;
     const coverage = cost?.arms?.find((row) => row.arm === arm.name)?.cost_coverage;
     const interval = fmtInterval(estimate?.mean_interval, unit);
     const state = armVerdict(arm, readout.verdict, experiment.concluded_arm);
@@ -601,6 +604,18 @@ function armCards(experiment, readout, primary, color) {
           + (arm.tasks_explorer_unobserved ? ` (+${arm.tasks_explorer_unobserved} unobserved)` : ""),
         title: "Analysed tasks with at least one explorer-delegation call during implement, at or after assignment. A task counts once. Unobserved tasks recorded no call, but an implement invocation's output outgrew the capture bound and lost its early tool calls, so a call there cannot be ruled out.",
       }),
+      delivery ? el("span", {
+        class: `mx-sc-foot${delivery.rate != null && delivery.rate < (readout.experiment?.min_delivered_rate ?? 0) ? " ex-warn-text" : ""}`,
+        text: `Delivered: ${delivery.delivered} of ${delivery.assigned - delivery.pending} runs`
+          + (delivery.rate != null ? ` (${Math.round(delivery.rate * 100)}%)` : "")
+          + (delivery.pending ? ` · ${delivery.pending} pending` : ""),
+        title: `Settled tasks whose ${delivery.roles.join(", ")} step received this arm's overlay and finished successfully. Below ${Math.round((readout.experiment?.min_delivered_rate ?? 0) * 100)}% the verdict is withheld. Pending tasks are in flight and not yet delivered.`,
+      }) : null,
+      readout.per_protocol ? el("span", {
+        class: "mx-sc-foot",
+        text: `Per-protocol (delivered runs only): ${perProtocol?.n ? fmtValue(perProtocol.mean, unit) : "—"} · n ${perProtocol?.n ?? 0}`,
+        title: "The primary metric over delivered runs only: each checked treatment arm keeps its delivered tasks, other arms all theirs. The value above is intention-to-treat, over every assigned run.",
+      }) : null,
       coverage ? el("span", {
         class: "mx-sc-foot ex-arm-cost",
         text: `Cost: ${coverage.reported} reported · ${coverage.estimated} estimated · ${coverage.unmeasured} unmeasured`,

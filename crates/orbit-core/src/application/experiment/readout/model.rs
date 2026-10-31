@@ -21,6 +21,10 @@ pub struct ExperimentReadout {
     pub sample_ratio: SampleRatio,
     pub lagging: Lagging,
     pub metrics: Vec<ReadoutMetric>,
+    /// The primary metric over delivered runs only, beside the
+    /// intention-to-treat `metrics`; present when a treatment arm's
+    /// delivery is checked.
+    pub per_protocol: Option<PerProtocolReadout>,
     pub guardrails: Vec<GuardrailReadout>,
     pub verdict: Verdict,
     pub warnings: Vec<ReadoutWarning>,
@@ -49,6 +53,9 @@ pub struct ReadoutExperiment {
     pub guardrails: BTreeMap<String, String>,
     pub min_sample: Option<u32>,
     pub max_days: Option<u32>,
+    /// `experiments.min_delivered_rate`: below this delivered rate in any
+    /// treatment arm the verdict is withheld.
+    pub min_delivered_rate: f64,
     pub started_at: Option<String>,
     /// `started_at` plus `max_days`.
     pub horizon_at: Option<String>,
@@ -100,6 +107,37 @@ pub struct ReadoutArm {
     pub run_digests: Vec<String>,
     /// More than one digest within the arm: its treatment changed.
     pub drifted: bool,
+    /// Whether the arm's treatment reached its tasks; `None` for the control
+    /// and for an arm whose overlay changes no dispatch (crew or config
+    /// only).
+    pub delivery: Option<ArmDelivery>,
+}
+
+/// How many of an arm's analysed tasks received its treatment: every
+/// activity role the overlay targets had a dispatch that received the
+/// overlay, in a step that then finished successfully.
+#[derive(Debug, Clone, Serialize)]
+pub struct ArmDelivery {
+    /// The activity roles the arm's overlay targets.
+    pub roles: Vec<String>,
+    /// Analysed tasks assigned to the arm.
+    pub assigned: usize,
+    pub delivered: usize,
+    /// Tasks still in flight whose treatment has not been delivered yet;
+    /// left out of `rate`.
+    pub pending: usize,
+    /// `delivered / (assigned - pending)`; `None` while no task is settled.
+    pub rate: Option<f64>,
+}
+
+/// The primary metric over delivered runs only (per-protocol): each
+/// checked treatment arm keeps only its delivered tasks, other arms all
+/// theirs.
+#[derive(Debug, Clone, Serialize)]
+pub struct PerProtocolReadout {
+    /// `per-protocol (delivered runs only)`.
+    pub label: &'static str,
+    pub metric: ReadoutMetric,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -263,7 +301,7 @@ pub struct Verdict {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ReadoutWarning {
-    /// `sample_ratio`, `drift`, `lagging`, `primary_unmeasured`,
+    /// `sample_ratio`, `drift`, `undelivered`, `lagging`, `primary_unmeasured`,
     /// `first_edit_incomplete`, `tool_trace_incomplete`,
     /// `explorer_trace_incomplete`, `crew_mismatch` or
     /// `crew_mismatch_unavailable`.
