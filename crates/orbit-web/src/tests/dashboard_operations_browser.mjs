@@ -483,7 +483,7 @@ try {
     tabs: [...document.querySelectorAll('#dock-mode-toggle .dock-seg')].filter(tab => tab.getClientRects().length > 0).map(tab => tab.dataset.mode).join(' '),
     column: document.getElementById('auto-drain-quick-start').closest('.dock-pane')?.id,
     durations: document.querySelectorAll('#auto-drain-quick-start .drain-durations .drain-duration[aria-pressed]').length,
-    fields: ['auto-drain-concurrency', 'auto-drain-mode', 'auto-drain-complete', 'auto-drain-approve', 'auto-drain-auto-fix', 'auto-drain-review']
+    fields: ['auto-drain-concurrency', 'auto-drain-complete', 'auto-drain-approve', 'auto-drain-auto-fix', 'auto-drain-review']
       .filter(id => !document.getElementById('auto-drain-quick-start-body').contains(document.getElementById(id))),
     feedback: document.getElementById('auto-drain-quick-start').nextElementSibling?.id,
   }));

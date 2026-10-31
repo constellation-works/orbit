@@ -17,7 +17,6 @@ const AUTO_DRAIN_APPROVE_WARNING = "The window will approve qualifying proposed 
 const AUTO_DRAIN_COMPLETE_WARNING = "Also marks every task this window ships as done (review -> done), not only the ones eligible right now.";
 let autoDrainDuration = "1h";
 let autoDrainConcurrency = "";
-let autoDrainMode = "";
 let autoDrainComplete = false;
 let autoDrainApproveProposed = false;
 let autoDrainAutoFix = false;
@@ -92,43 +91,6 @@ function autoDrainDurationControl(payload) {
     segment.appendChild(option);
   }
   return segment;
-}
-
-const AUTO_DRAIN_MODE_HELP = {
-  enforce: "Admits only when the forecast fits.",
-  shadow: "Admits freely and records what the forecast would have decided.",
-  off: "Admits without forecasting. Host safety limits still apply.",
-};
-
-function autoDrainModeControl(payload) {
-  const configured = payload.auto_concurrency?.configured_mode;
-  const label = el("label", { class: "drain-field-label", text: "Admission control" });
-  label.htmlFor = "auto-drain-mode";
-  const select = el("select", { class: "drain-mode-select" });
-  select.id = "auto-drain-mode";
-  select.dataset.drainFocus = "mode";
-  for (const [value, text] of [["", `Host default (${configured || "unknown"})`], ["off", "Off"], ["shadow", "Shadow"], ["enforce", "Enforce"]]) {
-    const option = el("option", { text });
-    option.value = value;
-    select.appendChild(option);
-  }
-  // Older readiness responses cannot authorize an override.
-  const authorized = payload.controls_authorized === true && payload.replica !== true;
-  select.disabled = !authorized;
-  select.value = authorized ? autoDrainMode : "";
-  select.addEventListener("change", () => {
-    autoDrainMode = select.value;
-    drainControlCallbacks.render(payload);
-  });
-  const chosen = authorized ? autoDrainMode : "";
-  const help = chosen
-    ? `${AUTO_DRAIN_MODE_HELP[chosen]} For this window only; configuration is unchanged.`
-    : `Uses this host's auto-concurrency mode.${AUTO_DRAIN_MODE_HELP[configured] ? ` ${AUTO_DRAIN_MODE_HELP[configured]}` : ""}`;
-  return el("div", { class: "drain-field" }, [
-    drainFieldHead(label, authorized ? help : ""),
-    select,
-    drainFieldRefusal(authorized ? "" : "A per-window mode requires an operator session on an owner workspace."),
-  ]);
 }
 
 // Concurrency is the same blank-means-runtime-default number input as before,
@@ -332,13 +294,11 @@ function autoDrainStartButton(payload, form) {
     const approveProposed = autoDrainApproveProposed;
     const autoFix = autoDrainAutoFix;
     const review = autoDrainReview;
-    const mode = payload.controls_authorized === true && payload.replica !== true ? autoDrainMode : "";
     const confirmText = [
       checkout.replica
         ? `Start pulling from ${checkout.ownerHost} in workspace "${workspace?.name || workspace?.id}"?`
         : `Start a bounded auto-delivery window in workspace "${workspace?.name || workspace?.id}"?`,
       `Duration: ${duration} · Concurrency: ${autoDrainConcurrency || "runtime default"}`,
-      `Auto-concurrency: ${mode || "inherit host at submission"}`,
       `Review before landing: ${checkout.replica ? "owner policy" : review ? `add ${review} review` : "workspace policy"}`,
       `Currently eligible: ${counts.eligible} · waiting: ${counts.waiting}`,
       "",
@@ -354,7 +314,6 @@ function autoDrainStartButton(payload, form) {
       const body = checkout.replica
         ? { for_duration: duration, pull: checkout.workspaceId || checkout.pullSelector, host: checkout.ownerHost }
         : { for_duration: duration, complete: autoDrainComplete, approve_proposed: approveProposed, auto_fix: autoFix };
-      if (!checkout.replica && mode) body.auto_concurrency = mode;
       if (!checkout.replica && review) body.review = review;
       if (autoDrainConcurrency) body.concurrency = Number(autoDrainConcurrency);
       const result = await postJson(visit.path("/api/workflows/auto"), body);
@@ -553,7 +512,6 @@ export function renderAutoDrainStart(payload, reasons) {
     ]),
     autoDrainConcurrencyControl(payload, form),
     form.problem,
-    autoDrainModeControl(payload),
     el("div", { class: "drain-divider", role: "separator", "aria-label": "After a task ships" }, [el("span", { text: "After a task ships" })]),
     autoDrainCompletionControl(payload, reasons),
     autoDrainApproveControl(payload, reasons),
@@ -571,8 +529,7 @@ function autoDrainStartSummary(payload) {
   const parallel = autoDrainConcurrencyValid() && autoDrainConcurrency
     ? autoDrainConcurrency
     : Number.isFinite(limit) && limit >= 1 ? String(Math.trunc(limit)) : "";
-  const mode = (payload.controls_authorized === true && payload.replica !== true && autoDrainMode)
-    || payload.auto_concurrency?.configured_mode || "";
+  const mode = payload.auto_concurrency?.configured_mode || "";
   return [
     `${autoDrainDuration} window`,
     parallel ? `up to ${parallel} in parallel` : "runtime default parallelism",
