@@ -403,12 +403,9 @@ await fetchAndRenderOperations();
 assert(drainReadinessFor('ORB-41')?.pool === 'other' && drainReadinessFor('ORB-41').badge.text === 'needs browser kit' && drainReadinessFor('ORB-41').title.includes(kitWait), `a browser-kit wait is named for its row: ${JSON.stringify(drainReadinessFor('ORB-41'))}`);
 readinessTasks.splice(-1);
 
-const modeInput = () => startNode('auto-drain-mode');
-assert(modeInput().value === '' && !modeInput().disabled, 'mode defaults to inherited host policy');
-assert(modeInput().options[0].textContent.includes('shadow'), 'inherited label uses the current readiness host mode');
-assert([...modeInput().options].map(o => o.value).join(',') === ',off,shadow,enforce', 'all supported modes are selectable');
-modeInput().value = 'enforce'; modeInput().dispatchEvent(new Event('change'));
-assert(modeInput().value === 'enforce', 'explicit choice survives rerender');
+// [ORB-20509] The Start card offers no per-window admission-control mode;
+// the host's configured mode applies.
+assert(startNode('auto-drain-mode') === undefined, 'the Start card has no admission-control picker');
 
 // Duration, stepper and completion drive the Start label and the submitted body.
 drainButton('2h').click();
@@ -427,16 +424,15 @@ setSwitch(completeSwitch(), true);
 assert(completeSwitch().checked && get('auto-drain-complete-help').textContent.includes('review -> done'), 'turning completion on marks done and warns');
 drainButton('Start 2h window').click(); await tick(); await tick(); await tick();
 const started = requests.find(r => r.path === '/api/workflows/auto');
-assert(started && started.workspace === 'one' && started.body.for_duration === '2h' && started.body.concurrency === 2 && started.body.complete === true && started.body.approve_proposed === false && started.body.auto_concurrency === 'enforce', `start posts the chosen window: ${JSON.stringify(started)}`);
+assert(started && started.workspace === 'one' && started.body.for_duration === '2h' && started.body.concurrency === 2 && started.body.complete === true && started.body.approve_proposed === false && !Object.hasOwn(started.body, 'auto_concurrency'), `start posts the chosen window: ${JSON.stringify(started)}`);
 assert(confirmations.at(-1).includes('Duration: 2h · Concurrency: 2') && confirmations.at(-1).includes('WARNING'), 'start confirms the window and warns about completion');
 assert(get('auto-drain-operation-feedback').textContent.includes('Run jrun-20260923-0400-a1 submitted (completion: done).'), 'start result lands in the card status line');
 // The receipt's notices are shown one per line, as `orbit run auto` prints them.
-assert(get('auto-drain-operation-feedback').textContent.split('\n').slice(1).join('|') === 'Auto-concurrency: enforce (explicit).|Warning: Admissions throttled: memory 95%. Running work is not touched.|Warning: FIXTURE_TOKEN is listed in execution.env.pass but not set|Note: no `workflow.required_validation_commands` configured', `start warnings and note follow the result: ${get('auto-drain-operation-feedback').textContent}`);
+assert(get('auto-drain-operation-feedback').textContent.split('\n').slice(1).join('|') === 'Auto-concurrency: shadow (configured).|Warning: Admissions throttled: memory 95%. Running work is not touched.|Warning: FIXTURE_TOKEN is listed in execution.env.pass but not set|Note: no `workflow.required_validation_commands` configured', `start warnings and note follow the result: ${get('auto-drain-operation-feedback').textContent}`);
 setSwitch(completeSwitch(), false);
 assert(!completeSwitch().checked, 'completion returns to review');
 
-assert(get('auto-drain-operation-feedback').textContent.includes('Auto-concurrency: enforce (explicit).'), 'receipt shows the submitted effective mode, separately from inherited config');
-modeInput().value = ''; modeInput().dispatchEvent(new Event('change'));
+assert(get('auto-drain-operation-feedback').textContent.includes('Auto-concurrency: shadow (configured).'), 'receipt shows the effective host mode');
 // Approving proposed tasks is its own explicit opt-in, off by default, with the
 // qualification rule in the tooltip and a line in the confirm dialog.
 const approveSwitch = () => startNode('auto-drain-approve');
@@ -501,7 +497,6 @@ await fetchAndRenderOperations();
 controlsAuthorized = false;
 await fetchAndRenderOperations();
 assert(autoFixInput().disabled && get('auto-drain-auto-fix-reason').textContent.trim(), 'unauthorized repair is disabled with a visible reason');
-assert(modeInput().disabled && modeInput().value === '', 'unauthorized launch cannot submit an explicit mode');
 assert(approveSwitch().disabled, 'an unauthorized session cannot choose to approve');
 assert(drainText().includes('Approving proposed tasks requires an authorized operator session'), 'the unauthorized reason is visible text');
 assert(!drainButton('Start 2h window').disabled, 'an unauthorized session can still start a default window');
@@ -509,7 +504,6 @@ controlsAuthorized = true;
 replicaWorkspace = true;
 await fetchAndRenderOperations();
 assert(autoFixInput().disabled && get('auto-drain-auto-fix-reason').textContent.includes('owner'), 'replica repair is disabled with an owner restriction');
-assert(modeInput().disabled, 'replica launch cannot choose an unsupported override');
 assert(approveSwitch().disabled && drainText().includes('A pull replica cannot approve proposed tasks'), 'a pull replica is not offered approving');
 replicaWorkspace = false;
 await fetchAndRenderOperations();

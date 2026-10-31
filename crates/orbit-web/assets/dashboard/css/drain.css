@@ -225,13 +225,6 @@
 .drain-field.drain-field-row { flex-direction: row; align-items: center; justify-content: space-between; gap: 16px; }
 .drain-field-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .drain-field-text > .drain-field-hint { margin: 0; }
-.drain-mode-select {
-  width: 100%; min-width: 0; height: 38px; padding: 0 10px;
-  border: 1px solid var(--border-strong); border-radius: 8px;
-  background: var(--bg-control); color: var(--fg); font: 13.5px var(--font-sans);
-}
-.drain-mode-select:disabled { color: var(--fg-disabled); }
-.drain-mode-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 /* The window length is a segmented control of buttons. */
 .drain-segments {
   display: flex; flex-wrap: wrap; gap: 3px; padding: 3px; min-width: 0;

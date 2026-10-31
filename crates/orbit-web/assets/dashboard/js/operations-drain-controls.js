@@ -17,11 +17,10 @@ const AUTO_DRAIN_APPROVE_WARNING = "The window will approve qualifying proposed 
 const AUTO_DRAIN_COMPLETE_WARNING = "Also marks every task this window ships as done (review -> done), not only the ones eligible right now.";
 let autoDrainDuration = "1h";
 let autoDrainConcurrency = "";
-let autoDrainMode = "";
 let autoDrainComplete = false;
 let autoDrainApproveProposed = false;
 let autoDrainAutoFix = false;
-// "" keeps workspace review policy; otherwise the layer this window adds.
+// "" keeps workspace review policy; "before-landing" adds that layer.
 let autoDrainReview = "";
 const AUTO_DRAIN_CONCURRENCY_MAX = 4_294_967_295;
 const AUTO_DRAIN_CONCURRENCY_PROBLEM = "Parallel tasks must be a whole number, 1 or more. Leave it blank for the runtime default.";
@@ -92,43 +91,6 @@ function autoDrainDurationControl(payload) {
     segment.appendChild(option);
   }
   return segment;
-}
-
-const AUTO_DRAIN_MODE_HELP = {
-  enforce: "Admits only when the forecast fits.",
-  shadow: "Admits freely and records what the forecast would have decided.",
-  off: "Admits without forecasting. Host safety limits still apply.",
-};
-
-function autoDrainModeControl(payload) {
-  const configured = payload.auto_concurrency?.configured_mode;
-  const label = el("label", { class: "drain-field-label", text: "Admission control" });
-  label.htmlFor = "auto-drain-mode";
-  const select = el("select", { class: "drain-mode-select" });
-  select.id = "auto-drain-mode";
-  select.dataset.drainFocus = "mode";
-  for (const [value, text] of [["", `Host default (${configured || "unknown"})`], ["off", "Off"], ["shadow", "Shadow"], ["enforce", "Enforce"]]) {
-    const option = el("option", { text });
-    option.value = value;
-    select.appendChild(option);
-  }
-  // Older readiness responses cannot authorize an override.
-  const authorized = payload.controls_authorized === true && payload.replica !== true;
-  select.disabled = !authorized;
-  select.value = authorized ? autoDrainMode : "";
-  select.addEventListener("change", () => {
-    autoDrainMode = select.value;
-    drainControlCallbacks.render(payload);
-  });
-  const chosen = authorized ? autoDrainMode : "";
-  const help = chosen
-    ? `${AUTO_DRAIN_MODE_HELP[chosen]} For this window only; configuration is unchanged.`
-    : `Uses this host's auto-concurrency mode.${AUTO_DRAIN_MODE_HELP[configured] ? ` ${AUTO_DRAIN_MODE_HELP[configured]}` : ""}`;
-  return el("div", { class: "drain-field" }, [
-    drainFieldHead(label, authorized ? help : ""),
-    select,
-    drainFieldRefusal(authorized ? "" : "A per-window mode requires an operator session on an owner workspace."),
-  ]);
 }
 
 // Concurrency is the same blank-means-runtime-default number input as before,
@@ -253,33 +215,40 @@ function autoDrainAutoFixControl(payload, reasons) {
   });
 }
 
-const AUTO_DRAIN_REVIEW_HELP = "Adds a second-agent review before landing to every task this window admits. It can only add review: the layer workspace policy already applies is kept, and the other layer is refused.";
+const AUTO_DRAIN_REVIEW_HELP = "Adds a second-agent review before landing to every task this window admits.";
 
-// Review before landing for this window only: workspace policy by default, or
-// a layer the window adds. Workspace configuration is unchanged.
+// The review layer workspace policy applies, as readiness reports it; ""
+// for none or a server that does not report it.
+function workspaceReviewTiming(payload) {
+  const timing = payload?.start_options?.review?.timing;
+  return timing === "before-landing" || timing === "before-pr" ? timing : "";
+}
+
+// [ORB-20510] Review before landing for this window only. Where workspace
+// policy already applies a layer the switch shows it on and is locked: a
+// window can add review, never remove it. Otherwise on adds before-landing
+// review for this window; configuration is unchanged.
 function autoDrainReviewControl(payload, reasons) {
-  const label = el("label", { class: "drain-field-label", text: "Review before landing" });
-  label.htmlFor = "auto-drain-review";
-  const select = el("select", { class: "drain-mode-select" });
-  select.id = "auto-drain-review";
-  select.dataset.drainFocus = "review";
-  for (const [value, text] of [["", "Workspace policy"], ["before-pr", "Add before-PR review"], ["before-landing", "Add before-landing review"]]) {
-    const option = el("option", { text });
-    option.value = value;
-    select.appendChild(option);
-  }
-  // Keep an unavailable selected layer clearable after the view changes.
-  select.disabled = Boolean(reasons.review) && !autoDrainReview;
-  select.value = autoDrainReview;
-  select.addEventListener("change", () => {
-    autoDrainReview = select.value;
-    drainControlCallbacks.render(payload);
+  const policy = workspaceReviewTiming(payload);
+  const source = payload?.start_options?.review?.source || "workspace";
+  const help = policy === "before-pr"
+    ? `Workspace policy applies before-PR review (review.timing = before_pr, ${source}; deprecated). Change it in configuration.`
+    : policy
+      ? `Workspace policy applies it (review.timing = before_landing, ${source}). Change it in configuration.`
+      : autoDrainReview ? AUTO_DRAIN_REVIEW_HELP : `Off: workspace policy applies no review before landing. ${AUTO_DRAIN_REVIEW_HELP}`;
+  return drainSwitchField({
+    id: "auto-drain-review",
+    label: "Review before landing",
+    help,
+    checked: Boolean(policy) || autoDrainReview === "before-landing",
+    // Keep an unavailable chosen layer clearable after the view changes.
+    disabled: Boolean(policy) || (Boolean(reasons.review) && !autoDrainReview),
+    refusal: policy ? "" : reasons.review || "",
+    onChange: checked => {
+      autoDrainReview = checked ? "before-landing" : "";
+      drainControlCallbacks.render(payload);
+    },
   });
-  return el("div", { class: "drain-field" }, [
-    drainFieldHead(label, autoDrainReview ? AUTO_DRAIN_REVIEW_HELP : "The workspace's review.timing setting decides."),
-    select,
-    drainFieldRefusal(reasons.review || ""),
-  ]);
 }
 
 // A replica starts a pull from its owner; an owner starts its own backlog.
@@ -300,7 +269,7 @@ function autoDrainStartBlocked(payload) {
     || (autoDrainComplete && Boolean(reasons.complete))
     || (autoDrainApproveProposed && Boolean(reasons.approve))
     || (autoDrainAutoFix && Boolean(reasons.autoFix))
-    || (Boolean(autoDrainReview) && Boolean(reasons.review));
+    || (Boolean(autoDrainReview) && !workspaceReviewTiming(payload) && Boolean(reasons.review));
 }
 
 function autoDrainStartButton(payload, form) {
@@ -331,14 +300,12 @@ function autoDrainStartButton(payload, form) {
       : "Shipped tasks stay in review; a separate action completes them.";
     const approveProposed = autoDrainApproveProposed;
     const autoFix = autoDrainAutoFix;
-    const review = autoDrainReview;
-    const mode = payload.controls_authorized === true && payload.replica !== true ? autoDrainMode : "";
+    const review = workspaceReviewTiming(payload) ? "" : autoDrainReview;
     const confirmText = [
       checkout.replica
         ? `Start pulling from ${checkout.ownerHost} in workspace "${workspace?.name || workspace?.id}"?`
         : `Start a bounded auto-delivery window in workspace "${workspace?.name || workspace?.id}"?`,
       `Duration: ${duration} · Concurrency: ${autoDrainConcurrency || "runtime default"}`,
-      `Auto-concurrency: ${mode || "inherit host at submission"}`,
       `Review before landing: ${checkout.replica ? "owner policy" : review ? `add ${review} review` : "workspace policy"}`,
       `Currently eligible: ${counts.eligible} · waiting: ${counts.waiting}`,
       "",
@@ -354,7 +321,6 @@ function autoDrainStartButton(payload, form) {
       const body = checkout.replica
         ? { for_duration: duration, pull: checkout.workspaceId || checkout.pullSelector, host: checkout.ownerHost }
         : { for_duration: duration, complete: autoDrainComplete, approve_proposed: approveProposed, auto_fix: autoFix };
-      if (!checkout.replica && mode) body.auto_concurrency = mode;
       if (!checkout.replica && review) body.review = review;
       if (autoDrainConcurrency) body.concurrency = Number(autoDrainConcurrency);
       const result = await postJson(visit.path("/api/workflows/auto"), body);
@@ -553,7 +519,6 @@ export function renderAutoDrainStart(payload, reasons) {
     ]),
     autoDrainConcurrencyControl(payload, form),
     form.problem,
-    autoDrainModeControl(payload),
     el("div", { class: "drain-divider", role: "separator", "aria-label": "After a task ships" }, [el("span", { text: "After a task ships" })]),
     autoDrainCompletionControl(payload, reasons),
     autoDrainApproveControl(payload, reasons),
@@ -571,8 +536,7 @@ function autoDrainStartSummary(payload) {
   const parallel = autoDrainConcurrencyValid() && autoDrainConcurrency
     ? autoDrainConcurrency
     : Number.isFinite(limit) && limit >= 1 ? String(Math.trunc(limit)) : "";
-  const mode = (payload.controls_authorized === true && payload.replica !== true && autoDrainMode)
-    || payload.auto_concurrency?.configured_mode || "";
+  const mode = payload.auto_concurrency?.configured_mode || "";
   return [
     `${autoDrainDuration} window`,
     parallel ? `up to ${parallel} in parallel` : "runtime default parallelism",
@@ -580,7 +544,7 @@ function autoDrainStartSummary(payload) {
     autoDrainComplete ? "marks done" : "",
     autoDrainApproveProposed ? "approves proposals" : "",
     autoDrainAutoFix ? "auto-fix on" : "",
-    autoDrainReview ? `adds ${autoDrainReview} review` : "",
+    autoDrainReview && !workspaceReviewTiming(payload) ? `adds ${autoDrainReview} review` : "",
   ].filter(Boolean).join(" · ");
 }
 
