@@ -2,7 +2,7 @@ use chrono::{SecondsFormat, Utc};
 use orbit_common::OrbitError;
 use serde_json::{Value, json};
 
-use super::roles;
+use super::{ExecutionScope, roles};
 use crate::OrbitRuntime;
 
 impl OrbitRuntime {
@@ -19,7 +19,9 @@ impl OrbitRuntime {
         let types = self.crew_performance_types();
         let facts = self.agent_scan()?;
         let since = Utc::now() - chrono::Duration::days(i64::from(window_days));
-        let cells = roles::implementer_by_type_cells(&facts, since, types)
+        // Draws keep interactive work beside managed: outcome cells carry no
+        // cost or run time, and narrowing them would reroute crews.
+        let cells = roles::implementer_by_type_cells(&facts, since, types, ExecutionScope::All)
             .iter()
             .map(crew_performance_cell)
             .collect::<Result<Vec<_>, OrbitError>>()?;

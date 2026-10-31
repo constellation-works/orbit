@@ -529,6 +529,13 @@ function warningsCard(readout) {
       message: `${plural(explicitCrew, "task")} with an explicit crew ${explicitCrew === 1 ? "was" : "were"} excluded, since no crew arm would have changed ${explicitCrew === 1 ? "its" : "their"} crew`,
     });
   }
+  const interactive = readout.enrollment?.interactive_excluded || 0;
+  if (interactive) {
+    warnings.push({
+      kind: "interactive",
+      message: `${plural(interactive, "task")} worked in an interactive session ${interactive === 1 ? "was" : "were"} excluded, since no job applied ${interactive === 1 ? "its" : "their"} arm`,
+    });
+  }
   const lagging = readout.lagging || {};
   const meta = `${lagging.open_tasks ?? 0} in flight · ${lagging.open_regression_windows ?? 0} in the ${lagging.regression_window_days ?? 14}-day regression window`;
   if (!warnings.length) {

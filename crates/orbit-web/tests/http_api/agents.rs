@@ -693,6 +693,225 @@ fn implementers_report_cost_coverage_without_averaging_priced_attempts() {
     );
 }
 
+/// A task worked in an interactive session (moved by hand, no job run) has no
+/// cost or run time. Before the execution split it joined its crew's row as a
+/// missing run, suppressing that row's cost and inflating its units: the
+/// implementer counts default to managed tasks, `execution` adds or isolates
+/// interactive ones, cost always counts managed tasks only, and the header
+/// shows each row's interactive and unclassified tasks whatever the scope.
+#[test]
+fn implementer_counts_default_to_managed_tasks_and_show_interactive_work_per_crew() {
+    isolated(
+        "agents::implementer_counts_default_to_managed_tasks_and_show_interactive_work_per_crew",
+        || {
+            use orbit_core::InvocationInsertParams;
+            use orbit_core::application::agents::{AgentQuery, agent_scorecard};
+            use orbit_types::telemetry::InvocationTrace;
+            let fixture = Fixture::new();
+            let now = Utc::now();
+            let task = |fixture: &Fixture, title: &str, status: TaskStatus| {
+                add(
+                    fixture,
+                    Owned {
+                        title,
+                        orchestrator: None,
+                        origin: None,
+                        complexity: TaskComplexity::Medium,
+                        status,
+                        relations: vec![],
+                    },
+                )
+            };
+            // Managed: a priced job run worked and landed it.
+            let managed = task(&fixture, "managed", TaskStatus::Done);
+            let start = now - Duration::hours(5);
+            implementation_run(
+                &fixture,
+                "jrun-split-managed",
+                &managed,
+                "split",
+                None,
+                start,
+                now - Duration::hours(4),
+            );
+            append(
+                &fixture,
+                &managed,
+                start,
+                "started",
+                None,
+                Some(TaskStatus::InProgress),
+            );
+            append(
+                &fixture,
+                &managed,
+                now - Duration::hours(4),
+                "status_changed",
+                None,
+                Some(TaskStatus::Done),
+            );
+            fixture
+                .runtime
+                .insert_invocation_trace_record(&InvocationInsertParams {
+                    agent_execution_id: None,
+                    job_run_id: "jrun-split-managed".into(),
+                    account: None,
+                    activity_id: "implement_one".into(),
+                    agent: "codex".into(),
+                    provider: None,
+                    model: None,
+                    task_ids: vec![managed.clone()],
+                    trace: InvocationTrace {
+                        provider_cost_usd: Some(4.0),
+                        ..Default::default()
+                    },
+                })
+                .unwrap();
+            // Interactive: the same crew, moved through review to done by
+            // hand with no job run; one regression names it.
+            let interactive = task(&fixture, "interactive", TaskStatus::Done);
+            append(
+                &fixture,
+                &interactive,
+                now - Duration::hours(4),
+                "crew_assigned",
+                Some("assigned crew `split` by hand"),
+                None,
+            );
+            for (hours, event, status) in [
+                (3, "started", TaskStatus::InProgress),
+                (2, "status_changed", TaskStatus::Review),
+                (1, "status_changed", TaskStatus::Done),
+            ] {
+                append(
+                    &fixture,
+                    &interactive,
+                    now - Duration::hours(hours),
+                    event,
+                    None,
+                    Some(status),
+                );
+            }
+            regression(
+                &fixture,
+                &interactive,
+                RegressionNature::DefectInNew,
+                RegressionEscape::NoTest,
+            );
+            // Unclassified: started by hand and not yet in review.
+            let open = task(&fixture, "unclassified", TaskStatus::InProgress);
+            append(
+                &fixture,
+                &open,
+                now - Duration::hours(4),
+                "crew_assigned",
+                Some("assigned crew `split` by hand"),
+                None,
+            );
+            append(
+                &fixture,
+                &open,
+                now - Duration::hours(1),
+                "started",
+                None,
+                Some(TaskStatus::InProgress),
+            );
+
+            let facts = fixture.runtime.agent_scan().unwrap();
+            let row = |execution: Option<&str>| {
+                let query = AgentQuery::parse(Some("30d"), Some(1))
+                    .unwrap()
+                    .with_execution(execution)
+                    .unwrap();
+                let card = agent_scorecard(
+                    &facts,
+                    AgentRole::Implementers,
+                    &query,
+                    std::time::Duration::ZERO,
+                );
+                let row = card["rows"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|row| row["crew"] == "split")
+                    .cloned();
+                (card, row)
+            };
+            let stat = |row: &Value, key: &str| {
+                row["stats"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|stat| stat["key"] == key)
+                    .unwrap()["value"]
+                    .clone()
+            };
+
+            let (card, managed_row) = row(None);
+            assert_eq!(card["execution"], "managed", "managed is the default");
+            let managed_row = managed_row.expect("the managed task's row");
+            assert_eq!(managed_row["units"], 1, "only the managed task counts");
+            assert_eq!(stat(&managed_row, "cost_per_weighted_landed"), json!(4.0));
+            assert_eq!(stat(&managed_row, "cost_missing_run_attempts"), json!(0));
+            assert_eq!(
+                card["execution_split"],
+                json!([{
+                    "crew": "split",
+                    "model": "model unknown",
+                    "managed_tasks": 1,
+                    "interactive_tasks": 1,
+                    "unclassified_tasks": 1,
+                    "interactive_landed": 1,
+                    "interactive_regressed": 1,
+                }]),
+                "interactive work stays visible per crew under the managed default"
+            );
+
+            let (_, all_row) = row(Some("all"));
+            let all_row = all_row.expect("the combined row");
+            assert_eq!(
+                all_row["units"], 2,
+                "managed and interactive, never unclassified"
+            );
+            assert_eq!(
+                stat(&all_row, "cost_per_weighted_landed"),
+                json!(4.0),
+                "cost counts managed tasks only whatever the scope"
+            );
+            assert_eq!(stat(&all_row, "cost_coverage_attempts"), json!(1));
+
+            let (_, interactive_row) = row(Some("interactive"));
+            let interactive_row = interactive_row.expect("the interactive series");
+            assert_eq!(interactive_row["units"], 1);
+            assert_eq!(stat(&interactive_row, "cost_coverage_attempts"), json!(0));
+            assert_eq!(stat(&interactive_row, "median_run_seconds"), Value::Null);
+
+            let server = fixture.server(false);
+            let http = json_ok(server.get(&format!(
+                "/api/agents/implementers/scorecard?{WS}&window=30d&min_support=1&execution=all"
+            )));
+            assert_eq!(http["execution"], "all");
+            assert_eq!(
+                http["rows"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|row| row["crew"] == "split")
+                    .unwrap()["units"],
+                2
+            );
+            let refused = server.get(&format!(
+                "/api/agents/implementers/scorecard?{WS}&window=30d&execution=offline"
+            ));
+            assert_eq!(
+                refused.status().as_u16(),
+                400,
+                "an unknown scope is refused"
+            );
+        },
+    );
+}
+
 /// One fixture workspace, read through the runtime API and the routes: every
 /// problem has exactly one owner or a Not scored reason and the attribution
 /// totals are the problems behind the four roles; a task two crews worked

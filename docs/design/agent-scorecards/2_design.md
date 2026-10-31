@@ -1,7 +1,7 @@
 ---
 title: Agent Scorecards — Design
 owner: claude
-last_updated: 2026-10-30
+last_updated: 2026-10-31
 last_validated: 2026-10-29
 status: Draft
 feature: agent-scorecards
@@ -286,6 +286,8 @@ The role panel shows each orchestrator's rework split into spec (counted), crew 
 
 Unit: **implemented tasks**, meaning tasks with at least one implementation run by the row's crew and model that started in the window. Tasks tagged `no-diff-expected` are not implementer work and are left out entirely [ORB-18078]: no units, credit, charges or fleet expectation, in the headline rows and the by-type cells alike. The tag is judged per attempt, as of the attempt's start, replayed from the task's `tags_changed` history, so a tag added after work began does not exempt that attempt and removing it does not retroactively count one. The tag alone decides: an untagged task that ends with no diff (a verified no-diff or already-landed handoff) still counts with its normal credits and charges. Implementer problems on an excluded attempt are Not scored with reason `no_diff_expected`, so the attribution strip and the ranking still agree. Tag edits made before writes recorded `tags_changed` entries cannot be reconstructed independently; for an attempt before the first recorded change, replay uses that change's `previous` tags. Current tags apply only when no `tags_changed` entry is recorded. A configured by-type entry that matches only on `no-diff-expected` keeps its cells, all empty. The Pilots role's own `no-diff-expected` exclusion (§5.4) is unchanged, and both roles read the one `is_no_diff_expected` predicate.
 
+**Execution split** [ORB-20391]. Tasks are also worked in interactive sessions (a desktop or terminal agent that moves the task and sets its `crew`) with no implementing job run, so no token, cost or run-time telemetry. Each scanned task's execution is derived from its attempts, never set by an agent: an attempt is a job's when a local implementation run matches it (§3.2) or a claim's `pulled_by` opened it (even without a recorded run id). The task is `managed` when its final attempt (the landed one, else the latest) is a job's, or when history records no attempt but an implementation run names it; `interactive` when it reached `review` or `done` otherwise; and `unclassified` when neither holds (not implemented yet, or interactive work not yet in review). Every implementer count (rows, detail, by-type cells, per-task export and size curves) reads the tasks the selection's `execution` scope admits: `managed` by default, `all` (managed and interactive) or `interactive` alone as a separate series. Unclassified tasks are in no scope. Cost, cost coverage and median run time count managed tasks whatever the scope, so an interactive task never reads as a missing run. The implementers header carries `execution_split`, one entry per row with a counted attempt in the window whatever the scope: `managed_tasks`, `interactive_tasks`, `unclassified_tasks`, and the interactive tasks' `interactive_landed` and `interactive_regressed` (named by any `regression_from` link). The other roles ignore the scope: they score review, authorship and assessment, not how a task was executed. The crew-performance snapshot reads scope `all`, so draws keep interactive outcomes ([crew-performance scope](../crew-performance/1_scope.md#evidence-snapshot)).
+
 | Term | Weight | Definition |
 |---|---|---|
 | Landed | +1 | Landed tasks whose final implementation run is the row's, one point each at every complexity. |
@@ -553,25 +555,28 @@ A landed file outside the declared context on a task no pilot assessed is not ch
 All routes are GET, scoped by `workspace`, follow the host picker through `/api/on/<host>/…`, and answer only GET.
 
 ```
-GET /api/agents/{role}/scorecard?window=&min_support=
-GET /api/agents/{role}/detail?window=&min_support=&crew=&model=
+GET /api/agents/{role}/scorecard?window=&min_support=&execution=
+GET /api/agents/{role}/detail?window=&min_support=&execution=&crew=&model=
 GET /api/agents/attribution?window=
-GET /api/agents/implementers/by-type?window=&min_support=
-GET /api/agents/implementers/size-curves?window=&complexity=
+GET /api/agents/implementers/by-type?window=&min_support=&execution=
+GET /api/agents/implementers/size-curves?window=&complexity=&execution=
 ```
+
+`execution` is `managed` (default), `all` or `interactive` (§5.2 Execution split); only implementer counts read it.
 
 `{role}` is `orchestrators`, `implementers`, `reviewers` or `pilots`. For orchestrators, `crew` names the orchestrator attribution and `model` the task's recorded `orchestrator_model`. `model` is the literal `model unknown` for an unknown model. It may be omitted when the crew has one row, and is required when it has several.
 
 **Scorecard** answers:
 
-- `role`, `window`, `requested_window`, `since`, `min_support`, `computed_at`, `cache_ttl_seconds`, `tasks_scanned`. `window` is the window served: `all` is requested as `all` and served as `90d`; `window_attempts` is a count window's size (null for a calendar window);
+- `role`, `window`, `requested_window`, `since`, `min_support`, `execution`, `computed_at`, `cache_ttl_seconds`, `tasks_scanned`. `window` is the window served: `all` is requested as `all` and served as `90d`; `window_attempts` is a count window's size (null for a calendar window);
 - `status`: `ok`, or `not_computed` while a role's track has not landed. A `not_computed` role still returns its `terms`, with empty `rows`.
 - `unit` (label of the role's unit);
 - `fleet_average`, over the judged rows;
 - `terms`: `key`, `label`, `weight`, `definition`, `group`, and `unit` on a term rated per 100 of its own unit (the pilots' calibration and warning terms);
 - `provisional`: for reviewers, the rows' provisional reviews in total; null for the other roles;
 - `rows`, best first;
-- pilots only: `warning_min_support`, and `sources.missed_scope_blocks` as `{available, triage_records, detail}`.
+- pilots only: `warning_min_support`, and `sources.missed_scope_blocks` as `{available, triage_records, detail}`;
+- implementers only: `execution_split` (§5.2).
 
 Each row carries `crew`, `model`, `units`, `below_support`, `unjudged` (§4.3; only reviewer rows can be true), `rank` (null below support or unjudged), `counts` and `per_100` (term key to number), `raw` and `score` (null on an unjudged row), `runs_without_model`, `provisional` (reviewers), and `stats` (the not-scored context: key, label, value). An implementers row also carries `reviewed_units`, the count of its tasks with a settled first review: a display-only denominator for the radar's review-derived axes (§1.1), never a scoring denominator. A row of a role with per-term denominators (pilots) also carries `term_units` (term key to its own units) and `provisional_terms` (the keys below their own minimum support). Calibration support counts placed tasks and uses `min_support`; warning support counts settled assessments and uses `warning_min_support`.
 
@@ -586,6 +591,7 @@ Every response carries an `Age` header: the seconds since its scan.
 Errors are 400 for:
 - an unknown role or window;
 - a zero `min_support`;
+- an `execution` other than `managed`, `all` or `interactive`;
 - a detail request without `crew`, or naming a row the window does not contain.
 
 The dashboard reads only these routes. The `/api/orchestrators/*` routes were removed with Analytics › Orchestrators.
@@ -594,7 +600,7 @@ The dashboard reads only these routes. The `/api/orchestrators/*` routes were re
 
 **Current.**
 
-`orbit agents scorecard --role <role> [--window <w>] [--min-support <n>] [--json]` and `orbit agents show --role <role> --crew <crew> [--model <model>] [--window <w>] [--min-support <n>] [--json]` print the same payloads as `/api/agents/<role>/scorecard` and `/api/agents/<role>/detail`. The table view lists each row's rank (`below` under the minimum support, `unjudged` for an unjudged row, whose score shows `-`), crew, model, units, score and term counts. Stdout carries only those rows, so plain and piped output is tab-separated records (with `--header`, the column header first); the selection line, the units footer and the empty-state line go to stderr, and a role with no row prints nothing on stdout. `show` lists each term's weight, count, rate and contribution, then the tasks behind every nonzero count. Implementers also show the 100-point base and an expected-count column; their scorecard footer explains the same-tier reference. The read-only MCP tools `orbit.agents.scorecard` and `orbit.agents.show` take the same arguments as `role`, `window`, `min_support` and, for `show`, `crew` and `row_model`. The row's model travels as `row_model` because `model` is every tool's caller attribution. A role outside the four is refused, naming the choices. A crew with several rows in the window is refused without a model, naming the selector for each surface (`--model`, `row_model`, or the dashboard's `model` query parameter) and the candidate models.
+`orbit agents scorecard --role <role> [--window <w>] [--min-support <n>] [--execution <scope>] [--json]` and `orbit agents show --role <role> --crew <crew> [--model <model>] [--window <w>] [--min-support <n>] [--execution <scope>] [--json]` print the same payloads as `/api/agents/<role>/scorecard` and `/api/agents/<role>/detail`. The table view lists each row's rank (`below` under the minimum support, `unjudged` for an unjudged row, whose score shows `-`), crew, model, units, score and term counts. Stdout carries only those rows, so plain and piped output is tab-separated records (with `--header`, the column header first); the selection line, the units footer and the empty-state line go to stderr, and a role with no row prints nothing on stdout. `show` lists each term's weight, count, rate and contribution, then the tasks behind every nonzero count. Implementers also show the 100-point base and an expected-count column; their scorecard footer explains the same-tier reference. The read-only MCP tools `orbit.agents.scorecard` and `orbit.agents.show` take the same arguments as `role`, `window`, `min_support`, `execution` and, for `show`, `crew` and `row_model`. The row's model travels as `row_model` because `model` is every tool's caller attribution. A role outside the four is refused, naming the choices. A crew with several rows in the window is refused without a model, naming the selector for each surface (`--model`, `row_model`, or the dashboard's `model` query parameter) and the candidate models.
 
 Each of those scans once per call and reports `cache_ttl_seconds: 0`. The definitions live in `orbit-common`'s `governance::agents` registry; the tools call `OrbitRuntime::agent_role_scorecard` and `agent_role_detail`, which scan and slice like the API without keeping the scan.
 

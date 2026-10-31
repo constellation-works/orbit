@@ -136,6 +136,10 @@ for (const id of ['agents-title', 'agents-count', 'agents-meta', 'agents-body'])
 const windows = make('div', 'agents-window-selector', layout);
 windows.dataset.fallbackWindow = 'last500';
 for (const value of ['last500', 'last1000', '7d', '30d']) make('button', null, windows, 'scoreboard-window-seg').dataset.window = value;
+const executionControl = make('div', 'agents-execution-control', layout);
+executionControl.hidden = true;
+const executions = make('div', 'agents-execution-selector', executionControl);
+for (const value of ['managed', 'all', 'interactive']) make('button', null, executions, 'scoreboard-window-seg').dataset.execution = value;
 
 const document = {
   activeElement: null,

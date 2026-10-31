@@ -1056,6 +1056,22 @@ no landed work show a dash; a dash does not mean free work. Cost and time never
 change the score. On a phone, the ranking scrolls within its own box and the
 detail stacks below the ranking.
 
+Tasks can also be worked in an interactive session, such as a desktop or
+terminal agent that moves the task itself, with no delivery run and so no
+cost, token, or run-time record. Orbit derives each task's execution from its
+runs: **managed** when a delivery run (local or pulled by another machine)
+worked its final implementation attempt, **interactive** when it reached review
+or done without one, and unclassified otherwise (not implemented yet, or
+interactive work not yet in review). The **execution** control above the
+panel, shown on this tab, picks which tasks the ranking, detail, and size
+curves count: **Managed** (the default), **All** (managed and interactive), or
+**Interactive** on its own. Unclassified tasks count in none. Cost and run time
+count managed tasks whatever you pick. **Interactive work by crew**, under the
+panels, lists each crew and model's managed, interactive, and unclassified
+tasks, with how many interactive tasks landed and how many a regression names,
+so interactive work stays visible while the default leaves it out. The CLI and
+tools take the same choice as `--execution` and `execution`.
+
 Below the ranking, the **Regression rate by change size** panel is the tab's
 one role panel. It shows the share of landed tasks with a regression linked to
 them within 7 days of completion, by lines changed. Each task counts once,
@@ -1069,7 +1085,7 @@ interval. Use **Complexity** to narrow the curves to one tier, and the crew
 checklist above the chart to choose which curves are drawn; crews with at least
 30 tasks and a drawn bucket start selected. Buckets with fewer than 10 tasks are
 not drawn, and hollow markers flag buckets with fewer than 5 regressed tasks.
-The panel follows the window above, and the **Bucket table** under the chart
+The panel follows the window and execution control above, and the **Bucket table** under the chart
 lists every bucket of the crews drawn. The score-against-cost plot and the
 first-reviews tier comparison stay removed. The panel is shown, not scored.
 

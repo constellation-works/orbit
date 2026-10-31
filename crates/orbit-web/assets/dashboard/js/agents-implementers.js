@@ -35,15 +35,16 @@ function isNarrow() {
   return Boolean(narrowQuery && narrowQuery.matches);
 }
 
-function curvesPath(selectedWindow) {
+function curvesPath(selectedWindow, execution) {
   const tier = complexity ? `&complexity=${encodeURIComponent(complexity)}` : "";
-  return `/api/agents/implementers/size-curves?window=${encodeURIComponent(selectedWindow)}${tier}`;
+  return `/api/agents/implementers/size-curves?window=${encodeURIComponent(selectedWindow)}${tier}&execution=${encodeURIComponent(execution || "managed")}`;
 }
 
-/// Read the curves for `selectedWindow` under the current filter. A
-/// response for a window, filter or workspace no longer shown is dropped.
-function loadCurves(selectedWindow) {
-  const path = curvesPath(selectedWindow);
+/// Read the curves for `selectedWindow` and `execution` under the current
+/// filter. A response for a window, filter or workspace no longer shown is
+/// dropped.
+function loadCurves(selectedWindow, execution) {
+  const path = curvesPath(selectedWindow, execution);
   const scope = `${getWorkspaceRevision()}\0${path}`;
   if (curvesScope !== scope) {
     curvesScope = scope;
@@ -112,7 +113,7 @@ function toggle(crew, on, rerender) {
   rerender();
 }
 
-function controlsNode(selectedWindow, rerender) {
+function controlsNode(selectedWindow, execution, rerender) {
   const select = el("select", { id: "agents-curves-tier", "aria-label": "Complexity" });
   const counts = new Map((curves && Array.isArray(curves.complexities) ? curves.complexities : []).map((entry) => [entry.tier, entry.tasks]));
   const total = [...counts.values()].reduce((sum, n) => sum + n, 0);
@@ -125,7 +126,7 @@ function controlsNode(selectedWindow, rerender) {
   select.value = complexity;
   select.addEventListener("change", () => {
     complexity = select.value;
-    loadCurves(selectedWindow).then(rerender);
+    loadCurves(selectedWindow, execution).then(rerender);
     rerender();
   });
   const label = el("label", { text: "Complexity" });
@@ -265,7 +266,7 @@ function render({ scorecard, rerender }) {
   redraw = rerender;
   const nodes = [
     el("p", { class: "agents-muted", text: "Share of landed tasks with a regression_from link observed within 7 days of completion, by lines changed, one curve per crew reference as dispatched. Shaded bands are Wilson 95% intervals. Shown, not scored." }),
-    controlsNode(selectedWindow, rerender),
+    controlsNode(selectedWindow, scorecard.execution, rerender),
   ];
   if (!curves) {
     nodes.push(el("p", { class: "agents-muted", role: "status", text: "Loading size curves…" }));
@@ -302,8 +303,8 @@ function hash() {
 }
 
 // Read on every scorecard fetch, so a poll refreshes the curves too.
-function fetchFor(selectedWindow) {
-  return loadCurves(selectedWindow);
+function fetchFor(selectedWindow, execution) {
+  return loadCurves(selectedWindow, execution);
 }
 
 export const implementersPanel = {

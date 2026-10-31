@@ -34,7 +34,8 @@ mod shadow;
 
 pub use attribution::{Charge, Credit, Owner};
 pub(crate) use facts::review_gate_verdicts;
-pub use facts::{AgentFacts, Problem};
+pub(crate) use facts::task_execution_modes;
+pub use facts::{AgentFacts, ExecutionMode, Problem};
 
 /// The model of a row whose runs, or for orchestrators whose tasks, recorded
 /// none.
@@ -104,14 +105,55 @@ impl AgentRole {
     }
 }
 
-/// A validated selection: the window and the units a row needs before it is
-/// ranked.
+/// Which tasks implementer metrics count, by their derived
+/// [`ExecutionMode`]. Unclassified tasks are in none. Cost and run time
+/// count managed tasks whatever the scope: interactive work records none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ExecutionScope {
+    /// Managed tasks only, the default.
+    #[default]
+    Managed,
+    /// Managed and interactive tasks together.
+    All,
+    /// Interactive tasks only, as a separate series.
+    Interactive,
+}
+
+impl ExecutionScope {
+    const ALL: [ExecutionScope; 3] = [
+        ExecutionScope::Managed,
+        ExecutionScope::All,
+        ExecutionScope::Interactive,
+    ];
+
+    /// The scope's wire name.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ExecutionScope::Managed => "managed",
+            ExecutionScope::All => "all",
+            ExecutionScope::Interactive => "interactive",
+        }
+    }
+
+    /// Whether a task executed as `mode` is counted.
+    pub(crate) fn admits(self, mode: ExecutionMode) -> bool {
+        match self {
+            ExecutionScope::Managed => mode == ExecutionMode::Managed,
+            ExecutionScope::All => mode != ExecutionMode::Unclassified,
+            ExecutionScope::Interactive => mode == ExecutionMode::Interactive,
+        }
+    }
+}
+
+/// A validated selection: the window, the units a row needs before it is
+/// ranked and which executions implementer metrics count.
 #[derive(Debug, Clone, Copy)]
 pub struct AgentQuery {
     requested: &'static str,
     window: &'static str,
     span: WindowSpan,
     min_support: usize,
+    execution: ExecutionScope,
 }
 
 /// How far back a window reaches.

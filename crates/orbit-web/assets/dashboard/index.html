@@ -675,6 +675,14 @@
                 <button type="button" role="tab" class="scoreboard-window-seg" data-window="30d" aria-selected="false" tabindex="-1">30d</button>
               </div>
             </div>
+            <div class="scoreboard-control-group" id="agents-execution-control" hidden>
+              <span class="scoreboard-control-label">execution</span>
+              <div class="scoreboard-window-selector" id="agents-execution-selector" role="tablist" aria-label="Implementer tasks counted by execution">
+                <button type="button" role="tab" class="scoreboard-window-seg on" data-execution="managed" aria-selected="true" tabindex="0" title="Tasks a job worked: the default, and the only ones with cost and run time">Managed</button>
+                <button type="button" role="tab" class="scoreboard-window-seg" data-execution="all" aria-selected="false" tabindex="-1" title="Managed and interactive tasks together; cost and run time still count managed tasks only">All</button>
+                <button type="button" role="tab" class="scoreboard-window-seg" data-execution="interactive" aria-selected="false" tabindex="-1" title="Tasks worked in an interactive session, without a job, as their own series">Interactive</button>
+              </div>
+            </div>
             <span class="scoreboard-controls-meta" id="agents-meta"></span>
           </div>
           <div class="body agents-body" id="agents-body" tabindex="0" role="region" aria-label="Agent scorecard"></div>

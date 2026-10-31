@@ -66,6 +66,9 @@ pub struct ReadoutEnrollment {
     /// Tasks excluded at admission because an explicit crew would have
     /// overridden this experiment's crew arms.
     pub explicit_crew_excluded: usize,
+    /// Assigned tasks worked in an interactive session rather than by a
+    /// job, so no arm treated them; left out of every estimate.
+    pub interactive_excluded: usize,
     /// Assigned tasks whose record could not be read.
     pub unreadable: usize,
 }

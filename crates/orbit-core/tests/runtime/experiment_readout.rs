@@ -315,6 +315,77 @@ fn expired_readout_requires_a_primary_comparison_interval() {
 }
 
 /// Creates a backlog task of `complexity` and enrolls it in `arm_name`.
+/// No job applies an arm's overlay to a task worked in an interactive
+/// session, so an assignment that reached review without a job run is not
+/// treated: the readout leaves it out of every estimate and counts it, while
+/// assignments not yet implemented stay analysed with open outcomes.
+#[test]
+fn readout_leaves_interactive_assignments_out_of_the_treated_population() {
+    if !super::dispatch_admission::isolated(
+        "experiment_readout::readout_leaves_interactive_assignments_out_of_the_treated_population",
+    ) {
+        return;
+    }
+    use orbit_core::application::task::TaskUpdateParams;
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("home/.orbit");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(
+        workspace.join("config.toml"),
+        "[experiments]\nenabled = true\n",
+    )
+    .unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let actor = ExperimentActor {
+        actor: "readout-test".into(),
+        reason: None,
+    };
+    let experiment = runtime
+        .create_experiment(
+            "interactive-excluded",
+            ExperimentDefinitionInput {
+                arms: Some(json!([{"name":"control","control":true},{"name":"treatment"}])),
+                primary_metric: Some("first_pass_acceptance".into()),
+                ..Default::default()
+            },
+            actor.clone(),
+        )
+        .unwrap();
+    runtime
+        .change_experiment(&experiment.id, ExperimentChange::Start, actor)
+        .unwrap();
+    for arm in ["control", "treatment"] {
+        enroll_arm_task(&runtime, &experiment.id, arm, TaskComplexity::Low);
+    }
+    let interactive = enroll_arm_task(&runtime, &experiment.id, "treatment", TaskComplexity::Low);
+    for status in [TaskStatus::InProgress, TaskStatus::Review] {
+        runtime
+            .force_update_task_with_identity(
+                &interactive,
+                TaskUpdateParams {
+                    status: Some(status),
+                    ..Default::default()
+                },
+                None,
+                None,
+            )
+            .unwrap();
+    }
+
+    let readout = runtime.experiment_readout(&experiment.id, None).unwrap();
+    assert_eq!(
+        readout.enrollment.analysed, 2,
+        "unrun assignments stay analysed"
+    );
+    assert_eq!(readout.enrollment.interactive_excluded, 1);
+    assert_eq!(
+        readout.enrollment.unreadable, 0,
+        "an excluded task is not an unreadable one"
+    );
+}
+
 fn enroll_arm_task(
     runtime: &OrbitRuntime,
     experiment_id: &str,

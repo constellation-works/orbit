@@ -27,12 +27,12 @@ use serde_json::{Value, json};
 
 use super::RoleSpec;
 use super::pilot_warnings::{self, CONFIRMED, DISMISSED, MISSED, SETTLED_UNIT, WarningRow};
-use crate::application::agents::AgentFacts;
 use crate::application::agents::attribution::row_key;
 use crate::application::agents::facts::TaskFacts;
 use crate::application::agents::score::{
     Denominator, Occurrence, RowInput, Stat, Tally, Term, number,
 };
+use crate::application::agents::{AgentFacts, ExecutionScope};
 use crate::application::codebase::{Anchor, Contest, HeldWait, PilotEvidence, PilotRun};
 
 pub(super) const ROLE: RoleSpec = RoleSpec {
@@ -476,7 +476,12 @@ fn observed_tiers<'a>(
 
 /// One row per pilot crew and model over the assessments written in the
 /// window.
-fn rows(facts: &AgentFacts, since: DateTime<Utc>, min_support: usize) -> Vec<RowInput<'_>> {
+fn rows(
+    facts: &AgentFacts,
+    since: DateTime<Utc>,
+    min_support: usize,
+    _execution: ExecutionScope,
+) -> Vec<RowInput<'_>> {
     let tasks: BTreeMap<&str, &TaskFacts> = facts
         .tasks
         .iter()

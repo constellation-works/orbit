@@ -346,7 +346,8 @@ impl OrbitRuntime {
             forced_excluded: rows.iter().filter(|row| row.forced).count(),
             surface_conflict_excluded: excluded(SURFACE_CONFLICT_EXCLUSION),
             explicit_crew_excluded: excluded(EXPLICIT_CREW_EXCLUSION),
-            unreadable: enrolled.len() - observed.tasks.len(),
+            interactive_excluded: observed.interactive_excluded,
+            unreadable: enrolled.len() - observed.tasks.len() - observed.interactive_excluded,
         };
         let mut readout = build_readout(&record, enrollment, &observed, metric, now)?;
         let facts = self.sqlite_store()?.list_invocation_accounting_facts(

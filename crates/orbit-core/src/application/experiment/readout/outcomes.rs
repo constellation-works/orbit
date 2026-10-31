@@ -19,7 +19,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
-use crate::application::agents::review_gate_verdicts;
+use crate::application::agents::{ExecutionMode, review_gate_verdicts, task_execution_modes};
 
 /// How long after landing a `regression_from` filing counts as an escape.
 pub(super) const REGRESSION_WINDOW_DAYS: i64 = 14;
@@ -220,6 +220,9 @@ pub(super) struct Observed {
     pub(super) run_digests: BTreeMap<String, BTreeSet<String>>,
     /// Landed tasks whose regression window is still open.
     pub(super) open_regression_windows: usize,
+    /// Assigned tasks worked in an interactive session rather than by a
+    /// job: not treated by any arm, so left out of every estimate.
+    pub(super) interactive_excluded: usize,
 }
 
 #[derive(Default)]
@@ -385,6 +388,7 @@ impl OrbitRuntime {
                 first_edit_incomplete: false,
                 run_digests: BTreeMap::new(),
                 open_regression_windows: 0,
+                interactive_excluded: 0,
             });
         }
         let since = created_at - READ_SLACK;
@@ -412,6 +416,20 @@ impl OrbitRuntime {
         let regressions = regressions(&all_tasks, &landed_at);
         let window = Duration::days(REGRESSION_WINDOW_DAYS);
         let mut open_regression_windows = 0;
+        // Only a job applies an arm's overlay, so a task worked in an
+        // interactive session was assigned but never treated.
+        let executed: Vec<(&Task, &[TaskHistoryEntry])> = tasks
+            .values()
+            .map(|task| {
+                let history = histories
+                    .get(task.id.as_str())
+                    .map(Vec::as_slice)
+                    .unwrap_or_default();
+                (*task, history)
+            })
+            .collect();
+        let modes = task_execution_modes(self, since, &executed, now);
+        let mut interactive_excluded = 0;
 
         let mut outcomes = Vec::with_capacity(enrolled.len());
         for row in enrolled {
@@ -420,6 +438,10 @@ impl OrbitRuntime {
                 continue;
             };
             let id = row.task_id.as_str();
+            if modes.get(id) == Some(&ExecutionMode::Interactive) {
+                interactive_excluded += 1;
+                continue;
+            }
             let terminal = task.status.is_terminal();
             let done = task.status == TaskStatus::Done;
             let settled = |value: Option<f64>| match (terminal, value) {
@@ -578,6 +600,7 @@ impl OrbitRuntime {
             first_edit_incomplete: first_edits.truncated,
             run_digests,
             open_regression_windows,
+            interactive_excluded,
         })
     }
 

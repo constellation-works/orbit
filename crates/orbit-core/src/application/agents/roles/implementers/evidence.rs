@@ -8,10 +8,10 @@ use super::performance::{
     Fleet, MIN_TIER_TASKS, TERMS, admitted_tags, compute_tallies, configured_type, path_prefixes,
     tier, work_by_row,
 };
-use crate::application::agents::AgentFacts;
 use crate::application::agents::attribution::{Charge, Credit};
 use crate::application::agents::facts::TaskFacts;
 use crate::application::agents::score::{Tally, number};
+use crate::application::agents::{AgentFacts, ExecutionScope};
 
 /// One row per implemented task and the row (crew, model) that worked it:
 /// the task's configured type, its tags as admitted, its context-file
@@ -24,8 +24,9 @@ pub(in crate::application::agents::roles) fn per_task_rows(
     facts: &AgentFacts,
     since: DateTime<Utc>,
     types: &[CrewPerformanceType],
+    execution: ExecutionScope,
 ) -> Vec<Value> {
-    let work = work_by_row(facts, since);
+    let work = work_by_row(facts, since, execution);
     let mut charges: BTreeMap<&str, Vec<&Charge>> = BTreeMap::new();
     let mut credits: BTreeMap<&str, Vec<&Credit>> = BTreeMap::new();
     for charge in &facts.charges {
@@ -105,8 +106,9 @@ pub(in crate::application::agents::roles) fn by_type_cells(
     facts: &AgentFacts,
     since: DateTime<Utc>,
     types: &[CrewPerformanceType],
+    execution: ExecutionScope,
 ) -> Vec<Value> {
-    let work = work_by_row(facts, since);
+    let work = work_by_row(facts, since, execution);
     let mut charges: BTreeMap<&str, Vec<&Charge>> = BTreeMap::new();
     let mut credits: BTreeMap<&str, Vec<&Credit>> = BTreeMap::new();
     for charge in &facts.charges {

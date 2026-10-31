@@ -20,7 +20,7 @@ use crate::application::agents::attribution::{Charge, Owner};
 use crate::application::agents::facts::{Problem, TaskFacts};
 use crate::application::agents::records::Cause;
 use crate::application::agents::score::{Occurrence, RowInput, Stat, Tally, Term, number};
-use crate::application::agents::{AgentFacts, AgentRole, MODEL_UNKNOWN};
+use crate::application::agents::{AgentFacts, AgentRole, ExecutionScope, MODEL_UNKNOWN};
 
 pub(super) const ROLE: RoleSpec = RoleSpec {
     unit: "owned tasks",
@@ -57,7 +57,12 @@ const TERMS: &[Term] = &[
 /// One row per orchestrator and recorded orchestrator model that owns a task
 /// created since `since`; a task without a recorded model counts under
 /// `model unknown`.
-fn rows(facts: &AgentFacts, since: DateTime<Utc>, _min_support: usize) -> Vec<RowInput<'_>> {
+fn rows(
+    facts: &AgentFacts,
+    since: DateTime<Utc>,
+    _min_support: usize,
+    _execution: ExecutionScope,
+) -> Vec<RowInput<'_>> {
     let mut owned: BTreeMap<(&str, &str), Vec<&TaskFacts>> = BTreeMap::new();
     for task in &facts.tasks {
         if let Some(name) = task.orchestrator.as_deref()

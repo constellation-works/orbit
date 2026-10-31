@@ -6,12 +6,14 @@ use serde_json::{Value, json};
 
 use super::facts::SCAN_DAYS;
 use super::{
-    AgentFacts, AgentQuery, COUNT_WINDOWS, DEFAULT_MIN_SUPPORT, DEFAULT_WINDOW, WINDOWS, WindowSpan,
+    AgentFacts, AgentQuery, COUNT_WINDOWS, DEFAULT_MIN_SUPPORT, DEFAULT_WINDOW, ExecutionScope,
+    WINDOWS, WindowSpan,
 };
 
 impl AgentQuery {
     /// Validate a selection. An omitted window is `30d` and an omitted
-    /// minimum support 10.
+    /// minimum support 10; implementer metrics count managed tasks until
+    /// [`Self::with_execution`] says otherwise.
     pub fn parse(window: Option<&str>, min_support: Option<usize>) -> Result<Self, OrbitError> {
         let window = window.unwrap_or(DEFAULT_WINDOW);
         let timed = WINDOWS
@@ -40,7 +42,30 @@ impl AgentQuery {
             window: served,
             span,
             min_support,
+            execution: ExecutionScope::Managed,
         })
+    }
+
+    /// Narrow implementer metrics to `managed` (the default when omitted),
+    /// `all` or `interactive` tasks.
+    pub fn with_execution(mut self, execution: Option<&str>) -> Result<Self, OrbitError> {
+        let Some(name) = execution.map(str::trim).filter(|name| !name.is_empty()) else {
+            return Ok(self);
+        };
+        self.execution = ExecutionScope::ALL
+            .into_iter()
+            .find(|scope| scope.as_str() == name)
+            .ok_or_else(|| {
+                OrbitError::InvalidInput(format!(
+                    "execution must be one of managed, all or interactive; got '{name}'"
+                ))
+            })?;
+        Ok(self)
+    }
+
+    /// Which executions implementer metrics count.
+    pub fn execution(&self) -> ExecutionScope {
+        self.execution
     }
 
     /// The window's start; it ends now. A count window starts at the newest
@@ -95,6 +120,8 @@ impl AgentQuery {
             },
             "since": since.to_rfc3339_opts(SecondsFormat::Secs, true),
             "min_support": self.min_support,
+            // Which derived executions implementer metrics count.
+            "execution": self.execution.as_str(),
             "computed_at": facts.computed_at.to_rfc3339_opts(SecondsFormat::Millis, true),
             "cache_ttl_seconds": cache_ttl.as_secs(),
             "tasks_scanned": facts.tasks_scanned,

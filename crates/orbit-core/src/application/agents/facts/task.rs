@@ -12,7 +12,9 @@ use super::super::records::{
     restart_cause, run_spans, spec_blocker_kind, spec_documents,
 };
 use super::super::roles::pilot_warnings::settle;
-use super::attempts::{assigned_runner, runner};
+use super::attempts::{
+    assigned_runner, execution_mode, final_attempt, landed_at, opened_by_claim, runner,
+};
 use super::model::{Attempt, FiledFinding, Problem, Record, Review, RunRecord, Runner, TaskFacts};
 use super::review::{failed_fix, settlement};
 use crate::application::task::{is_review_finding, latest_verification};
@@ -31,31 +33,25 @@ pub(super) fn task_facts(
     let spans = run_spans(history);
     let attempts: Vec<Attempt> = spans
         .iter()
-        .map(|span| Attempt {
-            start: span.start,
-            end: span.end,
-            runner: runner(runs, span.start, span.end.or(Some(now)))
-                .unwrap_or_else(|| assigned_runner(task, history, pulled, span.start)),
-            tags: tags_at(history, &task.tags, span.start),
+        .map(|span| {
+            let matched = runner(runs, span.start, span.end.or(Some(now)));
+            Attempt {
+                start: span.start,
+                end: span.end,
+                job: matched.is_some() || opened_by_claim(history, span.start),
+                runner: matched
+                    .unwrap_or_else(|| assigned_runner(task, history, pulled, span.start)),
+                tags: tags_at(history, &task.tags, span.start),
+            }
         })
         .collect();
     let landed = landed(task.status, history);
     let dropped = matches!(task.status, TaskStatus::Archived | TaskStatus::Rejected) && !landed;
-    let landed_at = landed
-        .then(|| {
-            history
-                .iter()
-                .rev()
-                .find(|entry| entry.to_status == Some(TaskStatus::Done))
-                .map(|entry| entry.at)
-        })
-        .flatten();
-    let final_attempt = landed
-        .then(|| match landed_at {
-            Some(at) => attempts.iter().rposition(|attempt| attempt.start <= at),
-            None => attempts.len().checked_sub(1),
-        })
-        .flatten();
+    let landed_at = landed.then(|| landed_at(history)).flatten();
+    let starts: Vec<_> = attempts.iter().map(|attempt| attempt.start).collect();
+    let final_attempt = final_attempt(landed, landed_at, &starts);
+    let jobs: Vec<bool> = attempts.iter().map(|attempt| attempt.job).collect();
+    let execution = execution_mode(task.status, history, &jobs, final_attempt, !runs.is_empty());
     let mut records = Vec::new();
 
     // Spec defects recorded on the task's own history. An edited task counts
@@ -271,6 +267,7 @@ pub(super) fn task_facts(
         dropped,
         attempts,
         final_attempt,
+        execution,
         landed_at,
         records,
         reviews,

@@ -25,6 +25,12 @@ Options:
           
           [default: 10]
 
+      --execution <EXECUTION>
+          Which implementer tasks to count: managed, all or interactive
+          
+          [default: managed]
+          [possible values: managed, all, interactive]
+
   -h, --help
           Print help (see a summary with '-h')
 
