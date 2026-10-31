@@ -137,24 +137,24 @@ def reject_user_specific_paths(value: Any, path: str) -> None:
             reject_user_specific_paths(item, f"{path}.{key}")
 
 
-def mcp_launch(payload: dict[str, Any] | None, label: str) -> tuple[str, list[str]] | None:
+def mcp_launch(payload: dict[str, Any] | None, label: str, name: str = "orbit") -> tuple[str, list[str]] | None:
     if payload is None:
         return None
     servers = payload.get("mcpServers")
     if not isinstance(servers, dict):
         errors.append(f"{label}.mcpServers must be an object")
         return None
-    orbit = servers.get("orbit")
-    if not isinstance(orbit, dict):
-        errors.append(f"{label}.mcpServers.orbit must be an object")
+    server = servers.get(name)
+    if not isinstance(server, dict):
+        errors.append(f"{label}.mcpServers.{name} must be an object")
         return None
-    command = orbit.get("command")
-    args = orbit.get("args")
+    command = server.get("command")
+    args = server.get("args", [])
     if not isinstance(command, str) or not command.strip():
-        errors.append(f"{label}.mcpServers.orbit.command must be a non-empty string")
+        errors.append(f"{label}.mcpServers.{name}.command must be a non-empty string")
         return None
     if not isinstance(args, list) or not all(isinstance(arg, str) and arg.strip() for arg in args):
-        errors.append(f"{label}.mcpServers.orbit.args must be an array of non-empty strings")
+        errors.append(f"{label}.mcpServers.{name}.args must be an array of non-empty strings")
         return None
     return command, args
 
@@ -303,6 +303,8 @@ if mcp is not None:
             if not isinstance(server, dict):
                 errors.append(f"plugin/mcp.json.mcpServers.{server_name} must be an object")
                 continue
+            if server_name != "orbit":
+                mcp_launch(mcp, "plugin/mcp.json", server_name)
             server_type = server.get("type")
             if server_type != "stdio":
                 errors.append(f"plugin/mcp.json.mcpServers.{server_name}.type must be 'stdio'")

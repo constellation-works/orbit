@@ -52,8 +52,8 @@ run_orbit init --non-interactive --machine-name visual-fixture \
 
 (
   cd "$work"
-  git init -q . 2>/dev/null || true
-  HOME="$home_dir" run_orbit workspace init >/dev/null 2>&1 || true
+  git init -q .
+  run_orbit workspace init >/dev/null
 )
 
 first_task=""
@@ -62,20 +62,40 @@ if [ "$seed_rows" = "1" ]; then
   rows="$(node -e '
     const fs = require("fs");
     const seed = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-    for (const task of seed.tasks ?? []) {
+    if (!Array.isArray(seed.tasks)) throw new Error("seed.tasks must be an array");
+    for (const task of seed.tasks) {
+      for (const value of [task.title, task.complexity ?? "low", task.status ?? "proposed"]) {
+        if (typeof value !== "string" || !value.trim() || /[\t\r\n]/.test(value)) {
+          throw new Error("seed task fields must be non-empty single-line strings");
+        }
+      }
       process.stdout.write([task.title, task.complexity ?? "low", task.status ?? "proposed"].join("\t") + "\n");
     }
   ' "$seed")"
   printf '%s\n' "$rows" | while IFS="$(printf '\t')" read -r title complexity status; do
     [ -n "$title" ] || continue
-    added="$(cd "$work" && run_orbit --json task add --title "$title" --complexity "$complexity" 2>/dev/null)" || continue
+    added="$(cd "$work" && run_orbit --json task add --title "$title" --complexity "$complexity")"
     id="$(printf '%s' "$added" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{process.stdout.write(JSON.parse(d).id??"")}catch{}})')"
-    [ -n "$id" ] || continue
+    if [ -z "$id" ]; then
+      echo "visual-fixture-server: task add returned no ID for $title" >&2
+      exit 1
+    fi
     printf '%s\n' "$id" >> "$scratch/task-ids"
     case "$status" in
       proposed) ;;
-      *) (cd "$work" && run_orbit task update --id "$id" --status "$status" >/dev/null 2>&1) || true ;;
+      # This operator override affects only the disposable fixture workspace.
+      *) (cd "$work" && run_orbit task update "$id" --status "$status" --force >/dev/null) ;;
     esac
+    actual="$(cd "$work" && run_orbit --json task show "$id")"
+    printf '%s' "$actual" | node -e '
+      let d = ""; process.stdin.on("data", c => d += c).on("end", () => {
+        const actual = JSON.parse(d).status;
+        if (actual !== process.argv[1]) {
+          console.error(`visual-fixture-server: ${process.argv[2]} expected ${process.argv[1]}, got ${actual}`);
+          process.exitCode = 1;
+        }
+      });
+    ' "$status" "$id"
   done
   first_task="$(head -n 1 "$scratch/task-ids" 2>/dev/null || true)"
 fi
