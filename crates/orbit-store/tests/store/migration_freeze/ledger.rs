@@ -506,6 +506,10 @@ fn legacy_db_adopts_versioned_ledger() {
                 "migration.v0077".to_string(),
                 "condition_triggers".to_string(),
             ),
+            (
+                "migration.v0078".to_string(),
+                "application_consent".to_string()
+            ),
         ]
     );
 }

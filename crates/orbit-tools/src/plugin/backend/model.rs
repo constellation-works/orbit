@@ -63,6 +63,7 @@ pub(super) const ORBIT_TOOLS_GLOBAL_WRITE_FILES: &[&str] = &[
 /// `context.secrets`.
 pub(super) const PLUGIN_GLOBAL_READ_DENY_DIRS: &[&str] = &[
     "state/plugin-callbacks",
+    "state/application-consents",
     "plugins/.grants",
     "state/plugins",
     PLUGIN_SECRET_STORE_DIR,

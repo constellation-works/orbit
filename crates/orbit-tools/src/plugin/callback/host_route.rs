@@ -26,9 +26,11 @@
 //! route proves only that the caller descends from this backend, which is
 //! what the credential descriptor already proves.
 //!
-//! **The route runs two tools and nothing else.** A confined child must not
-//! gain an unconfined host for its other callbacks, so the host refuses any
-//! tool outside [`HOST_ROUTED_CALLBACK_TOOLS`] before dispatch.
+//! **The route has a closed tool list.** Decision-channel callbacks and exact
+//! application completion callbacks run here. The completion operations also
+//! require application authority in the host-minted record. Every request is
+//! still held to the plugin allowlist and session ceiling; the runtime checks
+//! consent, input, digest, workspace, expiry and revocation before a mutation.
 
 use std::cell::RefCell;
 use std::path::Path;
@@ -46,10 +48,14 @@ use super::SessionRecord;
 /// confined child cannot do.
 pub const PLUGIN_HOST_ROUTE_FD: i32 = 4;
 
-/// The callbacks the host route runs on the host: the two that read the
-/// decision-channel key store. The list is closed.
-pub const HOST_ROUTED_CALLBACK_TOOLS: [&str; 2] =
-    ["orbit.decision.digest", "orbit.decision.submit"];
+/// Closed host-route list: decision-channel reads and separately consented
+/// application completion operations. The latter require an app-bound record.
+pub const HOST_ROUTED_CALLBACK_TOOLS: [&str; 4] = [
+    "orbit.decision.digest",
+    "orbit.decision.submit",
+    "orbit.task.update",
+    "orbit.decision.answer",
+];
 
 /// Whether `tool` is a callback the host route runs on the host.
 pub fn is_host_routed_callback_tool(tool: &str) -> bool {
@@ -346,10 +352,14 @@ mod unix {
             .and_then(|body| parse_request(&body))
         {
             Err(error) => unanswered_response(&error),
-            Ok((tool, _)) if !is_host_routed_callback_tool(&tool) => {
+            Ok((tool, _))
+                if !is_host_routed_callback_tool(&tool)
+                    || (matches!(tool.as_str(), "orbit.task.update" | "orbit.decision.answer")
+                        && record.application.is_none()) =>
+            {
                 unanswered_response(&OrbitError::PolicyDenied(format!(
-                    "the plugin host route runs only {}; '{tool}' runs in the backend's own \
-                     sandbox",
+                    "the plugin host route admits only {}; completion operations require an \
+                     application-bound host session; '{tool}' is refused",
                     HOST_ROUTED_CALLBACK_TOOLS.join(" and ")
                 )))
             }

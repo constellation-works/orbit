@@ -1,4 +1,5 @@
 pub mod agents;
+pub mod application;
 pub mod audit;
 pub mod auto_task;
 pub mod automation;
@@ -92,6 +93,7 @@ Environment:
   host         Register and inspect the remote Orbit hosts this machine reaches over SSH
   browser-kit  Install, verify and remove the headless browser kit workers check UIs with
   plugin       Install and manage Orbit plugins
+  application  Consent to scoped application calls and manage credentials
   migrate      Apply or inspect pending .orbit layout/schema migrations
   update       Install a published Orbit release and converge to it
 
@@ -163,6 +165,7 @@ pub enum Commands {
     #[command(name = "browser-kit")]
     BrowserKit(browser_kit::BrowserKitCommand),
     Plugin(plugin::PluginCommand),
+    Application(application::ApplicationCommand),
     Migrate(migrate::MigrateCommand),
     Update(update::UpdateCommand),
 

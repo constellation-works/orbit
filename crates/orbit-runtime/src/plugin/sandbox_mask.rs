@@ -37,12 +37,13 @@ const SENTINEL_TEXT: &str = "Plugin state, plugin secrets and decision-channel k
 
 /// The trees an agent sandbox masks: plugin state, the plugin secret store
 /// and the decision-channel store, whose registrations carry each channel's
-/// token key.
-pub fn plugin_masked_trees(global_root: &Path) -> [PathBuf; 3] {
+/// token key, plus the host-only application-consent witnesses.
+pub fn plugin_masked_trees(global_root: &Path) -> [PathBuf; 4] {
     [
         plugin_state_root(global_root),
         plugin_secret_store_dir(global_root),
         decision_channel_store_dir(global_root),
+        global_root.join("state/application-consents"),
     ]
 }
 

@@ -171,6 +171,10 @@ impl RuntimeKernel {
     ) -> Result<(), OrbitError> {
         self.check_tool_enabled(name)?;
         check_tool_active(self.tool_registry(), name)?;
+        let mut session = tool_context.session_context.clone();
+        if self.admit_application_call(name, input, &mut session, capability_enforcement)? {
+            return Ok(());
+        }
 
         // ORB-10453: the capability chokepoint. Every tool caller in the
         // workspace reaches the registry through this function, so this is the
@@ -230,7 +234,8 @@ impl RuntimeKernel {
     /// not exist (design `docs/design/plugins/1_scope.md` §4.1, §4.8). That
     /// only holds if inactive also means uncallable, which is here: the
     /// registry is the one place every workspace caller passes through.
-    fn check_tool_enabled(&self, name: &str) -> Result<(), OrbitError> {
+    /// Enforce a persisted tool disable before built-in application dispatch.
+    pub fn check_tool_enabled(&self, name: &str) -> Result<(), OrbitError> {
         if let Some(stored) = self.stores().tools().get_tool(name)?
             && !stored.enabled
         {

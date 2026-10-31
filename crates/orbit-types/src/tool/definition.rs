@@ -7,6 +7,9 @@ use serde_json::Value;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolSessionContext {
+    /// Verified by the host from a credential, never from wire metadata.
+    #[serde(skip)]
+    pub application: Option<Box<super::ApplicationInvocation>>,
     /// Runtime-owned attempt binding. Ordinary JSON session metadata cannot
     /// create authority; transport adapters propagate it explicitly.
     #[serde(skip)]
@@ -104,6 +107,7 @@ impl ToolSessionContext {
         machine_name: Option<String>,
     ) -> Self {
         Self {
+            application: None,
             workspace: None,
             worker_invocation: None,
             worker_host_call: false,
