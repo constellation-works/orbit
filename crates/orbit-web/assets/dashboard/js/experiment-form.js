@@ -3,9 +3,13 @@
 // /api/diagnostics/experiments (create) or patches
 // /api/diagnostics/experiments/{id} (edit); starting posts to
 // /api/diagnostics/experiments/{id}/start. Each route runs core's own create,
-// update and start, so the form adds no rule of its own: it collects the
-// definition, sends it and shows core's refusal next to the field the message
-// names. "Save and start" is two writes, so a refused start leaves the saved
+// update and start, so the form adds no rule of its own except one: it
+// collects the definition, sends it and shows core's refusal next to the
+// field the message names. The exception is clearing an optional draft
+// field (`primary_metric`, `min_sample`, `max_days`) the stored draft
+// already sets: the API treats an omitted field as unchanged, so the form
+// refuses the clear next to its field instead of closing as a saved edit.
+// "Save and start" is two writes, so a refused start leaves the saved
 // draft open in the form and says so.
 //
 // The form lives in its own host above the polled panel body. An unchanged
@@ -301,6 +305,10 @@ function definitionBody(state) {
     guardrails,
     mode: fields.mode,
   };
+  // Empty-value contract, shared by create, edit and Save and start: a blank
+  // optional field is omitted, and an omitted field leaves the stored draft
+  // unchanged. Blank is a value only when the stored draft has none; edit
+  // callers must refuse `clearedOptionalFields` before sending.
   if (fields.primary_metric) body.primary_metric = fields.primary_metric;
   for (const name of ["min_sample", "max_days"]) {
     if (fields[name].trim()) body[name] = count(fields[name]);
@@ -309,6 +317,35 @@ function definitionBody(state) {
   const name = fields.name.trim();
   if (state.mode === "create" || name !== state.original?.name) body.name = name;
   return body;
+}
+
+// The optional fields `definitionBody` omits when blank. In edit mode an
+// omitted field the stored draft already sets would silently keep its old
+// value, so callers refuse it before reporting a successful save. Create
+// mode has no stored draft, so nothing is ever cleared there.
+function clearedOptionalFields(original, body) {
+  if (!original) return [];
+  const cleared = [];
+  if (body.primary_metric === undefined && text(original.primary_metric).trim() !== "") cleared.push("primary_metric");
+  for (const name of ["min_sample", "max_days"]) {
+    if (body[name] === undefined && text(original[name]).trim() !== "") cleared.push(name);
+  }
+  return cleared;
+}
+
+const CLEAR_REFUSAL = {
+  primary_metric: "Clearing the primary metric is not supported: the draft keeps its saved `primary_metric`. Re-select a metric to change it.",
+  min_sample: "Clearing `min_sample` is not supported: the draft keeps its saved value. Enter a positive number to change it.",
+  max_days: "Clearing `max_days` is not supported: the draft keeps its saved value. Enter a positive number to change it.",
+};
+
+function showClearRefusal(state, cleared) {
+  state.errors = Object.fromEntries(cleared.map((field) => [field, CLEAR_REFUSAL[field]]));
+  state.status = "";
+  state.pending = false;
+  state.confirming = false;
+  renderForm();
+  $(HOST)?.querySelector(".exf-error")?.scrollIntoView?.({ block: "center" });
 }
 
 // ---- error placement ------------------------------------------------------------
@@ -374,6 +411,16 @@ async function submit(start) {
   // Save and start writes the definition its confirmation captured, not the
   // form as it stands when Confirm is pressed.
   const body = start ? state.confirming.body : definitionBody(state);
+  // Clearing an optional field the stored draft sets would silently keep its
+  // old value, so refuse it next to its field instead of saving. This one
+  // check covers ordinary Save and the captured Save-and-start body.
+  if (state.mode === "edit") {
+    const cleared = clearedOptionalFields(state.original, body);
+    if (cleared.length) {
+      showClearRefusal(state, cleared);
+      return;
+    }
+  }
   const visit = captureWorkspaceVisit();
   const current = () => form === state && visit.isCurrent();
   state.pending = true;
@@ -880,7 +927,18 @@ function actionsView(state) {
   const start = canStart ? el("button", { class: "action ship exf-save-start", type: "button", text: "Save and start" }) : null;
   if (start) {
     start.disabled = state.pending || !canSave;
-    start.addEventListener("click", () => { state.confirming = confirmationOf(state); rerender(); });
+    start.addEventListener("click", () => {
+      // Refuse a cleared optional field before confirming, so Save and start
+      // cannot capture a body that would silently keep its old value.
+      if (state.mode === "edit") {
+        const cleared = clearedOptionalFields(state.original, definitionBody(state));
+        if (cleared.length) {
+          showClearRefusal(state, cleared);
+          return;
+        }
+      }
+      state.confirming = confirmationOf(state); rerender();
+    });
   }
   const cancel = el("button", { class: "action cancel exf-cancel", type: "button", text: "Cancel" });
   cancel.disabled = state.pending;

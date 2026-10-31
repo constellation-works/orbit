@@ -417,7 +417,10 @@ conclude form described in
 [Use the dashboard](../dashboard/#experiments), and can define, edit, and
 start drafts there with **New experiment**, **Edit**, and **Start**. The
 dashboard applies the same checks as `orbit experiment create`, `update`,
-and `start`. See
+and `start`, except that clearing the primary metric, minimum sample, or
+maximum days on a draft that already sets them is refused in the form:
+an omitted field leaves the stored value unchanged, so the form keeps the
+edit open and names each cleared field instead of saving. See
 [Create, edit, and start an experiment](../dashboard/#create-edit-and-start-an-experiment).
 
 ## See also
