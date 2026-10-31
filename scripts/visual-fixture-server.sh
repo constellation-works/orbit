@@ -10,12 +10,15 @@
 # The caller owns the process group and stops it.
 #
 # Frozen server clock: when libfaketime's `faketime` is on PATH the
-# server runs under it pinned to the fixture instant — a test-only
-# seam of this script, never a shipped environment variable read by
-# the product. Without faketime the browser clock is still frozen by
-# the runner (Playwright) and every seeded timestamp is created in
-# one seeding pass; relative ages then drift with wall time, which
-# the results record as server_clock=faketime-absent.
+# server runs under it with its wall clock frozen at the fixture
+# instant (ORBIT_VISUAL_FROZEN_INSTANT, default 2026-01-01T12:00:00Z)
+# — a test-only seam of this script, never a shipped environment
+# variable read by the product. The monotonic clock is not faked, so
+# startup/readiness timers still advance in real time. Without
+# faketime the browser clock is still frozen by the runner
+# (Playwright) and every seeded timestamp is created in one seeding
+# pass; relative ages then drift with wall time, which the results
+# record as server_clock=faketime-absent.
 set -eu
 
 fixture="${1:-busy-workspace}"
@@ -102,8 +105,15 @@ fi
 
 if command -v faketime >/dev/null 2>&1; then
   server_clock="faketime"
-  set -- faketime -f "$scratch/faketime.rc" "$orbit" --root "$root" web serve --host 127.0.0.1 --port 0 --no-open
-  printf '@%s\n' "$(date -u -d "$frozen" +%s 2>/dev/null || echo 1767268800)" > "$scratch/faketime.rc"
+  # `faketime -f` passes its argument directly as FAKETIME; it does not
+  # read a file, so a pathname is rejected as a timestamp. The frozen
+  # (stopped-clock) form is the absolute "YYYY-MM-DD hh:mm:ss" with no
+  # "@" prefix ("@..." would start at the instant and keep running).
+  # Convert the ISO-8601 UTC instant to that form, pin TZ=UTC so the
+  # wall clock freezes at that UTC instant on any host, and leave
+  # CLOCK_MONOTONIC real so readiness/startup timers still advance.
+  frozen_ts="$(date -u -d "$frozen" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || printf '%s' "$frozen" | sed -e 's/T/ /' -e 's/Z$//')"
+  set -- env TZ=UTC FAKETIME_DONT_FAKE_MONOTONIC=1 faketime -f "$frozen_ts" "$orbit" --root "$root" web serve --host 127.0.0.1 --port 0 --no-open
 else
   server_clock="faketime-absent"
   set -- "$orbit" --root "$root" web serve --host 127.0.0.1 --port 0 --no-open
