@@ -368,7 +368,7 @@ plugin being removed.
 
 <a id="the-twenty-three-seeded-definitions"></a>
 
-## The 25 seeded definitions
+## The 26 seeded definitions
 
 `orbit workspace init` seeds the defaults selected by `seeding.auto_tasks`
 (`"all"` by default) from this catalog, disabled,
@@ -538,6 +538,24 @@ For ongoing selection and reconciliation, follow [Seeding policy](configuration.
   established, never both. It runs on the owner: preparation records a
   `required_machine` owner-evidence contract before admission, and a follower
   that still starts it stops with `wrong_host` without filing.
+- **`pilot-block-patterns`** (`medium`) — daily. The upstream counterpart of
+  `run-failure-patterns`: over the 14 days before scan start it reads task-pilot
+  warnings and holds and the blocks final recovery escalated. Its first input is
+  the disposition `escalation_triage_pipeline` recorded on each (the
+  `pilot_warning_triaged` and `blocked_task_triaged` markers and comments, whose
+  named human actions recur), then task history, `pilot_warnings` and run
+  records for what triage did not cover. It groups them by cause and routes each group that recurs (at least 3
+  occurrences across 2 tasks) to its source: the filer that writes unverifiable
+  tasks, the task-pilot activity for holds that proved harmless, the
+  final-recovery activity for blocks a cheap step later resolved,
+  `run-failure-patterns` for run failures (where it only makes sure a fix is
+  open), or a friction or setup chore for the host. It comments on open coverage
+  and files at most 5 `proposed` fix tasks per pass, tagged
+  `pilot-block-patterns` and `no-auto-approve`, compares each group with the
+  prior pass and files a regression when a done fix did not reduce its group.
+  It never acts on an individual blocked or held task; that stays with
+  `escalation_triage_pipeline`. Like `run-failure-patterns`, it runs on the owner
+  and stops with `wrong_host` on a follower.
 - **`architecture-audit`** (`hard`) — every 14 days. Audits the package and
   module dependency graph, built from the ecosystem's own metadata tool or
   an import scan (the method used is named in the run summary): cycles,

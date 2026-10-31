@@ -1,0 +1,198 @@
+schemaVersion: 1
+name: pilot-block-patterns
+description: Daily review of recurring task-pilot warnings and blocks left after final recovery; files one fix per cause at its source and checks whether earlier fixes reduced it
+enabled: false
+schedule:
+  cron: 40 6 * * *
+template:
+  title: Fix recurring pilot warnings and post-recovery blocks at their source
+  description: |-
+    Find why task-pilot keeps warning about or holding tasks, and why tasks stay blocked
+    after final recovery, then make sure each recurring cause has a fix in flight where the
+    cause starts. Success is the same cause recurring less pass over pass, not the number of
+    tasks filed. The durable outputs are the `pilot-block-report.json` artifact, the
+    `pilot-block-cursor.json` artifact, and filed or commented fix tasks. Narrative-only
+    output does not count.
+
+    This pass studies causes, not individual tasks. Resolving one blocked or held task is
+    `escalation_triage_pipeline`'s job: never edit, requeue, comment on or triage a blocked
+    or pilot-held task, even when its fix is obvious. Its occurrence is evidence for a group.
+
+    ## Rules and command surfaces
+
+    - **Owner host only.** Task history, pilot assessments and run records live on the
+      workspace owner. Preparation must record `required_machine` for this owner-evidence
+      contract before admission, naming the owning machine. First confirm this checkout is the
+      owner: `orbit run history --limit 50 --no-reconcile --json` must list runs executed on
+      this host. If it is a follower replica, stop: record `wrong_host` with the evidence in
+      the execution summary, attach no cursor, and file nothing.
+    - **Durable records only.** Read pilot and recovery outcomes from task records and run
+      records, never from an agent's chat output or a run's free-text log alone:
+      `orbit tool run orbit.task.list --input '{"status":["proposed","blocked"],"limit":10000,"model":"<agent-family>"}'`
+      (check `truncated`), `orbit tool run orbit.task.show --input '{"id":"<task-id>","model":"<agent-family>"}'`
+      (its `pilot_warnings`, `block`, `history`, `comments` and `relations`), and
+      `orbit run show <run-id> --no-reconcile --json`. Never drop `--no-reconcile`. Do not read
+      the Orbit database or state files directly.
+    - **Writes are limited to these calls.** `orbit.task.add` files a fix;
+      `orbit.task.update` adds a comment to an open fix task that covers a group and nothing
+      else (only `id`, `comment` and `model`; your own task's `execution_summary` excepted);
+      `orbit.friction.add` records a host or Orbit defect with no supported fix. Never change
+      another task's status, fields, crew or tags, never call `orbit.task.block_triage`,
+      `orbit.task.requeue`, a run resume, `--force` or any other operator-only tool, and never
+      complete, reject, archive or approve a task.
+    - Search with `orbit tool run orbit.search --input '{"query":"<one distinctive token>","all":true,"model":"<agent-family>"}'`:
+      one error code, guard name, finding kind or file name per query. A 0-hit multi-word
+      query proves nothing. Read the installed `orbit` skill's `references/task-authoring.md`
+      before filing.
+    - A pass that finds nothing new still succeeds, with the report and cursor stored. Don't
+      invent work.
+
+    ## 1. Windows
+
+    - **Cursor.** Find the newest completed prior pass with `orbit.task.list`
+      `{"status":["done"],"tag":["pilot-block-patterns","no-diff-expected"],"limit":1}` and
+      read its `pilot-block-cursor.json` and `pilot-block-report.json` with
+      `orbit.task.artifact.get`. Record the new cursor, the moment this scan starts, before
+      reading any task. A prior pass whose artifacts can't be read is reported, and this pass
+      compares against nothing.
+    - **Analysis window: the 14 days before scan start.** Report occurrences since the prior
+      cursor separately; they decide whether a cause is still firing.
+
+    ## 2. Collect
+
+    For every task with an event in the window, record each occurrence with its task id, time
+    and source record. Start from the records `escalation_triage_pipeline` already left: it
+    has read each held assessment and escalated block once, and its disposition is the
+    primary input. Read the raw pilot and recovery records for what it did not cover.
+
+    - **Escalation triage dispositions (primary).** Each `pilot_warning_triaged` and
+      `blocked_task_triaged` history marker in the window, with its comment
+      (`pilot_warning_triage disposition=... outcome=...` or
+      `blocked_task_triage disposition=... outcome=...`): the disposition (`human_only`,
+      `decision`, `mechanical`), the quoted holding findings or blocker, and the named
+      `human_action` or the proposal's options. The human actions recur nearly verbatim
+      across tasks (a run resume, a hosted CI rerun of failed jobs, a rebase onto a moved
+      base, an Orbit-defect friction), so the normalized human action is the first grouping
+      key. Never record a decision of your own on these tasks.
+    - **Pilot warnings and holds.** For held tasks without a triage marker, each applied pilot
+      assessment (`task_pilot_applied` in history) and the task's `pilot_warnings`: every
+      `utility_warnings` and `surface_warnings` finding with its `holds_promotion` flag. Note
+      how a hold was later resolved: an operator's `task-pilot-admission:` comment or
+      `pilot_admission_decided` decision, a material edit that re-piloted clean, promotion, or
+      rejection.
+    - **Blocks after final recovery.** For blocks without a triage marker, each
+      `final_recovery_decided` history entry and its `final_recovery` comment
+      (`outcome=escalated` and the diagnosis), and the block's run from the task's `block`
+      field. For every block, note what ended it: a later requeue that delivered, an operator
+      applying a proposed option, a human edit, a rejection, or nothing yet.
+
+    ## 3. Group by cause and route to the source
+
+    Normalize each occurrence to a signature: the triage disposition and normalized human
+    action when one was recorded, then the finding kind or guard name, the failing step, and
+    the cause in a few words, with ids, SHAs, paths, PR numbers, run ids, hosts and
+    timestamps stripped. A group recurs when it has at least 3 occurrences across 2 distinct
+    tasks in the window. Give every recurring group exactly one route:
+
+    - **Authoring:** criteria no lane can verify, missing or wrong `context_files`, a wrong
+      `os:` tag, a required contract or tool that does not exist. Find the filer: the
+      auto-task definition (its `auto-task:<name>` provenance tag), skill or routine that
+      wrote those tasks. The fix changes that filer.
+    - **Pilot misjudgment:** holds that later proved harmless, because the operator cleared
+      them, a re-pilot passed without a material change, or the task delivered as written.
+      The fix changes the task-pilot activity, citing each false hold.
+    - **Final recovery gives up too early:** escalated blocks that a later run, escalation
+      triage or a human resolved with a cheap mechanical step (a requeue, a refreshed base, a
+      rerun). The fix
+      changes the final-recovery activity, citing each block and what resolved it.
+    - **Orbit run failure:** the block's root cause is a failed or interrupted run.
+      `run-failure-patterns` owns these. Only make sure a fix is in flight there: search for
+      an open task tagged `run-failure-patterns` that covers the signature and comment on it
+      with this pass's occurrences. When none exists, file one bug tagged
+      `run-failure-patterns`, linked with `regression_from` to the landed task whose change
+      caused it when the evidence names one. Never file a failure-rate measurement task.
+    - **Host or setup:** missing tools, credentials, browser kit, sandbox or OS. Record it with
+      `orbit tool run orbit.friction.add` (search first), or file a setup chore for the
+      operator when it needs a configuration change.
+
+    Groups below the recurrence threshold are listed in the report as `counted`.
+
+    ## 4. Dedupe and file
+
+    For each routed group, search open tasks and tasks closed in the last 30 days for the
+    signature and inspect plausible hits:
+
+    - **Open task covers it:** comment once with this pass's counts (window occurrences, new
+      since cursor, representative task ids). Don't file.
+    - **Done task covers it:** go to section 5.
+    - **Rejected task decided not to fix it:** record the mapping and don't file.
+    - **Untracked:** verify the mechanism in this checkout (record `git rev-parse HEAD`): name
+      the file and the instruction or guard that produces the warning or the escalation, and
+      quote a few lines. File one task per group:
+
+      `orbit tool run orbit.task.add --input '{"title":"<fix at the source, naming the cause>","description":"<problem; evidence table: signature, occurrences, distinct tasks, first and last seen, up to three task ids; verified mechanism with file and quoted lines; route and why; proposed change; expected effect>","acceptance_criteria":["<a deterministic check in one leaf showing the source no longer produces the cause>"],"context_files":["file:<verified path of the filer, activity or code to change>"],"complexity":"<assessed, never xhard>","tags":["pilot-block-patterns","no-auto-approve","<authoring|pilot|recovery|run-failure-patterns|setup>"],"type":"bug","relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"<low|medium>","workspace":"<current workspace path>","model":"<agent-family>"}'`
+
+      Read each created task back and confirm the `spawned_from` edge.
+
+    File at most 5 new tasks per pass, ranked by occurrences per week they would prevent; list
+    the rest in the report as `deferred`.
+
+    ## 5. Check earlier fixes
+
+    For every task this auto-task filed (tag `pilot-block-patterns`) that reached done in the
+    last 30 days, compare its group's weekly occurrences before it landed with the weeks after,
+    using the prior report for the earlier counts. Report each as `effective`, `not effective`,
+    `too early` (under 3 days since landing) or `unknown` (the prior report can't be read). For
+    a `not effective` fix, file a regression task as in section 4, naming the done task with
+    `{"type":"regression_from","target":"<done task>","regression":{"nature":"incomplete","escape":"unclassified","severity":"<low|medium|high>"}}`
+    in `relations`. Compare every group with the prior pass too, and say whether it grew,
+    shrank, held or is new.
+
+    ## 6. Report and cursor
+
+    Write `.orbit/tmp/pilot-block-report.json` (`$ORBIT_SCRATCH_DIR`) and attach it as
+    `pilot-block-report.json` with `orbit.task.artifact.put`:
+
+    ```json
+    {"schema_version": 1, "scan_start": "<RFC 3339>", "head": "<sha>",
+     "groups": [{"signature": "...", "route": "authoring|pilot|recovery|run_failure|setup",
+                 "occurrences": 0, "new_since_cursor": 0, "previous": 0, "tasks": ["..."],
+                 "disposition": "filed:<id>|commented:<id>|rejected:<id>|regression:<id>|deferred|counted"}],
+     "fix_effectiveness": [{"task": "...", "landed": "...", "before_per_week": 0, "after_per_week": 0, "verdict": "..."}]}
+    ```
+
+    Write `{"schema_version":1,"cursor":"<scan start>"}` to `.orbit/tmp/pilot-block-cursor.json`
+    and attach it as `pilot-block-cursor.json`, on every completed owner pass including an
+    empty one.
+
+    Execution summary: the groups with route, counts and change against the prior pass; the
+    fix-effectiveness verdicts; filed, commented and deferred ids; every tool refusal
+    verbatim; and anything unreadable.
+  acceptance_criteria:
+  - Escalation-triage dispositions (`pilot_warning_triaged` and `blocked_task_triaged` markers and their comments) in the 14-day window were collected first, untriaged pilot holds and final-recovery escalations were added from task history, `pilot_warnings` and run records, and `pilot-block-report.json` lists every group with its signature, route, counts and disposition.
+  - Every recurring group (at least 3 occurrences across 2 tasks) has one route (authoring, pilot, recovery, run_failure or setup) and was commented on an open covering task, mapped to a rejected one, or filed, with at most 5 new tasks filed and the rest listed as deferred.
+  - Run-failure groups were only commented on an open `run-failure-patterns` task or filed as one tagged `run-failure-patterns`; no failure-rate measurement task was filed.
+  - No blocked or pilot-held task was edited, requeued, commented on or triaged; the only writes on other tasks were comments on open fix tasks covering a group.
+  - Every group carries its change against the prior pass, and every fix this auto-task filed that reached done in the last 30 days has an effectiveness verdict, with a regression task filed for each `not effective` fix.
+  - The pass ran on the owning machine and attached `pilot-block-cursor.json`, or stopped with `wrong_host` in the execution summary without filing and without attaching a cursor.
+  task_type: chore
+  tags:
+  - pilot-block-patterns
+  - no-diff-expected
+  required_tools:
+  - orbit.friction.add
+  - orbit.search
+  - orbit.task.add
+  - orbit.task.artifact.get
+  - orbit.task.artifact.put
+  - orbit.task.list
+  - orbit.task.show
+  - orbit.task.update
+  priority: medium
+  complexity: medium
+  status: backlog
+dedupe: skip_if_open
+created_by: system
+created_at: 2026-10-31T00:00:00Z
+updated_by: system
+updated_at: 2026-10-31T00:00:00Z
