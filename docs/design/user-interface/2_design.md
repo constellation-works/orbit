@@ -395,8 +395,10 @@ and cost, and a visible freshness label shared by its counts and figures
 and accessible text. A failed or missing estimate is one muted line; it does
 not delay the card or action readback.
 
-The footer links the scoped run, names the admission mode and offers **Stop**
-or **Send pending results**. Queued windows retain their own run, ceiling,
+The footer links the scoped run and names the admission mode. While a window
+is admitting, it offers **Stop**. When none is admitting, a replica checkout
+offers **Send pending results**; an owner checkout offers no stop or settle
+control. Queued windows retain their own run, ceiling,
 completion, crews, duration and start time, their missing-credential warnings,
 and a confirmed per-run Cancel that leaves the live window alone. That Cancel
 posts `queued_only: true`: a window that started after the card rendered is
