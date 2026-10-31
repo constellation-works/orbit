@@ -322,6 +322,15 @@ The binding (§2.1) is what makes a slow reply safe. Per gate, the request binds
 | `proposed_approval` | Task revision + `proposed` status | Status moved, or description/criteria changed since the digest rendered |
 | `review_approval` | Task revision + `review` status + candidate identity | Status moved, or a new candidate replaced the reviewed one |
 
+Core judges the binding, state, expiry and allowed answer on a fresh read of
+the task under its write lock, and applies the gate's effect and records
+`decision_answered` under that same lock. An edit that lands after an answer
+looked its request up, but before the answer applied, therefore refuses the
+answer as `request_superseded` with nothing applied; the token it carried is
+not consumed by that refusal, and presenting it again is refused the same way.
+A review approval's effects on other records (resolved frictions and tasks)
+run only after the lock is released.
+
 Every refusal writes nothing to the task beyond, where noted, a history marker, and
 produces a refusal reply mail (rate-limited per §8) so the human learns the answer
 did not land — silence after a decision mail is the failure mode this design most

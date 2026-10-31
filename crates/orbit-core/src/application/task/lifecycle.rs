@@ -188,30 +188,12 @@ pub(crate) fn ensure_status_change_allowed(
     }
 
     // Promotion is refused while the task is an unverified review finding,
-    // judged on the finding material this update leaves it with.
+    // judged on the finding material this update leaves it with. A caller
+    // that normalizes the edits afterwards judges them again as stored.
     if matches!(from, TaskStatus::Proposed | TaskStatus::Someday)
         && matches!(target, TaskStatus::Backlog | TaskStatus::InProgress)
     {
-        let mut promoted = task.clone();
-        if let Some(title) = &params.title {
-            promoted.title = title.clone();
-        }
-        if let Some(description) = &params.description {
-            promoted.description = description.clone();
-        }
-        if let Some(criteria) = &params.acceptance_criteria {
-            promoted.acceptance_criteria = criteria.clone();
-        }
-        if let Some(context_files) = &params.context_files {
-            promoted.context_files = context_files.clone();
-        }
-        if let Some(tags) = &params.tags {
-            promoted.tags = tags.clone();
-        }
-        if let Some(task_type) = params.task_type {
-            promoted.task_type = task_type;
-        }
-        runtime.ensure_finding_verified(&promoted)?;
+        runtime.ensure_promoted_finding_verified(task, params)?;
     }
 
     match target {

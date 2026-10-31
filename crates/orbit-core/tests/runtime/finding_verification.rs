@@ -20,6 +20,8 @@ use orbit_engine::{
     resolve_job_catalog_refs_for_execution,
 };
 use orbit_tools::ToolContext;
+use orbit_types::desktop::{DesktopTaskFields, DesktopTaskOperation, DesktopTaskRequest};
+use orbit_types::tool::{McpCapability, ToolSessionContext};
 use orbit_types::workflow::RoutineDefinition;
 use orbit_types::workflow::activity_job::{ActivityV2Spec, DeterministicSpec};
 use serde_json::{Value, json};
@@ -1465,6 +1467,175 @@ fn confirmation_is_fresh_for_promotion_admission_and_observation() {
     );
 }
 
+/// A start that promotes a proposed task through `orbit.task.update` is
+/// judged on the finding material its own edits leave: turning a chore into
+/// a review bug, or editing a confirmed finding, needs a fresh verdict before
+/// anything is written. Ordinary promotion judges tags as stored, so a
+/// differently spelled review tag is a finding too.
+fn a_guarded_start_judges_the_finding_material_it_leaves() {
+    let start = |fixture: &Fixture, task: &Task, edits: Value| {
+        let mut input = json!({
+            "id": task.id,
+            "status": "in-progress",
+            "plan": "1. Repair the reported defect.",
+        });
+        input
+            .as_object_mut()
+            .unwrap()
+            .extend(edits.as_object().unwrap().clone());
+        fixture.runtime.run_tool("orbit.task.update", input)
+    };
+    let untouched =
+        |fixture: &Fixture, task: &Task| {
+            let stored = fixture.runtime.get_task(&task.id).unwrap();
+            assert_eq!(stored.status, TaskStatus::Proposed, "{}", task.title);
+            assert_eq!(stored.task_type, task.task_type, "{}", task.title);
+            assert_eq!(stored.tags, task.tags, "{}", task.title);
+            assert_eq!(stored.description, task.description, "{}", task.title);
+            assert_eq!(stored.plan, task.plan, "{}", task.title);
+            let history = fixture.runtime.get_task_history(&task.id).unwrap();
+            assert!(
+                !history.iter().any(|entry| entry.to_status.is_some()
+                    && entry.to_status != Some(TaskStatus::Proposed)),
+                "{} moved: {history:?}",
+                task.title
+            );
+        };
+
+    let fixture = Fixture::new();
+    let chore = fixture.task(
+        "Chore promoted into a finding",
+        TaskComplexity::Medium,
+        TaskType::Chore,
+        &[],
+        None,
+    );
+    let refusal = start(
+        &fixture,
+        &chore,
+        json!({"type": "bug", "tags": ["code-review"]}),
+    )
+    .expect_err("a start cannot turn a chore into an unverified finding")
+    .to_string();
+    assert!(refusal.contains(JOB), "{refusal}");
+    untouched(&fixture, &chore);
+
+    let confirmed = fixture.finding("Confirmed then edited", TaskComplexity::Medium);
+    fixture.confirm(&confirmed);
+    let refusal = start(
+        &fixture,
+        &confirmed,
+        json!({"description": "A different claim made at start."}),
+    )
+    .expect_err("a start cannot reuse a verdict for replaced material")
+    .to_string();
+    assert!(refusal.contains(JOB), "{refusal}");
+    untouched(&fixture, &confirmed);
+
+    let spelled = fixture.task(
+        "Tag spelled differently",
+        TaskComplexity::Medium,
+        TaskType::Bug,
+        &[],
+        None,
+    );
+    let refusal = fixture
+        .runtime
+        .update_task_with_identity(
+            &spelled.id,
+            TaskUpdateParams {
+                status: Some(TaskStatus::Backlog),
+                tags: Some(vec![" Code-Review ".into()]),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .expect_err("a normalized review tag makes the promotion a finding's")
+        .to_string();
+    assert!(refusal.contains(JOB), "{refusal}");
+    untouched(&fixture, &spelled);
+
+    // A desktop edit promoting a confirmed someday finding is judged on the
+    // material it leaves too.
+    let shelved = fixture.task(
+        "Shelved finding",
+        TaskComplexity::Medium,
+        TaskType::Bug,
+        &["code-review"],
+        Some(TaskStatus::Someday),
+    );
+    fixture.confirm(&shelved);
+    let mut session = ToolSessionContext::default();
+    session
+        .effective_capabilities
+        .insert(McpCapability::Operator);
+    let revision = fixture
+        .runtime
+        .desktop_task_snapshot(&shelved.id, &session)
+        .unwrap()
+        .revision;
+    let refusal = fixture
+        .runtime
+        .desktop_task_write(
+            DesktopTaskRequest {
+                request_id: "promote-edited-finding".into(),
+                operation: DesktopTaskOperation::Edit {
+                    id: shelved.id.clone(),
+                    expected_revision: revision,
+                    fields: DesktopTaskFields {
+                        status: Some(TaskStatus::Backlog),
+                        description: Some("A different claim made on promotion.".into()),
+                        ..Default::default()
+                    },
+                },
+            },
+            None,
+            None,
+            &session,
+        )
+        .expect_err("a desktop promotion cannot reuse a verdict for replaced material")
+        .to_string();
+    assert!(refusal.contains(JOB), "{refusal}");
+    let stored = fixture.runtime.get_task(&shelved.id).unwrap();
+    assert_eq!(stored.status, TaskStatus::Someday);
+    assert_eq!(stored.description, shelved.description);
+
+    // The unchanged confirmed finding and a start that leaves a non-finding
+    // still start.
+    start(&fixture, &confirmed, json!({})).expect("a confirmed finding starts");
+    assert_eq!(fixture.status(&confirmed), TaskStatus::InProgress);
+    let plain = fixture.task(
+        "Plain chore",
+        TaskComplexity::Medium,
+        TaskType::Chore,
+        &[],
+        None,
+    );
+    start(&fixture, &plain, json!({"description": "Edited at start."}))
+        .expect("a non-finding starts");
+    assert_eq!(fixture.status(&plain), TaskStatus::InProgress);
+
+    // With the gate off, the same promotion starts as before.
+    let fixture = Fixture::with_review("");
+    let chore = fixture.task(
+        "Chore promoted without the gate",
+        TaskComplexity::Medium,
+        TaskType::Chore,
+        &[],
+        None,
+    );
+    start(
+        &fixture,
+        &chore,
+        json!({"type": "bug", "tags": ["code-review"]}),
+    )
+    .expect("the gate is off");
+    let stored = fixture.runtime.get_task(&chore.id).unwrap();
+    assert_eq!(stored.status, TaskStatus::InProgress);
+    assert_eq!(stored.task_type, TaskType::Bug);
+}
+
 fn legacy_confirmation_is_readable_but_cannot_authorize_promotion() {
     let fixture = Fixture::new();
     let task = fixture.finding("Legacy confirmation", TaskComplexity::Medium);
@@ -1742,7 +1913,8 @@ crate::scenario_table!(
     the_state_trigger_picks_up_only_unverified_review_findings,
     material_edits_supersede_prepared_verdicts,
     escalation_preserves_material_from_initial_preparation,
-    confirmation_is_fresh_for_promotion_admission_and_observation
+    confirmation_is_fresh_for_promotion_admission_and_observation,
+    a_guarded_start_judges_the_finding_material_it_leaves
 );
 
 crate::scenario_table!(

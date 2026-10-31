@@ -1,5 +1,12 @@
 use super::*;
 
+/// What an approval runs on other records once its task lock is released.
+#[must_use = "an approval's deferred effects must run after the caller's task lock"]
+pub(crate) struct DeferredApprovalEffects {
+    task: Task,
+    note: Option<String>,
+}
+
 impl OrbitRuntime {
     /// Move a task to backlog through the approval body when its current
     /// state is proposed, otherwise through the ordinary governed update.
@@ -102,6 +109,52 @@ impl OrbitRuntime {
         model: Option<String>,
         guard_run_ownership: bool,
     ) -> Result<Task, OrbitError> {
+        let (result, effects) = self.approve_task_deferring_effects(
+            id,
+            note,
+            comment,
+            agent,
+            model,
+            guard_run_ownership,
+        )?;
+        self.run_deferred_approval_effects(effects);
+        Ok(result)
+    }
+
+    /// The operator approval of [`Self::approve_task_guarding_run_ownership`]
+    /// without its effects on other records, for a caller that holds this
+    /// task's lock across the approval and must run them only after it
+    /// releases that lock (a decision answer). Cascading resolution touches
+    /// other tasks and frictions, so it never runs under this task's lock.
+    pub(crate) fn approve_task_guarded_deferring_effects(
+        &self,
+        id: &str,
+        note: Option<String>,
+        comment: Option<String>,
+    ) -> Result<(Task, DeferredApprovalEffects), OrbitError> {
+        self.approve_task_deferring_effects(id, note, comment, None, None, true)
+    }
+
+    /// Run the effects an approval deferred until its caller released the
+    /// task lock: resolves bookkeeping and PR closure for a review approval.
+    pub(crate) fn run_deferred_approval_effects(&self, effects: DeferredApprovalEffects) {
+        let DeferredApprovalEffects { task, note } = effects;
+        if task.status == TaskStatus::Done {
+            self.record_resolves_side_effects(TaskStatus::Review, &task);
+            // Approval to done only ever leaves `review`.
+            self.close_task_prs_after_transition(TaskStatus::Review, &task, note.as_deref());
+        }
+    }
+
+    fn approve_task_deferring_effects(
+        &self,
+        id: &str,
+        note: Option<String>,
+        comment: Option<String>,
+        agent: Option<String>,
+        model: Option<String>,
+        guard_run_ownership: bool,
+    ) -> Result<(Task, DeferredApprovalEffects), OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
         let note = note.map(|value| redact_all(&value));
         let comment = comment.map(|value| redact_all(&value));
@@ -198,14 +251,11 @@ impl OrbitRuntime {
         let result = result.ok_or_else(|| {
             OrbitError::Execution("task approve body did not run under the task lock".to_string())
         })?;
-
-        if result.status == TaskStatus::Done {
-            self.record_resolves_side_effects(TaskStatus::Review, &result);
-            // Approval to done only ever leaves `review`.
-            self.close_task_prs_after_transition(TaskStatus::Review, &result, note.as_deref());
-        }
-
-        Ok(result)
+        let effects = DeferredApprovalEffects {
+            task: result.clone(),
+            note,
+        };
+        Ok((result, effects))
     }
 
     /// Refuse a done transition whose unqualified `resolves` target lives in

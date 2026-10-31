@@ -90,6 +90,8 @@ pub use context_repair::{
     CONTEXT_REPAIR_SWEEP_STATUSES, ContextFileRestoration, ContextRepairCandidate,
 };
 pub use decision::DecisionRequestListing;
+#[cfg(feature = "test-support")]
+pub use decision::answer_checkpoint::with_decision_answer_checkpoint;
 pub(crate) use decision::decision_request_json;
 #[cfg(feature = "test-support")]
 pub use decision_channel::dkim::test_support::with_decision_dkim_resolver;

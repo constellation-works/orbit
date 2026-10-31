@@ -11,10 +11,12 @@
 //! and later the delegated channel that submits a human's answer to core.
 //! It refuses a stale answer (superseded, expired, or an answer outside
 //! the request's allowed set) with the design's named refusals and writes
-//! nothing. An allowed pilot answer that cannot resolve the current
-//! duplicate or already-landed hold is refused the same way, before any
-//! comment. Every other allowed answer lands through the human funnel
-//! (`update_task_as_human`, or `approve_task_screened` / `reject_task` for
+//! nothing. The request is judged on a fresh read under the task's write
+//! lock, which the gate's effect and the `decision_answered` record share,
+//! so a task edit cannot land between the check and the effect. An allowed
+//! pilot answer that cannot resolve the current duplicate or already-landed
+//! hold is refused the same way, before any comment. Every other allowed answer lands through the human funnel
+//! (`update_task_as_human`, or the guarded approval / `reject_task` for
 //! approvals) and only then records `decision_answered`, which is what
 //! makes the request read `answered`. A proposed approval is screened
 //! first (`ensure_proposal_admissible`): work a pilot hold or a missing
@@ -31,6 +33,7 @@ use serde_json::{Value, json};
 
 use super::TaskRecordUpdateParams;
 use super::params::TaskUpdateParams;
+use super::transitions::DeferredApprovalEffects;
 use crate::OrbitRuntime;
 use crate::application::task::{PilotAdmissionHold, TaskRecords, TriageTarget};
 
@@ -185,111 +188,94 @@ impl OrbitRuntime {
         provenance: Option<String>,
     ) -> Result<DecisionRequest, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
-        let request = self.get_decision_request(request_id)?.ok_or_else(|| {
+        let not_found = || {
             OrbitError::decision_refused(
                 DecisionRefusalCode::RequestNotFound,
                 format!("no decision request `{request_id}` in this workspace"),
             )
-        })?;
-        match request.state {
-            DecisionRequestState::Open => {}
-            DecisionRequestState::Expired => {
-                return Err(OrbitError::decision_refused(
-                    DecisionRefusalCode::RequestExpired,
-                    format!(
-                        "decision request `{request_id}` expired at {}; nothing was applied",
-                        request.expires_at.to_rfc3339()
-                    ),
-                ));
-            }
-            DecisionRequestState::Answered => {
-                let by = request
-                    .resolution
-                    .as_ref()
-                    .map_or("another answer", |resolution| {
-                        resolution.answered_by.as_str()
-                    });
-                return Err(OrbitError::decision_refused(
-                    DecisionRefusalCode::RequestSuperseded,
-                    format!(
-                        "decision request `{request_id}` was already answered by {by}; nothing was applied"
-                    ),
-                ));
-            }
-            DecisionRequestState::Superseded => {
-                return Err(OrbitError::decision_refused(
-                    DecisionRefusalCode::RequestSuperseded,
-                    format!(
-                        "decision request `{request_id}` no longer matches the hold on task {}; nothing was applied",
-                        request.task_id
-                    ),
-                ));
-            }
-        }
-        if !request.allows(answer_id) {
-            let allowed = request
-                .answers
-                .iter()
-                .map(|answer| answer.id.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            return Err(OrbitError::decision_refused(
-                DecisionRefusalCode::AnswerNotAllowed,
-                format!(
-                    "`{answer_id}` is not an allowed answer for decision request `{request_id}` (allowed: {allowed}); nothing was applied"
-                ),
-            ));
-        }
+        };
+        // The workspace scan only locates the request's task. Its state,
+        // binding, expiry and allowed answers are judged again below on a
+        // fresh read under that task's write lock, which the gate's effect
+        // and the `decision_answered` record share: a task edit that lands
+        // after this lookup supersedes the request before anything applies.
+        let task_id = self
+            .get_decision_request(request_id)?
+            .ok_or_else(not_found)?
+            .task_id;
+        #[cfg(feature = "test-support")]
+        answer_checkpoint::notify();
         let note = note
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty());
-        self.apply_decision_answer(
-            &request,
-            answer_id,
-            note.as_deref(),
-            &actor_label,
-            provenance.as_deref(),
-        )?;
+        let mut answered = None;
+        let mut deferred = None;
+        self.stores()
+            .tasks()
+            .with_task_write_lock(&task_id, &mut || {
+                let request = self
+                    .get_task_decision_requests(&task_id)?
+                    .into_iter()
+                    .find(|candidate| candidate.id == request_id)
+                    .ok_or_else(not_found)?;
+                ensure_request_answerable(&request, answer_id)?;
+                deferred = self.apply_decision_answer(
+                    &request,
+                    answer_id,
+                    note.as_deref(),
+                    &actor_label,
+                    provenance.as_deref(),
+                )?;
 
-        let now = chrono::Utc::now();
-        let resolution = DecisionResolution {
-            request_id: request.id.clone(),
-            answer_id: answer_id.to_string(),
-            answered_by: actor_label.clone(),
-            provenance: provenance.clone(),
-            note: note.clone(),
-            answered_at: now,
-        };
-        let answered = TaskHistoryEntry {
-            at: now,
-            by: actor_label.clone(),
-            event: DECISION_ANSWERED_EVENT.to_string(),
-            note: serde_json::to_string(&resolution).ok(),
-            from_status: None,
-            to_status: None,
-            operation_id: Some(request.id.clone()),
-            decision: None,
-        };
-        self.stores().task_records().update(
-            &request.task_id,
-            TaskRecordUpdateParams {
-                actor: actor_label,
-                append_history: vec![answered],
-                ..Default::default()
-            },
-        )?;
-        self.get_task_decision_requests(&request.task_id)?
-            .into_iter()
-            .find(|candidate| candidate.id == request.id)
-            .ok_or_else(|| {
-                OrbitError::Execution(format!(
-                    "decision request `{request_id}` vanished after its answer was applied"
-                ))
-            })
+                let now = chrono::Utc::now();
+                let resolution = DecisionResolution {
+                    request_id: request.id.clone(),
+                    answer_id: answer_id.to_string(),
+                    answered_by: actor_label.clone(),
+                    provenance: provenance.clone(),
+                    note: note.clone(),
+                    answered_at: now,
+                };
+                let entry = TaskHistoryEntry {
+                    at: now,
+                    by: actor_label.clone(),
+                    event: DECISION_ANSWERED_EVENT.to_string(),
+                    note: serde_json::to_string(&resolution).ok(),
+                    from_status: None,
+                    to_status: None,
+                    operation_id: Some(request.id.clone()),
+                    decision: None,
+                };
+                self.stores().task_records().update(
+                    &task_id,
+                    TaskRecordUpdateParams {
+                        actor: actor_label.clone(),
+                        append_history: vec![entry],
+                        ..Default::default()
+                    },
+                )?;
+                answered = self
+                    .get_task_decision_requests(&task_id)?
+                    .into_iter()
+                    .find(|candidate| candidate.id == request.id);
+                Ok(())
+            })?;
+        // A review approval's effects on other records run only once this
+        // task's lock is released.
+        if let Some(effects) = deferred {
+            self.run_deferred_approval_effects(effects);
+        }
+        answered.ok_or_else(|| {
+            OrbitError::Execution(format!(
+                "decision request `{request_id}` vanished after its answer was applied"
+            ))
+        })
     }
 
     /// The gate's own write for one allowed answer, as the human. The
-    /// caller has already refused every stale or disallowed answer.
+    /// caller holds the task's write lock and has already refused every
+    /// stale or disallowed answer. An approval returns the effects it
+    /// deferred until that lock is released.
     fn apply_decision_answer(
         &self,
         request: &DecisionRequest,
@@ -297,7 +283,7 @@ impl OrbitRuntime {
         note: Option<&str>,
         actor_label: &str,
         provenance: Option<&str>,
-    ) -> Result<(), OrbitError> {
+    ) -> Result<Option<DeferredApprovalEffects>, OrbitError> {
         let task_id = request.task_id.as_str();
         let via = provenance.unwrap_or("operator surface");
         let chosen = request
@@ -325,7 +311,7 @@ impl OrbitRuntime {
                         },
                         actor_label.to_string(),
                     )?;
-                    return Ok(());
+                    return Ok(None);
                 }
                 let edit = self.triage_option_edit(task_id, answer_id)?;
                 let consequence = format!(
@@ -346,7 +332,7 @@ impl OrbitRuntime {
                     TriageTarget::Description => params.description = Some(edit.replacement),
                 }
                 self.update_task_as_human(task_id, params, actor_label.to_string())?;
-                Ok(())
+                Ok(None)
             }
             DecisionGate::PilotAdmission => {
                 let (verdict, header) = match answer_id {
@@ -398,7 +384,7 @@ impl OrbitRuntime {
                     },
                     actor_label.to_string(),
                 )?;
-                Ok(())
+                Ok(None)
             }
             DecisionGate::ProposedApproval | DecisionGate::ReviewApproval => {
                 let comment = decision_comment(request, answer_id, chosen, via, note, "");
@@ -407,21 +393,19 @@ impl OrbitRuntime {
                         if request.gate == DecisionGate::ProposedApproval {
                             self.ensure_proposal_admissible(task_id)?;
                         }
-                        self.approve_task_screened(
+                        let (_, effects) = self.approve_task_guarded_deferring_effects(
                             task_id,
                             note.map(str::to_string),
                             Some(comment),
-                            None,
-                            None,
                         )?;
-                        Ok(())
+                        Ok(Some(effects))
                     }
                     "reject" => {
                         let reason = note.map(str::to_string).unwrap_or_else(|| {
                             format!("rejected via decision request {}", request.id)
                         });
                         self.reject_task(task_id, reason, Some(comment))?;
-                        Ok(())
+                        Ok(None)
                     }
                     other => Err(OrbitError::decision_refused(
                         DecisionRefusalCode::AnswerNotAllowed,
@@ -585,6 +569,63 @@ impl OrbitRuntime {
     }
 }
 
+/// Refuse an answer to `request` as it reads now: one that is not open
+/// (expired, answered or superseded) or whose answer it does not allow.
+/// Nothing is written.
+fn ensure_request_answerable(request: &DecisionRequest, answer_id: &str) -> Result<(), OrbitError> {
+    let request_id = request.id.as_str();
+    match request.state {
+        DecisionRequestState::Open => {}
+        DecisionRequestState::Expired => {
+            return Err(OrbitError::decision_refused(
+                DecisionRefusalCode::RequestExpired,
+                format!(
+                    "decision request `{request_id}` expired at {}; nothing was applied",
+                    request.expires_at.to_rfc3339()
+                ),
+            ));
+        }
+        DecisionRequestState::Answered => {
+            let by = request
+                .resolution
+                .as_ref()
+                .map_or("another answer", |resolution| {
+                    resolution.answered_by.as_str()
+                });
+            return Err(OrbitError::decision_refused(
+                DecisionRefusalCode::RequestSuperseded,
+                format!(
+                    "decision request `{request_id}` was already answered by {by}; nothing was applied"
+                ),
+            ));
+        }
+        DecisionRequestState::Superseded => {
+            return Err(OrbitError::decision_refused(
+                DecisionRefusalCode::RequestSuperseded,
+                format!(
+                    "decision request `{request_id}` no longer matches the hold on task {}; nothing was applied",
+                    request.task_id
+                ),
+            ));
+        }
+    }
+    if !request.allows(answer_id) {
+        let allowed = request
+            .answers
+            .iter()
+            .map(|answer| answer.id.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(OrbitError::decision_refused(
+            DecisionRefusalCode::AnswerNotAllowed,
+            format!(
+                "`{answer_id}` is not an allowed answer for decision request `{request_id}` (allowed: {allowed}); nothing was applied"
+            ),
+        ));
+    }
+    Ok(())
+}
+
 /// The hold classification a refusal names, in the vocabulary drain
 /// approval and admission already report.
 fn pilot_hold_classification(hold: &PilotAdmissionHold) -> &'static str {
@@ -630,4 +671,42 @@ fn decision_comment(
         comment.push_str(note);
     }
     comment
+}
+
+/// A deterministic interleaving at the answer path: a hook runs after the
+/// request lookup and before the task lock under which the answer is judged
+/// and applied, so a test can land a competing task write in between.
+#[cfg(feature = "test-support")]
+pub(crate) mod answer_checkpoint {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static HOOK: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+    }
+
+    /// Take the hook before running it, so a hook that answers again does
+    /// not run itself a second time.
+    pub(super) fn notify() {
+        let hook = HOOK.with(|slot| slot.borrow_mut().take());
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+
+    /// Run `operation` with `hook` called once, on this thread, between a
+    /// decision answer's request lookup and its locked apply.
+    pub fn with_decision_answer_checkpoint<T>(
+        hook: impl FnOnce() + 'static,
+        operation: impl FnOnce() -> T,
+    ) -> T {
+        struct Clear;
+        impl Drop for Clear {
+            fn drop(&mut self) {
+                HOOK.with(|slot| *slot.borrow_mut() = None);
+            }
+        }
+        HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+        let _clear = Clear;
+        operation()
+    }
 }

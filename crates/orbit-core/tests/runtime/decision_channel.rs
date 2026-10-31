@@ -1316,6 +1316,76 @@ fn an_approve_through_the_channel_lands_like_a_screened_approval() {
     assert_eq!(fx.status(&rejected), TaskStatus::Rejected);
 }
 
+/// A task edit that lands after an answer looked its request up, but before
+/// the answer applies, supersedes the request: the answer is refused with
+/// nothing applied, and an answer to the current request applies once.
+#[test]
+fn an_edit_between_an_answers_lookup_and_its_apply_supersedes_the_answer() {
+    let fx = registered_fixture();
+    let task = fx.proposed_task("Edited while answered");
+    fx.prepare_footprint(&task);
+    let stale = request_for(&fx.digest(Fixture::plugin_caller()).unwrap().raised, &task);
+    let comments = fx.comments(&task);
+
+    let editor = OrbitRuntime::from_roots(&fx.global, &fx.repo.join(".orbit")).unwrap();
+    let edited = task.clone();
+    let refused = orbit_core::test_support::with_decision_answer_checkpoint(
+        move || {
+            editor
+                .run_tool(
+                    "orbit.task.update",
+                    json!({
+                        "id": edited,
+                        "description": "A proposal rewritten while the answer was in flight.",
+                        "model": "codex",
+                    }),
+                )
+                .unwrap();
+        },
+        || fx.submit_minted(&stale, "approve"),
+    );
+    refusal(refused, "request_superseded");
+    let stored = fx.runtime.get_task(&task).unwrap();
+    assert_eq!(stored.status, TaskStatus::Proposed, "no approval applied");
+    assert_eq!(
+        stored.description, "A proposal rewritten while the answer was in flight.",
+        "only the competing edit landed"
+    );
+    assert_eq!(fx.comments(&task), comments, "no answer comment");
+    let history = fx.runtime.get_task_history(&task).unwrap();
+    assert!(
+        !history
+            .iter()
+            .any(|entry| entry.event == DECISION_ANSWERED_EVENT
+                || entry.event == "proposal_approved"),
+        "no answer or approval was recorded: {history:?}"
+    );
+    fx.assert_state(&task, &stale.id, DecisionRequestState::Superseded);
+
+    // The request for the current text applies exactly once, as the human.
+    let current = request_for(&fx.digest(Fixture::plugin_caller()).unwrap().raised, &task);
+    assert_ne!(current.id, stale.id);
+    let answered = fx.submit_minted(&current, "approve").unwrap();
+    assert_eq!(answered.state, DecisionRequestState::Answered);
+    let resolution = answered.resolution.unwrap();
+    assert_eq!(resolution.answered_by, HUMAN);
+    assert!(
+        resolution
+            .provenance
+            .as_deref()
+            .is_some_and(|provenance| provenance.starts_with("decision-channel email")),
+        "{resolution:?}"
+    );
+    assert_eq!(fx.status(&task), TaskStatus::Backlog);
+    let history = fx.runtime.get_task_history(&task).unwrap();
+    let answers = history
+        .iter()
+        .filter(|entry| entry.event == DECISION_ANSWERED_EVENT)
+        .collect::<Vec<_>>();
+    assert_eq!(answers.len(), 1, "{history:?}");
+    assert_eq!(answers[0].by, HUMAN);
+}
+
 #[test]
 fn a_digest_approve_is_refused_while_the_pilot_holds_or_no_footprint_is_prepared() {
     let fx = registered_fixture();

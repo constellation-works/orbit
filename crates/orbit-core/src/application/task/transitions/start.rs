@@ -324,10 +324,6 @@ impl OrbitRuntime {
                     )));
                 }
             }
-            // Starting a proposed or someday task promotes it.
-            if matches!(task.status, TaskStatus::Proposed | TaskStatus::Someday) {
-                self.ensure_finding_verified(&task)?;
-            }
             let mut start_edits = start_body_field_edits(field_edits.clone(), plan.clone());
             // A start accepts the same caller-supplied artifacts as an ordinary
             // update. Admit the whole batch before approval or record writes.
@@ -349,6 +345,13 @@ impl OrbitRuntime {
             let crew_source = validated.crew_source;
             let crew_redraw_history = validated.crew_redraw_history;
             let start_edits = validated.params;
+            // Starting a proposed or someday task promotes it, so it is judged
+            // like an ordinary promotion: on the finding material the start's
+            // normalized edits leave, with the stored status kept, before
+            // approval, history or field writes.
+            if matches!(task.status, TaskStatus::Proposed | TaskStatus::Someday) {
+                self.ensure_promoted_finding_verified(&task, &start_edits)?;
+            }
             let resolved_crew_override = if start_edits.crew.is_some() {
                 start_edits.crew.clone().flatten()
             } else {

@@ -25,4 +25,5 @@ mod reject;
 mod requeue;
 mod start;
 
+pub(crate) use approve::DeferredApprovalEffects;
 pub(crate) use requeue::INFRA_BLOCK_CLEARED_EVENT;
