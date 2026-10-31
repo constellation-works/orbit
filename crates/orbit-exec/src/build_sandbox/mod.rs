@@ -10,8 +10,9 @@
 //! - **Linux** (`linux-bwrap-build-v1`): Bubblewrap with a constructed root,
 //!   every namespace unshared, a fresh `/proc` and a minimal `/dev`. The
 //!   `build` phase has no network namespace to speak of; `fetch` shares the
-//!   host network under a Landlock ruleset that allows only outbound TCP to
-//!   port 443.
+//!   host network under a Landlock ruleset that permits TCP connects only to
+//!   port 443 (including loopback), denies TCP binds, and leaves UDP (DNS
+//!   included) unrestricted.
 //! - **macOS** (`macos-sandbox-build-v1`): a deny-default SBPL profile with
 //!   no network. macOS runs no `fetch` phase ([`BUILD_FETCH_PHASE_SUPPORTED`]).
 //!
