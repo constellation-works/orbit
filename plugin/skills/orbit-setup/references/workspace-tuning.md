@@ -314,6 +314,61 @@ because review reruns checks. Pair a pre-landing layer with
 `review.baseline_commands` (section 2) and a `pre_landing_review` pool
 (section 6).
 
+### Selective pre-landing review: `review.selective_before_landing`
+
+Unconditional pre-landing review reviews every delivery. Selective review
+reviews only the candidates that look risky, while the rest land on hosted
+checks alone. Use it when most deliveries are routine but a few areas or
+large, risky changes still deserve a reviewer before landing.
+
+- **What it is.** Each candidate is scanned against two predicates combined
+  with OR: a risk predicate (`risk_threshold`) that selects when the existing
+  task-riskiness estimate for the pinned candidate is strictly greater than
+  the threshold, and a path predicate (`paths`) of repository-relative globs
+  matched against both old and new names of the complete pinned diff. When
+  the risk predicate is configured but no usable estimate exists,
+  `unknown_risk` decides (`review` selects, `skip` does not).
+- **Modes (`mode`, default `off`).** `off` performs no selective scan.
+  `observe` records what would require review on a host-authored
+  `review-selection.json` receipt without invoking a reviewer or changing
+  delivery. `enforce` runs the existing before-landing reviewer alongside
+  hosted CI for each selected candidate; unselected candidates proceed
+  without a reviewer. A selected enforced candidate runs even when it
+  carries a review-skip tag. Neither observations nor skips count as a
+  completed review.
+- **Prerequisites.** Selective review needs `review.timing = "off"`: it is
+  one pre-landing layer, not a second one, so an unconditional layer refuses
+  the combination. It needs at least one predicate (a `risk_threshold`, a
+  non-empty `paths`, or both). Enforcement additionally needs a pre-landing
+  reviewer crew and the PR route; observation needs the PR route but no crew.
+- **How to set it.** Start in `observe`, read selection volume from the
+  receipts, then switch only `mode` to `enforce` for future admissions:
+
+```toml
+[review]
+timing = "off"
+
+[review.selective_before_landing]
+mode = "observe"
+risk_threshold = 0.40
+paths = ["hosting-workflows/**"]
+unknown_risk = "review"
+```
+
+  A path-only policy omits `risk_threshold` (no risk model is built); a
+  risk-only policy leaves `paths` empty. A stated `paths` list replaces the
+  lower layer's list.
+
+- **How to verify it.** `orbit config show` (and `--all` / `--json`) must
+  load without error and show each new value with source `workspace`; the
+  selective lines name the mode, the predicates, and, for enforcement, the
+  effective reviewer pool. In `observe`, inspect the `review-selection.json`
+  receipts for selection volume per predicate, unknown counts, and scan gaps
+  before deciding on `enforce`. As with any pre-landing layer, pair it with
+  `review.baseline_commands` (section 2) and a `pre_landing_review` pool
+  (section 6), and keep `review.minutes` above the time the required list
+  takes.
+
 ## 8. Analytics classification
 
 `workflow.test_paths` and `workflow.non_code_paths` class landed lines as
