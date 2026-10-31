@@ -163,23 +163,24 @@ Tests assert what the code guarantees (parses, required fields present, ships di
 
 ## Admission fixture construction
 
-The cancellation and claimed-recovery fixtures share the test-only
-`application::test_support::{admission_request, admission_receipt}` constructors.
-`admission_request` lives in `crates/orbit-core/tests/support/admission.rs`, which
-`lib.rs` and the `runtime` integration binary both include with `#[path]`, because
-an integration test cannot import a `cfg(test)` library helper. The same file holds
-`admission_ship_contract` and `admission_review_contract`; the distributed-drain
-review fixtures set `before_pr`, `before_landing`, `review`, `crew` and the
-captured checks with struct update syntax. A minimal `TaskCreateParams` comes from
+The runtime distributed-admission fixtures use a test-only
+`admission_test_support` module shared with orbit-core unit tests. Its
+`admission_request`, `admission_ship_contract` and `admission_review_contract`
+constructors live in `crates/orbit-core/tests/support/admission.rs`; `lib.rs`
+and `tests/runtime/main.rs` include that file with `#[path]`, because an
+integration test cannot import a `cfg(test)` library helper. The request
+fixture deserializes required wire fields and lets serde default unrelated
+optional capability and evidence metadata. Distributed-drain review fixtures
+set `before_pr`, `before_landing`, `review`, `crew` and captured checks with
+struct update syntax. A minimal `TaskCreateParams` comes from
 `tests/support/task_params.rs` the same way (`task_create_params(title,
 description, status)`), with the scenario's context files, complexity and crew set
 by struct update.
-These deserialize the required wire fields and use the contract's serde defaults
-for unrelated optional capability and evidence metadata. The request helper uses
-the fixture caller version and current protocol schema; callers explicitly set
-`caller_before_pr` and `review_gate` with struct update syntax. Keep request/run
-identity, the ship contract, claim identity and phase, task, lineage and local
-admission transitions at the scenario call site.
+The request helper uses the fixture caller version and current protocol schema.
+Call sites may override caller metadata and provide `caller_before_pr` and
+`review_gate` as needed. Keep request/run identity, the ship contract, claim
+identity and phase, task, lineage and local admission transitions at the
+scenario call site.
 
 An additive optional wire field with a neutral serde default should require no
 edits to these call sites or helpers. A scenario exercising that field must set
