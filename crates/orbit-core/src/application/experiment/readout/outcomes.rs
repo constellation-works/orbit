@@ -679,6 +679,11 @@ impl OrbitRuntime {
 
     /// Analysed-task ids with at least one explorer-delegation tool call on
     /// an implement invocation at or after that task's assignment.
+    ///
+    /// Each task is read on its own: the store applies the `task_id` filter
+    /// before its newest-first limit, so unrelated workspace invocations,
+    /// however many and however new, cannot evict an enrolled task's
+    /// recorded call the way one workspace-wide scan could [ORB-20573].
     fn tasks_with_explorer_call(
         &self,
         ids: &BTreeSet<String>,
@@ -686,27 +691,30 @@ impl OrbitRuntime {
         since: DateTime<Utc>,
     ) -> Result<BTreeSet<String>, OrbitError> {
         let mut found = BTreeSet::new();
-        for activity in IMPLEMENT_INVOCATION_IDS {
-            let records = self.workspace_invocation_records(InvocationQuery {
-                since: Some(since),
-                activity_id: Some((*activity).to_string()),
-                limit: INVOCATION_LIMIT,
-                ..Default::default()
-            })?;
-            for record in records {
-                if !record
-                    .tool_calls
-                    .iter()
-                    .any(|call| is_explorer_delegation(&call.tool_name))
-                {
-                    continue;
+        for id in ids {
+            let Some(assigned) = assigned_at.get(id) else {
+                continue;
+            };
+            for activity in IMPLEMENT_INVOCATION_IDS {
+                if found.contains(id) {
+                    break;
                 }
-                for id in record.task_ids.iter().filter(|id| ids.contains(*id)) {
-                    let Some(assigned) = assigned_at.get(id) else {
-                        continue;
-                    };
-                    if record.ts >= *assigned {
+                let records = self.workspace_invocation_records(InvocationQuery {
+                    since: Some(since),
+                    activity_id: Some((*activity).to_string()),
+                    task_id: Some(id.clone()),
+                    limit: INVOCATION_LIMIT,
+                    ..Default::default()
+                })?;
+                for record in records {
+                    if record.ts >= *assigned
+                        && record
+                            .tool_calls
+                            .iter()
+                            .any(|call| is_explorer_delegation(&call.tool_name))
+                    {
                         found.insert(id.clone());
+                        break;
                     }
                 }
             }
