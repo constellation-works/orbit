@@ -37,6 +37,35 @@ pub struct V2AuditEventFilter {
     pub event_ids: Vec<String>,
 }
 
+/// Which rows of a bounded forward scan need their payload text.
+///
+/// The scan itself stays a raw-row window. Payload bytes are read only for
+/// rows the caller cannot reject from `event_type`.
+#[derive(Debug, Clone, Copy)]
+pub struct V2AuditKindForwardQuery<'a> {
+    pub workspace_id: &'a str,
+    pub run_id: &'a str,
+    pub source: &'a str,
+    /// `event_type` of the requested body, when this crate writes that body.
+    /// `None` reads every payload in the window.
+    pub canonical_event_type: Option<&'a str>,
+    /// `event_type` values this crate writes. A different known value cannot
+    /// be the requested body, so its payload stays unread. Empty disables
+    /// that rejection and reads every payload in the window.
+    pub known_event_types: &'a [&'a str],
+    /// Raw rows, oldest first, that bound the scan. The next row is reported
+    /// and not returned.
+    pub scan_limit: usize,
+}
+
+/// Payload text for one bounded kind-forward scan, oldest first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V2AuditKindForwardPayloads {
+    pub payloads: Vec<String>,
+    /// True when another raw row exists after [`V2AuditKindForwardQuery::scan_limit`].
+    pub past_scan_limit: bool,
+}
+
 /// Filtered total and one chronological tail page from a single read snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct V2AuditEventTailPage {

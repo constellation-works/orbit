@@ -20,7 +20,11 @@
 //!   are dropped; a payload without an `event_id` is still returned.
 
 use orbit_common::OrbitError;
+use orbit_store::contracts::{V2AuditKindForwardPayloads, V2AuditKindForwardQuery};
 use orbit_types::workflow::JobRun;
+use orbit_types::workflow::activity_job::audit_envelope::{
+    V2_AUDIT_BODY_KIND_EVENT_TYPES, event_type_for_body_kind,
+};
 use serde_json::Value;
 
 use crate::RuntimeKernel;
@@ -50,7 +54,8 @@ pub struct RunEventsSelection<'a> {
 pub enum RunEventsPage<'a> {
     /// Read forward from the run's first event. Without `kind` it is a plain
     /// window; with an exact `body_kind` the match is made inside the payload
-    /// under [`RUN_EVENTS_MAX_SCAN_ROWS`].
+    /// under [`RUN_EVENTS_MAX_SCAN_ROWS`]. Rows whose `event_type` is a
+    /// different kind this crate writes are not read as payloads.
     Forward {
         kind: Option<&'a str>,
         offset: usize,
@@ -145,37 +150,64 @@ impl RuntimeKernel {
         offset: usize,
         limit: usize,
     ) -> Result<RunEventsPageResult, OrbitError> {
-        // Without a kind filter the page is a plain SQL window; `body_kind`
+        // Without a kind filter the page is a plain SQL window. `body_kind`
         // lives inside the payload, so a filtered page scans under a row
-        // budget instead.
-        let (sql_offset, sql_limit, skip) = match kind {
-            None => (offset, limit, 0),
-            Some(_) => (0, RUN_EVENTS_MAX_SCAN_ROWS + 1, offset),
-        };
+        // budget and reads payload text only for rows the event_type column
+        // cannot reject.
+        if let Some(kind) = kind {
+            return self.forward_kind_filtered_run_events(run_id, kind, offset, limit);
+        }
         let rows = self.list_v2_audit_events(V2AuditEventFilter {
             workspace_id: String::new(),
             run_id: Some(run_id.to_string()),
             source: Some(RUN_EVENTS_SOURCE.to_string()),
-            limit: Some(sql_limit),
-            offset: Some(sql_offset),
+            limit: Some(limit),
+            offset: Some(offset),
             oldest_first: true,
             ..Default::default()
         })?;
-        let budget_exceeded = kind.is_some() && rows.len() > RUN_EVENTS_MAX_SCAN_ROWS;
+        let page = rows
+            .into_iter()
+            .filter_map(|row| serde_json::from_str::<Value>(&row.payload_json).ok())
+            .collect();
+        Ok(RunEventsPageResult::Forward(page))
+    }
+
+    fn forward_kind_filtered_run_events(
+        &self,
+        run_id: &str,
+        kind: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<RunEventsPageResult, OrbitError> {
+        let known_event_types: Vec<&str> = V2_AUDIT_BODY_KIND_EVENT_TYPES
+            .iter()
+            .map(|(_, event_type)| *event_type)
+            .collect();
+        let V2AuditKindForwardPayloads {
+            payloads,
+            past_scan_limit,
+        } = self.v2_audit_store()?.list_v2_audit_kind_forward_payloads(
+            &V2AuditKindForwardQuery {
+                workspace_id: &self.workspace_id()?,
+                run_id,
+                source: RUN_EVENTS_SOURCE,
+                canonical_event_type: event_type_for_body_kind(kind),
+                known_event_types: &known_event_types,
+                scan_limit: RUN_EVENTS_MAX_SCAN_ROWS,
+            },
+        )?;
         let mut page: Vec<Value> = Vec::with_capacity(RUN_EVENTS_PAGE_CAPACITY_HINT);
         let mut matched: usize = 0;
-
-        for row in rows.into_iter().take(RUN_EVENTS_MAX_SCAN_ROWS) {
-            let Ok(value) = serde_json::from_str::<Value>(&row.payload_json) else {
+        for payload in payloads {
+            let Ok(value) = serde_json::from_str::<Value>(&payload) else {
                 continue;
             };
-            if let Some(needle) = kind {
-                let body_kind = value.get("body_kind").and_then(Value::as_str).unwrap_or("");
-                if body_kind != needle {
-                    continue;
-                }
+            let body_kind = value.get("body_kind").and_then(Value::as_str).unwrap_or("");
+            if body_kind != kind {
+                continue;
             }
-            if matched < skip {
+            if matched < offset {
                 matched = matched.saturating_add(1);
                 continue;
             }
@@ -185,8 +217,7 @@ impl RuntimeKernel {
                 break;
             }
         }
-
-        if budget_exceeded && page.len() < limit {
+        if past_scan_limit && page.len() < limit {
             return Ok(RunEventsPageResult::ScanBudgetExceeded);
         }
         Ok(RunEventsPageResult::Forward(page))
