@@ -425,7 +425,7 @@ pub(super) fn backlog_snapshot_in_mode(
         if allowlist.is_none() && crew_unset.is_empty() {
             return true;
         }
-        let resolution = runtime.auto_task_crew_candidates(task, pools, None);
+        let resolution = runtime.auto_task_crew_candidates(task, pools, None, allowlist);
         if let Ok((crews, _)) = &resolution {
             let candidates = crews
                 .iter()

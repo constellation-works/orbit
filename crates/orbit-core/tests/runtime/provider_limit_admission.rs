@@ -954,6 +954,70 @@ fn muse_windows_gate_admission_and_remain_visible_with_gating_off() {
     );
 }
 
+// A creation-time purpose draw excluded by a later drain allowlist must be
+// redrawn from that purpose pool, while explicit and disjoint crews wait.
+fn allowlist_redraws_a_purpose_assignment() {
+    substitute_worker();
+    let config =
+        |pool: &str| purpose_limit_config(pool, "").replace("baseline_red_repair =", "review =");
+    let fx = Fixture::new(&config(r#"["opus"]"#));
+    let task = fx
+        .runtime()
+        .add_task(TaskAddParams {
+            title: "Review fixture".into(),
+            description: "Review a delivery.".into(),
+            acceptance_criteria: vec!["Reviewed.".into()],
+            plan: "Review.".into(),
+            complexity: TaskComplexity::Hard,
+            context_files: vec!["dir:.".into()],
+            task_type: Some(orbit_core::TaskType::Chore),
+            status: Some(TaskStatus::Backlog),
+            crew: Some("opus".into()),
+            crew_source: Some("workflow.purpose_crews.review".into()),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(task.crew.as_deref(), Some("opus"));
+    assert_eq!(
+        task.crew_source.as_deref(),
+        Some("workflow.purpose_crews.review")
+    );
+    let explicit = fx.filed_task(
+        Some("opus"),
+        &["crew-purpose:review"],
+        "file:explicit-review.txt",
+    );
+    fx.configure(&config(r#"["opus:1", "sol:3", "luna:1"]"#));
+    assert_eq!(
+        fx.readiness_allowing(&task.id, &["sol", "luna"])["eligible"],
+        true
+    );
+    assert_eq!(
+        fx.readiness_allowing(&explicit.id, &["sol"])["reason"],
+        "crew_not_allowed"
+    );
+    assert_eq!(
+        fx.readiness_allowing(&task.id, &["flash"])["reason"],
+        "crew_not_allowed"
+    );
+    let admitted =
+        fx.replay_admission(json!({"task_ids": [task.id], "allowed_crews": ["sol", "luna"]}));
+    assert!(
+        admitted["crew"] == "sol" || admitted["crew"] == "luna",
+        "{admitted}"
+    );
+    assert_eq!(
+        admitted["crew_selection"]["eligible_pool"],
+        json!([{"name":"luna","weight":1}, {"name":"sol","weight":3}])
+    );
+    let updated = fx.runtime().get_task(&task.id).unwrap();
+    assert_eq!(updated.crew.as_deref(), admitted["crew"].as_str());
+    assert_eq!(
+        updated.crew_source.as_deref(),
+        Some("workflow.purpose_crews.review")
+    );
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     a_task_waits_on_an_exhausted_provider_until_the_reset_scenarios,
@@ -964,6 +1028,7 @@ crate::scenario_table!(
     an_off_override_leaves_an_exhausted_provider_eligible,
     muse_windows_gate_admission_and_remain_visible_with_gating_off,
     a_recorded_antigravity_quota_keeps_low_complexity_work_off_its_crew_until_the_reset,
+    allowlist_redraws_a_purpose_assignment,
     a_purpose_assignment_redraws_within_its_pool_when_its_provider_is_limited,
     an_auto_task_explicit_crew_is_reassigned_when_its_provider_is_limited
 );

@@ -14,6 +14,7 @@ use crate::application::contracts::{
     TYPE_SOURCE_PREFIX, admission_crew_source, automatic_crew_source, parse_type_crew_source,
     type_crew_source,
 };
+use crate::runtime::engine::crew::CrewAllowlist;
 use crate::runtime::run_input::non_empty;
 
 use super::draw::{
@@ -278,6 +279,7 @@ impl OrbitRuntime {
         task: &Task,
         pools: &CapturedCrewPools,
         explicit: Option<&str>,
+        allowlist: Option<&CrewAllowlist>,
     ) -> Result<(Vec<CrewCandidate>, String), OrbitError> {
         if explicit.and_then(non_empty).is_some() {
             return Ok((
@@ -287,10 +289,68 @@ impl OrbitRuntime {
                 "explicit".to_string(),
             ));
         }
-        match self.usage_pressure_redraw_view(task)? {
-            Some(redraw) => self.admissible_crew_candidates(&redraw, pools),
-            None => self.admissible_crew_candidates(task, pools),
+        // An allowlist never redirects an explicit or legacy task pin, even
+        // when provider-limit policy would otherwise offer a fallback pool.
+        if let Some(allowed) = allowlist
+            && let Some(name) = task.crew.as_deref().and_then(non_empty)
+            && self
+                .task_crew_source(task)?
+                .as_deref()
+                .is_none_or(|source| source == "explicit")
+        {
+            let crew = self.resolve_crew_for_task(None, Some(name))?;
+            if !allowed.permits(&crew) {
+                return Ok((vec![sole_candidate(crew)], "task.crew".to_string()));
+            }
         }
+        let result = match self.usage_pressure_redraw_view(task)? {
+            Some(redraw) => self.admissible_crew_candidates(&redraw, pools)?,
+            None => self.admissible_crew_candidates(task, pools)?,
+        };
+        let Some(allowlist) = allowlist else {
+            return Ok(result);
+        };
+        if result
+            .0
+            .iter()
+            .any(|candidate| candidate.weight > 0 && allowlist.permits(&candidate.crew))
+        {
+            return Ok(result);
+        }
+        let Some(source) = self.task_crew_source(task)? else {
+            return Ok(result);
+        };
+        let pool = if source == orbit_config::REVIEW_CREW_KEY {
+            let policy = self.operation_policy();
+            let pool = canonical_crew_pool(
+                &policy.review_crew.value,
+                self.context.settings().crews(),
+                &source,
+            )?;
+            self.pool_member_candidates(&pool.entries, &source, None)?
+        } else if source.starts_with(PURPOSE_SOURCE_PREFIX) {
+            self.purpose_assignment_candidates(task)?
+        } else if source.starts_with(TYPE_SOURCE_PREFIX) {
+            self.type_assignment_candidates(task)?
+        } else if let Some(tier) = source
+            .strip_prefix("pool:")
+            .and_then(|tier| tier.parse().ok())
+        {
+            self.complexity_pool_candidates(Some(tier), pools)?
+        } else {
+            None
+        };
+        let Some((mut candidates, pool_source)) = pool else {
+            return Ok(result);
+        };
+        let hold = self.admission_provider_hold(task);
+        let gate = self.provider_limit_gate(chrono::Utc::now());
+        candidates.retain(|candidate| {
+            hold.as_ref()
+                .is_none_or(|hold| !hold.excludes(&candidate.crew.name))
+                && gate.limit_for(&candidate.crew).is_none()
+        });
+        Ok((candidates, format!("{pool_source}; allowlist redraw")))
     }
 
     /// `task` as an admission re-draw sees it [ORB-17770]: with no crew and
