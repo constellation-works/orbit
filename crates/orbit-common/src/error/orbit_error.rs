@@ -16,8 +16,8 @@ pub enum OrbitError {
     #[error("policy denied: {0}")]
     PolicyDenied(String),
     #[error(
-        "{kind} not found: {id}{guidance}",
-        guidance = .guidance.as_deref().unwrap_or_default()
+        "{message}",
+        message = not_found_message(*kind, id, guidance.as_deref())
     )]
     NotFound {
         kind: NotFoundKind,
@@ -370,6 +370,18 @@ const _: () = assert!(
     std::mem::size_of::<OrbitError>() <= 128,
     "OrbitError exceeds its 128-byte size budget; box multi-field variant payloads"
 );
+
+fn not_found_message(kind: NotFoundKind, id: &str, guidance: Option<&str>) -> String {
+    // This synthetic partition represents an initialized data root without a
+    // registered workspace. It is an internal routing key, so show the setup
+    // action instead of presenting that key as a workspace the operator can
+    // find.
+    if kind == NotFoundKind::Workspace && id == "ws_unbound-data-dir" {
+        return "workspace not found; run `orbit workspace init` from a project or pass `--workspace <workspace>`".to_string();
+    }
+
+    format!("{kind} not found: {id}{}", guidance.unwrap_or_default())
+}
 
 fn serialize_absorbed_candidate<S: serde::Serializer>(
     candidate: &CandidateAbsorbed,

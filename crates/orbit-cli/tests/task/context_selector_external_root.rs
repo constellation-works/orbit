@@ -27,6 +27,14 @@ struct Workspace {
 
 impl Workspace {
     fn init() -> Self {
+        let workspace = Self::init_unbound();
+        let rooted_ws = workspace.rooted(&["workspace", "init", "--name", "repo"]);
+        workspace.run_success(&workspace.repo, &string_refs(&rooted_ws));
+        workspace.assert_bound_from_checkout();
+        workspace
+    }
+
+    fn init_unbound() -> Self {
         let temp = tempdir().expect("tempdir");
         let home = temp.path().join("home");
         // Nested so `dir:root` names the data directory under its parent —
@@ -63,9 +71,6 @@ impl Workspace {
             "EXR",
         ]);
         workspace.run_success(&workspace.repo, &string_refs(&rooted_init));
-        let rooted_ws = workspace.rooted(&["workspace", "init", "--name", "repo"]);
-        workspace.run_success(&workspace.repo, &string_refs(&rooted_ws));
-        workspace.assert_bound_from_checkout();
         workspace
     }
 
@@ -198,6 +203,41 @@ impl Workspace {
             .expect("write worktree-only file");
         worktree
     }
+}
+
+#[test]
+fn task_add_on_an_unbound_custom_root_names_the_workspace_setup_step() {
+    let workspace = Workspace::init_unbound();
+    let add_task = workspace.rooted(&[
+        "task",
+        "add",
+        "--title",
+        "Example",
+        "--description",
+        "Task creation requires a registered workspace",
+        "--complexity",
+        "low",
+        "--json",
+    ]);
+    let refusal = workspace.run_failure(&workspace.repo, &string_refs(&add_task));
+    assert!(
+        refusal.contains("workspace not found")
+            && refusal.contains("orbit workspace init")
+            && refusal.contains("--workspace"),
+        "the refusal must explain how to create or select a workspace: {refusal}"
+    );
+    assert!(
+        !refusal.contains("ws_unbound-data-dir"),
+        "the synthetic routing partition must not be shown as a missing workspace: {refusal}"
+    );
+
+    let rooted_ws = workspace.rooted(&["workspace", "init", "--name", "repo"]);
+    workspace.run_success(&workspace.repo, &string_refs(&rooted_ws));
+    let created = workspace.json(&workspace.repo, &string_refs(&add_task));
+    assert!(
+        created["id"].as_str().is_some(),
+        "task creation must work once the root has a workspace: {created}"
+    );
 }
 
 fn string_refs(args: &[String]) -> Vec<&str> {
