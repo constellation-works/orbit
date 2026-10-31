@@ -58,7 +58,7 @@ A UI `check(ctx)` reads `ctx.page` and `ctx.target`, and returns results built w
 | `ui.cramped-wrap` | A 2–5 word label (up to 60 characters) does not stack to 3+ lines at ≤1.5 words per line; longer text must not occupy 9+ lines averaging under 25 characters per line. Both checks exclude table cells and compact controls such as pills, chips and badges. |
 | `ui.cramped-padding` | Own-text glyphs keep at least a 4px inset (within a pixel for subpixel noise) from the nearest bordered or filled block-level container's border box, on sides with a drawn edge (border, padding or a differing fill); pills, chips, buttons, table parts and absolutely positioned runs are out of scope. |
 | `ui.tight-leading` | Multi-line text (2+ line boxes) has a numeric `line-height` of at least 1.3× its font size; `normal` is recorded, never failed. |
-| `ui.undersized-text` | Content tags (`p`, `li`, `td`, `th`, `dd`, `dt`, buttons, links, labels, headings) meet the 11px dashboard minimum (the theme's smallest named content size, 11px column heads); uppercase tracked overlines are exempt. |
+| `ui.undersized-text` | Content tags (`p`, `li`, `td`, `th`, `dd`, `dt`, buttons, links, labels, headings) meet the 11px dashboard minimum (the theme's smallest named content size, 11px column heads); only uppercase text with letter-spacing of at least 5% of the font size (a tracked overline) is exempt; either style alone is ordinary prose. |
 | `ui.heading-rhythm` | Rendered space above a section heading (nearest block above through the ancestor chain, plus the larger adjoining margin when the boxes touch) is at least the space below it. |
 
 ## Rule module
