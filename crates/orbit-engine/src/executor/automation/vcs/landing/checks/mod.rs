@@ -94,3 +94,4 @@ pub(in crate::executor::automation::vcs) use recovery::{
 };
 
 pub(in crate::executor::automation::vcs) use rerun::{CiRerunStep, plan_ci_rerun};
+pub(in crate::executor::automation::vcs) use suspect::manual_rerun_command_for_failed;

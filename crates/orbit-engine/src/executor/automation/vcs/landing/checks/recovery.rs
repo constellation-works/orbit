@@ -339,6 +339,30 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
         super::rerun::CiRerunStep::Wait(format!("CI retry evidence is unavailable: {error}"))
     }) {
         super::rerun::CiRerunStep::Wait(reason) => {
+            // A planner wait for base-suspect evidence is still a base
+            // observation: count it toward the same bounded cycle limit as
+            // a direct base-suspect classification, so it cannot poll
+            // indefinitely within this landing's deadline.
+            let limit = recovery.max_base_ci_cycles;
+            let mut exhausted = None;
+            for job in jobs.iter().filter(|job| {
+                matches!(
+                    job.class,
+                    CheckFailureClass::BaseSuspect | CheckFailureClass::Flaky
+                )
+            }) {
+                let key = (head.to_owned(), job.label.clone(), job.signature.clone());
+                let cycles = recovery.base_suspect_cycles.entry(key).or_default();
+                *cycles = cycles.saturating_add(1);
+                if *cycles >= limit {
+                    exhausted.get_or_insert((*cycles, job.label.clone(), job.signature.clone()));
+                }
+            }
+            if let Some((cycles, check, signature)) = exhausted {
+                return Ok(CheckRecoveryStep::Stop(format!(
+                    "{reason}; base-suspect wait ended after {cycles} base CI observation cycles (limit {limit}): check '{check}' still fails with signature `{signature}` on unchanged head {head}; no matching unchanged-head pull_request rerun has concluded, so the candidate stays in review"
+                )));
+            }
             return Ok(CheckRecoveryStep::WaitForBase(reason));
         }
         super::rerun::CiRerunStep::Acted(plan) => {

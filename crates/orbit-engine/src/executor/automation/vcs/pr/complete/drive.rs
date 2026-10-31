@@ -164,6 +164,9 @@ fn drive_pr_to_merged_observed<H: RuntimeHost + ?Sized>(
     // The latest base-modification refusal, kept for the error that ends the
     // wait.
     let mut base_race: Option<String> = None;
+    // Bounded base-suspect wait, sharing landing's cycle-limit input.
+    let max_base_suspect_polls = bounded_u64(input, "max_base_ci_cycles", 3, 100)?.max(1);
+    let mut base_suspect_polls = 0_u64;
 
     let reviewed_head_sha = reviewed_head_sha(input);
     let selective_head_sha = selective_selection_head_sha(input);
@@ -381,7 +384,28 @@ fn drive_pr_to_merged_observed<H: RuntimeHost + ?Sized>(
             && let Some(auto_fix) = auto_fix
         {
             let failed = super::super::super::landing::checks::failed_checks(&status);
-            if !failed.is_empty()
+            // A conflicting PR's base-suspect hold gets the same one
+            // unchanged-head rerun the blocked path requests.
+            let rerun_waiting = !failed.is_empty()
+                && matches!(
+                    super::super::auto_fix::recover_ci_rerun(
+                        host,
+                        auto_fix,
+                        input,
+                        workspace_path,
+                        pr_number,
+                        &status,
+                        completion_deadline_ms,
+                        diagnostic,
+                    ),
+                    Ok(super::super::super::landing::checks::CiRerunStep::Acted(_))
+                );
+            if rerun_waiting {
+                base_red_reason = Some(
+                    "base-suspect: unchanged-head CI rerun recovery is in progress through the shared rerun planner; waiting for it to conclude"
+                        .into(),
+                );
+            } else if !failed.is_empty()
                 && let Some(reason) = {
                     match red_base_wait(
                         host,
@@ -415,6 +439,32 @@ fn drive_pr_to_merged_observed<H: RuntimeHost + ?Sized>(
                     "pr_auto_fix_base_red",
                     &json!({"failed_head":status.head_sha,"reason":reason}),
                 )?;
+                if reason.contains("base-suspect") {
+                    base_suspect_polls = base_suspect_polls.saturating_add(1);
+                    if base_suspect_polls >= max_base_suspect_polls {
+                        let manual = status
+                            .head_sha
+                            .as_deref()
+                            .and_then(|head| {
+                                super::super::super::landing::checks::manual_rerun_command_for_failed(
+                                    host,
+                                    Path::new(workspace_path),
+                                    head,
+                                    &failed,
+                                )
+                            })
+                            .unwrap_or_else(|| "gh run rerun <run-id> --failed".into());
+                        return Err(hold_auto_fix_stop(
+                            stopped(
+                                pr_number,
+                                &format!(
+                                    "{reason}; base-suspect wait ended after {base_suspect_polls} observation polls (limit {max_base_suspect_polls}); when automatic reruns are disabled (auto_fix=false), the manual command is: {manual}"
+                                ),
+                            ),
+                            DeliveryRefusal::BaseChecksPending,
+                        ));
+                    }
+                }
                 base_red_reason = Some(reason);
             }
         }
@@ -449,7 +499,10 @@ fn drive_pr_to_merged_observed<H: RuntimeHost + ?Sized>(
                     diagnostic,
                 );
                 infrastructure_wait |= match retry {
-                    Ok(waiting) => waiting,
+                    Ok(step) => !matches!(
+                        step,
+                        super::super::super::landing::checks::CiRerunStep::NotEligible
+                    ),
                     Err(error) => {
                         // [ORB-20178] The first throttled answer ends this
                         // poll's reads of that log until its not-before.
@@ -728,6 +781,28 @@ fn drive_pr_to_merged_observed<H: RuntimeHost + ?Sized>(
                                 "pr_auto_fix_base_red",
                                 &json!({"failed_head":status.head_sha,"reason":reason}),
                             )?;
+                            if reason.contains("base-suspect") {
+                                base_suspect_polls = base_suspect_polls.saturating_add(1);
+                                if base_suspect_polls >= max_base_suspect_polls {
+                                    let manual = status.head_sha.as_deref().and_then(|head| {
+                                        super::super::super::landing::checks::manual_rerun_command_for_failed(
+                                            host,
+                                            Path::new(workspace_path),
+                                            head,
+                                            &failed,
+                                        )
+                                    }).unwrap_or_else(|| "gh run rerun <run-id> --failed".into());
+                                    return Err(hold_auto_fix_stop(
+                                        stopped(
+                                            pr_number,
+                                            &format!(
+                                                "{reason}; base-suspect wait ended after {base_suspect_polls} observation polls (limit {max_base_suspect_polls}); when automatic reruns are disabled (auto_fix=false), the manual command is: {manual}"
+                                            ),
+                                        ),
+                                        DeliveryRefusal::BaseChecksPending,
+                                    ));
+                                }
+                            }
                             base_red_reason = Some(reason);
                         } else {
                             match repair_failed_checks(

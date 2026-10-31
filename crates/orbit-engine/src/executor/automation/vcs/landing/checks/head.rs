@@ -440,7 +440,8 @@ pub(in crate::executor::automation::vcs) fn unmoved_red_base<H: RuntimeHost + ?S
             }
             CheckFailureClass::Flaky => {
                 let why = format!(
-                    "base-suspect: a successful same-check run on the accepted base ancestry is not enough by itself; waiting for the unchanged pull-request head to fail the same signature again ({signature})"
+                    "base-suspect: a successful same-check run on the accepted base ancestry is not enough by itself; waiting for the unchanged pull-request head to fail the same signature again ({signature}); when automatic reruns are disabled (auto_fix=false), the manual command is: {}",
+                    super::suspect::manual_rerun_command(job),
                 );
                 let evidence = serde_json::json!({
                     "base": tip, "head": head, "check": label, "signature": signature,

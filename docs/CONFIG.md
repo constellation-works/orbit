@@ -2429,8 +2429,15 @@ Each `[[review.host_evidence]]` rule has `kind` (`codeql` or `host_sandbox_test`
   Runner/OS and filesystem integrity remain prerequisites; this is no attestation against a
   compromised runner. Changed/legacy/spoofed sources, an overwritten helper or records grant no
   dependency-only authority. `ci_check_rerun_reserved` consumes the shared once-per-head budget
-  before sending, and survives restart or an unknown reply without another request. `auto_fix=false`
-  keeps its conservative manual-repeat hold. No new recovery setting weakens required checks.
+  before sending, and survives restart or an unknown reply without another request. When the only
+  missing attribution evidence is an unchanged-head `pull_request` rerun, the shared planner
+  requests it itself (once per failed job and head) on both the blocked and conflicting
+  completion paths; a repeated signature then attributes the failure to the candidate and a
+  passing rerun clears it. `auto_fix=false`
+  keeps its conservative manual-repeat hold: the waiting reason says automatic reruns are
+  disabled and names the manual command, `gh run rerun <run-id> --failed`. A `ci_base_suspect`
+  history entry is recorded once per head, check and signature, however often the base moves.
+  No new recovery setting weakens required checks.
   See the [eligible-set recovery contract](design/distributed-drain/2_design.md) and
   [operator recovery procedure](runbooks/distributed-drain.md).
   Orbit runs `gh run rerun <id> --failed`; GitHub retains the
@@ -2439,7 +2446,9 @@ Each `[[review.host_evidence]]` rule has `kind` (`codeql` or `host_sandbox_test`
   the same signature failing again with the passing base result enters the one automatic repair for
   the candidate's own failure. If untouched-path evidence remains incomplete, landing stops after
   `max_base_ci_cycles` observation cycles (default 3) or `max_wait_seconds` (default 3600 seconds),
-  whichever comes first (see the [distributed drain runbook](runbooks/distributed-drain.md)). Branch
+  whichever comes first, and completion stops its base-suspect hold after the same
+  `max_base_ci_cycles` observation polls or its completion deadline with a held
+  `delivery_base_checks_pending` reason (see the [distributed drain runbook](runbooks/distributed-drain.md)). Branch
   protection's own reading of a skipped or neutral required check is unchanged. Without
   `hosted_check` — a custom query, or a workspace with no hosted CodeQL — the requirement holds the
   review like any other owed check. Declare it only for a check that really runs the rule's command:

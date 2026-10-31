@@ -2706,6 +2706,30 @@ fn untouched_failure_escalates_after_configured_base_ci_cycles() {
     );
 }
 
+/// A base-suspect failure is recorded once per head, check and signature:
+/// a moved base tip on a later poll updates no history, and the bounded
+/// waiting reason names the manual rerun when automatic reruns are off.
+#[test]
+fn base_suspect_history_is_recorded_once_when_the_base_moves() {
+    let (_sandbox, forge, candidate, _base) = forge_fixture(false, false);
+    forge.job(&candidate, failed(1, 11, UNTOUCHED_TEST_FAILURE));
+    let first = land_now(&forge).expect_err("first base-suspect hold");
+    assert!(
+        first.to_string().contains("gh run rerun 1 --failed"),
+        "waiting reason names the manual rerun: {first}"
+    );
+    fix_base(&forge.repo);
+    let _ = land_now(&forge).expect_err("second base-suspect hold");
+    let records = forge
+        .history
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|row| row.event == "ci_base_suspect")
+        .count();
+    assert_eq!(records, 1, "one ci_base_suspect per head/check/signature");
+}
+
 /// A base-suspect failure whose landing tip has moved is decided only by
 /// a fresh run of the same job on that tip: a fresh pass permits one
 /// rerun before repair, with no branch update, and a fresh

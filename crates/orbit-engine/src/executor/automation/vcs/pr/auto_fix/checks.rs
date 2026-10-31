@@ -127,32 +127,33 @@ pub(in crate::executor::automation::vcs::pr) fn recover_ci_rerun<H: RuntimeHost 
     observation: &mut Option<
         super::super::super::landing::checks::rerun_diagnostic::CiRerunDiagnostic,
     >,
-) -> Result<bool, OrbitError> {
+) -> Result<super::super::super::landing::checks::CiRerunStep, OrbitError> {
+    use super::super::super::landing::checks::CiRerunStep;
     let Some(head) = status.head_sha.as_deref() else {
-        return Ok(false);
+        return Ok(CiRerunStep::NotEligible);
     };
     // Missing source bindings leave prerequisite recovery's existing read
     // order and typed deadline holds intact; they cannot authorize this plan.
     let Some(base_name) = input_string_field(input, "base") else {
-        return Ok(false);
+        return Ok(CiRerunStep::NotEligible);
     };
     if status.head_branch.is_none() {
-        return Ok(false);
+        return Ok(CiRerunStep::NotEligible);
     }
     let failed = super::super::super::landing::checks::failed_checks(status);
     if failed.is_empty() {
-        return Ok(false);
+        return Ok(CiRerunStep::NotEligible);
     }
     let (failed, _) = match required_failures(host, workspace_path, pr_number, head, &failed) {
         Ok(value) => value,
-        Err(_) => return Ok(false),
+        Err(_) => return Ok(CiRerunStep::NotEligible),
     };
     let workspace = Path::new(workspace_path);
     let base_ref =
         resolve_worktree_start_point(workspace, &base_name, base_sync_mode_from_input(input)?)?;
     let tip = commit_sha(workspace, &base_ref)?;
     let base = git_output(workspace, &["merge-base", head, &tip])?;
-    match super::super::super::landing::checks::plan_ci_rerun(
+    super::super::super::landing::checks::plan_ci_rerun(
         host,
         workspace,
         &auto_fix.task_ids,
@@ -166,14 +167,7 @@ pub(in crate::executor::automation::vcs::pr) fn recover_ci_rerun<H: RuntimeHost 
         None,
         &auto_fix.run_id,
         observation,
-    )? {
-        super::super::super::landing::checks::CiRerunStep::NotEligible => Ok(false),
-        super::super::super::landing::checks::CiRerunStep::Wait(_) => {
-            // The shared bounded journal retains this observation.
-            Ok(true)
-        }
-        super::super::super::landing::checks::CiRerunStep::Acted(_) => Ok(true),
-    }
+    )
 }
 
 /// Whether an earlier poll recorded `head`'s failure as inherited from the

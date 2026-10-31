@@ -100,8 +100,10 @@ pub(super) fn watcher_suspicion<H: RuntimeHost + ?Sized>(
             let reason = format!(
                 "base-suspect: '{}' has a successful same-check base run, but head {head} \
                  has no unchanged-head pull_request rerun with the same failure signature; \
-                 a base pass alone does not authorize repair",
+                 a base pass alone does not authorize repair; when automatic reruns are \
+                 disabled (auto_fix=false), the manual command is: {}",
                 jobs::job_label(job),
+                manual_rerun_command(job),
             );
             // Retain this first failure so a later unchanged-head rerun with
             // the same signature can be matched by
@@ -249,9 +251,11 @@ fn untouched_base_evidence<H: RuntimeHost + ?Sized>(
     Ok(UntouchedBaseEvidence::Waiting(format!(
         "base-suspect: its cited repository files ({}) are outside the candidate's changed paths; \
          waiting for a successful same-check push run of '{}' from base {base} through {tip} and an \
-         unchanged-head pull_request rerun with the same failure signature; a base pass alone does not authorize repair",
+         unchanged-head pull_request rerun with the same failure signature; a base pass alone does not authorize repair; \
+         when automatic reruns are disabled (auto_fix=false), the manual command is: {}",
         paths.into_iter().take(20).collect::<Vec<_>>().join(", "),
         jobs::job_label(job),
+        manual_rerun_command(job),
     )))
 }
 
@@ -470,6 +474,50 @@ pub(super) fn has_matching_candidate_rerun<H: RuntimeHost + ?Sized>(
     false
 }
 
+/// The manual unchanged-head rerun for a failed job, naming its provider run.
+pub(super) fn manual_rerun_command(job: &Value) -> String {
+    match job["run_id"].as_u64() {
+        Some(run_id) => format!("gh run rerun {run_id} --failed"),
+        None => "gh run rerun <run-id> --failed".into(),
+    }
+}
+
+/// The manual unchanged-head rerun for the first failed job answering `failed`.
+pub(in crate::executor::automation::vcs) fn manual_rerun_command_for_failed<
+    H: RuntimeHost + ?Sized,
+>(
+    host: &H,
+    workspace: &Path,
+    head: &str,
+    failed: &[(Option<String>, String)],
+) -> Option<String> {
+    let jobs = jobs::commit_jobs(host, workspace, head).ok()?;
+    let job = jobs.iter().find(|job| {
+        jobs::unsuccessful(job) && failed.iter().any(|check| jobs::answers(job, check))
+    })?;
+    Some(manual_rerun_command(job))
+}
+
+/// Whether two base-suspect notes name the same failure: the same head,
+/// check and signature, regardless of the (moving) base or other fields.
+fn same_base_suspect_failure(existing_note: Option<&str>, evidence: &Value) -> bool {
+    let Some(existing) = existing_note.and_then(|note| serde_json::from_str::<Value>(note).ok())
+    else {
+        return false;
+    };
+    let key = |note: &Value| -> Option<(String, String, String)> {
+        Some((
+            note["head"].as_str()?.to_owned(),
+            note["check"].as_str()?.to_owned(),
+            note["signature"].as_str()?.to_owned(),
+        ))
+    };
+    match (key(&existing), key(evidence)) {
+        (Some(existing), Some(new)) => existing == new,
+        _ => false,
+    }
+}
+
 /// Surface the base-wide suspicion once per owning task and exact failure,
 /// independent of poll count or PR head. This spends no repair reservation.
 pub(super) fn record_base_suspect<H: RuntimeHost + ?Sized>(
@@ -481,11 +529,11 @@ pub(super) fn record_base_suspect<H: RuntimeHost + ?Sized>(
     let note = serde_json::to_string(evidence)
         .map_err(|error| OrbitError::Execution(error.to_string()))?;
     for task in tasks {
-        if host
-            .get_task_history(task)?
-            .iter()
-            .any(|entry| entry.event == "ci_base_suspect" && entry.note.as_deref() == Some(&note))
-        {
+        if host.get_task_history(task)?.iter().any(|entry| {
+            entry.event == "ci_base_suspect"
+                && (entry.note.as_deref() == Some(&note)
+                    || same_base_suspect_failure(entry.note.as_deref(), evidence))
+        }) {
             continue;
         }
         if let Some(handoff_id) = handoff_id {
