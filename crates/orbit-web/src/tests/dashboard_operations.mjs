@@ -375,10 +375,19 @@ assert(!descendants(drainBody).some(node => /auto-drain-(task|slot)/.test(String
 assert(get('auto-drain-phase-label').textContent === 'Idle' && !get('auto-drain-live'), 'no live window reads idle');
 assert(drainBody.querySelector('.drain-forecast-state')?.textContent === 'no forecast this pass', 'a readiness payload with no forecast says no forecast this pass');
 assert(!get('auto-drain-quick-start').hidden, 'the Start card shows for a writable workspace');
-// With no live window Stop becomes "Send pending results": the settle-only pass
+// [ORB-20501] With no live window an owner has nothing to send: the
+// settle-only pass delivers a replica's pull settlements to its owner, so the
+// owner's card offers neither Stop nor Send pending results.
+assert(!drainButton('Stop') && !drainButton('Send pending results') && !drainBody.querySelector('.drain-stop, .drain-stop-note'), 'an owner with no live window offers no stop or settle control');
+assert(!drainText().includes('to their owner'), `an owner with no live window is not told to send results to its owner: ${drainText()}`);
+// On a replica Stop becomes "Send pending results": the settle-only pass
 // needs no drain, so it stays usable and says what it does in visible text.
-assert(!drainButton('Stop') && drainButton('Send pending results') && !drainButton('Send pending results').disabled, 'Stop relabels to Send pending results and stays enabled without a live window');
-assert(drainBody.querySelector('.drain-stop-note:not([hidden])')?.textContent.trim(), 'the idle control has visible guidance');
+replicaWorkspace = true;
+await fetchAndRenderOperations();
+assert(!drainButton('Stop') && drainButton('Send pending results') && !drainButton('Send pending results').disabled, 'a replica relabels Stop to Send pending results and keeps it enabled without a live window');
+assert(get('auto-drain-body').querySelector('.drain-stop-note:not([hidden])')?.textContent.includes('Send completed task results to their owner.'), 'the replica idle control has visible guidance');
+replicaWorkspace = false;
+await fetchAndRenderOperations();
 
 // A task whose `os:` tags this host cannot run waits in the "other" pool, and
 // its row names the host it waits for.
@@ -699,6 +708,8 @@ assert(get('auto-drain-operation-feedback').textContent === remainingAfterClear,
 
 // Send pending results delivers recorded settlements and reports each outcome; a
 // settlement that did not reach its owner is never reported as plain success.
+replicaWorkspace = true;
+await fetchAndRenderOperations();
 stopOutcome = 'idle';
 stopSettlements = [
   { owner: 'host:/owner', drain_run_id: 'jrun-old', task_id: 'ORB-1', leaf_run_id: 'jrun-leaf-1', outcome: 'settled' },
@@ -706,7 +717,9 @@ stopSettlements = [
   { owner: 'host:/owner', drain_run_id: 'jrun-old', task_id: 'ORB-3', leaf_run_id: null, outcome: 'owner_unreachable' },
   { owner: 'host:/owner', drain_run_id: 'jrun-old', task_id: 'ORB-4', leaf_run_id: null, outcome: 'launch_uncertain' },
 ];
+const settleRequests = requests.length;
 drainButton('Send pending results').click(); await tick(); await tick(); await tick();
+assert(requests.slice(settleRequests).some(r => r.path === '/api/workflows/auto/stop' && r.workspace === 'one'), 'a replica\'s Send pending results runs the settle-only pass');
 const settleFeedback = get('auto-drain-operation-feedback');
 assert(settleFeedback.textContent.includes('No auto-delivery window was live'), `idle stop names what did not change: ${settleFeedback.textContent}`);
 assert(settleFeedback.textContent.includes('2 settlements delivered'), `delivered settlements are counted: ${settleFeedback.textContent}`);
@@ -731,6 +744,7 @@ controlsAuthorized = false;
 await fetchAndRenderOperations();
 assert(drainButton('Send pending results').disabled && drainText().includes('requires an authorized operator session'), 'an unauthorized session sees why the control is off as visible text');
 controlsAuthorized = true;
+replicaWorkspace = false;
 await fetchAndRenderOperations();
 
 // A live window: footer link in short form, time left in the header for a
@@ -824,10 +838,15 @@ drainButton('Stop').click(); await tick(); await tick(); await tick();
 assert(requests.some(r => r.path === '/api/workflows/auto/stop' && r.workspace === 'one'), 'stop posts to the stop endpoint');
 assert(confirmations.at(-1).includes('This is not cancellation.') && confirmations.at(-1).includes('jrun-20260923-0400-a1'), 'stop confirms and names the window');
 assert(get('auto-drain-operation-feedback').textContent.includes('Admissions stopped') && get('auto-drain-operation-feedback').textContent.includes('1 admitted worker still running.'), 'stop result lands in the card status line');
-// Once admissions are stopped the button offers the settle-only pass instead.
+// Once admissions are stopped no window is live: an owner has nothing to
+// settle, while a replica offers the settle-only pass instead.
 drainAdmissionsStopped = true;
 await fetchAndRenderOperations();
-assert(drainButton('Send pending results') && !drainButton('Send pending results').disabled && drainText().includes('Admissions are already stopped for jrun-20260923-0400-a1'), 'a stopped window still offers to settle recorded work');
+assert(!drainButton('Stop') && !drainButton('Send pending results'), 'an owner\'s stopped window offers no settle control');
+replicaWorkspace = true;
+await fetchAndRenderOperations();
+assert(drainButton('Send pending results') && !drainButton('Send pending results').disabled && drainText().includes('Admissions are already stopped for jrun-20260923-0400-a1'), 'a replica\'s stopped window still offers to settle recorded work');
+replicaWorkspace = false;
 drainAdmissionsStopped = false;
 drainRunId = null;
 drainPhase = 'winding_down';
@@ -837,6 +856,7 @@ drainPhase = 'winding_down';
 // and does not claim that no window is live or that nothing is stopped.
 drainPhase = 'idle';
 pullDrainRunId = 'jrun-pull-drain-0001';
+replicaWorkspace = true;
 await fetchAndRenderOperations();
 assert(drainButton('Stop') && !drainButton('Send pending results') && !drainButton('Stop').disabled, 'a live pull drain alone offers Stop, not Send pending results');
 assert(get('auto-drain-phase-label').textContent === 'Pull drain' && !get('auto-drain-live') && !get('auto-drain-when').textContent && descendants(get('auto-drain-run')).some(node => String(node.title || '').includes('jrun-pull-drain-0001')), `the pill names the pull drain and the footer links it: ${get('auto-drain-run').textContent}`);
@@ -849,6 +869,7 @@ await fetchAndRenderOperations();
 assert(drainButton('Send pending results') && drainText().includes('Admissions are already stopped for pull drain jrun-pull-drain-0001'), `a stopped pull drain is reported as stopped: ${drainText()}`);
 pullDrainStopped = false;
 pullDrainRunId = null;
+replicaWorkspace = false;
 drainPhase = 'winding_down';
 
 // No concrete workspace: the fleet is visible without workspace write controls.
@@ -1728,6 +1749,7 @@ const forecastTextIncludesAdmission = () => (forecastCard()?.textContent || '').
 harnessTab = 'tasks';
 backlogForecastMode = 'ready';
 delayBacklogForecast = true;
+replicaWorkspace = true;
 const searchesBeforeHeld = backlogForecastSearches.length;
 let heldRefreshCompleted = false;
 const heldRefresh = fetchAndRenderAutoDrainPane().then(() => { heldRefreshCompleted = true; });
@@ -1744,6 +1766,7 @@ releaseBacklogForecast();
 releaseBacklogForecast = null;
 await heldRefresh;
 await tick();
+replicaWorkspace = false;
 assert(backlogLink()?.querySelector('.drain-backlog-forecast-figures')?.textContent.startsWith('6.5h – 20h'), 'the forecast summary updates after its independent request settles');
 const searchesBeforeReady = backlogForecastSearches.length;
 backlogForecastMode = 'ready';
