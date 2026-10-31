@@ -382,11 +382,23 @@ It saves the visited URLs, response statuses, and headings under the evidence di
 
 ### Inline code layout checks
 
-After `npm run check` and `npm run build`, run this browser regression check through the
-foreground wrapper above. It keeps the built `dist/` served on loopback at
-`PREVIEW_PORT` until the checker exits, and refuses to start if that port is taken; the
-staged Playwright package from "Stage Playwright and Chromium" above satisfies
-the browser requirement:
+Run this built-site leg only from a genuinely authorized operator or validator
+surface with explicit access to `website/dist/`. The checker discovers routes by
+reading the built output (`htmlRoutes()` in `website/scripts/check-inline-code.mjs`
+reads `../dist/`), so route discovery and the browser check both require that
+access. A repository validator is not automatically authorized to access a denied
+path. The same denied-read refusal as the `security.txt` generated-asset rule
+above applies: after a denial, do not inspect `website/dist/` with Read, `grep`,
+`rg`, another executable, a copy, or a wrapper, and do not broaden the committed
+permission to bypass it.
+
+On an authorized surface, after `npm run check` and `npm run build`, run this browser
+regression check through the foreground wrapper above. It keeps the built `dist/` served
+on loopback at `PREVIEW_PORT` until the checker exits, and refuses to start if that port
+is taken; the staged Playwright package from "Stage Playwright and Chromium" above satisfies
+the browser requirement. The foreground wrapper owns the preview for the managed-agent
+run, and a port conflict remains a refusal: free the port or choose another rather than
+sharing or reusing a server this run does not own:
 
 ```bash
 run_foreground_preview_check command node "$REPO/website/scripts/check-inline-code.mjs" \
@@ -406,6 +418,13 @@ only code keep their underline (painted, for four known links at 1280px),
 checks mobile page overflow, and
 verifies the agents provider table's width and borders. It saves measurements
 and failure screenshots in the evidence directory.
+
+When `website/dist/` access is denied or otherwise unavailable, leave this leg
+blocked/not-run: record the denied path, the command not run, and this section as
+the source-based reference for what the check would have covered, then record the
+required authorized follow-up as a re-run of this check from an authorized operator
+or validator surface with explicit `website/dist/` access. Do not substitute a
+scratch fixture, a copied tree, or another executable as built-site evidence.
 
 When changing a Markdown plugin, run
 `ASTRO_TELEMETRY_DISABLED=1 npm exec -- astro sync --force` in `website/`
