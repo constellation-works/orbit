@@ -2,7 +2,7 @@
 title: Agent Scorecards — Design
 owner: claude
 last_updated: 2026-10-31
-last_validated: 2026-10-29
+last_validated: 2026-10-31
 status: Draft
 feature: agent-scorecards
 doc_role: design
