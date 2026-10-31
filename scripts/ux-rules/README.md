@@ -142,7 +142,7 @@ The deterministic `file_rule_findings` activity turns one results document into 
 
 `ux_rules_pipeline` runs the shipped `step.mjs` adapter, then the filer. It uses `--fixture` for UI; `ui_base_url` is ignored because a network-none script cannot reach the host dashboard. The merged results retain each result's surface for filing. Surface startup failures become `error` results with the runner's diagnostic. The temporary evidence files are removed after the merge; their paths in the results are diagnostic references, not retained artifacts.
 
-To set up the workspace, copy the following template to `.orbit/resources/scripts/ux_rules_runner.yaml`. Replace the absolute paths with the host's actual Node interpreter, Orbit binary, and browser kit root. The kit root must contain both the Playwright module and browsers. The Orbit binary and Node must be executable in the sandbox, including their shared libraries. Set `UX_RULES_ORBIT` to the absolute Orbit binary path, and set `PLAYWRIGHT_MODULE` and `PLAYWRIGHT_BROWSERS_PATH` to the kit's paths in the environment of the process running jobs (including its service environment). The script profile clears other environment variables. Scratch uses its provided `TMPDIR`; no extra write root is needed.
+To set up the workspace, copy the following template to `.orbit/resources/scripts/ux_rules_runner.yaml`. Replace the absolute paths with the host's actual Node interpreter, Orbit binary, and browser kit root, keeping each path identical in `interpreter`/`args` and in `requests.read_roots`. The kit root is the root `orbit browser-kit` installs (it holds `kit/node_modules/playwright/index.mjs` and `browsers/`). The Orbit binary and Node must be executable in the sandbox, including their shared libraries. Do not request `env_pass`: this build's script profile refuses any granted step that requests environment passthrough, and it clears the environment instead. Granted read roots are bound at their host paths inside the sandbox, so the adapter finds the Orbit binary and the browser kit from the manifest `args` below (a step input `orbit` or `browser_kit` overrides them) and passes `PLAYWRIGHT_MODULE` and `PLAYWRIGHT_BROWSERS_PATH` to its own runner child. Scratch uses its provided `TMPDIR`; no extra write root is needed.
 
 ```yaml
 schemaVersion: 1
@@ -153,6 +153,7 @@ spec:
   description: Measure configured UX rule surfaces.
   entry: scripts/ux-rules/step.mjs
   interpreter: [/opt/node/bin/node]
+  args: [--orbit, /opt/orbit/bin/orbit, --browser-kit, /opt/browser-kit]
   input_schema_json:
     type: object
     required: [surfaces]
@@ -160,6 +161,10 @@ spec:
       surfaces: {type: array, items: {type: string}}
       ui_base_url: {type: string}
       runner: {type: string}
+      orbit: {type: string}
+      browser_kit: {type: string}
+      playwright_module: {type: string}
+      playwright_browsers_path: {type: string}
   output_schema_json:
     type: object
     required: [schema_version, surface, results]
@@ -171,11 +176,10 @@ spec:
     network: none
     read_roots: [/opt/orbit/bin/orbit, /opt/browser-kit]
     write_roots: []
-    env_pass: [UX_RULES_ORBIT, PLAYWRIGHT_MODULE, PLAYWRIGHT_BROWSERS_PATH]
     timeout_seconds: 3600
 ```
 
-1. Copy and adapt the manifest and service environment as above.
+1. Copy and adapt the manifest as above.
 2. Set surfaces with `orbit config set ux_rules.surfaces '["cli", "ui"]'`.
 3. An operator runs `orbit script grant ux_rules_runner`, then `orbit run job ux_rules_pipeline`. Check `orbit run show` for counts and filed tasks before enabling the disabled daily routine.
 

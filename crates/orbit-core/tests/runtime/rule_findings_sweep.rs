@@ -381,6 +381,92 @@ fn ux_rules_pipeline_preserves_custom_manifest_defaults_when_config_unset() {
     );
 }
 
+/// The shipped `ux_rules_runner` template (README) must reach the runner
+/// through the granted script-step path: granting it records no `env_pass`,
+/// and a pipeline run is never refused for `env_pass`. On a host where the
+/// sandbox itself cannot start (for example nested in another sandbox) the
+/// run may refuse for that reason instead — only the `env_pass` refusal is
+/// the regression.
+fn documented_ux_rules_runner_template_is_not_refused_for_env_pass() {
+    let (_root, runtime) = fixture("");
+    let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let readme = std::fs::read_to_string(repo_root.join("scripts/ux-rules/README.md")).unwrap();
+    let template_start = readme
+        .find("name: ux_rules_runner")
+        .and_then(|index| readme[..index].rfind("```yaml\n"))
+        .unwrap()
+        + "```yaml\n".len();
+    let template_end = template_start + readme[template_start..].find("\n```").unwrap();
+    let template = &readme[template_start..template_end];
+
+    // Adapt the template's host paths exactly as its setup text instructs.
+    let node = std::env::var_os("PATH")
+        .and_then(|paths| {
+            std::env::split_paths(&paths).find_map(|dir| {
+                let candidate = dir.join("node");
+                candidate
+                    .is_file()
+                    .then(|| candidate.canonicalize().unwrap())
+            })
+        })
+        .expect("node on PATH for the template interpreter");
+    let fake_orbit = _root.path().join("host-bin/orbit");
+    std::fs::create_dir_all(fake_orbit.parent().unwrap()).unwrap();
+    std::fs::write(&fake_orbit, "#!/bin/sh\nexit 0\n").unwrap();
+    let kit_root = _root.path().join("browser-kit");
+    std::fs::create_dir_all(kit_root.join("kit/node_modules/playwright")).unwrap();
+    std::fs::write(
+        kit_root.join("kit/node_modules/playwright/index.mjs"),
+        "export {};\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(kit_root.join("browsers")).unwrap();
+    let manifest = template
+        .replace("/opt/node/bin/node", &node.display().to_string())
+        .replace("/opt/orbit/bin/orbit", &fake_orbit.display().to_string())
+        .replace("/opt/browser-kit", &kit_root.display().to_string());
+
+    let repo = _root.path().join("repo");
+    let scripts_dir = repo.join(".orbit/resources/scripts");
+    std::fs::create_dir_all(&scripts_dir).unwrap();
+    std::fs::write(scripts_dir.join("ux_rules_runner.yaml"), &manifest).unwrap();
+    let entry_path = repo.join("scripts/ux-rules/step.mjs");
+    std::fs::create_dir_all(entry_path.parent().unwrap()).unwrap();
+    std::fs::copy(repo_root.join("scripts/ux-rules/step.mjs"), &entry_path).unwrap();
+    let activity_dir = _root.path().join("home/.orbit/resources/activities");
+    std::fs::create_dir_all(&activity_dir).unwrap();
+    std::fs::write(
+        activity_dir.join("file_rule_findings.yaml"),
+        include_str!("../../assets/activities/file_rule_findings.yaml"),
+    )
+    .unwrap();
+
+    let grant = runtime
+        .grant_script(
+            "ux_rules_runner",
+            &orbit_core::runtime::scripts::ScriptGrantOptions::default(),
+        )
+        .expect("the documented template grants");
+    assert!(
+        grant.env_pass.is_empty(),
+        "the documented template must not record env_pass: {:?}",
+        grant.env_pass
+    );
+
+    let job_path = repo.join("ux_rules_pipeline.yaml");
+    std::fs::write(
+        &job_path,
+        include_str!("../../assets/jobs/ux_rules_pipeline.yaml"),
+    )
+    .unwrap();
+    let outcome = runtime.run_job_v2_from_yaml(&job_path, json!({"surfaces": []}));
+    let rendered = format!("{outcome:?}");
+    assert!(
+        !rendered.contains("env_pass"),
+        "the granted template step must not be refused for env_pass: {rendered}"
+    );
+}
+
 fn errors_file_one_task_per_rule() {
     let (_root, runtime) = fixture("");
     let mut first_error = result("error", "medium", "cli.example|a", json!({"threw": "x"}));
@@ -500,6 +586,7 @@ crate::scenario_table!(
     fail_pass_fail_pass_records_second_pass_transition,
     cap_takes_highest_severity_first_and_floor_records_only,
     blank_file_at_uses_configured_floor,
+    documented_ux_rules_runner_template_is_not_refused_for_env_pass,
     default_ux_rules_pipeline_file_step_binds_optional_inputs,
     ux_rules_pipeline_binds_config_defaults_and_explicit_overrides_win,
     ux_rules_pipeline_preserves_custom_manifest_defaults_when_config_unset,
