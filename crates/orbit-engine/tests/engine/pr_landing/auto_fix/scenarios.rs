@@ -2269,17 +2269,9 @@ fn regression_latest_required_failure_blocks_merge_until_passing_head_rerun() {
             } else {
                 case
             }]);
-            let required = |conclusion: &str| {
-                json!({
-                    "pullRequest":{"headRefOid":fx.candidate,"commits":{"nodes":[{"commit":{
-                        "oid":fx.candidate,"statusCheckRollup":{"contexts":{
-                            "pageInfo":{"hasNextPage":false},"nodes":[{
-                                "name":"test","isRequired":true,"status":"COMPLETED","conclusion":conclusion
-                            }]
-                        }}
-                    }}]}}
-                })
-            };
+            // The head's history keeps the failed run after a rerun replaces
+            // it in the rollup.
+            let required = |conclusion: &str| required_test_check(&fx, conclusion, &["test"]);
             fx.write_forge(
                 "required-policy",
                 json!({"data":{"repository":required("FAILURE")}}).to_string(),
@@ -2316,6 +2308,69 @@ fn regression_latest_required_failure_blocks_merge_until_passing_head_rerun() {
             fx.script_checks(&["success"]);
             let result = action_ok(&host, "pr_complete", &input);
             assert_eq!(result["merge"]["merged"], true, "{case}");
+            assert_landed_exactly(&fx, &host, &fx.candidate, case);
+        },
+    );
+}
+
+/// The required-check read of `fx.candidate` with one required `test` run
+/// concluding `conclusion`, and `failed` naming every check with a failed run
+/// on that head, superseded runs included.
+fn required_test_check(fx: &Fixture, conclusion: &str, failed: &[&str]) -> Value {
+    json!({
+        "pullRequest":{"headRefOid":fx.candidate,"commits":{"nodes":[{"commit":{
+            "oid":fx.candidate,"statusCheckRollup":{"contexts":{
+                "pageInfo":{"hasNextPage":false},"nodes":[{
+                    "name":"test","isRequired":true,"status":"COMPLETED","conclusion":conclusion
+                }]
+            }},
+            "checkSuites":{"pageInfo":{"hasNextPage":false},"nodes":[{"checkRuns":{
+                "pageInfo":{"hasNextPage":false},
+                "nodes":failed.iter().map(|name| json!({"name":name})).collect::<Vec<_>>()
+            }}]}
+        }}]}}
+    })
+}
+
+/// [ORB-20615] A docs-only head reports its required check skipped, and
+/// branch protection calls the PR mergeable. With no failed run of that check
+/// on the head, completion merges it; a failure of another check does not
+/// count. History the provider truncated proves nothing and still refuses.
+#[test]
+fn regression_never_failed_skipped_required_check_merges_mergeable_head() {
+    auto_fix_table(
+        "auto_fix::regression_never_failed_skipped_required_check_merges_mergeable_head",
+        "skipped neutral truncated_history",
+        |case, row| {
+            let (fx, host) = docs_only_pr(row);
+            let conclusion = if case == "neutral" {
+                "neutral"
+            } else {
+                "skipped"
+            };
+            fx.script_checks(&[conclusion]);
+            let mut required = required_test_check(&fx, &conclusion.to_uppercase(), &["coverage"]);
+            if case == "truncated_history" {
+                required["pullRequest"]["commits"]["nodes"][0]["commit"]["checkSuites"]["pageInfo"]
+                    ["hasNextPage"] = json!(true);
+            }
+            fx.write_forge(
+                "required-policy",
+                json!({"data":{"repository":required}}).to_string(),
+            );
+            let mut input = fx.complete_ungated_input();
+            input["max_wait_seconds"] = json!(0);
+            if case == "truncated_history" {
+                let error = action(&host, "pr_complete", &input).expect_err(case);
+                assert!(
+                    error.to_string().contains("has no successful run"),
+                    "{case}: {error}"
+                );
+                assert!(fx.merge_requests().is_empty(), "{case}");
+                return;
+            }
+            let result = action_ok(&host, "pr_complete", &input);
+            assert_eq!(result["merge"]["merged"], true, "{case}: {result}");
             assert_landed_exactly(&fx, &host, &fx.candidate, case);
         },
     );

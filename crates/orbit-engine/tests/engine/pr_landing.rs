@@ -5863,6 +5863,8 @@ check() {
             printf '{"__typename":"CheckRun","name":"test","status":"%s","conclusion":"%s","isRequired":true},{"__typename":"CheckRun","name":"coverage","status":"COMPLETED","conclusion":"FAILURE","isRequired":false}' "$test_state" "$conclusion" ;;
         pending) printf '{"__typename":"CheckRun","name":"test","status":"IN_PROGRESS","conclusion":""}' ;;
         success) printf '{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"SUCCESS"}' ;;
+        # A completed skip (a docs-only head) or neutral result.
+        skipped|neutral) printf '{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"%s"}' "$(printf '%s' "$1" | tr a-z A-Z)" ;;
         failure|dirty_failure|clean_failure|unstable_failure) printf '{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"FAILURE"}' ;;
         # Two required failures. `test` then `lint`, or the reverse. Both
         # carry isRequired so the policy read does not tag only the last node.
@@ -5939,6 +5941,8 @@ status() {
         mixed_success) merge_state=CLEAN; rollup=$(check "$observed") ;;
         pending) merge_state=BLOCKED; rollup=$(check pending) ;;
         success) merge_state=CLEAN; rollup=$(check success) ;;
+        # Branch protection accepts a skipped or neutral required check.
+        skipped|neutral) merge_state=CLEAN; rollup=$(check "$observed") ;;
         failure) merge_state=BLOCKED; rollup=$(check failure) ;;
         clean_failure) merge_state=CLEAN; rollup=$(check failure) ;;
         unstable_failure) merge_state=UNSTABLE; rollup=$(check failure) ;;

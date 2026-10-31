@@ -514,11 +514,15 @@ pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?S
             Some(CheckState::Pending) => pending = true,
             Some(CheckState::Passed)
                 if matches!(state, PrMergeState::Mergeable)
-                    && check.owed_state != Some(CheckState::Passed) =>
+                    && check.owed_state != Some(CheckState::Passed)
+                    && !required.never_failed(check) =>
             {
-                // Branch protection accepts skipped/neutral conclusions, but
-                // neither is a passing rerun of a failed required check. A
-                // refusal also prevents delegating this head to auto-merge.
+                // Branch protection accepts skipped/neutral conclusions, and
+                // so does this gate for a check that never failed on this
+                // head (a docs-only skip). Neither is a passing rerun of a
+                // failed required check, and unreadable history cannot show
+                // the check never failed. A refusal also prevents delegating
+                // this head to auto-merge.
                 failed = Some(format!(
                     "required check '{}' has no successful run on the current head",
                     check.name.as_deref().unwrap_or_default()

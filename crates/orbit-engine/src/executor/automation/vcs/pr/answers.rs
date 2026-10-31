@@ -6,6 +6,7 @@
 //! JSON: every decision takes the typed value, so the provider's field names
 //! appear here and in the producer only. Unknown fields are ignored.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use orbit_common::OrbitError;
@@ -446,6 +447,10 @@ pub(in crate::executor::automation::vcs) struct RequiredChecks {
     /// [ORB-16185] Required check runs no workflow produced, with the check
     /// run and app identities this same head-bound observation reported.
     pub(in crate::executor::automation::vcs) check_runs: Vec<RequiredCheckRun>,
+    /// Names of checks with a failed run on this head, superseded runs
+    /// included. `None` when the answer carried no complete history, which
+    /// can never show that a check did not fail.
+    failed_history: Option<BTreeSet<String>>,
 }
 
 /// A required check run outside any workflow (a provider app's aggregate
@@ -487,6 +492,7 @@ impl RequiredChecks {
                 reported_head_sha: reported(pull_request.get("headRefOid")),
                 checks: Vec::new(),
                 check_runs: Vec::new(),
+                failed_history: None,
             });
         };
         if contexts.pointer("/pageInfo/hasNextPage") != Some(&Value::Bool(false)) {
@@ -535,7 +541,19 @@ impl RequiredChecks {
             checks,
             check_runs,
             reported_head_sha: reported(pull_request.get("headRefOid")),
+            failed_history: failed_check_history(commit),
         })
+    }
+
+    /// Whether this head's complete check history shows no failed run of
+    /// `check`. Branch protection accepts a skipped or neutral required
+    /// result; that acceptance stands only when no run of the check failed
+    /// on this head, since such a rerun is not a pass of the failure.
+    pub(in crate::executor::automation::vcs) fn never_failed(&self, check: &StatusCheck) -> bool {
+        self.failed_history
+            .as_ref()
+            .zip(check.name.as_ref())
+            .is_some_and(|(failed, name)| !failed.contains(name))
     }
 
     /// Retain an allowlisted observation alongside the existing parser result.
@@ -607,6 +625,25 @@ pub(in crate::executor::automation::vcs) fn read_required_checks_observed<
         }),
     );
     RequiredChecks::observe_response(response, observation)
+}
+
+/// The names of every failed check run on the head commit, superseded runs
+/// included, as `pr.required_checks` filtered them. A missing, truncated or
+/// unnamed entry leaves the history unknown.
+fn failed_check_history(commit: &Value) -> Option<BTreeSet<String>> {
+    let complete =
+        |page: &Value| page.pointer("/pageInfo/hasNextPage") == Some(&Value::Bool(false));
+    let suites = commit
+        .get("checkSuites")
+        .filter(|suites| complete(suites))?;
+    let mut failed = BTreeSet::new();
+    for suite in suites.get("nodes")?.as_array()? {
+        let runs = suite.get("checkRuns").filter(|runs| complete(runs))?;
+        for run in runs.get("nodes")?.as_array()? {
+            failed.insert(reported(run.get("name"))?);
+        }
+    }
+    Some(failed)
 }
 
 fn reported(value: Option<&Value>) -> Option<String> {

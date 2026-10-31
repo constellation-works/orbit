@@ -60,6 +60,18 @@ fi
 if [ -f "$forge/clean-missing" ] && [ -f "$forge/base-applied" ]; then
     checks=$(printf '%s' "$checks" | sed 's/"name":"Protected (rust)"/"name":"Not emitted"/')
 fi
+# A docs-only head: the required check concluded skipped, which branch
+# protection accepts. `failed-history` names the checks that failed on this
+# head before; the required-check read reports history only with that file.
+if [ -f "$forge/required-skipped" ]; then
+    rollup=$(printf '%s' "$rollup" | sed 's/"Protected (rust)","status":"COMPLETED","conclusion":"SUCCESS"/"Protected (rust)","status":"COMPLETED","conclusion":"SKIPPED"/')
+    checks=$(printf '%s' "$checks" | sed 's/"name":"Protected (rust)",\(.*\)"conclusion":"success"}/"name":"Protected (rust)",\1"conclusion":"skipped"}/')
+fi
+history=''
+if [ -f "$forge/failed-history" ]; then
+    history=$(sed 's/.*/{"name":"&"}/' "$forge/failed-history" | paste -sd, -)
+    history=',"checkSuites":{"pageInfo":{"hasNextPage":false},"nodes":[{"checkRuns":{"pageInfo":{"hasNextPage":false},"nodes":['"$history"']}}]}'
+fi
 if [ -f "$forge/legacy-state" ]; then
     rollup="$rollup,"'{"__typename":"StatusContext","context":"external-ci","state":"SUCCESS","isRequired":true}'
 fi
@@ -91,7 +103,7 @@ case "$1 ${2:-}" in
                 printf '{"data":{"repository":{"pullRequest":{"headRefOid":"%s","baseRefName":"%s","reviewDecision":null,"baseRef":{"branchProtectionRule":{"id":"RULE-1","requiredStatusChecks":[]}}}}}}\n' "$head" "$base" ;;
             *statusCheckRollup*)
                 if [ -f "$forge/required-rollup-truncated" ]; then printf '{"data":{"repository":{"pullRequest":{"headRefOid":"%s","commits":{"nodes":[{"commit":{"oid":"%s","statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":true},"nodes":[]}}}}]}}}}}\n' "$head" "$head"; exit; fi
-                printf '{"data":{"repository":{"pullRequest":{"headRefOid":"%s","commits":{"nodes":[{"commit":{"oid":"%s","statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":false},"nodes":[%s]}}}}]}}}}}\n' "$head" "$head" "$rollup" ;;
+                printf '{"data":{"repository":{"pullRequest":{"headRefOid":"%s","commits":{"nodes":[{"commit":{"oid":"%s","statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":false},"nodes":[%s]}}%s}}]}}}}}\n' "$head" "$head" "$rollup" "$history" ;;
             *merge*|*Merge*) echo '{"data":{"repository":{"nameWithOwner":"'"$slug"'","mergeCommitAllowed":true,"squashMergeAllowed":true,"rebaseMergeAllowed":false,"autoMergeAllowed":false,"pullRequest":{"baseRefName":"'"$base"'","baseRef":{"branchProtectionRule":{"requiresLinearHistory":false}}}}}}' ;;
             *) echo "unknown graphql $*" >&2; exit 2 ;;
         esac ;;
