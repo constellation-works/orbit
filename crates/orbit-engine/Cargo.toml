@@ -36,7 +36,6 @@ thiserror.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-chrono-tz.workspace = true
 # The crate's own tests build their host doubles on `test_support::NullRuntimeHost`.
 orbit-engine = { path = ".", features = ["test-support"] }
 jsonschema.workspace = true
