@@ -19,21 +19,6 @@ use super::{
     PullDrainState, SteeringRound, SteeringWatermark, TaskCancellationPolicy,
 };
 
-/// What a drain's submission warned about and noted [ORB-20446]: the same
-/// lines its receipt carried, so the dashboard can keep showing them for the
-/// life of the window instead of only in the Start reply.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SubmissionNoticeRecord {
-    /// When the submission was accepted.
-    pub recorded_at: DateTime<Utc>,
-    /// One warning per entry, in the receipt's order.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub warnings: Vec<String>,
-    /// One note per entry, in the receipt's order.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub notes: Vec<String>,
-}
-
 /// A crew whose `[crews.<name>] env` entries read sources the launching
 /// environment does not hold. Names only, never values.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -198,11 +183,6 @@ pub struct PipelineState {
     /// Names only, never values. Absent when none were unset.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub crew_env_unset: Vec<CrewEnvUnset>,
-    /// The warnings and notes a drain's submission reported [ORB-20446].
-    /// Absent when it reported none, for every other run, and on runs
-    /// recorded before this existed.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub submission_notices: Option<SubmissionNoticeRecord>,
     /// The leaf failure this run's own failure echoes, when it failed only
     /// because a child it waited on failed [ORB-15202]. Absent for a run that
     /// failed on its own, and on runs recorded before this existed.
@@ -263,7 +243,6 @@ impl PipelineState {
             trigger: None,
             env_pass_unset: Vec::new(),
             crew_env_unset: Vec::new(),
-            submission_notices: None,
             root_cause: None,
             steering_watermarks: BTreeMap::new(),
             steering_rounds: BTreeMap::new(),

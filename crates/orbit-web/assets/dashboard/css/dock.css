@@ -10,57 +10,6 @@
   overflow: hidden;
 }
 
-/* The warnings box above the tabs [ORB-20446]: the dock column's width, three
-   one-line rows of the small mono line, scrolling beyond that. A row opens to
-   its full text on click. Three rows plus padding and border come to 76px, so
-   at desktop width its top lines up with the list toolbar's New task button. */
-.dock-warnings {
-  --dock-warning-line: 20px;
-  flex: 0 0 auto;
-  box-sizing: border-box;
-  max-height: calc(3 * var(--dock-warning-line) + 16px);
-  margin: 0;
-  padding: 7px 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  list-style: none;
-  border: 1px solid var(--warn-line);
-  border-radius: var(--radius-sm);
-  background: var(--warn-wash);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: var(--dock-warning-line);
-}
-.dock-warnings[hidden] { display: none; }
-.dock-warning {
-  display: flex;
-  gap: 8px;
-  min-width: 0;
-  padding: 0 10px;
-  color: var(--fg-soft);
-  cursor: pointer;
-}
-.dock-warning:hover { background: color-mix(in srgb, var(--warn-fg) 6%, transparent); }
-.dock-warning:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.dock-warning-icon { flex: 0 0 auto; width: 1.2em; text-align: center; }
-.dock-warning.warn .dock-warning-icon { color: var(--warn-fg); }
-.dock-warning.note { color: var(--fg-mute); }
-.dock-warning-time { flex: 0 0 auto; color: var(--fg-mute); font-variant-numeric: tabular-nums; }
-.dock-warning-source { flex: 0 0 auto; max-width: 14ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-dim); }
-.dock-warning.warn .dock-warning-source:not(.link) { color: var(--warn-fg); }
-button.dock-warning-source {
-  padding: 0;
-  border: 0;
-  background: none;
-  font: inherit;
-  cursor: pointer;
-  text-decoration: underline dotted;
-  text-underline-offset: 2px;
-}
-button.dock-warning-source:hover { color: var(--fg-strong); }
-.dock-warning-message { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dock-warning.expanded .dock-warning-message { white-space: pre-wrap; overflow-wrap: anywhere; }
-
 /* Underline tabs on a hairline. */
 .dock-head {
   flex: 0 0 auto;

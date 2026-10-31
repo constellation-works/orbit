@@ -10,7 +10,6 @@
 
 import { bindTaskLink, el, fetchJson, formatClock, formatDateTime, onClockZoneChange, onWorkspaceChange, getHost, isHostUnavailable, withHost } from './common.js';
 import { recordRoutedHref } from './router.js';
-import { dockWarningCount, onDockWarningsChange, setLogWarnings } from './dock-warnings.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -243,8 +242,7 @@ function firstDockCardOffset(side) {
 
 // Re-level whenever something above the first task block, or the dock itself,
 // changes size: the toolbar or status pills wrapping, the pager coming and
-// going, the dock coming back after a task closes, the tab bar or the warnings
-// box above it changing height.
+// going, the dock coming back after a task closes, the tab bar changing height.
 // The create dialog is in the top layer and moves nothing. A tab switch re-levels from applyDockMode. Passing notices
 // sit in the message area and move nothing.
 function wireDockAlignment() {
@@ -261,8 +259,6 @@ function wireDockAlignment() {
   resize.observe(dock);
   const head = dock.querySelector("#side-dock > .dock-head");
   if (head) resize.observe(head);
-  const warnings = $("dock-warnings");
-  if (warnings) resize.observe(warnings);
   for (const node of panel.children) resize.observe(node);
   for (const node of panel.querySelectorAll(":scope > header > *")) resize.observe(node);
   queue();
@@ -725,7 +721,6 @@ function syncLogFilterPills() {
 function applyLogFilters() {
   let visibleCount = 0;
   const counts = { err: 0, deny: 0, warn: 0 };
-  const warnings = [];
   for (const row of logRows) {
     if (row.dataset.gap) {
       row.style.display = "";
@@ -735,7 +730,6 @@ function applyLogFilters() {
     const level = row.dataset.level;
     const lvClass = getLogClass(level, code);
     if (lvClass in counts) counts[lvClass] += 1;
-    if (lvClass === "warn") warnings.push(logWarningEntry(row));
 
     let show = false;
     if (activeLogFilters.has("all")) {
@@ -752,52 +746,17 @@ function applyLogFilters() {
   
   const cnt = $("log-count");
   if (cnt) cnt.textContent = `${visibleCount}`;
+  writeLogCounts(counts);
+}
+
+// Each level pill counts its lines among those kept, and the Log tab names
+// the worst level present so a problem shows while Drain is selected.
+function writeLogCounts(counts) {
   for (const node of document.querySelectorAll("#side-dock .filter-count[data-count]")) {
     const count = counts[node.dataset.count] || 0;
     node.textContent = String(count);
     node.classList.toggle("nonzero", count > 0);
   }
-  logProblemCounts = counts;
-  // The warnings box repaints and calls writeLogBadge back.
-  setLogWarnings(warnings);
-}
-
-// The warnings box's entry for one Log warning line; `reveal` opens the Log
-// on it, clearing a filter that hides it.
-function logWarningEntry(row) {
-  return {
-    ts: row.dataset.ts || "",
-    source: row.querySelector(".ag")?.textContent || "Log",
-    message: row.querySelector(".m")?.textContent || "",
-    reveal: () => revealLogRow(row),
-  };
-}
-
-function revealLogRow(row) {
-  chooseDockMode("log");
-  if (!row.isConnected) return;
-  if (row.style.display === "none") {
-    activeLogFilters = new Set(["all"]);
-    if (!logPanelPrefs.showAgent && row.dataset.agentStdout === "true") {
-      logPanelPrefs = { ...logPanelPrefs, showAgent: true };
-      saveLogPanelPrefs(logPanelPrefs);
-    }
-    syncLogFilterPills();
-    applyLogFilters();
-  }
-  row.classList.add("expanded", "located");
-  row.scrollIntoView?.({ block: "nearest" });
-  setTimeout(() => row.classList.remove("located"), 1600);
-}
-
-let logProblemCounts = { err: 0, deny: 0, warn: 0 };
-onDockWarningsChange(writeLogBadge);
-
-// The Log tab names the worst level present so a problem shows while Drain is
-// selected. Its warning count is the warnings box's, which adds the live
-// window's submission warnings to the Log's own warning lines.
-function writeLogBadge() {
-  const counts = { ...logProblemCounts, warn: dockWarningCount() };
   const state = $("dock-log-state");
   if (!state) return;
   const level = counts.err > 0 ? "err" : counts.deny > 0 ? "deny" : counts.warn > 0 ? "warn" : "";

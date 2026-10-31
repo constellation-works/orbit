@@ -115,7 +115,6 @@ impl Execute for AutoCommand {
             let mut warnings = notices.warnings();
             // [ORB-15622] A replica whose gates drifted from the owner's.
             warnings.extend(runtime.pull_gate_drift(&invoke.run_id)?);
-            runtime.record_submission_notices(&invoke.run_id, &warnings, &notices.notes());
             return workflow_dispatch_payload_with_notices(
                 AUTO_WORKFLOW,
                 &[WorkflowDispatchResult {
@@ -187,7 +186,6 @@ impl Execute for AutoCommand {
         };
         let mode = runtime.run_auto_concurrency(&run.run_id)?;
         let notices = runtime.submission_notices(SubmissionKind::Drain);
-        runtime.record_submission_notices(&run.run_id, &notices.warnings(), &notices.notes());
         super::support::workflow_dispatch_payload_with_auto_concurrency(
             AUTO_WORKFLOW,
             &[run],
