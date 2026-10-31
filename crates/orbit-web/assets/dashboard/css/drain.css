@@ -147,10 +147,14 @@
 .drain-backlog-forecast:hover .drain-backlog-forecast-figures,
 .drain-backlog-forecast:hover .drain-backlog-forecast-go { color: var(--accent); }
 .drain-backlog-forecast:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
-.drain-backlog-forecast-figures { flex: 1 1 auto; color: var(--fg); font-variant-numeric: tabular-nums; }
-.drain-backlog-forecast-go { color: var(--fg-mute); }
+/* The figures (or the baseline line) take the row under the label, ordered
+   after the arrow, so the arrow ends the label row instead of wrapping alone
+   beside a full-width figures line [ORB-20480]. */
+.drain-backlog-forecast-figures { order: 1; flex: 1 1 100%; color: var(--fg); font-variant-numeric: tabular-nums; }
+.drain-backlog-forecast-go { margin-left: auto; color: var(--fg-mute); }
 .drain-backlog-forecast.unavailable { color: var(--fg-mute); }
-.drain-backlog-forecast-baseline { flex: 1 1 auto; min-width: 0; color: var(--fg-dim); overflow-wrap: anywhere; }
+.drain-backlog-forecast-baseline { order: 1; flex: 1 1 100%; min-width: 0; color: var(--fg-dim); overflow-wrap: anywhere; }
+.drain-backlog-forecast-baseline:empty { display: none; }
 /* In a narrow card the figures drop under the chart, right-aligned. */
 @container drain-card (max-width: 520px) {
   .drain-forecast-peaks { grid-template-columns: 56px minmax(0, 1fr); row-gap: 6px; }
