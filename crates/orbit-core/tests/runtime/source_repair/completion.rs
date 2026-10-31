@@ -130,6 +130,7 @@ fn tail_forge(f: &Fixture, mode: &str) -> PathBuf {
     let once = f._root.path().join("lost-read");
     let merged = f._root.path().join("merged");
     let gh = f._root.path().join("bin/gh");
+    let head = &f.head;
     std::fs::write(&gh, format!(r#"#!/bin/sh
 printf '%s\n' "$*" >> '{}'
 case "$1 $2" in
@@ -137,7 +138,11 @@ case "$1 $2" in
     if [ ! -f '{}' ]; then touch '{}'; echo 'TLS handshake timeout' >&2; exit 1; fi
     if [ -f '{}' ]; then cat '{}'; else cat '{}'; fi;;
  'repo view') echo '{{"nameWithOwner":"owner/repository"}}';;
- 'api graphql') echo '{{"data":{{"repository":{{"autoMergeAllowed":false,"mergeCommitAllowed":true,"rebaseMergeAllowed":false,"squashMergeAllowed":false,"pullRequest":{{"baseRefName":"main","baseRef":{{"branchProtectionRule":null}}}}}}}}}}';;
+ 'api graphql')
+    case "$*" in
+     *isRequired*) echo '{{"data":{{"repository":{{"pullRequest":{{"headRefOid":"{head}","commits":{{"nodes":[{{"commit":{{"oid":"{head}","statusCheckRollup":null}}}}]}}}}}}}}}}';;
+     *) echo '{{"data":{{"repository":{{"autoMergeAllowed":false,"mergeCommitAllowed":true,"rebaseMergeAllowed":false,"squashMergeAllowed":false,"pullRequest":{{"baseRefName":"main","baseRef":{{"branchProtectionRule":null}}}}}}}}}}';;
+    esac;;
  'api repos/'*) touch '{}'; printf '{{"merged":true,"sha":"{}"}}';;
  *) exit 99;;
 esac

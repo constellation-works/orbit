@@ -656,7 +656,9 @@ pub(super) fn ci_answer(host: &DeliveryHost, operation: &str, input: &Value) -> 
             };
             let conclusion = if observed == "pending" {
                 ""
-            } else if observed == "success" {
+            } else if observed == "success"
+                || (observed == "source_contract" && contract(head) == "fixed")
+            {
                 "SUCCESS"
             } else {
                 "FAILURE"
@@ -1467,7 +1469,8 @@ fn auto_fix_watches_required_running_beside_optional_failure() {
                     ("PR required checks".into(), 15_000),
                     ("PR status".into(), 10_000),
                     ("PR required checks".into(), 10_000),
-                    ("PR status".into(), 5_000)
+                    ("PR status".into(), 5_000),
+                    ("PR required checks".into(), 5_000)
                 ],
                 "all observations consume the original absolute completion deadline"
             );
@@ -2219,8 +2222,159 @@ fn auto_fix_waits_for_an_unmoved_red_base_and_repairs_a_candidate_failure() {
     );
 }
 
-/// A base hold must survive the public job boundary, including a conflicting
-/// PR and jobs with retry, step, final and failure recovery configured.
+#[test]
+fn auto_fix_repairs_untouched_failure_on_green_base_first_poll() {
+    auto_fix_table(
+        "auto_fix::auto_fix_repairs_untouched_failure_on_green_base_first_poll",
+        "green_base",
+        |case, row| {
+            let (fx, host) = docs_only_pr(row);
+            let log = "error: source failure\n --> src/contract:1:1\n";
+            plant_commit_ci(&fx, &fx.candidate, 11, "failure", log);
+            plant_commit_ci(&fx, &fx.base_sha, 21, "success", log);
+            fx.script_checks(&["failure"]);
+            let reads = fx.status_reads();
+            let error = action(
+                &host,
+                "pr_complete",
+                &waited_auto_fix_input(&fx, 15, Some(5)),
+            )
+            .expect_err(case)
+            .to_string();
+            assert!(is_check_repair(&error), "{error}");
+            assert_eq!(repair_attempts(&host).len(), 1);
+            assert_eq!(fx.status_reads() - reads, 1);
+            assert!(
+                !host
+                    .history(TASK_ID)
+                    .iter()
+                    .any(|entry| entry.event == "pr_auto_fix_base_red")
+            );
+        },
+    );
+}
+
+/// A provider-reported mergeable head still needs its own green required CI.
+/// Base attribution cannot turn a latest failing check into permission to merge.
+#[test]
+fn regression_latest_required_failure_blocks_merge_until_passing_head_rerun() {
+    auto_fix_table(
+        "auto_fix::regression_latest_required_failure_blocks_merge_until_passing_head_rerun",
+        "clean_failure unstable_failure stale_rollup",
+        |case, row| {
+            let (fx, host) = docs_only_pr(row);
+            plant_older_green_base(&fx);
+            fx.script_checks(&[if case == "stale_rollup" {
+                "success"
+            } else {
+                case
+            }]);
+            let required = |conclusion: &str| {
+                json!({
+                    "pullRequest":{"headRefOid":fx.candidate,"commits":{"nodes":[{"commit":{
+                        "oid":fx.candidate,"statusCheckRollup":{"contexts":{
+                            "pageInfo":{"hasNextPage":false},"nodes":[{
+                                "name":"test","isRequired":true,"status":"COMPLETED","conclusion":conclusion
+                            }]
+                        }}
+                    }}]}}
+                })
+            };
+            fx.write_forge(
+                "required-policy",
+                json!({"data":{"repository":required("FAILURE")}}).to_string(),
+            );
+            let input = fx.complete_ungated_input();
+            let error = action(&host, "pr_complete", &input).expect_err(case);
+            assert!(
+                error.to_string().contains("required check 'test' failed"),
+                "{case}: {error}"
+            );
+            assert!(
+                fx.merge_requests().is_empty(),
+                "{case}: red head must never merge"
+            );
+            assert_candidate_head_unchanged(&fx, case);
+            for unpassed in ["SKIPPED", "NEUTRAL"] {
+                fx.write_forge(
+                    "required-policy",
+                    json!({"data":{"repository":required(unpassed)}}).to_string(),
+                );
+                let mut immediate = input.clone();
+                immediate["max_wait_seconds"] = json!(0);
+                action(&host, "pr_complete", &immediate)
+                    .expect_err("a skipped or neutral rerun did not pass the failed check");
+                assert!(
+                    fx.merge_requests().is_empty(),
+                    "{case}: {unpassed} cannot clear the failed check"
+                );
+            }
+            fx.write_forge(
+                "required-policy",
+                json!({"data":{"repository":required("SUCCESS")}}).to_string(),
+            );
+            fx.script_checks(&["success"]);
+            let result = action_ok(&host, "pr_complete", &input);
+            assert_eq!(result["merge"]["merged"], true, "{case}");
+            assert_landed_exactly(&fx, &host, &fx.candidate, case);
+        },
+    );
+}
+
+/// Independent recovery still records suspicion, once per exact failure even
+/// when a later poll observes a newer base tip.
+#[test]
+fn regression_base_suspect_history_deduplicates_across_base_tips() {
+    isolated(
+        "auto_fix::regression_base_suspect_history_deduplicates_across_base_tips",
+        |row| {
+            let (fx, host) = docs_only_pr(row);
+            plant_older_green_base(&fx);
+            host.script(
+                "test_checkpoint",
+                json!({"workspace_path":fx.repo,"base_sha":fx.base_sha}),
+            );
+            host.script(
+                "test_final_decision",
+                json!({"decision":"escalate","diagnosis":"source failure","human_action":"repair"}),
+            );
+            let mut input = waited_auto_fix_input(&fx, 0, None);
+            input["auto_fix"] = json!(false);
+            for run in [RUN_ID, "jrun-new-base"] {
+                if run != RUN_ID {
+                    fx.advance_base();
+                    host.set_status(TASK_ID, TaskStatus::Review);
+                }
+                let result = run_job(
+                    &host,
+                    green_base_hold_job(&input),
+                    &green_base_hold_activities(),
+                    run,
+                    json!({"task_ids":[TASK_ID]}),
+                    None,
+                );
+                assert!(
+                    !matches!(&result, Ok(outcome) if outcome.success),
+                    "{run}: {result:?}"
+                );
+                assert!(!scripted_ran(&host, "test_final_decision"));
+                assert_eq!(
+                    host.history(TASK_ID)
+                        .iter()
+                        .filter(|entry| entry.event == "ci_base_suspect")
+                        .count(),
+                    1,
+                    "one suspicion per head/check/signature, including a new base tip"
+                );
+                assert!(fx.merge_requests().is_empty());
+            }
+        },
+    );
+}
+
+/// A known-red-base hold survives the public job boundary, including a
+/// conflicting PR and configured recovery hooks. Source suspicion instead
+/// admits repair without granting merge permission.
 #[test]
 fn base_check_holds_never_dispatch_candidate_recovery() {
     auto_fix_table(
@@ -2281,7 +2435,7 @@ fn base_check_holds_never_dispatch_candidate_recovery() {
             let mut job = job_asset(json!([
                 {"id":"commit", "target":"activity:checkpoint", "recovery_activity":"step_failure_recovery"},
                 {"id":"complete_pr", "target":"activity:pr_complete", "recovery_activity":"pr_conflict_recovery", "default_input":input,
-                 "retry":{"max_attempts":if case == "candidate" { 1 } else { 2 },"initial_backoff_ms":1}}
+                 "retry":{"max_attempts":if case.ends_with("red") { 2 } else { 1 },"initial_backoff_ms":1}}
             ]));
             job.failure_activity = Some("unexpected_failure".into());
             job.final_recovery_activity = Some("unexpected_final".into());
@@ -2300,12 +2454,54 @@ fn base_check_holds_never_dispatch_candidate_recovery() {
                 json!({}),
                 None,
             );
-            if case == "candidate" {
+            if case == "dirty_suspect" {
+                let error = result.expect_err(case).to_string();
                 assert!(
-                    scripted_ran(&host, "unexpected_step"),
-                    "candidate checks still dispatch recovery: {result:?}"
+                    error.contains("branch has merge conflicts"),
+                    "{case}: {error}"
                 );
-                assert_eq!(repair_attempts(&host).len(), 1);
+                assert!(
+                    repair_attempts(&host).len() == 1,
+                    "a green-base source failure admits one check repair even beside a reported conflict"
+                );
+                assert_no_unexpected_ran(
+                    &host,
+                    &["unexpected_step", "unexpected_conflict", "unexpected_final"],
+                    case,
+                );
+                assert!(
+                    scripted_ran(&host, "unexpected_failure"),
+                    "{case}: the ordinary failure handler receives a conflict that is not a base hold"
+                );
+                assert!(
+                    !host
+                        .history(TASK_ID)
+                        .iter()
+                        .any(|entry| entry.event == "pr_auto_fix_base_red")
+                );
+                assert_nothing_landed(&fx, &host, TaskStatus::Review, case);
+                return;
+            }
+            if !case.ends_with("red") {
+                assert!(
+                    scripted_ran(&host, "unexpected_step")
+                        || scripted_ran(&host, "unexpected_conflict"),
+                    "{case}: candidate checks still dispatch recovery: {result:?}"
+                );
+                assert!(
+                    !host
+                        .history(TASK_ID)
+                        .iter()
+                        .any(|entry| entry.event == "pr_auto_fix_base_red"),
+                    "{case}: suspicion must not be recorded as a known-red base: {result:?}"
+                );
+                assert!(
+                    fx.merge_requests().is_empty(),
+                    "{case}: recovery grants no merge"
+                );
+                if !case.starts_with("dirty_") {
+                    assert_eq!(repair_attempts(&host).len(), 1, "{case}: one source repair");
+                }
                 return;
             }
             let error = result.expect_err(case);
@@ -2352,75 +2548,6 @@ fn base_check_holds_never_dispatch_candidate_recovery() {
                     .any(|entry| entry.event == "pr_auto_fix_base_red"),
                 "{case}"
             );
-            if case == "suspect" {
-                // An unrelated push run on the same head is not a
-                // rerun of the recorded failure: it still holds and
-                // spends no repair attempt.
-                let candidate_dir = fx.forge.join("commit-ci").join(&fx.candidate);
-                rewrite_forge_json(&candidate_dir.join("jobs.json"), |jobs| {
-                    jobs["jobs"][0]["id"] = json!(32);
-                    jobs["jobs"][0]["started_at"] = json!("2026-10-27T05:02:00Z");
-                    jobs["jobs"][0]["completed_at"] = json!("2026-10-27T05:03:00Z");
-                });
-                rewrite_forge_json(&candidate_dir.join("runs.json"), |runs| {
-                    runs["workflow_runs"][0]["id"] = json!(3);
-                    runs["workflow_runs"][0]["run_attempt"] = json!(1);
-                    runs["workflow_runs"][0]["event"] = json!("push");
-                    runs["workflow_runs"][0]["run_started_at"] = json!("2026-10-27T05:02:00Z");
-                });
-                fs::write(candidate_dir.join("run_id"), "3").unwrap();
-                let mut unrelated = auto_fix_input(&fx);
-                unrelated["run_id"] = json!("jrun-unrelated-run");
-                let error = action(&host, "pr_complete", &unrelated).unwrap_err();
-                assert!(
-                    (error.to_string().contains("base_red")
-                        || error.to_string().contains("base-suspect"))
-                        && !is_check_repair(&error.to_string()),
-                    "unrelated push run cannot admit repair: {error}"
-                );
-                assert!(
-                    repair_attempts(&host).is_empty(),
-                    "unrelated push run spends no repair attempt"
-                );
-                // A later watcher re-observes the held PR. A base pass
-                // alone still holds; the unchanged-head rerun must fail
-                // the same signature before repair admission.
-                let candidate_dir = fx.forge.join("commit-ci").join(&fx.candidate);
-                rewrite_forge_json(&candidate_dir.join("jobs.json"), |jobs| {
-                    jobs["jobs"][0]["id"] = json!(13);
-                    jobs["jobs"][0]["started_at"] = json!("2026-10-27T05:02:00Z");
-                    jobs["jobs"][0]["completed_at"] = json!("2026-10-27T05:03:00Z");
-                });
-                rewrite_forge_json(&candidate_dir.join("runs.json"), |runs| {
-                    runs["workflow_runs"][0]["id"] = json!(11);
-                    runs["workflow_runs"][0]["run_attempt"] = json!(2);
-                    runs["workflow_runs"][0]["run_started_at"] = json!("2026-10-27T05:02:00Z");
-                    runs["workflow_runs"][0]["event"] = json!("pull_request");
-                    runs["workflow_runs"][0]["pull_requests"] = json!([{"number": 42}]);
-                });
-                fs::write(candidate_dir.join("run_id"), "11").unwrap();
-                let base_dir = fx.forge.join("commit-ci").join(&fx.base_sha);
-                rewrite_forge_json(&base_dir.join("jobs.json"), |jobs| {
-                    jobs["jobs"][0]["started_at"] = json!("2026-10-27T04:58:00Z");
-                });
-                rewrite_forge_json(&base_dir.join("runs.json"), |runs| {
-                    runs["workflow_runs"][0]["status"] = json!("completed");
-                    runs["workflow_runs"][0]["conclusion"] = json!("success");
-                    runs["workflow_runs"][0]["run_started_at"] = json!("2026-10-27T04:58:00Z");
-                });
-                fx.write_forge(
-                    "base-push-runs.json",
-                    fs::read_to_string(base_dir.join("runs.json")).unwrap(),
-                );
-                let mut next = auto_fix_input(&fx);
-                next["run_id"] = json!("jrun-base-recheck");
-                let error = action(&host, "pr_complete", &next).unwrap_err();
-                assert!(
-                    is_check_repair(&error.to_string()),
-                    "same-signature PR rerun plus green base releases the hold: {error}"
-                );
-                assert_eq!(repair_attempts(&host).len(), 1);
-            }
         },
     );
 }
@@ -2731,11 +2858,12 @@ fn plant_oversized_base_ci(fx: &Fixture, collection: &str) {
     }
 }
 
-/// Projected provider failures must remain errors and cannot spend a repair.
+/// Invalid projected base evidence stays an adapter error. It cannot establish
+/// a known-red base or suppress a repair whose own source evidence is complete.
 #[test]
-fn auto_fix_refuses_unreadable_or_incomplete_projected_ci() {
+fn auto_fix_repairs_without_treating_unreadable_base_as_known_red() {
     auto_fix_table(
-        "auto_fix::auto_fix_refuses_unreadable_or_incomplete_projected_ci",
+        "auto_fix::auto_fix_repairs_without_treating_unreadable_base_as_known_red",
         "missing_runs malformed_runs incomplete_runs unreadable_jobs incomplete_jobs object_jobs",
         |case, row| {
             let (fx, host) = docs_only_pr(row);
@@ -2795,20 +2923,27 @@ fn auto_fix_refuses_unreadable_or_incomplete_projected_ci() {
                 );
             }
             let error = action(&host, "pr_complete", &auto_fix_input(&fx)).unwrap_err();
-            assert!(!is_check_repair(&error.to_string()), "{case}: {error}");
+            assert!(is_check_repair(&error.to_string()), "{case}: {error}");
+            assert_eq!(
+                repair_attempts(&host).len(),
+                1,
+                "{case}: complete head evidence admits repair"
+            );
             assert!(
-                repair_attempts(&host).is_empty(),
-                "{case}: unread evidence spends no repair"
+                !host
+                    .history(TASK_ID)
+                    .iter()
+                    .any(|entry| entry.event == "pr_auto_fix_base_red")
             );
             assert_nothing_landed(&fx, &host, TaskStatus::Review, case);
         },
     );
 }
 
-/// An older green base permits a PR rerun, but cannot by itself admit either
-/// the auto-fix repair or completion's independent final recovery. Oversized
-/// workflow and job payloads exercise the normal 1 MiB process capture bound;
-/// only the same-PR later attempt may reach final recovery. The refused row is
+/// Auto-fix admits source repair on an older green base without a repeat.
+/// Independent final recovery still requires the same-PR later attempt.
+/// Oversized workflow and job payloads exercise the normal 1 MiB process
+/// capture bound without gating auto-fix. The refused-history row is
 /// the former `held_first_failure_survives_a_refused_history_write` scenario:
 /// a refused first-failure record still holds and dispatches no recovery.
 #[test]
@@ -2859,6 +2994,26 @@ fn older_green_base_holds_recovery_until_matching_pr_rerun() {
                         !matches!(&result, Ok(outcome) if outcome.success),
                         "{detail}"
                     );
+                    if auto_fix {
+                        assert!(
+                            result
+                                .as_ref()
+                                .err()
+                                .is_some_and(|error| is_check_repair(&error.to_string())),
+                            "{detail}: first failure hands off the source repair: {result:?}"
+                        );
+                        assert_eq!(repair_attempts(&host).len(), 1, "{detail}");
+                        assert!(
+                            !host.history(TASK_ID).iter().any(|entry| matches!(
+                                entry.event.as_str(),
+                                "pr_auto_fix_base_red"
+                            )),
+                            "{detail}: suspicion does not gate repair"
+                        );
+                        assert_no_context_widening(&host, &context, &detail);
+                        assert_nothing_landed(&fx, &host, TaskStatus::Backlog, &detail);
+                        return;
+                    }
                     assert!(
                         !scripted_ran(&host, "test_final_decision"),
                         "{detail}: an older green base alone cannot dispatch final recovery: {result:?}"

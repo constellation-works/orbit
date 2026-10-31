@@ -287,6 +287,17 @@ The owner enforces what it is owed in two places:
   neutral required check as satisfied; this gate does not. The candidate
   stays in review. A local candidate owed a hosted check stops too.
 
+  Auto-fix completion uses a separate repair-admission policy: a source
+  failure gets a repair on its first completion poll unless the known-red-base
+  path applies. Untouched-file suspicion, a missing unchanged-head repeat,
+  and eligible-set authorization do not delay that repair. The merge gate
+  still requires the latest required results on the head being merged to
+  pass, even when GitHub reports it as mergeable. A flaky or base-suspect
+  classification never clears a red required check; only a later passing
+  run of that check on the same head or the repaired head does. Remaining
+  suspicion records are written once per head, check and signature across
+  base-tip changes.
+
 Any other Linux CodeQL keeps the hold, as it does on a before-PR review: a
 rule without `hosted_check` (a custom query, or a workspace with no hosted
 CodeQL), and Linux CodeQL the reviewer names that no such rule covers. The

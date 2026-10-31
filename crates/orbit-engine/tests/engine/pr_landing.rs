@@ -1162,15 +1162,19 @@ fn a_base_modified_merge_refusal_retries_the_same_candidate_on_fresh_evidence(sa
         );
         // Every read after the refusal, up to the one that permits the retry.
         let fresh_reads = checks.len().max(2) - 1;
-        let mut expected = vec!["pr view", "repo view", "api graphql", MERGE_CALL];
-        for check in checks.iter().skip(1) {
+        let mut expected = vec![
+            "pr view",
+            "api graphql",
+            "repo view",
+            "api graphql",
+            MERGE_CALL,
+        ];
+        for _check in checks.iter().skip(1) {
             expected.push("pr view");
-            if *check == "pending" {
-                expected.push("api graphql");
-            }
+            expected.push("api graphql");
         }
         if checks.len() == 1 {
-            expected.push("pr view");
+            expected.extend(["pr view", "api graphql"]);
         }
         expected.extend(["repo view", "api graphql", MERGE_CALL, "pr view"]);
         assert_eq!(fx.forge_calls()[published..], expected, "{case}");
@@ -5859,7 +5863,7 @@ check() {
             printf '{"__typename":"CheckRun","name":"test","status":"%s","conclusion":"%s","isRequired":true},{"__typename":"CheckRun","name":"coverage","status":"COMPLETED","conclusion":"FAILURE","isRequired":false}' "$test_state" "$conclusion" ;;
         pending) printf '{"__typename":"CheckRun","name":"test","status":"IN_PROGRESS","conclusion":""}' ;;
         success) printf '{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"SUCCESS"}' ;;
-        failure|dirty_failure) printf '{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"FAILURE"}' ;;
+        failure|dirty_failure|clean_failure|unstable_failure) printf '{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"FAILURE"}' ;;
         # Two required failures. `test` then `lint`, or the reverse. Both
         # carry isRequired so the policy read does not tag only the last node.
         paired_pending|paired_failure|paired_failure_reversed)
@@ -5936,6 +5940,8 @@ status() {
         pending) merge_state=BLOCKED; rollup=$(check pending) ;;
         success) merge_state=CLEAN; rollup=$(check success) ;;
         failure) merge_state=BLOCKED; rollup=$(check failure) ;;
+        clean_failure) merge_state=CLEAN; rollup=$(check failure) ;;
+        unstable_failure) merge_state=UNSTABLE; rollup=$(check failure) ;;
         paired_pending|paired_failure|paired_failure_reversed) merge_state=BLOCKED; rollup=$(check "$observed") ;;
         aggregate_failure|aggregate_mixed_failure)
             merge_state=BLOCKED

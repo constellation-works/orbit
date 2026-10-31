@@ -339,7 +339,7 @@ fn drive_pr_to_merged_observed<H: RuntimeHost + ?Sized>(
                 BlockedCheckWait::Owner(&[])
             },
             &mut unreported,
-            completion_deadline_ms,
+            (max_wait_seconds > 0).then_some(completion_deadline_ms),
         )
         .map_err(|refusal| observed(refusal.into_error(|reason| stopped(pr_number, reason))))?;
         if !base_refresh_wait

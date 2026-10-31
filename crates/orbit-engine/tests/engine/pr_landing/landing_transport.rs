@@ -87,8 +87,8 @@ fn required_check_transport_preserves_retry_budget_and_merge_authority() {
                 );
                 assert_eq!(
                     calls(&fx, REQUIRED_READ),
-                    2,
-                    "required-check evidence recovers before landing"
+                    3,
+                    "required-check evidence recovers and is rechecked on the mergeable head"
                 );
                 assert_eq!(mutations(&fx), "merge\n");
                 assert_eq!(steps(&host), landed_steps());
@@ -140,7 +140,11 @@ fn required_check_transport_preserves_retry_budget_and_merge_authority() {
             in_fresh_row(sandbox, |row| {
                 let (fx, host) = faulty_landing(row, "unused-fault", TLS, false);
                 fs::write(fx.forge.join("gates-pending"), "pending").unwrap();
-                fs::write(fx.forge.join("policy-unreadable"), "invalid evidence").unwrap();
+                fs::write(
+                    fx.forge.join("required-rollup-truncated"),
+                    "invalid evidence",
+                )
+                .unwrap();
                 let (outcome, waits) = land(&host);
 
                 outcome.expect_err("invalid required-check evidence grants no authority");

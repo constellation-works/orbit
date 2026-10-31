@@ -1725,10 +1725,18 @@ one. From then on:
     base run. A same-signature base failure stays
     **inherited**. The lookup examines up to 100 recent base-branch push runs,
     retaining the latest run per workflow and commit; evidence outside that
-    window does not authorize repair. `orbit run auto --auto-fix` applies the
-    same rule and, with `auto_fix=true`, produces the first bounded retry through
-    the shared eligible-set planner. With `auto_fix=false` it keeps the
-    non-mutating hold until a verified manual repeat answers the first failure.
+    window does not authorize the claimed landing's repair. This attribution
+    policy belongs to `handoff_land` and independent completion recovery.
+    `orbit run auto --auto-fix` instead admits a source repair on the first
+    completion poll unless the failure is held as a known-red base. It does
+    not require an unchanged-head repeat or eligible-set authorization first.
+    With `auto_fix=false`, completion recovery keeps the non-mutating hold
+    until a verified manual repeat answers the first failure. Surviving
+    `ci_base_suspect` records are deduplicated by head, check and signature,
+    even when the base tip changes. Every merge path separately checks the
+    latest required results on the head being merged: neither flaky nor
+    base-suspect attribution can clear a red check. A later passing run on
+    that head, including a repaired head, must clear it before merge.
     Without decisive evidence, `handoff_land` stops in review after
     `max_base_ci_cycles` (default 3) observation cycles or the existing
     `max_wait_seconds` deadline (default 3600 seconds), whichever comes first.

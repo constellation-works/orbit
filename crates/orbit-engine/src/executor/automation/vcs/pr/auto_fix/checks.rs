@@ -49,7 +49,6 @@ pub(in crate::executor::automation::vcs::pr) fn red_base_wait<H: RuntimeHost + ?
     };
     match evaluate_red_base(
         host,
-        auto_fix,
         input,
         workspace_path,
         pr_number,
@@ -77,7 +76,6 @@ pub(in crate::executor::automation::vcs::pr) fn red_base_wait<H: RuntimeHost + ?
 #[allow(clippy::too_many_arguments)]
 fn evaluate_red_base<H: RuntimeHost + ?Sized>(
     host: &H,
-    auto_fix: &admission::AutoFix,
     input: &Value,
     workspace_path: &str,
     pr_number: &str,
@@ -107,9 +105,7 @@ fn evaluate_red_base<H: RuntimeHost + ?Sized>(
         base.trim(),
         &tip,
         base_name.strip_prefix("origin/").unwrap_or(&base_name),
-        &auto_fix.task_ids,
         &failed,
-        pr_number.parse::<u64>().ok(),
         deadline_ms,
     )
 }

@@ -248,7 +248,7 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
             &status,
             BlockedCheckWait::Owner(&context.owed_hosted_checks),
             &mut unreported,
-            deadline_ms,
+            (max_wait_seconds > 0).then_some(deadline_ms),
         );
         diagnostic["required_checks"] = unreported.required_observation.clone();
         diagnostic["unreported_wait"] = unreported.diagnostic();

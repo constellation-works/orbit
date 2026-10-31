@@ -111,6 +111,13 @@ fn planner_refusal_journal_deduplicates_bounds_transitions_and_clears_on_recover
             for case in ["identical", "transitions", "recovered", "head_changed"] {
                 in_fresh_row(sandbox, |row| {
                     let (fx, host, _) = fixture(row);
+                    // Source suspicion no longer gates auto-fix. The durable
+                    // rerun journal still governs actual runner failures.
+                    fs::write(
+                        fx.forge.join("retry-log-1000"),
+                        "test\tTests\terror: TLS handshake timeout\n",
+                    )
+                    .unwrap();
                     let host = Rc::new(host);
                     host.script("refuse:ci.rerun_plan", json!({"reason":format!("CI authentication refused Authorization: Bearer secret-value {}\nraw-provider-output-must-not-survive", "é".repeat(1500))}));
                     let clock = Rc::new(Cell::new(1_000_000_u64));

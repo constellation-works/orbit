@@ -136,9 +136,9 @@ fn fixture_with_source(row: &Path, workflow: &str) -> (Fixture, DeliveryHost, Va
 }
 
 #[test]
-fn first_dependency_failure_reruns_before_owner_repair() {
+fn first_dependency_failure_repairs_without_owner_rerun() {
     isolated(
-        "ci_rerun::first_dependency_failure_reruns_before_owner_repair",
+        "ci_rerun::first_dependency_failure_repairs_without_owner_rerun",
         |sandbox| {
             let (fx, host, request) = fixture(sandbox);
             let plan = run_private_vcs_operation("ci.rerun_plan", &request).unwrap();
@@ -146,18 +146,33 @@ fn first_dependency_failure_reruns_before_owner_repair() {
             let mut input = fx.complete_ungated_input();
             input["auto_fix"] = json!(true);
             input["completion"] = json!("review");
-            let result = complete_with_logical_clock(&host, &input);
-            assert!(result.is_ok(), "{result:?}");
-            assert_eq!(
-                fx.forge_lines("retry-sends"),
-                vec!["run rerun 700 --failed"]
-            );
+            let reads = fx
+                .forge_calls()
+                .iter()
+                .filter(|call| call.as_str() == "pr view")
+                .count();
+            let error =
+                complete_with_logical_clock(&host, &input).expect_err("first-poll source repair");
             assert!(
-                host.history(TASK_ID)
+                orbit_types::workflow::is_pr_auto_fix_check_repair(&error.to_string()),
+                "{error}"
+            );
+            assert_eq!(
+                fx.forge_calls()
+                    .iter()
+                    .filter(|call| call.as_str() == "pr view")
+                    .count()
+                    - reads,
+                1
+            );
+            assert!(fx.forge_lines("retry-sends").is_empty());
+            assert!(
+                !host
+                    .history(TASK_ID)
                     .iter()
                     .any(|entry| entry.event == CI_RERUN_RESERVED_EVENT)
             );
-            assert!(pr_auto_fix_attempts(&host.history(TASK_ID), "42").is_empty());
+            assert_eq!(pr_auto_fix_attempts(&host.history(TASK_ID), "42").len(), 1);
         },
     );
 }
@@ -345,6 +360,11 @@ fn reserved_owner_retry_never_resends_an_unknown_reply() {
         "ci_rerun::reserved_owner_retry_never_resends_an_unknown_reply",
         |sandbox| {
             let (fx, host, _) = fixture(sandbox);
+            fs::write(
+                fx.forge.join("retry-log-1000"),
+                "test\tTests\terror: TLS handshake timeout\n",
+            )
+            .unwrap();
             let mut config: Value =
                 serde_json::from_slice(&fs::read(fx.forge.join("retry-config.json")).unwrap())
                     .unwrap();
@@ -471,6 +491,20 @@ fn claimed<'a>(fx: &Fixture, host: &'a DeliveryHost) -> ClaimedRetry<'a> {
     }
 }
 
+fn land_claimed_retry(host: &ClaimedRetry<'_>) -> Res<Value> {
+    with_completion_clock(|| {
+        execute_deterministic_action(
+            host,
+            "handoff_land",
+            &json!({}),
+            &json!({"handoff_id":"handoff-retry","task_id":TASK_ID,"run_id":RUN_ID,"max_wait_seconds":10,"poll_interval_seconds":5}),
+            false,
+            &HashMap::new(),
+            None,
+        )
+    })
+}
+
 #[test]
 fn first_dependency_failure_reruns_before_claimed_landing_repair() {
     isolated(
@@ -575,27 +609,24 @@ fn owner_retry_preserves_read_only_and_independent_candidate_routes() {
                     input["max_wait_seconds"] = json!(10);
                     let result = complete_with_logical_clock(&host, &input);
                     let attempts = pr_auto_fix_attempts(&host.history(TASK_ID), "42");
-                    if matches!(case, "independent" | "repeat") {
+                    if case == "read_only" {
+                        assert!(result.is_err(), "{case}: {result:?}");
+                        assert!(attempts.is_empty(), "read-only completion admits no repair");
+                    } else {
                         let error = result.expect_err(case);
                         assert!(
                             orbit_types::workflow::is_pr_auto_fix_check_repair(&error.to_string()),
                             "{case}: {error}"
                         );
-                        assert_eq!(attempts.len(), 1, "{case}");
-                    } else if case == "lost_applied" {
-                        assert!(result.is_ok(), "{result:?}");
-                        assert!(attempts.is_empty());
-                    } else {
-                        assert!(result.is_err(), "{case}");
-                        assert!(attempts.is_empty(), "{case}: no candidate attribution");
+                        assert_eq!(
+                            attempts.len(),
+                            1,
+                            "{case}: source failure repairs on its first observation"
+                        );
                     }
-                    assert_eq!(
-                        fx.forge_lines("retry-sends").len(),
-                        usize::from(matches!(
-                            case,
-                            "lost_applied" | "repeat" | "different_signature"
-                        )),
-                        "{case}"
+                    assert!(
+                        fx.forge_lines("retry-sends").is_empty(),
+                        "{case}: no rerun is required before source repair"
                     );
                     assert!(
                         fx.merge_requests().is_empty(),

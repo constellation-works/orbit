@@ -180,6 +180,17 @@ fn plan_ci_rerun_observed<H: RuntimeHost + ?Sized>(
             };
             (class, signature)
         };
+        // Auto-fix repairs source failures on its first poll. The landing
+        // rerun policy must not impose eligible-set authorization or an
+        // unchanged-head repeat on that separate repair path.
+        if handoff.is_none()
+            && matches!(
+                class,
+                CheckFailureClass::Flaky | CheckFailureClass::BaseSuspect
+            )
+        {
+            return Ok(CiRerunStep::NotEligible);
+        }
         if class == CheckFailureClass::Flaky
             && super::suspect::has_matching_candidate_rerun(
                 host,
