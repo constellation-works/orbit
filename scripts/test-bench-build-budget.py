@@ -5,8 +5,10 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import tempfile
+import time
 
 
 TRANSPORT = r'''#!/usr/bin/env python3
@@ -56,6 +58,19 @@ if tool == "cargo" and args[:2] == ["check", "-p"]:
         slots=os.environ.get("ORBIT_BUILD_SLOTS"),
     )
     record()
+    block = os.environ.get("BENCH_BLOCK")
+    if block:
+        # Cancellation fixture: start a descendant, publish readiness, then
+        # block on a FIFO that only the harness can release.
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])
+        ready = Path(block) / "ready.json"
+        pending = ready.with_suffix(".tmp")
+        pending.write_text(json.dumps({"pids": [os.getpid(), child.pid]}), encoding="utf-8")
+        pending.rename(ready)
+        with open(Path(block) / "release", "rb") as release:
+            release.read()
+        child.wait()
+        raise SystemExit(0)
     target = Path(event["target"])
     if not target.is_dir() or target.is_symlink():
         raise SystemExit("target was not an owned directory")
@@ -83,6 +98,13 @@ if tool == "rm":
             event["unsafe"] = True
         else:
             event["owned_paths"].append(str(resolved))
+    ready = os.environ.get("BENCH_BLOCK")
+    if ready and (Path(ready) / "ready.json").exists():
+        event["live_pids"] = [
+            pid for pid in json.loads((Path(ready) / "ready.json").read_text(encoding="utf-8"))["pids"]
+            if Path("/proc", str(pid), "stat").exists()
+            and Path("/proc", str(pid), "stat").read_text().rsplit(")", 1)[1].split()[0] != "Z"
+        ]
     record()
     if event["unsafe"]:
         raise SystemExit("cleanup escaped the benchmark workdir")
@@ -330,6 +352,65 @@ def scenario_fresh_run(root, script):
     return errors
 
 
+def pid_alive(pid):
+    try:
+        state = Path("/proc", str(pid), "stat").read_text(encoding="utf-8").rsplit(")", 1)[1].split()[0]
+    except OSError:
+        return False
+    return state != "Z"
+
+
+def scenario_cancellation(root, script):
+    case, work, events, env = make_fixture(root, script, "cancellation", allow_rm=True)
+    block = case / "block"
+    block.mkdir()
+    os.mkfifo(block / "release")
+    env["BENCH_BLOCK"] = str(block)
+    process = subprocess.Popen(
+        ["bash", str(script)], env=env, text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    errors = []
+    pids = []
+    try:
+        deadline = time.monotonic() + 20
+        while not (block / "ready.json").exists():
+            if process.poll() is not None or time.monotonic() > deadline:
+                errors.append("benchmark did not reach the blocked fake Cargo arm")
+                return errors
+            time.sleep(0.02)
+        pids = json.loads((block / "ready.json").read_text(encoding="utf-8"))["pids"]
+        process.send_signal(signal.SIGTERM)
+        try:
+            process.communicate(timeout=20)
+        except subprocess.TimeoutExpired:
+            errors.append("benchmark did not exit after SIGTERM")
+            return errors
+        if process.returncode != 143:
+            errors.append(f"cancellation did not report SIGTERM failure (exit {process.returncode})")
+        survivors = [pid for pid in pids if pid_alive(pid)]
+        if survivors:
+            errors.append(f"arm processes survived the benchmark command: {survivors}")
+        cleanup = [event for event in read_events(events) if event["tool"] == "rm"]
+        if not cleanup:
+            errors.append("owned directories were not cleaned after cancellation")
+        if any(event.get("live_pids") for event in cleanup):
+            errors.append("cleanup removed owned directories while the arm was still running")
+        if any((work / name).exists() for name in ("trees", "targets", "locks")):
+            errors.append("owned directories survived cancellation cleanup")
+    finally:
+        for pid in pids:
+            if pid_alive(pid):
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except OSError:
+                    pass
+        if process.poll() is None:
+            process.kill()
+            process.communicate()
+    return errors
+
+
 def main():
     script = Path(__file__).with_name("bench-build-budget.sh").resolve()
     scratch = Path(__file__).resolve().parent.parent / ".orbit" / "tmp"
@@ -342,6 +423,7 @@ def main():
         ("result-escape", scenario_result_escape),
         ("archive-failure", scenario_archive_failure),
         ("fresh-run", scenario_fresh_run),
+        ("cancellation", scenario_cancellation),
     )
     failures = 0
     with tempfile.TemporaryDirectory(prefix="bench-build-budget-", dir=scratch) as directory:
