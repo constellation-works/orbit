@@ -527,6 +527,126 @@ orbit config show --json      # the same table in effective JSON
 The table shows configuration only. It does not report that a consumer is
 running, because none ships with Orbit.
 
+## Visual review
+
+Visual review checks a delivered mock-up against what the code actually
+renders. A task that carries reference images (mocks) names each view, state,
+theme and width in its artifact names; the workspace's view manifests say how
+to serve that view from the checkout. When the feature is on, delivery
+captures the final candidate beside each mock, runs the workspace's UI checks
+over the captures, and — unless disabled — asks an image-capable reviewer to
+compare each pair and verify its own findings. This section is the
+`[visual_review]` table. It governs mock deliveries only; general UI work
+still uses the browser kit as described in
+[Browser kit](browser-checks.md).
+
+### Set the table
+
+Add or merge this table in `<workspace>/.orbit/config.toml`. The example
+enables shadow mode; every other key keeps its built-in default unless
+listed:
+
+```toml
+[visual_review]
+manifests = ["views.toml"]
+mode = "shadow"
+```
+
+`manifests` lists repository-relative view-manifest files. A task that
+carries mocks is refused while the list is empty, so name at least one
+manifest before enabling a mode. `default_width` is the width a mock name
+without a width part means, and the only width a non-responsive view allows.
+
+| Key | Default | Effect |
+|---|---|---|
+| `visual_review.manifests` | `[]` | View manifests mock names are validated against when a task is promoted and again at delivery admission, read at the base revision. Empty refuses a mock-carrying task. |
+| `visual_review.default_width` | `1440` | Width a mock name with no width part means; also the only width a non-responsive view allows. |
+| `visual_review.mode` | `"off"` | `off`, `shadow` or `live`; see Modes below. |
+| `visual_review.block_at` | `"high"` | In `live`, lowest confirmed-finding severity that blocks landing until fixed or its dispute is accepted: `critical`, `high`, `medium`, `low` or `never` (nothing blocks). |
+| `visual_review.file_at` | `"low"` | In `live`, lowest confirmed-finding severity filed as a follow-up when a delivery lands without fixing it: `critical`, `high`, `medium`, `low`, `nit` or `never`; lower findings are only recorded. Loading refuses a `file_at` above `block_at`, naming both keys. |
+| `visual_review.max_mocks` | `12` | Most mocks one delivery captures (1–100), by artifact name; the rest are recorded as over budget and, in `live`, are neither captured nor required at the final head. |
+| `visual_review.reviewer` | `true` | Run the mock comparison reviewer and its in-line verifier after the checks. `false` keeps capture and checks only. |
+| `visual_review.max_images` | `32` | Most images one review invocation is sent (2–200), canary included, also capped by the drawn executor's image-input limit. Each mock costs two images (mock and capture); the side-by-side is sent only when both would not fit. |
+| `visual_review.max_image_tokens` | `48000` | Estimated image tokens for one review invocation (1–1000000), checked before dispatch. What does not fit is listed as not shown in the review record. |
+| `visual_review.max_findings` | `15` | Most findings accepted from one comparison review (1–100); extras are dropped and counted, as are findings whose evidence names an image outside the delivery's capture or a region outside its image. |
+| `visual_review.require_established` | `false` | `true` holds a delivery whose capture is not established. To release it, clear the setting and resume the held run; a fresh delivery on a host with a verified browser kit captures it. |
+
+The reviewer is drawn from the `visual_review` purpose crew pool, keeping
+only crews whose executor declares image input; while that pool is unset it
+draws from the task's complexity pool under the same filter. The verifier is
+a different such crew than both the reviewer's and the implementer's. With
+no image-capable crew the review records `not_established: no_vision_crew`
+instead of findings.
+
+### Modes
+
+| Mode | Effect |
+|---|---|
+| `off` (default) | No delivery capture, checks or comparison review. The implementer self-check below still works in every mode. |
+| `shadow` | Delivery captures, checks and reviews, and records everything, but nothing blocks and nothing is filed. Use it to measure the reviewer before it can hold work. |
+| `live` | Confirmed findings take effect: each one gets its disposition from `block_at` and `file_at`. The code reviewer before landing receives the findings and answers each as fixed, disputed or unfixed. A blocking finding holds the run until it is fixed and the recapture's checks pass, or an operator accepts its dispute. After landing, each unfixed finding at or above `file_at`, and each accepted-dispute blocking finding, is filed as a follow-up with the mock, capture and side-by-side attached; findings below `file_at` are only recorded. |
+
+In `live` without a review before landing, nothing can resolve a blocking
+finding, so blocking findings are filed as high-priority follow-ups instead
+and configuration loading warns. Live delivery also requires complete
+evidence for every budgeted mock at the final head, even when the initial
+review found nothing; a recapture runs when a review change moved the
+candidate.
+
+### Verify the effective policy
+
+```bash
+orbit config show                  # effective values with source provenance
+orbit config show --all            # include unset advanced keys
+orbit browser-kit status           # a verified kit is required to capture
+```
+
+`orbit config show` reports the merged table and which file each value came
+from. Reach for it before assuming a value; the defaults above are built-ins,
+not necessarily this host's effective policy.
+
+### Self-check a task before delivery
+
+An implementer can render the current checkout beside a task's mocks at any
+time, in any mode:
+
+```bash
+orbit visual capture --task <task-id>
+orbit visual capture --task <task-id> --mock <mock-name> --out <directory>
+```
+
+The command reads the same `visual_review.manifests` from the working tree,
+renders each mock's view from the current checkout (uncommitted changes
+included), and writes the capture, the side-by-side and the UI-rule results
+under the output directory. It needs a verified browser kit and a named
+manifest; without either it fails naming what is missing. It attaches nothing
+and records nothing on the task: it is a self-check aid, not delivery
+evidence. Delivery captures its own evidence on the final candidate, and
+only that system-written capture counts.
+
+### Disputes and missing establishment
+
+In `live`, when the code reviewer disputes a blocking finding instead of
+fixing it, the delivery is held for an operator. Only an operator, outside a
+managed run, can release it:
+
+```bash
+orbit visual accept-dispute --task <task-id> --finding <finding-id> --reason <why>
+```
+
+Accepting records the decision on the task, lets the held delivery land once
+resumed, and files the finding as a follow-up after landing. The command is
+refused in managed runs and for claimed workers; a worker that hits a
+dispute reports it in its handoff instead of accepting it itself.
+
+A host without a verified browser kit cannot capture. Delivery then records
+`not_established` with its reason — for example a missing kit, a kit that no
+longer matches its pin, or a failed setup or capture — shown in
+`orbit run show`, `orbit task show` and the PR body. That record is never a
+pass. Install and verify the kit as described in
+[Browser kit](browser-checks.md), or set `visual_review.require_established`
+only when an unestablished capture must hold the delivery.
+
 ## Review finding verification and owed host evidence
 
 These settings govern review findings and the checks an owner may owe after a

@@ -154,6 +154,41 @@ worker run (a disposable task, or the first UI task) that sources
 The deprecated `orbit run agent` (tool `orbit.agent.invoke`) runs on
 the host outside Orbit's executor sandbox, so it is not that proof.
 
+## Visual review captures
+
+The kit is also what visual review captures with. When a workspace sets
+`visual_review.mode` to `shadow` or `live`, delivery renders each of a
+task's mocks from the final candidate and captures it for comparison; that
+capture needs a verified kit on the delivering host, exactly as a worker's
+own check does. The settings themselves are described in
+[Configuration — Visual review](configuration.md#visual-review).
+
+Two capture paths use the kit, and they are not interchangeable:
+
+- `orbit visual capture --task <task-id>` is the implementer's self-check.
+  It renders the current checkout beside the task's mocks and writes the
+  capture, side-by-side and UI-rule results under its output directory. It
+  attaches nothing and records nothing on the task, so it never counts as
+  delivery evidence.
+- Delivery captures its own evidence on the final candidate. Only that
+  system-written capture, its checks and its comparison review are the
+  evidence of record; agent and operator writes under its namespace are
+  refused.
+
+A host without a verified kit — none installed, never verified, or changed
+since its last pass — records `not_established` with its reason instead of
+capturing. That record is shown in `orbit run show`, `orbit task show` and
+the PR body, and it is never a pass. Fix the kit with
+`orbit browser-kit install` and `orbit browser-kit verify`, then let a fresh
+delivery capture; setting `visual_review.require_established` makes an
+unestablished capture hold the delivery until then.
+
+In `live`, a disputed blocking finding is released only by an operator
+running `orbit visual accept-dispute --task <task-id> --finding <finding-id>
+--reason <why>` outside a managed run. The command is refused in managed
+runs and for claimed workers, so a worker that hits a dispute reports it in
+its handoff instead of accepting it itself.
+
 ## Remove
 
 `orbit browser-kit remove --confirm` deletes `~/.local/chromium-deps`.
