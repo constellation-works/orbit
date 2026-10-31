@@ -25,8 +25,8 @@ use orbit_types::workflow::automation::ConditionScope;
 use orbit_types::workflow::{
     AUTO_TASK_CHECKPOINT_VERSION, AUTO_TASK_TAG_PREFIX, AutoTaskDefinition, AutoTaskReceipt,
     AutoTaskRunCheckpoint, AutoTaskSchedule, AutoTaskStepRecord, AutoTaskStepStatus, DedupePolicy,
-    FrozenAutoTaskTarget, JobRunState, JobV2, ParkedWait, PipelineState, RunStateUpdate,
-    auto_task_tag,
+    FrozenAutoTaskTarget, JobRunState, JobV2, JobV2Step, JobV2StepBody, ParkedWait, PipelineState,
+    RunStateUpdate, auto_task_tag,
 };
 use serde_json::{Value, json};
 
@@ -474,29 +474,129 @@ impl StepContext {
         }
         // An ordinary step: a completed one reads `done`, a `when: false`
         // skip stays `skipped`, anything else is still `waiting`.
-        let status = self
-            .job
-            .steps
-            .iter()
-            .position(|step| step.id == id)
-            .filter(|index| {
-                self.state.step_states.get(&(*index as u32)) == Some(&JobRunState::Success)
-            })
-            .map_or("waiting", |index| {
-                let skipped = self.job.steps[index].when.is_some()
-                    && self
-                        .state
-                        .step_outputs
-                        .get(&(index as u32))
-                        .is_none_or(Value::is_null);
-                if skipped { "skipped" } else { "done" }
-            });
         StepFacts {
-            status: status.to_string(),
+            status: self.ordinary_step_status(id).to_string(),
             end_time: None,
             task_id: None,
         }
     }
+
+    fn ordinary_step_status(&self, id: &str) -> &'static str {
+        let Some(located) = locate_step(&self.job.steps, id) else {
+            return "waiting";
+        };
+        // A step inside a loop or fan_out has no single durable outcome.
+        if located.dynamic {
+            return "waiting";
+        }
+        let Some(parallel_id) = located.enclosing_parallel else {
+            // Top-level: the run state is keyed by this step's own index.
+            let index = located.top_index as u32;
+            if self.state.step_states.get(&index) != Some(&JobRunState::Success) {
+                return "waiting";
+            }
+            let skipped = located.step.when.is_some()
+                && self
+                    .state
+                    .step_outputs
+                    .get(&index)
+                    .is_none_or(Value::is_null);
+            return if skipped { "skipped" } else { "done" };
+        };
+        // A parallel branch: its enclosing top-level block must have
+        // completed, so a checkpoint under a still-live block (a cross-branch
+        // read the checker refuses) cannot masquerade as done. The branch's
+        // own outcome is the checkpoint a succeeded branch recorded; only
+        // succeeded branches are recorded, and a `when:` skip records null.
+        if self.state.step_states.get(&(located.top_index as u32)) != Some(&JobRunState::Success) {
+            return "waiting";
+        }
+        let Some(output) = self
+            .checkpoint
+            .branches
+            .get(parallel_id)
+            .and_then(|branches| branches.get(id))
+        else {
+            return "waiting";
+        };
+        if located.step.when.is_some() && output.is_null() {
+            "skipped"
+        } else {
+            "done"
+        }
+    }
+}
+
+/// One step's static position in a job, mirroring the checker's walk in
+/// `orbit-automation`: its top-level ancestor, its nearest enclosing
+/// `parallel` block, and whether a loop or fan_out encloses it.
+struct LocatedStep<'a> {
+    step: &'a JobV2Step,
+    top_index: usize,
+    enclosing_parallel: Option<&'a str>,
+    dynamic: bool,
+}
+
+fn locate_step<'a>(steps: &'a [JobV2Step], id: &str) -> Option<LocatedStep<'a>> {
+    fn walk<'a>(
+        steps: &'a [JobV2Step],
+        id: &str,
+        top_index: Option<usize>,
+        enclosing_parallel: Option<&'a str>,
+        dynamic: bool,
+        found: &mut Option<LocatedStep<'a>>,
+    ) {
+        for (position, step) in steps.iter().enumerate() {
+            if found.is_some() {
+                return;
+            }
+            let top_index = top_index.unwrap_or(position);
+            if step.id == id {
+                *found = Some(LocatedStep {
+                    step,
+                    top_index,
+                    enclosing_parallel,
+                    dynamic,
+                });
+                return;
+            }
+            match &step.body {
+                JobV2StepBody::Parallel { parallel } => {
+                    for branch in &parallel.branches {
+                        walk(
+                            std::slice::from_ref(branch),
+                            id,
+                            Some(top_index),
+                            Some(step.id.as_str()),
+                            dynamic,
+                            found,
+                        );
+                    }
+                }
+                JobV2StepBody::FanOut { fan_out, .. } => walk(
+                    std::slice::from_ref(&*fan_out.worker),
+                    id,
+                    Some(top_index),
+                    enclosing_parallel,
+                    true,
+                    found,
+                ),
+                JobV2StepBody::Loop { loop_ } => walk(
+                    &loop_.steps,
+                    id,
+                    Some(top_index),
+                    enclosing_parallel,
+                    true,
+                    found,
+                ),
+                JobV2StepBody::TargetRef(_) | JobV2StepBody::Target(_) => {}
+            }
+        }
+    }
+
+    let mut found = None;
+    walk(steps, id, None, None, false, &mut found);
+    found
 }
 
 fn observe_with(
