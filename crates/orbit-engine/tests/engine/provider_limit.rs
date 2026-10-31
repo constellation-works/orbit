@@ -360,10 +360,13 @@ fn usage_limits_are_typed_only_from_text_the_failed_provider_wrote() {
                 let resets_at = limit.resets_at.expect("Claude said when it resets");
                 let pacific = resets_at.with_timezone(&chrono_tz::America::Los_Angeles);
                 assert_eq!((pacific.hour(), pacific.minute()), (15, 0), "{label}");
-                assert_eq!(
-                    Some(resets_at),
-                    next_pacific_three_pm(before),
-                    "{label}: the next 3pm Pacific"
+                let first_possible_reset =
+                    next_pacific_three_pm(before).expect("the next Pacific day exists");
+                let last_possible_reset =
+                    next_pacific_three_pm(after).expect("the next Pacific day exists");
+                assert!(
+                    resets_at >= first_possible_reset && resets_at <= last_possible_reset,
+                    "{label}: the next 3pm Pacific: {resets_at}"
                 );
             }
             _ => assert_eq!(
