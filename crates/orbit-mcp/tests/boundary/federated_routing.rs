@@ -176,6 +176,47 @@ mod workspace_route {
     }
 
     #[test]
+    fn a_malformed_explicit_selector_is_refused_instead_of_using_the_session_default() {
+        let (host, log) = routed_mux();
+        let context = ToolSessionContext {
+            workspace: Some("hm_owner/ws_orbit".to_string()),
+            ..ToolSessionContext::default()
+        };
+
+        for malformed in [
+            json!(42),
+            json!(true),
+            json!(["hm_owner/ws_orbit"]),
+            json!({}),
+        ] {
+            let error = host
+                .call_tool(
+                    "orbit.task.update",
+                    json!({ "id": "ORB-1", "workspace": malformed, "comment": "hi" }),
+                    context.clone(),
+                )
+                .expect_err("a non-string workspace must be refused");
+            assert!(
+                matches!(error, OrbitError::InvalidInput(_)),
+                "{malformed}: {error:?}"
+            );
+        }
+        assert!(
+            log.calls().is_empty(),
+            "a malformed selector must neither contact a destination nor dispatch a mutation"
+        );
+
+        for omitted in [
+            json!({ "id": "ORB-1" }),
+            json!({ "id": "ORB-1", "workspace": null }),
+        ] {
+            host.call_tool("orbit.task.update", omitted, context.clone())
+                .expect("an omitted or null workspace uses the session default");
+        }
+        assert_eq!(log.calls().len(), 2, "the defaults still dispatch");
+    }
+
+    #[test]
     fn a_dispatched_call_whose_answer_is_lost_is_outcome_unknown_not_unreachable() {
         let probe = three_destination_probe().on_call(
             OWNER_MACHINE,

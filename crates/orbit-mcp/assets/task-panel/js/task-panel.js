@@ -578,7 +578,7 @@
     saveDraft();
     editMode=edit;
     editorTarget={
-      workspace,id:edit?selected?.id:null
+      workspace,id:edit?selected?.id:null,hadCrew:edit&&!!snapshot?.task?.crew
     };
     editorRevision=edit?snapshot?.revision:null;
     const entity=snapshot?.task||{
@@ -734,7 +734,9 @@
       const fields={
         title:op.title,description:op.description,acceptance_criteria:op.acceptance_criteria,priority:op.priority
       };
+      // An empty string is the guarded reset; omitting crew would keep the old assignment.
       if(op.crew)fields.crew=op.crew;
+      else if(editorTarget.hadCrew)fields.crew='';
       for(const key of ['title','description','acceptance_criteria','priority','crew'])delete op[key];
       op.id=editorTarget.id;
       op.expected_revision=editorRevision;
