@@ -365,6 +365,7 @@ impl Fixture {
     pub(super) fn seed_run(&self, name: &str, job: &str, state: JobRunState) -> JobRun {
         let now = Utc::now();
         let run = JobRun {
+            build: None,
             run_id: name.into(),
             job_id: job.into(),
             attempt: 1,

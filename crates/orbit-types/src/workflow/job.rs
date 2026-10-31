@@ -602,8 +602,23 @@ pub struct KnowledgeRunMetrics {
     pub total_llm_input_tokens: u64,
 }
 
+/// Build of the Orbit process that admitted or started a job run.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OrbitBuild {
+    /// Package version embedded at compilation.
+    pub version: String,
+    /// Full source commit embedded at compilation; absent for source archives without Git.
+    pub source_commit: Option<String>,
+    /// Source checkout had uncommitted changes when compiled; ancestry is inconclusive.
+    pub dirty: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct JobRun {
+    /// Build at admission, replaced by the executing process on first start.
+    /// Historical rows remain unknown; ordinary updates never rewrite this identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build: Option<OrbitBuild>,
     /// Immutable runtime identity at insertion; pre-existing rows remain unknown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub executed_on: Option<crate::task::ExecutionLocation>,

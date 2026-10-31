@@ -72,6 +72,7 @@ fn finished_delivery_of(
     let workspace = follower.workspace_id().unwrap();
     let admitted = Utc::now() - ChronoDuration::days(2);
     let run = JobRun {
+        build: None,
         executed_on: None,
         run_id: format!("jrun-{task}"),
         job_id: "task_pr_pipeline".into(),

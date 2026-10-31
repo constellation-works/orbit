@@ -229,6 +229,7 @@ fn task_show_summarizes_active_run_and_limits_artifacts() {
             .unwrap()
             .with_actor(ActorIdentity::human("task-show-fixture"));
         let run = JobRun {
+            build: None,
             run_id: run_id.into(),
             job_id: "local-run-fixture".into(),
             attempt: 1,
@@ -961,6 +962,7 @@ fn task_show_offers_resume_for_resumable_escalated_run() {
     let run_id = "jrun-escalated-failed";
     let now = Utc::now();
     let run = JobRun {
+        build: None,
         run_id: run_id.into(),
         job_id: "task_pr_pipeline".into(),
         attempt: 1,
@@ -1030,6 +1032,7 @@ fn task_show_offers_resume_for_resumable_escalated_run() {
         .to_string();
     let nonlocal_run_id = "jrun-escalated-nonlocal";
     let nonlocal_run = JobRun {
+        build: None,
         run_id: nonlocal_run_id.into(),
         job_id: "task_pr_pipeline".into(),
         attempt: 1,
@@ -1101,6 +1104,7 @@ fn task_show_offers_resume_for_resumable_escalated_run() {
         .to_string();
     let nonresumable_run_id = "jrun-escalated-succeeded";
     let nonresumable_run = JobRun {
+        build: None,
         run_id: nonresumable_run_id.into(),
         job_id: "task_pr_pipeline".into(),
         attempt: 1,

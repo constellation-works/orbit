@@ -284,14 +284,15 @@ pub(super) fn upsert_job_run_for_workspace_conn(
     let knowledge_metrics_json =
         optional_json(&run.knowledge_metrics, "job run knowledge metrics")?;
     let pipeline_state_json = optional_json(&pipeline_state, "job run pipeline state")?;
+    let build_json = optional_json(&run.build, "Orbit build")?;
     let executed_on_json = optional_json(&run.executed_on, "execution location")?;
     conn.execute(
         r#"INSERT INTO job_runs(
             run_id, workspace_id, job_id, attempt, state, scheduled_at,
             started_at, finished_at, duration_ms, created_at, pid, pid_start_time,
             input_json, retry_source_run_id, knowledge_metrics_json, resolved_crew,
-            crew_model, executed_on_json
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
+            crew_model, executed_on_json, build_json
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
         ON CONFLICT(workspace_id, run_id) DO UPDATE SET
             job_id = excluded.job_id,
             attempt = excluded.attempt,
@@ -327,6 +328,7 @@ pub(super) fn upsert_job_run_for_workspace_conn(
             run.resolved_crew,
             run.crew_model,
             executed_on_json,
+            build_json,
         ],
     )
     .map_err(sqlite_store_error)?;
@@ -432,6 +434,7 @@ fn row_to_job_run_with_input_keys(
     let input_json: Option<String> = row.get(11)?;
     let knowledge_metrics_json: Option<String> = row.get(13)?;
     Ok(JobRun {
+        build: parse_optional_json(row.get(17)?, "build_json")?,
         executed_on: parse_optional_json(row.get(16)?, "executed_on_json")?,
         run_id: row.get(0)?,
         job_id: row.get(1)?,
@@ -552,7 +555,7 @@ pub(super) fn job_run_list_sql(
 pub(super) const JOB_RUN_COLUMNS: &str = "run_id, job_id, attempt, state, scheduled_at, \
      started_at, finished_at, duration_ms, created_at, pid, pid_start_time, input_json, \
      retry_source_run_id, knowledge_metrics_json, resolved_crew, \
-     COALESCE(crew_model, implementer_model), executed_on_json";
+     COALESCE(crew_model, implementer_model), executed_on_json, build_json";
 
 /// Probe the existing per-job created index once per requested ID, then
 /// hydrate only that run. A window over all history would scan old runs to

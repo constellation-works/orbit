@@ -377,6 +377,7 @@ fn pilot_cli_ranks_task_pilot_crews_against_the_landed_diff() {
             .with_actor(ActorIdentity::human("codebase-fixture"));
         let started = now - chrono::Duration::minutes(10);
         let run = JobRun {
+            build: None,
             run_id: "jrun-pilot-cli".into(),
             job_id: "task_pilot_pipeline".into(),
             attempt: 1,

@@ -43,6 +43,7 @@ fn seed_run(runtime: &OrbitRuntime, id: &str, state: JobRunState) {
 fn seed_job_run(runtime: &OrbitRuntime, id: &str, job_id: &str, state: JobRunState) {
     let now = Utc::now();
     let run = JobRun {
+        build: None,
         run_id: id.into(),
         job_id: job_id.into(),
         attempt: 1,

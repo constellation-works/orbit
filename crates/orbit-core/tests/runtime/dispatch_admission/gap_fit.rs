@@ -101,6 +101,7 @@ impl Fixture {
         let admitted = Utc::now() - Duration::days(2) + Duration::hours(i64::from(index));
         let finished = admitted + Duration::minutes(cpu.len() as i64);
         let run = JobRun {
+            build: None,
             executed_on: None,
             run_id: format!("jrun-gap-fit-{index}"),
             job_id: "task_pr_pipeline".into(),

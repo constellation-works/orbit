@@ -54,6 +54,7 @@ fn task(status: TaskStatus, with_pr: bool) -> Task {
 fn run(state: JobRunState) -> JobRun {
     let now = Utc::now();
     JobRun {
+        build: None,
         executed_on: None,
         run_id: "jrun-1".to_string(),
         job_id: "task_pr_pipeline".to_string(),

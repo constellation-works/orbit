@@ -102,6 +102,7 @@ fn finished_run(
     host: ExecutionLocation,
 ) -> JobRun {
     JobRun {
+        build: None,
         run_id: run_id.into(),
         job_id: "fixture-provider".into(),
         attempt: 1,

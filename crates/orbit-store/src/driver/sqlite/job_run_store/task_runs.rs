@@ -44,7 +44,7 @@ impl Store {
                 .collect::<Vec<_>>()
                 .join(" UNION ALL ");
             let sql = format!(
-                "SELECT job_runs.{JOB_RUN_COLUMNS}, requested.task_id FROM ({pages}) AS requested
+                "SELECT job_runs.{JOB_RUN_COLUMNS}, requested.task_id AS requested_task_id FROM ({pages}) AS requested
                  CROSS JOIN job_runs WHERE job_runs.workspace_id = ?1
                  AND job_runs.run_id = requested.run_id"
             );
@@ -54,7 +54,10 @@ impl Store {
             let mut statement = conn.prepare(&sql).map_err(sqlite_store_error)?;
             let rows = statement
                 .query_map(params.as_slice(), |row| {
-                    Ok((row.get::<_, String>(17)?, row_to_job_run(row)?))
+                    Ok((
+                        row.get::<_, String>("requested_task_id")?,
+                        row_to_job_run(row)?,
+                    ))
                 })
                 .map_err(sqlite_store_error)?;
             for row in rows {

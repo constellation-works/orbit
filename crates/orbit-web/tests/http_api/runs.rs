@@ -440,6 +440,7 @@ fn seed_workspace_run(
 ) -> JobRun {
     let ts = created + chrono::Duration::milliseconds(offset_ms);
     let run = JobRun {
+        build: None,
         run_id: id.to_string(),
         job_id: job.to_string(),
         attempt: 1,

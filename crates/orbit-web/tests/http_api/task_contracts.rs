@@ -800,6 +800,7 @@ fn delivery_attention_flags_failed_review_and_omits_healthy() {
                             now: chrono::DateTime<chrono::Utc>| {
                 let input = json!({ "task_ids": [task_id] });
                 let run = JobRun {
+                    build: None,
                     executed_on: None,
                     run_id: run_id.to_string(),
                     job_id: "task_pr_pipeline".to_string(),

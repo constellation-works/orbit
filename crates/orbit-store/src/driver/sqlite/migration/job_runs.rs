@@ -305,3 +305,11 @@ pub(super) fn apply_job_run_states(conn: &Connection) -> Result<(), OrbitError> 
 pub(super) fn apply_job_run_step_lock_wait(conn: &Connection) -> Result<(), OrbitError> {
     add_column_if_missing(conn, "job_run_steps", "lock_wait_ms", "INTEGER")
 }
+
+/// Build provenance is nullable so old runs never inherit the upgrading binary's identity.
+pub(super) fn apply_job_run_build(conn: &Connection) -> Result<(), OrbitError> {
+    if !table_exists(conn, "job_runs")? {
+        return Ok(());
+    }
+    add_column_if_missing(conn, "job_runs", "build_json", "TEXT")
+}

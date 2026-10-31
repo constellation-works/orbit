@@ -3503,6 +3503,7 @@ fn action(host: &LifecycleHost, name: &str, input: &Value) -> Result<Value, Orbi
 fn job_run(run_id: &str, state: JobRunState, input: Value) -> JobRun {
     let now = Utc::now();
     JobRun {
+        build: None,
         executed_on: None,
         run_id: run_id.to_string(),
         job_id: "task_pr_pipeline".to_string(),

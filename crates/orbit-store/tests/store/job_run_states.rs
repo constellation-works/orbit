@@ -95,7 +95,12 @@ fn large_pipeline_state_never_overflows_the_listing_row() {
     );
     // A per-task listing honours the same bindings: text array elements and
     // a text top-level `task_id`, never nested or non-text values.
-    for (task, owned) in [("T-1", true), ("T-2", true), (" T-1 ", true), ("T-3", false)] {
+    for (task, owned) in [
+        ("T-1", true),
+        ("T-2", true),
+        (" T-1 ", true),
+        ("T-3", false),
+    ] {
         let runs = jobs
             .list_job_runs_filtered(&orbit_store::contracts::JobRunQuery {
                 task_id: Some(task.into()),
@@ -103,7 +108,11 @@ fn large_pipeline_state_never_overflows_the_listing_row() {
             })
             .unwrap();
         let ids: Vec<_> = runs.iter().map(|run| run.run_id.as_str()).collect();
-        let expected: Vec<&str> = if owned { vec![child.run_id.as_str()] } else { vec![] };
+        let expected: Vec<&str> = if owned {
+            vec![child.run_id.as_str()]
+        } else {
+            vec![]
+        };
         assert_eq!(ids, expected, "runs owned by {task:?}");
     }
     for query in [
@@ -339,4 +348,81 @@ fn pending_only_cancel_and_start_never_both_win() {
             .unwrap(),
         PendingJobRunCancellation::Missing
     );
+}
+
+/// Missing provenance prevented deploy analysis. Public store admission must
+/// record it, first start must identify the worker, and later writes preserve it.
+#[test]
+fn job_run_build_tracks_first_start_and_preserves_unknown_history() {
+    let store = Store::open_in_memory().unwrap();
+    let jobs = workspace_job_run_store(store.clone(), "ws_build");
+    let run = jobs
+        .insert_job_run("build", 1, Utc::now(), None, None)
+        .unwrap();
+    let build_of =
+        |run: &orbit_types::workflow::JobRun| serde_json::to_value(run).unwrap()["build"].clone();
+    let current = build_of(&run);
+    assert_eq!(
+        current["version"],
+        env!("CARGO_PKG_VERSION"),
+        "new runs must record the executing Orbit build for deployment analysis"
+    );
+    assert!(current["dirty"].is_boolean());
+    assert_eq!(build_of(&jobs.list_job_runs("build").unwrap()[0]), current);
+
+    // Simulate admission by an older build before a worker from this build starts.
+    let old = json!({"version":"0.1.0","source_commit":"1111111111111111111111111111111111111111","dirty":false}).to_string();
+    store
+        .connection()
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE job_runs SET build_json = ?1 WHERE run_id = ?2",
+            rusqlite::params![old, run.run_id],
+        )
+        .unwrap();
+    jobs.mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
+        .unwrap();
+    assert_eq!(
+        build_of(&jobs.get_job_run(&run.run_id).unwrap().unwrap()),
+        current
+    );
+    let mut stale = serde_json::to_value(jobs.get_job_run(&run.run_id).unwrap().unwrap()).unwrap();
+    stale.as_object_mut().unwrap().remove("build");
+    let stale = serde_json::from_value(stale).unwrap();
+    store
+        .upsert_job_run_for_workspace("ws_build", &stale, None)
+        .unwrap();
+    assert_eq!(
+        build_of(&jobs.get_job_run(&run.run_id).unwrap().unwrap()),
+        current
+    );
+    jobs.mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
+        .unwrap();
+    jobs.finalize_job_run(&run.run_id, JobRunState::Success, Utc::now(), None)
+        .unwrap();
+    assert_eq!(
+        build_of(&jobs.get_job_run(&run.run_id).unwrap().unwrap()),
+        current
+    );
+
+    // Terminal historical rows stay unknown, even when rewritten by a new binary.
+    store
+        .connection()
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE job_runs SET build_json = NULL WHERE run_id = ?1",
+            [&run.run_id],
+        )
+        .unwrap();
+    let historical = jobs.get_job_run(&run.run_id).unwrap().unwrap();
+    assert!(build_of(&historical).is_null());
+    let mut historical = serde_json::to_value(historical).unwrap();
+    historical["build"] = current;
+    let historical = serde_json::from_value(historical).unwrap();
+    store
+        .upsert_job_run_for_workspace("ws_build", &historical, None)
+        .unwrap();
+    assert!(build_of(&jobs.get_job_run(&run.run_id).unwrap().unwrap()).is_null());
 }

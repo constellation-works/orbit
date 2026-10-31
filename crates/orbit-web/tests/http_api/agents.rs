@@ -164,6 +164,7 @@ pub(super) fn implementation_run(
     finished: DateTime<Utc>,
 ) {
     fixture.save_run(&JobRun {
+        build: None,
         run_id: run_id.into(),
         job_id: "task_pr_pipeline".into(),
         attempt: 1,

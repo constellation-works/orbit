@@ -53,8 +53,15 @@ template:
     - **Analysis window: the 7 days before scan start**, always, regardless of the cursor.
       Recurring failures spread over days; clustering only the hours since the last pass hides
       them. Also compute the 30-day rates for trend.
-    - **New since cursor:** occurrences that finished after the prior cursor. Report them
-      separately; they decide whether a tracked class is still firing.
+    - **New since cursor:** compute this from occurrence timestamps, never from signature
+      novelty or the previous report's count: parse RFC 3339 instants and count deduplicated
+      root runs with `prior_cursor < run.finished_at <= scan_start`. A recurring signature
+      can have new occurrences. Use the root run's finish time even when an echo finished
+      later; for a follower-only occurrence use its settlement's `finished_at`, or report
+      the timestamp unavailable (never substitute `settled_at`). Record the prior cursor and
+      each counted run id with its `finished_at` so the count can be recomputed. A missing
+      finish time or prior cursor makes the count `null` with a reason, never a guessed zero.
+      Report these separately; they decide whether a tracked class is still firing.
 
     Page `orbit run history --since 30d --no-reconcile --json` with a large enough `--limit`
     that the oldest returned run predates the 30-day start.
@@ -110,6 +117,11 @@ template:
     - `timeout`: the reviewer exceeded its wall clock or review budget.
     - `other`: anything else.
 
+    Derive every occurrence's signature from its own failure evidence, including runs after
+    a covering fix. Never inherit the prior report's class just because the job or broad
+    symptom matches: changed error codes, leading error kinds, actions and tools split into
+    new or regression classes before coverage lookup and cursor accounting.
+
     Rank the classes by folded occurrences and take the **Pareto set**: the top classes that
     together cover at least 80% of that job's folded failures, plus every class with at least 3
     occurrences across 2 runs in the 7 days. These are the classes this pass must account for.
@@ -146,12 +158,33 @@ template:
       pass with this pass's counts (7-day occurrences, new since cursor, share of the job's
       failures, representative run ids). If it is `proposed` and its class is in the top three
       for its job, say so in the comment: that is the operator's cue to promote it.
-    - **Done task covers it:** find the commit it landed in and whether that commit is
-      deployed on the host the failures ran on (the installed binary's source commit in
-      `~/.orbit/deploy-*.log` or the run's recorded build, if present; when it can't be
-      established, say so). Occurrences on a binary that predates the fix are "fix not yet
-      deployed": report, don't refile. Occurrences on a binary that includes the fix are a
-      regression: file a new task that names the done task.
+    - **Done task covers it:** find its landed commit, then assess **each occurrence** using
+      that run's `build.version`, `build.source_commit` and `build.dirty` (`.run.build` in
+      run show, `.runs[].build` in history).
+      A current installation, deploy log, version number or run date cannot establish what
+      an earlier run executed. With both commits available locally and a clean recorded
+      build, use `git merge-base --is-ancestor <fix-landed-commit> <run-build-source-commit>`:
+      exit 0 proves `deployed`; exit 1 proves only "not an ancestor". Use the reverse ancestry
+      check to prove the run build predates the fix before calling it `not_yet_deployed`.
+      Divergent histories, missing commits/build/source commit, dirty builds or command
+      errors are `deploy_unknown`; record the missing evidence. Never infer ancestry from
+      semantic version ordering or timestamps. Assess follower-only occurrences from their
+      leaf run's recorded build when readable, otherwise `deploy_unknown`.
+      - Same-signature occurrences proven to predate the fix are "fix not yet deployed":
+        report them without refiling those occurrences. A mixed class must list deploy states
+        per occurrence; old or unknown builds never hide deployed failures.
+      - Occurrences whose build includes the fix are regressions: file a new task naming the
+        done task, unless an open task already covers that regression.
+      - `deploy_unknown` is reported explicitly and **never suppresses filing on its own**:
+        continue the untracked mechanism verification and normal filing/deduplication rules.
+        If no task is filed or commented, explain the independent reason (such as the filing
+        cap); unknown deployment is not evidence that a fix has not shipped.
+      - Re-read each occurrence's actual error signature. An occurrence after a covering fix
+        with a different error code, leading error kind, failing action or tool belongs to a
+        **new or regression class**, even when it shares a job or broad symptom with the old
+        class. Do not carry forward the pre-fix signature or its deployment disposition. Use
+        `regression_from` only when build ancestry and the mechanism establish causation;
+        otherwise file it as a new class. Recompute its counts and cursor membership.
     - **Rejected task decided it is not to be fixed:** record the mapping and don't file, but
       list it in the report with its share of failures, so the decision can be revisited.
     - **Untracked:** verify the mechanism in this checkout (record `git rev-parse HEAD`): name
@@ -162,8 +195,10 @@ template:
     **Effectiveness of earlier fixes.** For every task this auto-task filed (tag
     `run-failure-patterns`) that reached done in the last 30 days, compare its class's weekly
     occurrences before its landing with the period after it was deployed. Report each as
-    `effective`, `not effective`, `not yet deployed` or `too early` (under 3 days deployed).
-    A `not effective` fix gets a regression task as above.
+    `effective`, `not effective`, `not yet deployed`, `deploy_unknown` or `too early` (under
+    3 days of proven deployed observations). Derive deployment from the recorded builds of
+    individual runs, not the present installation; unknown observations cannot prove a fix
+    effective or not yet deployed. A `not effective` fix gets a regression task as above.
 
     ## 5. Filing
 
@@ -209,9 +244,15 @@ template:
     {"schema_version": 2, "scan_start": "<RFC 3339>", "head": "<sha>",
      "jobs": [{"job": "...", "runs_7d": 0, "failed_raw_7d": 0, "failed_folded_7d": 0,
                "rate_7d": 0.0, "rate_30d": 0.0, "rate_7d_prev": 0.0}],
+     "prior_cursor": "<RFC 3339 or null>",
      "classes": [{"job": "...", "signature": "...", "occurrences_7d": 0, "new_since_cursor": 0,
+                  "new_since_cursor_reason": null,
+                  "new_occurrences": [{"run_id": "...", "finished_at": "<RFC 3339>"}],
+                  "deploy_evidence": [{"run_id": "...", "build": null, "fix_commit": "...",
+                                       "state": "deployed|not_yet_deployed|deploy_unknown", "reason": "..."}],
                   "share": 0.0, "category": "product_defect|misclassified_hold|provider|upstream_quality|environment|one_off",
-                  "disposition": "filed:<id>|commented:<id>|not_yet_deployed:<id>|regression:<id>|rejected:<id>|deferred|counted"}],
+                  "disposition": "filed:<id>|commented:<id>|not_yet_deployed:<id>|regression:<id>|rejected:<id>|deploy_unknown|deferred|counted",
+                  "filing_reason": "<independent reason when deployment is unknown>"}],
      "fix_effectiveness": [{"task": "...", "landed": "...", "deployed": "...", "before_per_week": 0, "after_per_week": 0, "verdict": "..."}]}
     ```
 
@@ -223,13 +264,13 @@ template:
     classes with their disposition, the fix-effectiveness verdicts, filed and commented ids,
     deferred classes, and anything unreadable.
   acceptance_criteria:
-  - The scan used the 7 days before scan start as its analysis window, computed per-job runs, raw and folded failed counts and failure rates for 7 days and 30 days, and reported new-since-cursor occurrences separately in `run-failure-report.json` with `schema_version` 2.
+  - The scan used the 7 days before scan start as its analysis window, computed per-job runs, raw and folded failed counts and failure rates for 7 days and 30 days, and reported new-since-cursor occurrences separately in `run-failure-report.json` with `schema_version` 2; the count uses each deduplicated root run's finished_at against the prior cursor, includes its run id and timestamp, and is null with a reason when the needed timestamps are unavailable.
   - Follower leaf settlements from `orbit run settlements --no-reconcile` were deduped against this host's runs only when machine id, leaf run id and task id all match (the settlement's `machine_id` equals the history row's `executed_on.machine_id`, its `leaf_run_id` equals the history row's `run_id`, and the history row's `task_ids` lists its `task_id`); a bare `leaf_run_id` match is a collision and counts, a null `executed_on` never dedupes, and failed parents were folded by their recorded `root_cause`, with a held child's parents not counted as failures.
   - Failures were clustered by normalized signature with review refusals split by escalation category, and the Pareto set covers at least 80% of each qualifying job's folded failures plus every class with at least 3 occurrences across 2 runs in 7 days.
   - Every Pareto class carries a category and a disposition in the report, and no class was dismissed by kind alone as designed refusal, provider, agent-declared, CI flake or operator resume.
   - Open tasks covering a Pareto class received one comment with 7-day counts and new-since-cursor counts, and at most 5 new tasks were filed, ranked by folded failures per week they would prevent.
-  - For every done covering task, the report states the landed commit and whether it was deployed on each failing host, with pre-deploy occurrences reported as not yet deployed and post-deploy occurrences filed as regressions.
-  - Every fix this auto-task filed that reached done in the last 30 days has a fix-effectiveness verdict of effective, not effective, not yet deployed or too early in the report.
+  - For every done covering task, the report records the landed commit and each occurrence's build and ancestry evidence; only proven pre-fix builds are not_yet_deployed, builds including the fix are regressions, and missing or inconclusive builds are deploy_unknown without suppressing normal filing on that basis alone. A changed post-fix error signature forms a new or regression class instead of inheriting the pre-fix signature or disposition.
+  - Every fix this auto-task filed that reached done in the last 30 days has a fix-effectiveness verdict of effective, not effective, not yet deployed, deploy_unknown or too early in the report, based on individual recorded run builds.
   - The pass ran on the owning machine under a `required_machine` owner-evidence contract, or stopped with `wrong_host` in the execution summary without filing and without attaching a cursor.
   - No run was retried, resumed, cancelled, or edited, and no run state was mutated.
   - The execution summary reports the per-job rate table with deltas, Pareto dispositions, effectiveness verdicts, filed and commented ids and deferred classes, and `run-failure-cursor.json` is attached on every completed owner pass.

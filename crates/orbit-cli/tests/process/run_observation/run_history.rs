@@ -862,3 +862,73 @@ fn history_rows_carry_pipeline_state_and_fail_when_it_is_unreadable() {
         .assert()
         .failure();
 }
+
+/// Failure analysis needs the build of each run, including after store updates;
+/// reading an older run must not invent provenance from the installed binary.
+#[test]
+fn run_show_and_history_preserve_recorded_build() {
+    if !isolated_run_observation(
+        "run_observation::run_history::run_show_and_history_preserve_recorded_build",
+    ) {
+        return;
+    }
+    let fixture = Fixture::terminal();
+    let runtime = fixture.runtime();
+    let jobs = runtime.stores().jobs();
+    let run = jobs
+        .insert_job_run("provenance", 1, Utc::now(), None, None)
+        .unwrap();
+    let shown = fixture.json(&["run", "show", &run.run_id, "--no-reconcile", "--json"]);
+    assert_eq!(shown["run"]["build"]["version"], env!("CARGO_PKG_VERSION"));
+    let expected_build =
+        serde_json::to_value(orbit_common::process::build::current_orbit_build()).unwrap();
+    assert_eq!(shown["run"]["build"], expected_build);
+    if let Some(commit) = shown["run"]["build"]["source_commit"].as_str() {
+        assert!(
+            matches!(commit.len(), 40 | 64) && commit.bytes().all(|byte| byte.is_ascii_hexdigit())
+        );
+    }
+    assert!(shown["run"]["build"]["dirty"].is_boolean());
+    let build = shown["run"]["build"].clone();
+    jobs.mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
+        .unwrap();
+    jobs.finalize_job_run(
+        &run.run_id,
+        orbit_types::workflow::JobRunState::Success,
+        Utc::now(),
+        None,
+    )
+    .unwrap();
+    let history = fixture.json(&[
+        "run",
+        "history",
+        "--job",
+        "provenance",
+        "--no-reconcile",
+        "--json",
+    ]);
+    assert_eq!(history["runs"][0]["build"], build);
+    let shown = fixture.json(&["run", "show", &run.run_id, "--no-reconcile", "--json"]);
+    assert_eq!(shown["run"]["build"], build);
+
+    // An old writer or legacy row has no build. Neither reads nor ordinary
+    // state updates may assign the inspecting binary's build to that run.
+    fixture
+        .db()
+        .execute(
+            "UPDATE job_runs SET build_json = NULL WHERE run_id = ?1",
+            [&run.run_id],
+        )
+        .unwrap();
+    let shown = fixture.json(&["run", "show", &run.run_id, "--no-reconcile", "--json"]);
+    assert!(shown["run"]["build"].is_null());
+    let history = fixture.json(&[
+        "run",
+        "history",
+        "--job",
+        "provenance",
+        "--no-reconcile",
+        "--json",
+    ]);
+    assert!(history["runs"][0]["build"].is_null());
+}
