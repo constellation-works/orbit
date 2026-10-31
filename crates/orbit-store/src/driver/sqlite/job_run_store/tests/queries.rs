@@ -3,6 +3,36 @@
 use super::*;
 use rusqlite::types::Value;
 
+/// A per-task listing reads the materialized ownership table. Parsing every
+/// run's input instead made each call walk the workspace's whole history,
+/// twice per enrolled task in an experiment readout [ORB-20412].
+#[test]
+fn per_task_listing_reads_ownership_instead_of_run_inputs() {
+    let store = Store::open_in_memory().unwrap();
+    let conn = store.read().unwrap();
+    let query = JobRunQuery {
+        task_id: Some("T-1".into()),
+        ..JobRunQuery::default()
+    };
+    let (sql, _) = job_run_list_sql("ws_a", &query);
+    let plan: Vec<String> = conn
+        .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+        .unwrap()
+        .query_map(rusqlite::params!["ws_a", "T-1"], |row| row.get(3))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert!(
+        plan.iter()
+            .any(|line| line.starts_with("SEARCH job_run_tasks")),
+        "a per-task listing must search job_run_tasks: {plan:?}"
+    );
+    assert!(
+        !plan.iter().any(|line| line.contains("VIRTUAL TABLE")),
+        "a per-task listing must not walk run inputs with json_each: {plan:?}"
+    );
+}
+
 /// The recency page is what the dashboard's aggregate run list asks of every
 /// workspace. Without an index over the recency expression SQLite read and
 /// sorted every run of the workspace to return the first page [ORB-14595].
