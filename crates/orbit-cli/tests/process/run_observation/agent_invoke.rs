@@ -868,6 +868,87 @@ fn agent_provenance_reports_provider_model_and_leaves_interrupted_launches_unava
     assert_eq!(mcp_completed.len(), 1, "{mcp}");
     assert_eq!(mcp_completed[0]["invocations"][0], *invocation, "{mcp}");
 
+    // Recreate a completed Antigravity lane: its model family is Gemini,
+    // while both the invocation and dispatch record name Antigravity.
+    let db = fixture.db();
+    db.execute(
+        "UPDATE invocations SET agent = 'gemini', provider = 'antigravity', model = 'gemini-reported' WHERE job_run_id = ?1",
+        params![run_id],
+    ).unwrap();
+    db.execute(
+        "UPDATE agent_executions SET provider = 'antigravity' WHERE run_id = ?1",
+        params![run_id],
+    )
+    .unwrap();
+    let shown = fixture.show_json(run_id);
+    let invocation = &shown["run"]["activity_provenance"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|activity| !activity["invocations"].as_array().unwrap().is_empty())
+        .unwrap()["invocations"][0];
+    assert_eq!(invocation["provider"], "antigravity", "{shown}");
+    assert_eq!(invocation["model"], "gemini-reported", "{shown}");
+    assert_eq!(
+        shown["run"]["agent_executions"][0]["provider"], "antigravity",
+        "{shown}"
+    );
+    assert_eq!(
+        shown["run"]["agent_executions"][0]["model"], "gemini-reported",
+        "{shown}"
+    );
+    let mcp = operator_json(
+        &fixture,
+        &[
+            "tool",
+            "run",
+            "orbit.workflow.run.show",
+            "--input",
+            &serde_json::json!({"id": run_id}).to_string(),
+        ],
+    );
+    assert_eq!(
+        mcp["agent_executions"][0]["provider"], "antigravity",
+        "{mcp}"
+    );
+    assert_eq!(
+        mcp["agent_executions"][0]["model"], "gemini-reported",
+        "{mcp}"
+    );
+    assert_eq!(
+        mcp["activity_provenance"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|activity| !activity["invocations"].as_array().unwrap().is_empty())
+            .unwrap()["invocations"][0],
+        *invocation,
+        "{mcp}"
+    );
+
+    // A dispatch record also preserves the provider for older completion rows.
+    db.execute(
+        "UPDATE invocations SET provider = NULL WHERE job_run_id = ?1",
+        params![run_id],
+    )
+    .unwrap();
+    let shown = fixture.show_json(run_id);
+    assert_eq!(
+        shown["run"]["agent_executions"][0]["provider"], "antigravity",
+        "{shown}"
+    );
+
+    // Legacy rows with neither provider nor dispatch fall back to their agent.
+    db.execute(
+        "UPDATE invocations SET provider = NULL, agent_execution_id = NULL WHERE job_run_id = ?1",
+        params![run_id],
+    )
+    .unwrap();
+    let shown = fixture.show_json(run_id);
+    let legacy = &shown["run"]["agent_executions"][0];
+    assert_eq!(legacy["provider"], "gemini", "{shown}");
+    assert_eq!(legacy["reasoning_effort"], "unknown", "{shown}");
+
     // An interrupted launch records dispatch but no completed invocation, so
     // the activity is `unavailable`, never `recorded`.
     let interrupted = Fixture::terminal();

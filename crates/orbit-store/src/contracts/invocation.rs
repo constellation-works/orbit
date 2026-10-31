@@ -71,6 +71,9 @@ pub struct InvocationRecord {
     pub job_run_id: String,
     pub activity_id: String,
     pub agent: String,
+    /// Recorded provider, or the dispatch provider when completion omitted it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
     pub model: Option<String>,
     pub duration_ms: u64,
     pub input_tokens: u64,
