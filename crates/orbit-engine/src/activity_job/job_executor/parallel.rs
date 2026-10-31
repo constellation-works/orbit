@@ -161,23 +161,28 @@ pub(super) fn run_parallel(
     })
 }
 
+/// Marker on a compound branch checkpoint. A target branch stores its raw
+/// output; a loop, fan-out, or nested parallel stores this envelope so a
+/// replay can put back every pipeline entry the branch exposed. A compound
+/// checkpoint written before the envelope existed has no marker and is
+/// replayed, because that raw output does not carry the nested entries.
+const COMPOUND_BRANCH_CHECKPOINT_KIND: &str = "compound_branch";
+
 /// The recorded output of a succeeded branch a resumed auto-task job
-/// restores. Only target branches are restored whole; a compound branch
-/// replays, and its own nested branches and auto-task records restore
-/// themselves inside it.
+/// restores. Target and compound branches are both restored whole. A
+/// compound branch also puts back the nested outputs and fan-in aliases it
+/// exposed. A branch with no success checkpoint still runs.
 fn restored_branch(step: &JobV2Step, branch: &JobV2Step, ctx: &ExecCtx<'_>) -> Option<StepOutcome> {
-    if !matches!(
-        branch.body,
-        JobV2StepBody::Target(_) | JobV2StepBody::TargetRef(_)
-    ) {
-        return None;
-    }
-    let output = ctx
+    let stored = ctx
         .restored_branches
         .as_ref()?
         .get(&step.id)?
         .get(&branch.id)?
         .clone();
+    let (output, exposed) = match &branch.body {
+        JobV2StepBody::Target(_) | JobV2StepBody::TargetRef(_) => (stored, serde_json::Map::new()),
+        _ => restored_compound_branch(&stored)?,
+    };
     emit_job_event_lossy(
         &ctx.audit,
         ctx.task_id(),
@@ -189,11 +194,55 @@ fn restored_branch(step: &JobV2Step, branch: &JobV2Step, ctx: &ExecCtx<'_>) -> O
             ),
         },
     );
+    for (key, value) in &exposed {
+        record_pipeline(ctx, key, value.clone());
+    }
     record_pipeline(ctx, &branch.id, output.clone());
     Some(StepOutcome {
         success: true,
         output,
         message: None,
+    })
+}
+
+/// Split a compound branch checkpoint into its own output and the other
+/// pipeline entries it exposed. `None` when the value is not the envelope,
+/// so an older raw checkpoint replays the branch.
+fn restored_compound_branch(stored: &Value) -> Option<(Value, serde_json::Map<String, Value>)> {
+    let object = stored.as_object()?;
+    if object.get("kind").and_then(Value::as_str) != Some(COMPOUND_BRANCH_CHECKPOINT_KIND) {
+        return None;
+    }
+    let output = object.get("output")?.clone();
+    let exposed = object.get("exposed")?.as_object()?.clone();
+    Some((output, exposed))
+}
+
+/// Checkpoint value for a succeeded compound branch: its output, plus every
+/// other pipeline entry the branch owns. Step ids are unique, and this runs
+/// after the branch returns, so sibling branches cannot still be writing
+/// these keys.
+fn compound_branch_checkpoint_value(
+    branch: &JobV2Step,
+    ctx: &ExecCtx<'_>,
+    output: &Value,
+) -> Value {
+    let mut keys = Vec::new();
+    super::execute::collect_step_keys(branch, &mut keys);
+    let pipeline = ctx.pipeline_snapshot();
+    let mut exposed = serde_json::Map::new();
+    for key in keys {
+        if key == branch.id {
+            continue;
+        }
+        if let Some(value) = pipeline.get(key) {
+            exposed.insert(key.to_string(), unwrap_step_output(value));
+        }
+    }
+    serde_json::json!({
+        "kind": COMPOUND_BRANCH_CHECKPOINT_KIND,
+        "output": output,
+        "exposed": Value::Object(exposed),
     })
 }
 
@@ -210,8 +259,12 @@ fn checkpoint_branch(
     if !outcome.success || ctx.restored_branches.is_none() {
         return Ok(outcome);
     }
+    let recorded = match &branch.body {
+        JobV2StepBody::Target(_) | JobV2StepBody::TargetRef(_) => outcome.output.clone(),
+        _ => compound_branch_checkpoint_value(branch, ctx, &outcome.output),
+    };
     ctx.host
-        .checkpoint_parallel_branch(&ctx.run_id, &step.id, &branch.id, &outcome.output)
+        .checkpoint_parallel_branch(&ctx.run_id, &step.id, &branch.id, &recorded)
         .map_err(|error| {
             DispatchError::JobExecution(format!(
                 "parallel step `{}`: branch `{}` succeeded but its checkpoint failed: {error}",

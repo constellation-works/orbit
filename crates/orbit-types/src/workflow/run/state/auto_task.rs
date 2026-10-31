@@ -37,9 +37,14 @@ pub struct AutoTaskRunCheckpoint {
     /// Per-step records keyed by step id (step ids are unique in a job).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub steps: BTreeMap<String, AutoTaskStepRecord>,
-    /// Outputs of parallel branches that already succeeded, keyed by the
-    /// parallel step id and then the branch id. A replay restores them
-    /// instead of running the branch again.
+    /// Recorded value of each parallel branch that already succeeded, keyed
+    /// by the parallel step id and then the branch id. A replay restores
+    /// the branch instead of running it again. A target branch stores its
+    /// raw output. A compound branch stores
+    /// `{kind: "compound_branch", output, exposed}`: `output` is the branch
+    /// output and `exposed` is the other pipeline entries it wrote (nested
+    /// step outputs and fan-in aliases). A compound checkpoint from before
+    /// that envelope stores only the raw output.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub branches: BTreeMap<String, BTreeMap<String, Value>>,
     /// Present while the execution is deliberately parked: no worker holds

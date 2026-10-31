@@ -85,7 +85,11 @@ macro_rules! recovery_methods {
 
         /// Durably record a succeeded branch of a `parallel:` block in a job
         /// with auto-task steps, so a replay restores it instead of running
-        /// it again. Fail-closed.
+        /// it again. Fail-closed. A target branch's `output` is that
+        /// branch's raw output. A compound branch (`loop`, `fan_out`, or a
+        /// nested `parallel`) stores an opaque object the engine reads
+        /// back: the branch output plus the other pipeline entries it
+        /// exposed. Hosts persist the value unchanged.
         fn checkpoint_parallel_branch(
             &self,
             run_id: &str,
