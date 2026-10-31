@@ -5,6 +5,10 @@
 //! every validation rule for both modes — an operator's trusted-host
 //! invocation and a managed run's read-only explorer [ORB-16814]. Nothing
 //! here decides anything.
+//!
+//! A sandboxed agent's explorer submission is brokered to the run's host
+//! worker [ORB-20566], so the explorer's own sandbox is created beside the
+//! caller's rather than nested inside it, where the kernel refuses it.
 
 use orbit_common::OrbitError;
 use orbit_common::protocol::tool_input::{optional_string, required_string};
@@ -15,6 +19,7 @@ use crate::OrbitRuntime;
 use crate::application::job::{
     AgentInvocation, AgentInvokeRequest, AgentInvokeSubmission, ExploreSubmission,
 };
+use crate::runtime::authorization::ManagedRunCaller;
 
 pub(super) fn invoke(
     runtime: &OrbitRuntime,
@@ -72,14 +77,14 @@ fn explore_response(
     submission: ExploreSubmission,
     wait_seconds: Option<u64>,
 ) -> Result<Value, OrbitError> {
-    let mut response = json!({
+    let response = json!({
         "run_id": submission.run_id,
         "job_id": submission.job_id,
         "submitted_at": submission.submitted_at,
         "state": submission.state,
         "queued": submission.queued,
         "queue_position": submission.queue_position,
-        "waited": wait_seconds.is_some(),
+        "waited": false,
         "deduplicated": submission.deduplicated,
         "timeout_seconds": submission.timeout_seconds,
         "parent_run_id": submission.parent_run_id,
@@ -93,16 +98,78 @@ fn explore_response(
         "calls_allowed": submission.calls_allowed,
         "max_answer_bytes": submission.max_answer_bytes,
     });
-    if let Some(seconds) = wait_seconds {
-        let result = runtime.wait_agent_invoke_run(&submission.run_id, Some(seconds))?;
-        response["state"] = json!(result.outcome);
-        let bounded = runtime.bound_explore_answer(result);
-        response["answer_truncated"] = json!(bounded.answer_truncated);
-        let result = serde_json::to_value(bounded.result)
-            .map_err(|error| OrbitError::Execution(format!("encode explorer answer: {error}")))?;
-        response["answer"] = result["answer"].clone();
-        response["agent_invocation"] = result;
+    match wait_seconds {
+        Some(seconds) => wait_for_explorer_answer(runtime, response, seconds),
+        None => Ok(response),
     }
+}
+
+/// Submit the explorer a sandboxed agent of `caller` asked its run's broker
+/// for [ORB-20566]. The caller is the run the host dispatched, never one named
+/// by the request or this process's environment. Waiting stays with the
+/// agent's own process ([`wait_for_explorer_answer`]), so a long wait holds no
+/// broker connection.
+pub(crate) fn invoke_brokered_explorer(
+    runtime: &OrbitRuntime,
+    caller: ManagedRunCaller,
+    input: &Value,
+    actor: Option<&str>,
+) -> Result<Value, OrbitError> {
+    let prompt = required_string(input, &["prompt"], "prompt")?;
+    let cwd = required_string(input, &["cwd"], "cwd")?;
+    let crew = optional_string(input, "crew")?;
+    let idempotency_key = optional_string(input, "idempotency_key")?;
+    let provider_sandbox = optional_string(input, "provider_sandbox")?;
+    let timeout_seconds = parse_timeout(input)?;
+    if parse_wait_seconds(input)?.is_some() {
+        return Err(OrbitError::InvalidInput(
+            "a brokered explorer submission does not wait; the caller waits for the answer"
+                .to_string(),
+        ));
+    }
+    let session_context = ToolSessionContext::default();
+    let submission = runtime.submit_explore_run(
+        caller,
+        AgentInvokeRequest {
+            prompt: &prompt,
+            cwd: &cwd,
+            crew: crew.as_deref(),
+            timeout_seconds,
+            idempotency_key: idempotency_key.as_deref(),
+            provider_sandbox: provider_sandbox.as_deref(),
+            actor,
+            session_context: &session_context,
+        },
+    )?;
+    explore_response(runtime, submission, None)
+}
+
+/// Validate a sandboxed agent's `wait_seconds` before its explorer is
+/// submitted through the broker, so an invalid wait creates no run.
+pub(crate) fn brokered_explorer_wait_seconds(input: &Value) -> Result<Option<u64>, OrbitError> {
+    parse_wait_seconds(input)
+}
+
+/// Wait up to `seconds` for the explorer `response` names and project its
+/// bounded answer into the response.
+pub(crate) fn wait_for_explorer_answer(
+    runtime: &OrbitRuntime,
+    mut response: Value,
+    seconds: u64,
+) -> Result<Value, OrbitError> {
+    let run_id = response["run_id"]
+        .as_str()
+        .ok_or_else(|| OrbitError::Execution("explorer submission names no run".to_string()))?
+        .to_string();
+    let result = runtime.wait_agent_invoke_run(&run_id, Some(seconds))?;
+    response["waited"] = json!(true);
+    response["state"] = json!(result.outcome);
+    let bounded = runtime.bound_explore_answer(result);
+    response["answer_truncated"] = json!(bounded.answer_truncated);
+    let result = serde_json::to_value(bounded.result)
+        .map_err(|error| OrbitError::Execution(format!("encode explorer answer: {error}")))?;
+    response["answer"] = result["answer"].clone();
+    response["agent_invocation"] = result;
     Ok(response)
 }
 

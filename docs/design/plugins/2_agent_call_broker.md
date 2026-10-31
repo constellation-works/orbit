@@ -9,7 +9,7 @@ paths: ["crates/orbit-core/src/adapter/engine_host/actions/sandbox/**", "crates/
 related_features: [policy-sandbox, plugins]
 related_artifacts: [ORB-13038, ORB-13008, ORB-13009, ORB-14017, ORB-14194, F2026-09-230]
 last_updated: 2026-10-30
-last_validated: 2026-10-26
+last_validated: 2026-10-31
 ---
 
 # Design: host-side broker for agent-initiated plugin calls
@@ -144,7 +144,7 @@ The nested `orbit` sends it to the broker, and the broker is the only party that
 plugin's secrets or spawns its backend. Built-in `orbit.*` tools are unchanged and still run in
 the nested `orbit`.
 
-**Host-credentialed reads.** The one exception among built-ins is a closed list of read-only
+**Host-credentialed reads.** One exception among built-ins is a closed list of read-only
 GitHub tools: `github.auth.status`, `github.pr.list`, `github.run.list`, `github.run.view` and
 `github.run.logs`. Each runs `gh`, which needs the host account's `~/.config/gh`, and every
 agent sandbox masks that directory (policy-sandbox [2_design.md](../policy-sandbox/2_design.md)
@@ -155,7 +155,19 @@ credential enters the sandbox. Forwarding a `GH_TOKEN` into the sandbox was reje
 agent and every command it runs could read it, and it would bypass the tools' redaction.
 Nothing that changes GitHub is on the list.
 
-**Claimed-owner calls.** The only other built-ins the broker carries are a claimed worker's
+**Explorer submissions.** A managed implement or review-repair agent's `orbit.agent.invoke`
+is the second exception ([ORB-20566]). Submitted inside the agent's sandbox, the explorer's
+detached worker would inherit that sandbox, and its own Bubblewrap or Seatbelt boundary would
+nest inside it: Ubuntu's AppArmor userns restriction confines every process under `bwrap` to
+`unpriv_bwrap`, which refuses a new namespace, and Seatbelt refuses a second profile. With
+`ORBIT_PLUGIN_BROKER` set and the managed-run envelope present, the nested `orbit` forwards the
+submission, and the broker runs explorer admission on the host for the run it serves (its job
+run and activity), never a run the request or the agent's environment names. The explorer's
+worker then starts beside the caller's sandbox and creates its own. Only the submission is
+brokered: the broker refuses `wait_seconds`, and the nested `orbit` waits for the answer itself
+by reading the run record, so a long wait holds no broker connection.
+
+**Claimed-owner calls.** The last built-ins the broker carries are a claimed worker's
 owner calls (`CLAIMED_OWNER_TOOLS`): `orbit.task.show`, `orbit.search`, `orbit.task.list`,
 `orbit.task.add`, `orbit.friction.add`, `orbit.task.artifact.get` and `orbit.task.artifact.put`. A claimed leaf's
 task lives on its owner, another machine reached over SSH, and every agent sandbox masks

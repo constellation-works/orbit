@@ -160,6 +160,7 @@
         "adapter/command/dispatch/tests/brokered.rs::a_backend_answering_with_a_listener_code_is_audited_once_by_the_broker",
         "adapter/command/dispatch/tests/brokered.rs::a_brokered_rotation_is_stored_by_compare_and_swap_and_never_returned",
         "adapter/command/dispatch/tests/brokered.rs::a_request_outside_the_run_is_refused_before_the_backend_runs",
+        "adapter/command/dispatch/tests/brokered.rs::an_explorer_submission_reaches_explorer_admission_for_the_served_run",
         "adapter/command/dispatch/tests/brokered.rs::the_broker_runs_the_github_reads_and_refuses_every_other_builtin",
         "adapter/engine_host/actions/pipeline_actions/tests/invoke.rs::a_child_that_finishes_as_the_wait_expires_reports_its_own_outcome",
         "adapter/engine_host/actions/pipeline_actions/tests/invoke.rs::a_finished_ci_sweep_stores_child_summaries_and_no_resume_state",

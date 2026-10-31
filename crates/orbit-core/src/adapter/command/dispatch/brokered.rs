@@ -1,7 +1,8 @@
 //! The host side of a run's plugin broker: execute one authenticated request
 //! — a plugin tool, one of the read-only `github.*` built-ins that need the
-//! host's `gh` credentials, or one of a claimed worker's owner calls that need
-//! the claim's owner route — through the audited dispatch,
+//! host's `gh` credentials, one of a claimed worker's owner calls that need
+//! the claim's owner route, or a read-only explorer submission whose sandbox
+//! cannot nest inside the caller's [ORB-20566] — through the audited dispatch,
 //! under the run's authority (`docs/design/plugins/2_agent_call_broker.md` §3, §4.3–§4.4, §5).
 //!
 //! Everything that decides authority — task, job run, activity policy, agent
@@ -23,8 +24,9 @@ use orbit_types::workflow::tool_allowed;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
+use crate::runtime::authorization::ManagedRunCaller;
 use crate::runtime::plugin::broker::{
-    BrokerDispatch, BrokerRequest, EntryPoint, is_host_credentialed_read,
+    BROKERED_EXPLORER_TOOL, BrokerDispatch, BrokerRequest, EntryPoint, is_host_credentialed_read,
 };
 use crate::runtime::tool_exec::CapabilityEnforcement;
 
@@ -206,6 +208,40 @@ impl BrokerDispatch for RunDispatch {
                             session_context,
                         );
                     }
+                    // [ORB-20566] An explorer submitted inside the agent's
+                    // sandbox would start its own sandbox nested in it, which
+                    // the kernel refuses. The host submits it beside the
+                    // caller instead, for the run it dispatched: the caller
+                    // is that run, never one the request names.
+                    if tool == BROKERED_EXPLORER_TOOL {
+                        self.runtime.ensure_tool_agent_facing(&tool)?;
+                        self.refuse_outside_activity_policy(&tool)?;
+                        if let Some(policy) = &run.tool_deny_policy
+                            && policy.denies(&tool)
+                        {
+                            return Err(OrbitError::PolicyDenied(policy.denial_message(&tool)));
+                        }
+                        let run_id = run.job_run_id.clone().ok_or_else(|| {
+                            OrbitError::CapabilityDenied(
+                                "this invocation has no job run, so it cannot delegate \
+                                 exploration"
+                                    .to_string(),
+                            )
+                        })?;
+                        let actor = orbit_types::identity::normalize_optional_attribution_label(
+                            run.model_name.as_deref().or(run.agent_name.as_deref()),
+                            run.model_name.as_deref(),
+                        );
+                        return crate::adapter::tool_host::agent_tools::invoke_brokered_explorer(
+                            &self.runtime,
+                            ManagedRunCaller {
+                                run_id,
+                                activity: Some(run.activity_name.clone()),
+                            },
+                            &input,
+                            actor.as_deref(),
+                        );
+                    }
                     // A built-in tool is answered by the nested `orbit`
                     // itself; the broker exists to run plugin backends and
                     // the closed set of reads that need the host's `gh`
@@ -214,8 +250,9 @@ impl BrokerDispatch for RunDispatch {
                         && !is_host_credentialed_read(&tool)
                     {
                         return Err(OrbitError::PolicyDenied(format!(
-                            "the plugin broker runs plugin tools, the read-only github.* tools \
-                             and a claimed worker's owner calls only; '{tool}' is none of these"
+                            "the plugin broker runs plugin tools, the read-only github.* tools, \
+                             a claimed worker's owner calls and explorer submissions only; \
+                             '{tool}' is none of these"
                         )));
                     }
                     self.runtime.ensure_tool_agent_facing(&tool)?;
