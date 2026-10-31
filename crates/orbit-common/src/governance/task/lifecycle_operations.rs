@@ -290,6 +290,9 @@ const BLOCK_TRIAGE_SUBJECT_VALUES: &[EnumValue] =
 const BLOCK_TRIAGE_ACTION_VALUES: &[EnumValue] = &[
     EnumValue::plain("candidates"),
     EnumValue::plain("requeue"),
+    EnumValue::plain("resume_run"),
+    EnumValue::plain("rerun_ci"),
+    EnumValue::plain("friction_reported"),
     EnumValue::plain("propose"),
     EnumValue::plain("report"),
 ];
@@ -301,7 +304,7 @@ pub(super) const BLOCK_TRIAGE: TaskOperation = TaskOperation {
     verb: TaskVerb::BlockTriage,
     cli_path: &[],
     tool_name: "orbit.task.block_triage",
-    tool_description: "Triage blocked tasks whose final recovery escalated, or that the backstop never decides. `candidates` lists those awaiting triage; `propose` records options and a recommendation, `report` records a human action, and `requeue` returns the task to the backlog within the requeue bound shared with final recovery. Never completes, rejects or archives a task. With `subject` `pilot_warning`, the same actions triage proposed tasks held by a task-pilot warning instead, and `requeue` is refused. A refused requeue leaves the task blocked. A decision on a task a live triage run holds needs that run's inspection proof. Policy detail, the requeue bound, the pilot-warning marker and the proof recipe: the orbit skill's references/tool-surface.md, section `Blocked-task triage`.",
+    tool_description: "Triage blocked tasks whose final recovery escalated, or that the backstop never decides. `candidates` lists those awaiting triage; `propose` records options and a recommendation, `report` records a human action, and `requeue` returns the task to the backlog within the requeue bound shared with final recovery. Block episodes also take three mechanical recoveries: `resume_run` resumes the episode's own failed run from its checkpoints and `rerun_ci` re-requests the failed checks on the task's pull request at an unchanged head and requeues it, both within that bound; `friction_reported` links or files the friction record for an Orbit defect, and the task stays blocked. A refused recovery changes and records nothing. Never completes, rejects or archives a task. With `subject` `pilot_warning`, the same actions triage proposed tasks held by a task-pilot warning instead, and `requeue` is refused. A refused requeue leaves the task blocked. A decision on a task a live triage run holds needs that run's inspection proof. Policy detail, the requeue bound, the pilot-warning marker and the proof recipe: the orbit skill's references/tool-surface.md, section `Blocked-task triage`.",
     cli_about: "",
     cli_help: CliHelp::NONE,
     // `candidates` only reads, but the decisions write.
@@ -312,7 +315,7 @@ pub(super) const BLOCK_TRIAGE: TaskOperation = TaskOperation {
             required(mcp_only(
                 "action",
                 ParamType::Enum(BLOCK_TRIAGE_ACTION_VALUES),
-                "candidates, requeue, propose, or report",
+                "candidates, requeue, resume_run, rerun_ci, friction_reported, propose, or report",
             )),
             mcp_only(
                 "subject",
@@ -322,17 +325,42 @@ pub(super) const BLOCK_TRIAGE: TaskOperation = TaskOperation {
             mcp_only(
                 "id",
                 ParamType::String,
-                "requeue, propose, report: the blocked or pilot-held task",
+                "every action but candidates: the blocked or pilot-held task",
             ),
             free_text(mcp_only(
                 "blocker",
                 ParamType::String,
-                "block requeue, propose, report: the escalation reason, quoted in the comment; pilot_warning quotes the holding findings itself and refuses it",
+                "block decisions: the escalation reason, quoted in the comment; pilot_warning quotes the holding findings itself and refuses it",
             )),
             free_text(mcp_only(
                 "reason",
                 ParamType::String,
-                "requeue: the repair applied and why the task can run again; report: the specific action only a human can take",
+                "requeue: the repair applied and why the task can run again; resume_run, rerun_ci: why the run or checks can now pass; report, friction_reported: the specific action only a human can take",
+            )),
+            mcp_only(
+                "run_id",
+                ParamType::String,
+                "resume_run: the episode's own failed run, as the candidate lists it",
+            ),
+            mcp_only(
+                "head_sha",
+                ParamType::String,
+                "rerun_ci: the pull request head the failed checks ran on; refused if the head moved",
+            ),
+            mcp_only(
+                "friction_id",
+                ParamType::String,
+                "friction_reported: an existing friction record to link",
+            ),
+            free_text(mcp_only(
+                "friction_title",
+                ParamType::String,
+                "friction_reported: title of a friction record to file instead, with friction_body",
+            )),
+            free_text(mcp_only(
+                "friction_body",
+                ParamType::String,
+                "friction_reported: what happened and why it is an Orbit defect",
             )),
             mcp_only(
                 "options",

@@ -1043,7 +1043,7 @@
   },
   {
     "name": "orbit_task_block_triage",
-    "description": "Triage blocked tasks whose final recovery escalated, or that the backstop never decides. `candidates` lists those awaiting triage; `propose` records options and a recommendation, `report` records a human action, and `requeue` returns the task to the backlog within the requeue bound shared with final recovery. Never completes, rejects or archives a task. With `subject` `pilot_warning`, the same actions triage proposed tasks held by a task-pilot warning instead, and `requeue` is refused. A refused requeue leaves the task blocked. A decision on a task a live triage run holds needs that run's inspection proof. Policy detail, the requeue bound, the pilot-warning marker and the proof recipe: the orbit skill's references/tool-surface.md, section `Blocked-task triage`.",
+    "description": "Triage blocked tasks whose final recovery escalated, or that the backstop never decides. `candidates` lists those awaiting triage; `propose` records options and a recommendation, `report` records a human action, and `requeue` returns the task to the backlog within the requeue bound shared with final recovery. Block episodes also take three mechanical recoveries: `resume_run` resumes the episode's own failed run from its checkpoints and `rerun_ci` re-requests the failed checks on the task's pull request at an unchanged head and requeues it, both within that bound; `friction_reported` links or files the friction record for an Orbit defect, and the task stays blocked. A refused recovery changes and records nothing. Never completes, rejects or archives a task. With `subject` `pilot_warning`, the same actions triage proposed tasks held by a task-pilot warning instead, and `requeue` is refused. A refused requeue leaves the task blocked. A decision on a task a live triage run holds needs that run's inspection proof. Policy detail, the requeue bound, the pilot-warning marker and the proof recipe: the orbit skill's references/tool-surface.md, section `Blocked-task triage`.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1053,7 +1053,7 @@
         },
         "action": {
           "type": "string",
-          "description": "candidates, requeue, propose, or report"
+          "description": "candidates, requeue, resume_run, rerun_ci, friction_reported, propose, or report"
         },
         "subject": {
           "type": "string",
@@ -1061,15 +1061,35 @@
         },
         "id": {
           "type": "string",
-          "description": "requeue, propose, report: the blocked or pilot-held task"
+          "description": "every action but candidates: the blocked or pilot-held task"
         },
         "blocker": {
           "type": "string",
-          "description": "block requeue, propose, report: the escalation reason, quoted in the comment; pilot_warning quotes the holding findings itself and refuses it"
+          "description": "block decisions: the escalation reason, quoted in the comment; pilot_warning quotes the holding findings itself and refuses it"
         },
         "reason": {
           "type": "string",
-          "description": "requeue: the repair applied and why the task can run again; report: the specific action only a human can take"
+          "description": "requeue: the repair applied and why the task can run again; resume_run, rerun_ci: why the run or checks can now pass; report, friction_reported: the specific action only a human can take"
+        },
+        "run_id": {
+          "type": "string",
+          "description": "resume_run: the episode's own failed run, as the candidate lists it"
+        },
+        "head_sha": {
+          "type": "string",
+          "description": "rerun_ci: the pull request head the failed checks ran on; refused if the head moved"
+        },
+        "friction_id": {
+          "type": "string",
+          "description": "friction_reported: an existing friction record to link"
+        },
+        "friction_title": {
+          "type": "string",
+          "description": "friction_reported: title of a friction record to file instead, with friction_body"
+        },
+        "friction_body": {
+          "type": "string",
+          "description": "friction_reported: what happened and why it is an Orbit defect"
         },
         "options": {
           "type": "array",

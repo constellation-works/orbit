@@ -56,10 +56,11 @@ pub use crate::builtin::github::task_prs::{
     authenticated_login as authenticated_login_request,
     bound_branch_pull_request as bound_branch_pull_request_request,
     close_pull_request as close_pull_request_request,
+    commit_workflow_runs as commit_workflow_runs_request,
     merged_pull_requests as merged_pull_requests_request,
     open_pull_requests as open_pull_requests_request,
     pull_request_blockers as pull_request_blockers_request,
-    view_pull_request as view_pull_request_request,
+    rerun_failed_jobs as rerun_failed_jobs_request, view_pull_request as view_pull_request_request,
 };
 pub use crate::builtin::github::{
     CheckoutEvidence, LogSelection, StreamedLog, StreamedLogCollector, parse_gh_json,

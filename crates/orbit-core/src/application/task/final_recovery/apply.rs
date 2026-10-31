@@ -409,9 +409,10 @@ impl OrbitRuntime {
         })
     }
 
-    /// Final-recovery requeues recorded in the trailing `window`: the one
-    /// count the requeue bound reads, shared by final recovery and the
-    /// blocked-task triage. A caller that cannot read it must not requeue.
+    /// Final-recovery requeues and blocked-task triage resumes recorded in
+    /// the trailing `window`: the one count the requeue bound reads, shared
+    /// by final recovery and the blocked-task triage. A caller that cannot
+    /// read it must not requeue or resume.
     pub(crate) fn recent_requeues(
         &self,
         task_id: &str,
@@ -427,7 +428,13 @@ impl OrbitRuntime {
         Ok(self
             .get_task_history(task_id)?
             .iter()
-            .filter(|entry| entry.event == FINAL_RECOVERY_REQUEUED_EVENT && entry.at >= since)
+            .filter(|entry| {
+                matches!(
+                    entry.event.as_str(),
+                    FINAL_RECOVERY_REQUEUED_EVENT
+                        | super::super::blocked_recovery::BLOCKED_TASK_TRIAGE_RESUMED_EVENT
+                ) && entry.at >= since
+            })
             .count())
     }
 

@@ -5,7 +5,8 @@
 //! and an owner drain checks a dead delivery leaf's PR is still open before
 //! it adopts the leaf. When an operator merges a task's delivery PR outside
 //! Orbit, Core settles the task from that merge
-//! (`application::task::external_merge`). Those policies only need a few
+//! (`application::task::external_merge`). The blocked-task triage re-requests
+//! the failed checks on a blocked task's PR head. Those policies only need a few
 //! forge operations, so they reach them through [`TaskPrForge`] rather than
 //! the `gh` CLI directly: production uses [`GhTaskPrForge`], and fixtures
 //! inject a fake forge. No operation deletes a branch.
@@ -137,6 +138,21 @@ pub trait TaskPrForge: Send + Sync {
         _number: u64,
     ) -> Result<Option<PullRequestBlockers>, OrbitError> {
         Ok(None)
+    }
+
+    /// Re-request the checks that failed on exactly commit `head_sha` of pull
+    /// request `number`, returning what was re-requested, by name. Nothing is
+    /// re-requested for any other head. The default cannot, so a forge
+    /// without it refuses and the caller records nothing.
+    fn rerun_failed_checks(
+        &self,
+        _repo_root: &Path,
+        number: u64,
+        _head_sha: &str,
+    ) -> Result<Vec<String>, OrbitError> {
+        Err(OrbitError::Execution(format!(
+            "this forge cannot re-request the checks of pull request #{number}"
+        )))
     }
 
     /// The login this machine's forge credentials act as, which is the
@@ -350,6 +366,60 @@ impl TaskPrForge for GhTaskPrForge {
                  required checks of pull request #{number}"
                 ))
             })
+    }
+
+    /// Reruns the failed jobs of each failed workflow run on the head. A
+    /// run whose reported head is not `head_sha` is never touched.
+    fn rerun_failed_checks(
+        &self,
+        repo_root: &Path,
+        number: u64,
+        head_sha: &str,
+    ) -> Result<Vec<String>, OrbitError> {
+        let stdout = run_gh(
+            orbit_tools::github_cli::commit_workflow_runs_request(head_sha),
+            repo_root,
+            "gh run list",
+        )?;
+        let runs = orbit_tools::github_cli::parse_gh_json(&stdout, "gh run list")?;
+        let runs = runs.as_array().ok_or_else(|| {
+            OrbitError::Execution("gh run list did not return an array".to_string())
+        })?;
+        let failed = runs
+            .iter()
+            .filter(|run| {
+                run.get("headSha").and_then(Value::as_str) == Some(head_sha)
+                    && run.get("status").and_then(Value::as_str) == Some("completed")
+                    && matches!(
+                        run.get("conclusion").and_then(Value::as_str),
+                        Some("failure" | "cancelled" | "timed_out" | "startup_failure")
+                    )
+            })
+            .filter_map(|run| {
+                Some((
+                    run.get("databaseId")?.as_u64()?,
+                    run.get("workflowName")
+                        .and_then(Value::as_str)
+                        .unwrap_or("unnamed workflow")
+                        .to_string(),
+                ))
+            })
+            .collect::<Vec<_>>();
+        if failed.is_empty() {
+            return Err(OrbitError::Execution(format!(
+                "no failed workflow run on head {head_sha} of pull request #{number} can be rerun"
+            )));
+        }
+        let mut rerun = Vec::new();
+        for (run_id, name) in failed {
+            run_gh(
+                orbit_tools::github_cli::rerun_failed_jobs_request(run_id),
+                repo_root,
+                "gh run rerun",
+            )?;
+            rerun.push(name);
+        }
+        Ok(rerun)
     }
 
     fn authenticated_login(&self, repo_root: &Path) -> Result<String, OrbitError> {

@@ -53,6 +53,7 @@ mod baseline_hold_refresh;
 mod baseline_hold_tick;
 mod baseline_red_repair;
 mod blocked_task_triage;
+mod blocked_task_triage_recovery;
 mod bundle_validation;
 mod cascade_outcomes;
 mod child_wait_audit;

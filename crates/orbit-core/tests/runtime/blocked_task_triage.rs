@@ -44,16 +44,16 @@ template:
   - block-reader
 ";
 
-struct Fixture {
+pub(super) struct Fixture {
     _root: TempDir,
     _git_ceiling: orbit_common::test_env::ScopedEnv,
-    global: PathBuf,
-    repo: PathBuf,
-    runtime: OrbitRuntime,
+    pub(super) global: PathBuf,
+    pub(super) repo: PathBuf,
+    pub(super) runtime: OrbitRuntime,
     runs: std::cell::Cell<u32>,
 }
 
-fn fixture() -> Fixture {
+pub(super) fn fixture() -> Fixture {
     fixture_with_config("")
 }
 
@@ -102,7 +102,7 @@ impl Fixture {
             .with_actor(ActorIdentity::human("human:operator"))
     }
 
-    fn task(&self, tags: &[&str]) -> String {
+    pub(super) fn task(&self, tags: &[&str]) -> String {
         let task = self
             .runtime
             .run_tool(
@@ -125,18 +125,23 @@ impl Fixture {
         id
     }
 
-    fn update(&self, mut input: Value) {
+    pub(super) fn update(&self, mut input: Value) {
         input["model"] = json!("codex");
         self.runtime.run_tool("orbit.task.update", input).unwrap();
     }
 
-    fn next_run(&self) -> String {
+    pub(super) fn next_run(&self) -> String {
         self.runs.set(self.runs.get() + 1);
         format!("jrun-triage-{}", self.runs.get())
     }
 
     /// Final recovery's `decision` on a fresh run of the in-progress `task`.
-    fn final_recovery(&self, task: &str, decision: Value) {
+    pub(super) fn final_recovery(&self, task: &str, decision: Value) {
+        self.final_recovery_of(task, &self.next_run(), decision);
+    }
+
+    /// Final recovery's `decision` on run `run_id` of the in-progress `task`.
+    pub(super) fn final_recovery_of(&self, task: &str, run_id: &str, decision: Value) {
         let observed = self
             .runtime
             .final_recovery_revision(&self.runtime.get_task(task).unwrap())
@@ -145,7 +150,7 @@ impl Fixture {
             .apply_final_recovery(
                 &FinalRecoveryRequest {
                     task_id: task.to_string(),
-                    run_id: self.next_run(),
+                    run_id: run_id.to_string(),
                     observed,
                     repo_root: self.repo.clone(),
                     base_ref: "main".to_string(),
@@ -159,7 +164,7 @@ impl Fixture {
 
     /// Start `task` and let final recovery escalate its failed run: one new
     /// escalated block episode.
-    fn escalate(&self, task: &str) {
+    pub(super) fn escalate(&self, task: &str) {
         self.update(json!({"id": task, "status": "in_progress"}));
         self.final_recovery(
             task,
@@ -172,17 +177,17 @@ impl Fixture {
         assert_eq!(self.status(task), "blocked");
     }
 
-    fn status(&self, task: &str) -> String {
+    pub(super) fn status(&self, task: &str) -> String {
         self.show(task)["status"].as_str().unwrap().to_string()
     }
 
-    fn show(&self, task: &str) -> Value {
+    pub(super) fn show(&self, task: &str) -> Value {
         self.runtime
             .run_tool("orbit.task.show", json!({ "id": task }))
             .unwrap()
     }
 
-    fn triage(&self, input: Value) -> Result<Value, String> {
+    pub(super) fn triage(&self, input: Value) -> Result<Value, String> {
         let mut input = input;
         input["model"] = json!("claude");
         input["workspace"] = json!(self.repo.to_string_lossy());
@@ -200,11 +205,11 @@ impl Fixture {
         }))
     }
 
-    fn candidates(&self) -> Value {
+    pub(super) fn candidates(&self) -> Value {
         self.triage(json!({"action": "candidates"})).unwrap()
     }
 
-    fn qualifying(&self) -> Vec<String> {
+    pub(super) fn qualifying(&self) -> Vec<String> {
         self.candidates()["qualifying"]
             .as_array()
             .unwrap()
@@ -261,7 +266,7 @@ impl Fixture {
         run.run_id
     }
 
-    fn triage_comments(&self, task: &str) -> Vec<String> {
+    pub(super) fn triage_comments(&self, task: &str) -> Vec<String> {
         self.show(task)["comments"]
             .as_array()
             .unwrap()

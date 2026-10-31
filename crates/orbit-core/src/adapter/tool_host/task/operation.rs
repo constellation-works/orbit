@@ -340,9 +340,22 @@ fn block_triage(
                 recommended,
             }
         }
+        "resume_run" => BlockTriageDecision::ResumeRun {
+            run_id: input.required_string("run_id")?,
+            reason: reason()?,
+        },
+        "rerun_ci" => BlockTriageDecision::RerunCi {
+            head_sha: input.required_string("head_sha")?,
+            reason: reason()?,
+        },
+        "friction_reported" => BlockTriageDecision::FrictionReported {
+            friction: triage_friction(input, caller.model.as_deref())?,
+            human_action: reason()?,
+        },
         other => {
             return Err(OrbitError::InvalidInput(format!(
-                "block triage action `{other}` is not one of candidates, requeue, propose or report"
+                "block triage action `{other}` is not one of candidates, requeue, resume_run, \
+                 rerun_ci, friction_reported, propose or report"
             )));
         }
     };
@@ -355,6 +368,40 @@ fn block_triage(
     proof()?;
     let response = runtime.record_block_triage(&request)?;
     Ok((response, Some(id)))
+}
+
+/// A `friction_reported` call's friction: `friction_id` links an existing
+/// record; `friction_title` with `friction_body` files one, attributed to the
+/// caller's `model`.
+fn triage_friction(
+    input: &OperationInput,
+    model: Option<&str>,
+) -> Result<crate::application::task::TriageFriction, OrbitError> {
+    use crate::application::task::TriageFriction;
+    let id = input.optional_string("friction_id")?;
+    let title = input.optional_string("friction_title")?;
+    let body = input.optional_string("friction_body")?;
+    match (id, title, body) {
+        (Some(id), None, None) => Ok(TriageFriction::Existing(id)),
+        (None, Some(title), Some(body)) => Ok(TriageFriction::File {
+            title,
+            body,
+            model: model
+                .map(str::trim)
+                .filter(|model| !model.is_empty())
+                .ok_or_else(|| {
+                    OrbitError::InvalidInput(
+                        "filing a friction through block triage requires `model`".into(),
+                    )
+                })?
+                .to_string(),
+        }),
+        _ => Err(OrbitError::InvalidInput(
+            "block triage `friction_reported` needs either `friction_id`, or both \
+             `friction_title` and `friction_body`"
+                .into(),
+        )),
+    }
 }
 
 /// A triage `propose` call's `options` and 1-based `recommended` index.
