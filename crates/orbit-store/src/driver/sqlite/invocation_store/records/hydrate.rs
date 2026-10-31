@@ -114,6 +114,7 @@ pub(super) fn map_invocation_record(row: &rusqlite::Row<'_>) -> rusqlite::Result
         job_run_id: row.get(2)?,
         activity_id: row.get(3)?,
         agent: row.get(4)?,
+        provider: row.get(17)?,
         model,
         duration_ms: row.get::<_, i64>(6)? as u64,
         input_tokens,

@@ -77,7 +77,7 @@ impl OrbitRuntime {
             .into_iter()
             .map(|record| ActivityInvocationEvidence {
                 activity_id: record.activity_id,
-                provider: record.agent,
+                provider: record.provider.unwrap_or(record.agent),
                 model: record.model,
                 execution: record.execution,
             })

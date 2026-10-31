@@ -262,7 +262,7 @@ fn build_invocation_list_query(filter: &InvocationQuery) -> (String, Vec<Box<dyn
         "SELECT i.id, i.ts, i.job_run_id, i.activity_id, i.agent, i.model, i.duration_ms, \
          i.input_tokens, i.cache_read_tokens, i.cache_create_tokens, i.cache_create_1h_tokens, \
          i.output_tokens, i.tool_call_count, i.provider_cost_usd, i.account, \
-         i.long_prompt_requests_json, e.identity_json \
+         i.long_prompt_requests_json, e.identity_json, COALESCE(i.provider, e.provider) \
          FROM invocations i LEFT JOIN agent_executions e ON e.id = i.agent_execution_id AND e.workspace_id = i.workspace_id AND e.run_id = i.job_run_id AND e.activity_id = i.activity_id {} ORDER BY i.ts DESC, i.id DESC LIMIT ?{}",
         query.where_clause(),
         query.len()
