@@ -38,7 +38,7 @@ pub(super) fn mount_paths_for_rule(
             "linux-bwrap modify rule `{rule}` has no existing path to mount"
         )));
     }
-    Ok(matches.iter().cloned().collect())
+    Ok(matches.iter().map(|entry| entry.target.clone()).collect())
 }
 
 pub(super) fn is_narrow_reallow(prior_rules: &[String], rule: &str) -> bool {
@@ -116,11 +116,18 @@ pub(super) fn expand_rules(rules: &[String]) -> Result<BTreeSet<PathBuf>, OrbitE
     Ok(expand_each_rule(rules.iter().map(String::as_str))?
         .into_values()
         .flatten()
+        .map(|entry| entry.target)
         .collect())
 }
 
 /// The existing paths each glob rule body matches, keyed by that body.
-pub(super) type GlobMatches<'a> = BTreeMap<&'a str, BTreeSet<PathBuf>>;
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct GlobMatch {
+    pub entry: PathBuf,
+    pub target: PathBuf,
+}
+
+pub(super) type GlobMatches<'a> = BTreeMap<&'a str, BTreeSet<GlobMatch>>;
 
 /// Every existing path matched by each of `rules`, keyed by rule.
 ///
@@ -174,7 +181,10 @@ pub(super) fn expand_each_rule<'a>(
                             canonical.insert(canonical_existing(&candidate, "denyModify match")?)
                         }
                     };
-                    matches.entry(rule).or_default().insert(path.clone());
+                    matches.entry(rule).or_default().insert(GlobMatch {
+                        entry: candidate.clone(),
+                        target: path.clone(),
+                    });
                 }
             }
         }

@@ -287,6 +287,7 @@ impl KitInspection {
         };
         self.module_present
             && self.browser_installed
+            && self.executable.is_some()
             && self.env_script_present
             && self.playwright_version.as_deref() == Some(verification.playwright_version.as_str())
             && self.chromium_revision.as_deref() == Some(verification.chromium_revision.as_str())

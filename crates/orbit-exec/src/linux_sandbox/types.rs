@@ -122,14 +122,14 @@ pub struct LinuxBwrapSpawnRequest<'a> {
 pub struct LinuxBwrapPostRunGuard {
     profile: String,
     rules: Vec<String>,
-    before: BTreeSet<PathBuf>,
+    before: BTreeSet<rules::GlobMatch>,
 }
 
 /// A denyModify match the child created under the run's scratch directory,
 /// which [`LinuxBwrapPostRunGuard::verify`] removed instead of failing the run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinuxBwrapScratchRemoval {
-    /// Canonical path of the removed match.
+    /// Physical path of the removed directory entry (without following its final symlink).
     pub path: PathBuf,
     /// The denyModify rule body it matched.
     pub rule: String,
@@ -144,7 +144,10 @@ impl LinuxBwrapPostRunGuard {
         if rules.is_empty() {
             return Ok(None);
         }
-        let before = expand_rules(&rules)?;
+        let before = expand_each_rule(rules.iter().map(String::as_str))?
+            .into_values()
+            .flatten()
+            .collect();
         Ok(Some(Self {
             profile: profile.name.clone(),
             rules,
@@ -201,19 +204,22 @@ impl LinuxBwrapPostRunGuard {
         }
         let in_scratch =
             |path: &Path| scratch.is_some_and(|root| path != root && path.starts_with(root));
-        if let Some(path) = created.keys().find(|path| !in_scratch(path)) {
+        if let Some(path) = created
+            .keys()
+            .find(|path| !in_scratch(&path.entry) || !in_scratch(&path.target))
+        {
             return Err(OrbitError::PolicyDenied(format!(
                 "linux-bwrap child created a path forbidden by denyModify before commit: {}",
-                path.display()
+                path.entry.display()
             )));
         }
         // Sorted, so a matched directory goes before any match beneath it.
         created
             .into_iter()
             .map(|(path, rule)| {
-                remove_scratch_match(&path)?;
+                remove_scratch_match(&path.entry)?;
                 Ok(LinuxBwrapScratchRemoval {
-                    path,
+                    path: path.entry,
                     rule: rule.to_string(),
                 })
             })

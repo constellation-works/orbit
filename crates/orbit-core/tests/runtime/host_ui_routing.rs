@@ -45,6 +45,7 @@ pub(crate) fn write_kit(home: &Path, verified: bool) {
     let shell = root.join(format!("browsers/chromium_headless_shell-{REVISION}"));
     std::fs::create_dir_all(&shell).unwrap();
     std::fs::write(shell.join("INSTALLATION_COMPLETE"), "").unwrap();
+    std::fs::write(shell.join("chrome-headless-shell"), "fixture").unwrap();
     std::fs::write(root.join("env.sh"), "# fixture\n").unwrap();
     if verified {
         std::fs::write(
@@ -260,6 +261,15 @@ fn a_host_without_a_verified_kit_withholds_ui_tasks_until_its_kit_is_verified() 
     );
 
     write_kit(&kit_home, true);
+    let executable = KitLayout::for_home(&kit_home).browsers().join(format!(
+        "chromium_headless_shell-{REVISION}/chrome-headless-shell"
+    ));
+    std::fs::remove_file(&executable).unwrap();
+    assert_eq!(
+        exclusion(&backlog(&linux), &ui.id).map(|(reason, _)| reason),
+        Some("browser_kit_missing".to_string())
+    );
+    std::fs::write(executable, "fixture").unwrap();
     let next = backlog(&linux);
     assert_eq!(admitted(&next), vec![ui.id.clone(), topical.id], "{next}");
     assert!(linux.browser_kit_backlog_waits().unwrap().is_empty());

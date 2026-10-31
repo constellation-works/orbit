@@ -97,13 +97,15 @@ pub fn verify(layout: &KitLayout) -> Result<VerifyReport, OrbitError> {
             "the kit has no Playwright module; run `orbit browser-kit install`".to_string(),
         ));
     };
-    if !kit.browser_installed || !kit.env_script_present {
+    if !kit.browser_installed || kit.executable.is_none() || !kit.env_script_present {
         return Err(OrbitError::InvalidInput(format!(
             "the kit is incomplete ({}); run `orbit browser-kit install`",
-            if kit.browser_installed {
-                "env.sh is missing".to_string()
+            if !kit.browser_installed || kit.executable.is_none() {
+                format!(
+                    "chromium_headless_shell-{revision} is not installed or its executable is missing"
+                )
             } else {
-                format!("chromium_headless_shell-{revision} is not installed")
+                "env.sh is missing".to_string()
             }
         )));
     }

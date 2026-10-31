@@ -44,6 +44,7 @@ pub fn kit_status(layout: &KitLayout) -> KitStatus {
         "not_installed"
     } else if !inspection.module_present
         || !inspection.browser_installed
+        || inspection.executable.is_none()
         || !inspection.env_script_present
     {
         "incomplete"
@@ -119,10 +120,10 @@ impl KitStatus {
                 "orbit browser-kit install",
             )),
         }
-        if kit.module_present && !kit.browser_installed {
+        if kit.module_present && (!kit.browser_installed || kit.executable.is_none()) {
             problems.push(install(
                 format!(
-                    "the browser revision chromium_headless_shell-{} is not installed under browsers/",
+                    "the browser revision chromium_headless_shell-{} is incomplete or missing its executable under browsers/",
                     kit.chromium_revision.as_deref().unwrap_or("?")
                 ),
                 "orbit browser-kit install",

@@ -138,7 +138,7 @@ pub fn install(
                 .to_string(),
         )
     })?;
-    if package.browser_installed {
+    if package.browser_installed && package.executable.is_some() {
         steps.push(format!("kept chromium_headless_shell-{revision}"));
     } else {
         progress(&format!(
@@ -148,6 +148,11 @@ pub fn install(
         command
             .arg(layout.cli_script())
             .args(["install", "--only-shell", "chromium"])
+            .args(if package.browser_installed {
+                &["--force"][..]
+            } else {
+                &[]
+            })
             .env(BROWSERS_PATH_ENV, layout.browsers())
             .current_dir(layout.npm_project());
         run_streaming(&mut command, "playwright install --only-shell chromium")?;
